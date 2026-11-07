@@ -67,15 +67,18 @@ func (s *clientServer) scopedReply(ctx context.Context, binding access.Binding, 
 	return protocol.Frame{Kind: protocol.KindControl, Payload: data}, nil
 }
 
+const resourceLimitCode = "resource.limit"
+const stateUnavailableCode = "state.unavailable"
+
 var (
-	errAccessUnavailable = errors.New("state.unavailable")
+	errAccessUnavailable = errors.New(stateUnavailableCode)
 	errAccessNotFound    = errors.New("session.not_found")
-	errAccessLimit       = errors.New("resource.limit")
+	errAccessLimit       = errors.New(resourceLimitCode)
 	errAccessInvalid     = errors.New("usage.invalid")
 )
 
 func scopedError(requestID string, err error) protocol.AccessReply {
-	reply := protocol.AccessReply{Type: protocol.TypeAccessDenied, RequestID: requestID, ErrorCode: "state.unavailable", Message: "Metadata is unavailable."}
+	reply := protocol.AccessReply{Type: protocol.TypeAccessDenied, RequestID: requestID, ErrorCode: stateUnavailableCode, Message: "Metadata is unavailable."}
 	switch {
 	case errors.Is(err, access.ErrDenied):
 		reply.ErrorCode = "access.denied"
@@ -84,7 +87,7 @@ func scopedError(requestID string, err error) protocol.AccessReply {
 		reply.ErrorCode = "session.not_found"
 		reply.Message = "Session was not found."
 	case errors.Is(err, errAccessLimit):
-		reply.ErrorCode = "resource.limit"
+		reply.ErrorCode = resourceLimitCode
 		reply.Message = "Metadata exceeds the response limit."
 	case errors.Is(err, errAccessInvalid):
 		reply.ErrorCode = "usage.invalid"
@@ -128,9 +131,9 @@ func scopedOutputFailure(requestID string, err error) protocol.AccessReply {
 	switch reply.ErrorCode {
 	case "access.denied":
 		reply.Message = "Session-output permission is required."
-	case "state.unavailable":
+	case stateUnavailableCode:
 		reply.Message = "Session output is unavailable."
-	case "resource.limit":
+	case resourceLimitCode:
 		reply.Message = "Session output exceeds the response limit."
 	case "usage.invalid":
 		reply.Message = "Session output request is invalid."

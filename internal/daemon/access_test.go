@@ -256,6 +256,7 @@ func TestScopedRealTLSProjectsOnlyAllowedMetadata(t *testing.T) {
 }
 
 var deniedScopedTypes = []string{
+	"execution.create", "execution.request", "execution.receipt",
 	"host.metrics.result", "session.created", "session.listed", "host.info.result", "host.renamed", "session.recovered", "session.recovery-record", "copy.result", "app.result", "host.context.result", "service.previewed", "service.upserted", "service.listed", "service.deleted", "service.labeled", "certificate.installed", "wake.remembered", "wake.probed", "wake.sent", "wake.configured",
 	"host.info", "host.metrics", "host.context", "host.rename", "session.list", "session.inspect", "session.logs", "session.recovery", "session.create", "session.attach", "session.attach-detached", "terminal.resize", "session.detach", "session.signal", "session.kill", "session.hibernate", "session.recover", "session.recovery-command", "session.remove", "service.preview", "service.upsert", "service.label", "service.list", "service.delete", "service.start", "service.stop", "fleet.hosts", "certificate.install", "wake.configure", "wake.remember", "wake.probe", "wake.send", "state.watch", "catalog.continue", "session.agent-begin", "session.agent-event", "session.agent-finish", "session.shell-update", "session.containment", "session.nest", "session.attached", "session.nesting", "session.exit", "session.logged", "session.inspected", "state.snapshot", "state.event", "state.current", "state.resync", "error", "ok", "access.output.result", "future.control",
 }
@@ -640,4 +641,40 @@ func (f *scopedFixture) handleScopedConnection(ctx, lifetime context.Context, co
 	stop := context.AfterFunc(lifetime, func() { cancel(); _ = conn.Close() })
 	defer stop()
 	return f.server.Handle(current, conn)
+}
+
+func TestScopedExecutionRequestsStopBeforeOwners(t *testing.T) {
+	for _, loose := range []bool{false, true} {
+		t.Run(fmt.Sprint(loose), func(t *testing.T) { denyScopedExecutionRequests(t, loose) })
+	}
+}
+
+func denyScopedExecutionRequests(t *testing.T, loose bool) {
+	t.Helper()
+	f := newScopedFixture(t.Context(), t, loose)
+	requests := []protocol.Control{
+		{Type: protocol.TypeExecutionCreate, RequestID: "create-denied", RequestKey: "scoped-job", ExecutionKind: "pty", Command: []string{"/bin/true"}, Cwd: "/work"},
+		{Type: protocol.TypeExecutionRequest, RequestID: "lookup-denied", RequestKey: "scoped-job"},
+	}
+	for _, request := range requests {
+		data, err := request.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := protocol.DecodeControl(data); err != nil {
+			t.Fatal("execution fixture must be valid for full admission", err)
+		}
+		assertScopedDenied(t, f, protocol.Frame{Kind: protocol.KindControl, Payload: data})
+	}
+	if f.catalog.reads.Load() != 0 || f.catalog.mutations.Load() != 0 || f.launches.Load() != 0 || f.workers.calls.Load() != 0 || f.owners.calls.Load() != 0 || f.services.reads.Load() != 0 || f.services.writes.Load() != 0 || f.privateReads.Load() != 0 {
+		t.Fatal("denied execution reached an owner")
+	}
+	if f.server.lifecycle.execution != nil {
+		t.Fatal("denied execution opened the journal")
+	}
+	for _, name := range []string{"execution", "s"} {
+		if _, err := os.Lstat(filepath.Join(f.state, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("denied execution created %s state: %v", name, err)
+		}
+	}
 }

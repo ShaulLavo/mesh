@@ -20,6 +20,7 @@ import (
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/updategate"
 	"path/filepath"
@@ -84,6 +85,8 @@ func validateTerminalSize(cols, rows int) error {
 
 // Config describes the session a worker should host.
 type Config struct {
+	Reservation        *session.Reservation
+	Execution          *execution.Binding
 	ID                 string
 	HostID             string
 	Dir                string
@@ -99,14 +102,15 @@ type Config struct {
 
 // Worker owns one PTY and serves clients over a Unix socket.
 type Worker struct {
-	cfg    Config
-	sid    protocol.SessionID
-	pty    xpty.Pty
-	cmd    *exec.Cmd
-	ring   *session.Ring
-	screen terminalstate.Screen
-	now    func() time.Time
-	metaMu sync.Mutex
+	executionClients *executionClients
+	cfg              Config
+	sid              protocol.SessionID
+	pty              xpty.Pty
+	cmd              *exec.Cmd
+	ring             *session.Ring
+	screen           terminalstate.Screen
+	now              func() time.Time
+	metaMu           sync.Mutex
 
 	observeProcess   processObserver
 	checkpointMu     sync.Mutex
@@ -473,6 +477,19 @@ func Run(cfg Config) (int, error) {
 		return 0, fmt.Errorf("worker: invalid terminal size: %w", err)
 	}
 
+	attempt, err := prepareExecution(cfg)
+	if err != nil {
+		return 0, err
+	}
+	if attempt != nil {
+		defer func() { _ = attempt.Close() }()
+	}
+	childStarted := false
+	defer func() {
+		if attempt != nil && !childStarted {
+			_ = attempt.Finish(execution.Result{Binding: *cfg.Execution, Termination: execution.Termination{Kind: "not_started", Reason: "child_start_failed"}, Capture: "not_recorded"})
+		}
+	}()
 	pty, err := xpty.NewPty(cfg.Cols, cfg.Rows)
 	if err != nil {
 		return 0, fmt.Errorf("worker: open pty: %w", err)
@@ -494,6 +511,7 @@ func Run(cfg Config) (int, error) {
 	if err := startSession(pty, cmd); err != nil {
 		return 0, fmt.Errorf("worker: start %s: %w", cfg.Command[0], err)
 	}
+	childStarted = true
 	// xpty retains the parent's slave descriptor after Start. Closing that copy
 	// lets the master report EOF when the child closes its descriptors.
 	if p, ok := pty.(interface{ Slave() *os.File }); ok {
@@ -516,6 +534,7 @@ func Run(cfg Config) (int, error) {
 
 	meta := Meta{
 		Build:         build,
+		Reservation:   cfg.Reservation,
 		ID:            cfg.ID,
 		PID:           cmd.Process.Pid,
 		Command:       cfg.Command,
@@ -539,13 +558,24 @@ func Run(cfg Config) (int, error) {
 		_ = ln.Close()
 		_ = os.Remove(sockPath)
 	}()
-	if err := os.Remove(paths.Launching(cfg.Dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if attempt != nil {
+		if err := attempt.Published(); err != nil {
+			return 0, fmt.Errorf("worker: publish execution socket: %w", err)
+		}
+	} else if err := os.Remove(paths.Launching(cfg.Dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return 0, fmt.Errorf("worker: publish session %s: %w", cfg.ID, err)
 	}
 
 	go w.pump()
 	w.startRecovery()
-	go w.acceptLoop(ln)
+	if attempt != nil {
+		w.executionClients = newExecutionClients()
+		servingDone := make(chan struct{})
+		go func() { defer close(servingDone); w.acceptLoop(ln) }()
+		defer w.stopExecutionServing(ln, servingDone)
+	} else {
+		go w.acceptLoop(ln)
+	}
 
 	state, waitErr := cmd.Process.Wait()
 	// Retire the PID before anything else can act on it. kill's grace timer can
@@ -586,6 +616,13 @@ func Run(cfg Config) (int, error) {
 	}
 	_ = w.pty.Close()
 	w.closeInput()
+	if attempt != nil {
+		ended := now.UTC()
+		result := execution.Result{Binding: *cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: "not_recorded"}
+		if err := attempt.Finish(result); err != nil {
+			return code, fmt.Errorf("worker: publish durable result: %w", err)
+		}
+	}
 	return code, nil
 }
 
@@ -750,6 +787,10 @@ func (w *Worker) acceptLoop(ln net.Listener) {
 		conn, err := ln.Accept()
 		if err != nil {
 			return
+		}
+		if w.executionClients != nil {
+			w.executionClients.serve(w, conn)
+			continue
 		}
 		go w.serve(conn)
 	}

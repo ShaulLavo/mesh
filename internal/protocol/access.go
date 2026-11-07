@@ -135,7 +135,7 @@ func readAccessField(decoder *json.Decoder, fields map[string]json.RawMessage, a
 	return nil
 }
 func DecodeAccessRead(data []byte) (AccessRequest, error) {
-	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", "requestId", "accessRead")
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessRead")
 	if err != nil {
 		return AccessRequest{}, err
 	}
@@ -143,7 +143,7 @@ func DecodeAccessRead(data []byte) (AccessRequest, error) {
 	if len(fields) != 3 || json.Unmarshal(fields["type"], &request.Type) != nil || request.Type != TypeAccessRead {
 		return request, errors.New("protocol: access.read required")
 	}
-	if json.Unmarshal(fields["requestId"], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
+	if json.Unmarshal(fields[requestIDField], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
 		return AccessRequest{}, errors.New("protocol: bounded access request ID required")
 	}
 	payload, err := rawAccessObject(fields["accessRead"], MaximumAccessRequest, "section", "sessionId", "limit", "cursor")
@@ -368,7 +368,7 @@ func scanAccessReplyObject(decoder *json.Decoder, depth int) error {
 
 func accessReplyField(key string) bool {
 	switch key {
-	case "type", "requestId", "accessResult", "errorCode", "message", "subject", "targetId", "principal", "class", "permissions", "expiresAt", "section", "observedAt", "freshness", "snapshot", "host", "sessions", "services", "nextPage", "id", "machineName", "version", "hostId", "state", "createdAt", "lastAttachedAt", "detachedAt", "exitCode", "name", "kind", "scope", "configured", "accessOutputResult", "sessionId", "format", "source", "checkpointAt", "bytesBase64", "preview", "styledPreview", "runs", "text", "style", "foreground", "background", "underlineColor", "bold", "faint", "italic", "reverse", "strikethrough", "underline", "value":
+	case "type", requestIDField, "accessResult", "errorCode", "message", "subject", "targetId", "principal", "class", "permissions", "expiresAt", "section", "observedAt", "freshness", "snapshot", "host", "sessions", "services", "nextPage", "id", "machineName", "version", "hostId", "state", "createdAt", "lastAttachedAt", "detachedAt", "exitCode", "name", "kind", "scope", "configured", "accessOutputResult", "sessionId", "format", "source", "checkpointAt", "bytesBase64", "preview", "styledPreview", "runs", "text", "style", "foreground", "background", "underlineColor", "bold", "faint", "italic", "reverse", "strikethrough", "underline", "value":
 		return true
 	}
 	return false
@@ -453,7 +453,7 @@ type AccessOutputReply struct {
 }
 
 func AccessRequestType(data []byte) (string, error) {
-	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", "requestId", "accessRead", "accessOutput")
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessRead", "accessOutput")
 	if err != nil {
 		return "", err
 	}
@@ -473,14 +473,14 @@ func AccessRequestType(data []byte) (string, error) {
 }
 func DecodeAccessOutput(data []byte) (AccessOutputRequest, error) {
 	var request AccessOutputRequest
-	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", "requestId", "accessOutput")
+	fields, err := rawAccessObject(data, MaximumAccessRequest, "type", requestIDField, "accessOutput")
 	if err != nil {
 		return request, err
 	}
 	if len(fields) != 3 || json.Unmarshal(fields["type"], &request.Type) != nil || request.Type != TypeAccessOutput {
 		return request, errors.New("protocol: access.output required")
 	}
-	if json.Unmarshal(fields["requestId"], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
+	if json.Unmarshal(fields[requestIDField], &request.RequestID) != nil || !accessRequestID(request.RequestID) {
 		return request, errors.New("protocol: bounded access request ID required")
 	}
 	payload, err := rawAccessObject(fields["accessOutput"], MaximumAccessRequest, "sessionId", "format", "maxBytes", "cols", "rows")

@@ -16,6 +16,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -438,7 +439,7 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 			continue
 		}
 		dir := filepath.Join(c.sessionsDir, string(current.ID))
-		if ownerPinned(dir) {
+		if c.protectedHistory(dir) {
 			continue
 		}
 		if _, err := os.Lstat(paths.Forgotten(dir)); err == nil {
@@ -469,6 +470,9 @@ func (c *Catalog) retireFinishedSessions(observed []storage.Session) ([]storage.
 
 func (c *Catalog) retentionCandidate(current storage.Session, index int) (retentionCandidate, bool) {
 	dir := filepath.Join(c.sessionsDir, string(current.ID))
+	if execution.ProtectedSession(c.sessionsDir, string(current.ID)) {
+		return retentionCandidate{}, false
+	}
 	candidate := retentionCandidate{index: index, orderAt: current.CreatedAt}
 	exit, labelled := c.eligibleLabelledExit(current.ID, "")
 	if labelled {
@@ -630,6 +634,13 @@ func (c *automaticClaim) release(unlink bool) {
 }
 
 func removeRetiredSession(dir string) error {
+	if execution.ProtectedSession(filepath.Dir(dir), filepath.Base(dir)) {
+		return execution.ErrProtected
+	}
+	return removeRetiredPayload(dir)
+}
+
+func removeRetiredPayload(dir string) error {
 	if ownerPinned(dir) {
 		return errors.New("app worker owner still pins session directory")
 	}
@@ -638,7 +649,7 @@ func removeRetiredSession(dir string) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		return executionBoundaryError("catalog.go removeRetiredPayload", err)
 	}
 	marker := paths.Forgotten(dir)
 	for _, entry := range entries {
@@ -647,15 +658,15 @@ func removeRetiredSession(dir string) error {
 			continue
 		}
 		if err := os.RemoveAll(path); err != nil {
-			return err
+			return executionBoundaryError("catalog.go removeRetiredPayload", err)
 		}
 	}
 	// Remove the durable intent only after metadata is gone. A crash during
 	// cleanup can then never turn a forgotten session back into a visible row.
 	if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return executionBoundaryError("catalog.go removeRetiredPayload", err)
 	}
-	return os.Remove(dir)
+	return executionBoundaryError("catalog.go removeRetiredPayload", os.Remove(dir))
 }
 
 // Remove prevents reconciliation from restoring a retired session.
@@ -679,6 +690,14 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	if ownerPinned(filepath.Join(c.sessionsDir, string(id))) {
 		return fmt.Errorf("daemon: session %s remains reserved by its app", id)
 	}
+	if execution.ProtectedSession(c.sessionsDir, string(id)) {
+		journal, err := execution.Open(filepath.Dir(c.sessionsDir), c.bootID(), "catalog-retirement")
+		if err != nil {
+			return executionBoundaryError("catalog.go Remove", err)
+		}
+		defer func() { _ = journal.Close() }()
+		return executionBoundaryError("retire execution session", journal.RetireSession(ctx, c.sessionsDir, string(id), func() error { return c.removeBoundSession(ctx, id) }))
+	}
 	removed, err := c.store.RetireSessions(ctx, c.host.ID, []storage.SessionID{id})
 	if err != nil {
 		return fmt.Errorf("daemon: retire session %s: %w", id, err)
@@ -692,4 +711,20 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 		return fmt.Errorf("daemon: remove session directory %s: %w", id, err)
 	}
 	return nil
+}
+
+func (c *Catalog) removeBoundSession(ctx context.Context, id storage.SessionID) error {
+	removed, err := c.store.RetireSessions(ctx, c.host.ID, []storage.SessionID{id})
+	if err != nil {
+		return executionBoundaryError("catalog.go removeBoundSession", err)
+	}
+	if removed != 0 {
+		delete(c.previous, id)
+		c.publishDiff(SessionDiff{Removed: []storage.SessionID{id}})
+	}
+	return nil
+}
+
+func (c *Catalog) protectedHistory(dir string) bool {
+	return ownerPinned(dir) || execution.ProtectedSession(c.sessionsDir, filepath.Base(dir))
 }

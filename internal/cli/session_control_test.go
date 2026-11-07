@@ -60,13 +60,13 @@ func controlTestListener(t *testing.T, socket string) <-chan protocol.Control {
 
 func TestRemoveRefusesAndKeepsALiveLocalSession(t *testing.T) {
 	setupLocalCommandTest(t)
-	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
-	dir, err := paths.SessionDir("L1VE")
+	writeLocalSessionDir(t, "71VE", worker.StateRunning)
+	dir, err := paths.SessionDir("71VE")
 	if err != nil {
 		t.Fatal(err)
 	}
 	controlTestListener(t, paths.Socket(dir))
-	_, _, err = executeCommand(t, Dependencies{}, "rm", "L1VE")
+	_, _, err = executeCommand(t, Dependencies{}, "rm", "71VE")
 	if err == nil || !strings.Contains(err.Error(), "still running") {
 		t.Fatalf("live rm = %v, want refusal", err)
 	}
@@ -157,8 +157,8 @@ func TestSignalNormalisesName(t *testing.T) {
 func checkLocalSignalName(t *testing.T, name, want string) {
 	t.Helper()
 	setupLocalCommandTest(t)
-	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
-	dir, err := paths.SessionDir("L1VE")
+	writeLocalSessionDir(t, "71VE", worker.StateRunning)
+	dir, err := paths.SessionDir("71VE")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func checkLocalSignalName(t *testing.T, name, want string) {
 		remoteDials.Add(1)
 		return nil, errors.New("unexpected remote fixture dial")
 	}}
-	if _, _, err := executeCommand(t, dependencies, "sig", "L1VE", name); err != nil {
+	if _, _, err := executeCommand(t, dependencies, "sig", "71VE", name); err != nil {
 		t.Fatal(err)
 	}
 	if remoteDials.Load() != 0 {
@@ -187,15 +187,15 @@ func checkLocalSignalName(t *testing.T, name, want string) {
 
 func TestSignalRejectsUnknownBeforeLocalProbe(t *testing.T) {
 	setupLocalCommandTest(t)
-	writeLocalSessionDir(t, "L1VE", worker.StateRunning)
-	dir, err := paths.SessionDir("L1VE")
+	writeLocalSessionDir(t, "71VE", worker.StateRunning)
+	dir, err := paths.SessionDir("71VE")
 	if err != nil {
 		t.Fatal(err)
 	}
 	received := controlTestListener(t, paths.Socket(dir))
 	probes := 0
 	setWorkerProbe(t, func(string) error { probes++; return nil })
-	stdout, _, err := executeCommand(t, Dependencies{}, "sig", "L1VE", "TREM")
+	stdout, _, err := executeCommand(t, Dependencies{}, "sig", "71VE", "TREM")
 	if err == nil || !strings.Contains(err.Error(), "TREM") || strings.Contains(stdout, "sent") || probes != 0 {
 		t.Fatalf("invalid signal = %q, %v, probes %d", stdout, err, probes)
 	}
@@ -382,12 +382,12 @@ func TestLogsAttemptsTheWorkerOnAnUnknownProbe(t *testing.T) {
 
 func TestOfflineRemoveHidesSessionFromCLIAndPickerBeforeReconciliation(t *testing.T) {
 	host := setupCommandTestHost(t)
-	writeLocalSessionDir(t, "L0CL", worker.StateExited)
+	writeLocalSessionDir(t, "70C7", worker.StateExited)
 	dependencies := Dependencies{DialHost: host.dial, DialControl: host.dial}
-	if _, _, err := executeCommand(t, dependencies, "rm", "L0CL"); err != nil {
+	if _, _, err := executeCommand(t, dependencies, "rm", "70C7"); err != nil {
 		t.Fatal(err)
 	}
-	dir, err := paths.SessionDir("L0CL")
+	dir, err := paths.SessionDir("70C7")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestOfflineRemoveHidesSessionFromCLIAndPickerBeforeReconciliation(t *testin
 		t.Fatal(err)
 	}
 	stdout, _, err := executeCommand(t, dependencies, "ls", "--all")
-	if err != nil || strings.Contains(stdout, "L0CL") {
+	if err != nil || strings.Contains(stdout, "70C7") {
 		t.Fatalf("offline removed session remained in ls: %q, %v", stdout, err)
 	}
 	picker, err := localPickerCatalog(t.Context())

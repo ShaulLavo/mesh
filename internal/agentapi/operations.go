@@ -3,6 +3,9 @@ package agentapi
 import "strings"
 
 const sessionFlag = "--session"
+const colsFlag = "--cols"
+const rowsFlag = "--rows"
+const hostValue = "HOST"
 const keyDirFlag = "--key-dir"
 const identityFlag = "--identity"
 const expectedRevisionFlag = "--expected-revision"
@@ -32,7 +35,7 @@ var Operations = []Operation{
 	{Name: "scope.revoke", Command: "mesh device scope revoke", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: identityFlag, Value: "ID", Required: true}, {Name: expectedRevisionFlag, Value: "N", Required: true}}, Summary: "Remove a scoped key from local target policy.", Example: "mesh device scope revoke --identity PUBLIC_ID --expected-revision 1 --json"},
 	{Name: "scope.list", Command: "mesh device scope list", Implemented: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}}, Summary: "Read the local target's scope policy.", Example: "mesh device scope list --json"},
 	{Name: "scope.read", Command: "mesh device scope read", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: hostFlag, Value: "ID", Required: true}, {Name: keyDirFlag, Value: pathFlagValue, Required: true}, {Name: "--section", Value: "SECTION"}, {Name: sessionFlag, Value: "ID"}, {Name: "--cursor", Value: "TOKEN"}, {Name: limitFlag, Value: "N"}, {Name: timeoutFlag, Value: "D"}}, Summary: "Read a narrow metadata page over explicit-key TLS without fallbacks.", Example: "mesh device scope read --host HOST_ID --key-dir KEY_DIRECTORY --json"},
-	{Name: "scope.output", Command: "mesh device scope output", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: hostFlag, Value: "ID", Required: true}, {Name: keyDirFlag, Value: pathFlagValue, Required: true}, {Name: sessionFlag, Value: "ID", Required: true}, {Name: "--format", Value: "FORMAT", Required: true}, {Name: "--max-bytes", Value: "N"}, {Name: "--cols", Value: "N"}, {Name: "--rows", Value: "N"}, {Name: timeoutFlag, Value: "D"}}, Summary: "Read bounded session output over explicit-key TLS without attaching.", Example: "mesh device scope output --host HOST_ID --key-dir KEY_DIRECTORY --session SESSION_ID --format preview --json"},
+	{Name: "scope.output", Command: "mesh device scope output", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: hostFlag, Value: "ID", Required: true}, {Name: keyDirFlag, Value: pathFlagValue, Required: true}, {Name: sessionFlag, Value: "ID", Required: true}, {Name: "--format", Value: "FORMAT", Required: true}, {Name: "--max-bytes", Value: "N"}, {Name: colsFlag, Value: "N"}, {Name: rowsFlag, Value: "N"}, {Name: timeoutFlag, Value: "D"}}, Summary: "Read bounded session output over explicit-key TLS without attaching.", Example: "mesh device scope output --host HOST_ID --key-dir KEY_DIRECTORY --session SESSION_ID --format preview --json"},
 	{Name: "services.list", Command: "mesh serve ls", Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for live host queries"}}, Network: true, Implemented: true, Summary: "List live and cached services without opening their URLs.", Example: "mesh serve ls --json"},
 	{Name: "hosts.list", Command: "mesh hosts", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read machine context without waking machines.", Example: "mesh hosts --json"},
 	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read full machine notes and current access.", Example: "mesh inspect HOST_ID --json"},
@@ -47,8 +50,8 @@ var Operations = []Operation{
 	{Name: "skill.update", Command: "mesh skill update"},
 	{Name: "skill.status", Command: "mesh skill status"},
 	{Name: "skill.uninstall", Command: "mesh skill uninstall"},
-	{Name: "sessions.create", Command: "mesh session create"},
-	{Name: "sessions.request", Command: "mesh session request"},
+	{Name: "sessions.create", Command: "mesh session create", Args: "-- command [args...]", Implemented: true, Network: true, Mutates: true, Flags: executionFlags(true), Summary: "Start one keyed detached PTY command on an online host.", Example: "mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true"},
+	{Name: "sessions.request", Command: "mesh session request", Implemented: true, Network: true, Flags: executionFlags(false), Summary: "Read a durable request receipt without launching work.", Example: "mesh session request --host HOST_ID --request-key job-17 --json"},
 	{Name: "sessions.wait", Command: "mesh session wait"},
 	{Name: "sessions.logs", Command: "mesh session logs"},
 	{Name: "sessions.signal", Command: "mesh session signal"},
@@ -117,16 +120,24 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, "--cursor", limitFlag, "--page", "--format", "--max-bytes", "--cols", "--rows":
+	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, "--cursor", limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", "--max-bytes", colsFlag, rowsFlag:
 		return true
 	}
 	return false
 }
 
 func sessionReadFlags(list bool) []Flag {
-	flags := []Flag{{Name: hostFlag, Value: "HOST", Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
+	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
 	if !list {
 		return append(flags, Flag{Name: "--preview", Summary: "include a preview at most 80 by 24"})
 	}
 	return append(flags, Flag{Name: "--all", Summary: "include ended sessions"}, Flag{Name: "--detail", Summary: "include launch command and directory"}, Flag{Name: limitFlag, Value: "N", Summary: "page size from 1 to 500"}, Flag{Name: "--page", Value: "TOKEN", Summary: "nextPage token from this host"})
+}
+
+func executionFlags(create bool) []Flag {
+	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: "--request-key", Value: "KEY", Required: true, Summary: "saved logical request key"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "finite request deadline"}}
+	if create {
+		return append(flags, Flag{Name: "--kind", Value: "pty", Required: true, Summary: "explicit PTY kind"}, Flag{Name: "--cwd", Value: "PATH", Required: true, Summary: "absolute target directory"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: colsFlag, Value: "N", Summary: "terminal width"}, Flag{Name: rowsFlag, Value: "N", Summary: "terminal height"})
+	}
+	return flags
 }

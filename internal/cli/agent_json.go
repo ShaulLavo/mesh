@@ -88,6 +88,8 @@ func controlAgentCode(code string) agentapi.Code {
 	switch code {
 	case "control.unknown":
 		return agentapi.ProtocolUnsupported
+	case "request.key_conflict", "request.in_progress", "request.outcome_unknown", "request.not_found", "resource.limit", "state.unavailable":
+		return agentapi.Code(code)
 	case "session.not_found":
 		return agentapi.SessionNotFound
 	default:
