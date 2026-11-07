@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "operation": "profile.set",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "revision": 1,
+    "digest": "DIGEST",
+    "changed": true,
+    "committed": true,
+    "publication": "complete",
+    "queued": true,
+    "fleetSaved": false,
+    "members": []
+  },
+  "errors": []
+}
