@@ -78,32 +78,71 @@ func (c *SQLiteCatalogCache) Load(ctx context.Context, host HostRecord) ([]proto
 	}
 	result := make([]protocol.SessionInfo, len(rows))
 	for i, row := range rows {
-		result[i] = protocol.SessionInfo{
-			ID:                 string(row.ID),
-			HostID:             string(row.HostID),
-			Command:            append([]string(nil), row.Command...),
-			Cwd:                row.Cwd,
-			State:              string(row.State),
-			CreatedAt:          row.CreatedAt,
-			LastAttachedAt:     cloneTime(row.LastAttachedAt),
-			ExitCode:           cloneInt(row.ExitCode),
-			LastOutputSequence: row.LastOutputSequence,
-		}
+		result[i] = cachedSessionInfo(row)
 	}
 	return result, nil
 }
 
-// Save replaces the cached active catalog after one authoritative query.
+// CachedSession preserves whether the scalar facts were actually observed.
+type CachedSession struct {
+	Info  protocol.SessionInfo
+	Facts *storage.SessionFacts
+}
+
+func cachedSessionInfo(row storage.Session) protocol.SessionInfo {
+	return protocol.SessionInfo{
+		ID:                 string(row.ID),
+		HostID:             string(row.HostID),
+		Command:            append([]string(nil), row.Command...),
+		Cwd:                row.Cwd,
+		State:              string(row.State),
+		CreatedAt:          row.CreatedAt,
+		LastAttachedAt:     cloneTime(row.LastAttachedAt),
+		ExitCode:           cloneInt(row.ExitCode),
+		LastOutputSequence: row.LastOutputSequence,
+	}
+}
+
+// LoadObserved is the agent's joined read. Human Load never decodes facts.
+func (c *SQLiteCatalogCache) LoadObserved(ctx context.Context, host HostRecord) ([]CachedSession, error) {
+	if c.store == nil {
+		return nil, c.unavailable(ctx)
+	}
+	rows, err := c.store.ListObservedHostSessions(ctx, storage.HostID(host.ID))
+	if err != nil {
+		return nil, fmt.Errorf("load observed catalog: %w", err)
+	}
+	result := make([]CachedSession, len(rows))
+	for i, row := range rows {
+		result[i] = CachedSession{Info: cachedSessionInfo(row.Session), Facts: row.Facts}
+	}
+	return result, nil
+}
+
+func observedSessionFacts(row protocol.SessionInfo) storage.SessionFacts {
+	return storage.SessionFacts{Hibernated: Hibernation(row) != nil, RecoveryPending: row.RecoveryPending, Label: row.Label, DetachedAt: cloneTime(row.DetachedAt)}
+}
+
+// Save writes shared rows without certifying pending human/picker details.
 func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+	return c.saveSessions(ctx, host, rows, false)
+}
+
+// SaveObserved records a complete successful agent session.list observation.
+func (c *SQLiteCatalogCache) SaveObserved(ctx context.Context, host HostRecord, rows []protocol.SessionInfo) error {
+	return c.saveSessions(ctx, host, rows, true)
+}
+
+func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, rows []protocol.SessionInfo, complete bool) error {
 	if c.store == nil {
 		return c.unavailable(ctx)
 	}
-	observed := make([]storage.Session, len(rows))
+	observed := make([]storage.ObservedSession, len(rows))
 	for i, row := range rows {
 		if row.HostID != host.ID {
 			return fmt.Errorf("host %s listed a session for a different host", HostLabel(host))
 		}
-		observed[i] = storage.Session{
+		observed[i].Session = storage.Session{
 			ID:                 storage.SessionID(row.ID),
 			HostID:             storage.HostID(row.HostID),
 			Command:            append([]string(nil), row.Command...),
@@ -114,8 +153,15 @@ func (c *SQLiteCatalogCache) Save(ctx context.Context, host HostRecord, rows []p
 			ExitCode:           cloneInt(row.ExitCode),
 			LastOutputSequence: row.LastOutputSequence,
 		}
+		if complete {
+			facts := observedSessionFacts(row)
+			observed[i].Facts = &facts
+		}
 	}
-	return c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed)
+	if err := c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed); err != nil {
+		return fmt.Errorf("save catalog sessions: %w", err)
+	}
+	return nil
 }
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.

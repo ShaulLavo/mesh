@@ -6,8 +6,10 @@ const keyDirFlag = "--key-dir"
 const identityFlag = "--identity"
 const expectedRevisionFlag = "--expected-revision"
 const pathFlagValue = "PATH"
-const jsonFlag = "--json"
 const timeoutFlag = "--timeout"
+const jsonFlag = "--json"
+const hostFlag = "--host"
+const limitFlag = "--limit"
 const jsonFlagSummary = "write one agent result"
 
 type Flag struct {
@@ -27,12 +29,12 @@ var Operations = []Operation{
 	{Name: "scope.grant", Command: "mesh device scope grant", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: identityFlag, Value: "ID", Required: true}, {Name: "--permissions", Value: "metadata", Required: true}, {Name: expectedRevisionFlag, Value: "N", Required: true}, {Name: "--expires-at", Value: "TIME"}, {Name: "--expires-in", Value: "D"}}, Summary: "Grant metadata access on the target's local policy.", Example: "mesh device scope grant --identity PUBLIC_ID --permissions metadata --expected-revision 0 --json"},
 	{Name: "scope.revoke", Command: "mesh device scope revoke", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: identityFlag, Value: "ID", Required: true}, {Name: expectedRevisionFlag, Value: "N", Required: true}}, Summary: "Remove a scoped key from local target policy.", Example: "mesh device scope revoke --identity PUBLIC_ID --expected-revision 1 --json"},
 	{Name: "scope.list", Command: "mesh device scope list", Implemented: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}}, Summary: "Read the local target's scope policy.", Example: "mesh device scope list --json"},
-	{Name: "scope.read", Command: "mesh device scope read", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--host", Value: "ID", Required: true}, {Name: keyDirFlag, Value: pathFlagValue, Required: true}, {Name: "--section", Value: "SECTION"}, {Name: "--session", Value: "ID"}, {Name: "--cursor", Value: "TOKEN"}, {Name: "--limit", Value: "N"}, {Name: timeoutFlag, Value: "D"}}, Summary: "Read a narrow metadata page over explicit-key TLS without fallbacks.", Example: "mesh device scope read --host HOST_ID --key-dir KEY_DIRECTORY --json"},
+	{Name: "scope.read", Command: "mesh device scope read", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: hostFlag, Value: "ID", Required: true}, {Name: keyDirFlag, Value: pathFlagValue, Required: true}, {Name: "--section", Value: "SECTION"}, {Name: "--session", Value: "ID"}, {Name: "--cursor", Value: "TOKEN"}, {Name: limitFlag, Value: "N"}, {Name: timeoutFlag, Value: "D"}}, Summary: "Read a narrow metadata page over explicit-key TLS without fallbacks.", Example: "mesh device scope read --host HOST_ID --key-dir KEY_DIRECTORY --json"},
 	{Name: "services.list", Command: "mesh serve ls", Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for live host queries"}}, Network: true, Implemented: true, Summary: "List live and cached services without opening their URLs.", Example: "mesh serve ls --json"},
 	{Name: "hosts.list", Command: "mesh hosts", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read machine context without waking machines.", Example: "mesh hosts --json"},
 	{Name: "hosts.inspect", Command: "mesh inspect", Args: "HOST", Implemented: true, Network: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline for host queries"}, {Name: "--cached", Summary: "do not dial hosts"}}, Summary: "Read full machine notes and current access.", Example: "mesh inspect HOST_ID --json"},
-	{Name: "sessions.list", Command: "mesh session list"},
-	{Name: "sessions.inspect", Command: "mesh session inspect", Args: "SESSION_ID"},
+	{Name: "sessions.list", Command: "mesh session list", Implemented: true, Network: true, Flags: sessionReadFlags(true), Summary: "Read a bounded page of sessions without attaching.", Example: "mesh session list --host HOST_ID --json"},
+	{Name: "sessions.inspect", Command: "mesh session inspect", Args: "SESSION_ID", Implemented: true, Network: true, Flags: sessionReadFlags(false), Summary: "Read live or saved session details without attaching.", Example: "mesh session inspect --host HOST_ID SESSION_ID --json"},
 	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},
 	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: pathFlagValue, Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
 	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
@@ -72,6 +74,9 @@ func Classify(args []string) string {
 	if len(words) > 0 && words[0] == "profile" {
 		return "profile.show"
 	}
+	if len(words) > 0 && words[0] == "session" {
+		return "sessions.list"
+	}
 	return ""
 }
 
@@ -109,8 +114,16 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case "--leave-key", "--detach-key", "--host", "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", "--limit":
+	case "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", "--session", "--cursor", limitFlag, "--page":
 		return true
 	}
 	return false
+}
+
+func sessionReadFlags(list bool) []Flag {
+	flags := []Flag{{Name: hostFlag, Value: "HOST", Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
+	if !list {
+		return append(flags, Flag{Name: "--preview", Summary: "include a preview at most 80 by 24"})
+	}
+	return append(flags, Flag{Name: "--all", Summary: "include ended sessions"}, Flag{Name: "--detail", Summary: "include launch command and directory"}, Flag{Name: limitFlag, Value: "N", Summary: "page size from 1 to 500"}, Flag{Name: "--page", Value: "TOKEN", Summary: "nextPage token from this host"})
 }

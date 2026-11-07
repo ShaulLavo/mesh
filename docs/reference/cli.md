@@ -24,6 +24,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh recover`](#mesh-recover) | Recover a saved session and retain its previous output |
 | [`mesh recovery-command`](#mesh-recovery-command) | Save an explicit restart command |
 | [`mesh rm`](#mesh-rm) | Forget finished sessions and delete what they left behind |
+| [`mesh session`](#mesh-session) | Read sessions without attaching or starting work |
 | [`mesh sig`](#mesh-sig) | Send a signal to a session process group |
 | [`mesh add`](#mesh-add) | Install Mesh on an SSH-reachable host |
 | [`mesh cp`](#mesh-cp) | Copy files or directories through an authenticated Mesh connection |
@@ -92,6 +93,7 @@ SESSIONS
   recover SESSION [--flags]                             Recover a saved session and retain its previous output
   recovery-command SESSION -- PROGRAM ARG... [--flags]  Save an explicit restart command
   rm session...                                         Forget finished sessions and delete what they left behind
+  session [command] [--flags]                           Read sessions without attaching or starting work
   sig session signal                                    Send a signal to a session process group
 
 HOSTS
@@ -464,6 +466,74 @@ FLAGS
   -h --help    Help for rm
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh session
+
+```text
+Read sessions without attaching or starting work
+
+USAGE
+
+  mesh session [command] [--flags]
+
+COMMANDS
+
+  inspect SESSION_ID [--flags]  Read live or saved session details without attaching
+  list [--flags]                List one host's sessions with bounded pages
+
+FLAGS
+
+  -h --help                     Help for session
+  --json                        Write one agent result
+  --leave-key                   Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy                     Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh session inspect
+
+```text
+Read a session's launch metadata and live or saved inspection.
+Without --preview, Mesh reads one cell internally and discards its preview.
+With --preview, Mesh reads at most 80 columns by 24 rows. Neither changes
+terminal size or attachment.
+
+USAGE
+
+  mesh session inspect SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for inspect
+  --host       Machine name or exact host ID, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --preview    Include a control-free preview, at most 80 by 24
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for the read, from 100ms to 60s (5s)
+```
+
+## mesh session list
+
+```text
+List one host's sessions with bounded pages
+
+USAGE
+
+  mesh session list [--flags]
+
+FLAGS
+
+  --all        Include exited and interrupted sessions
+  --detail     Include launch command and working directory
+  -h --help    Help for list
+  --host       Machine name or exact host ID, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --limit      Maximum sessions in this page, from 1 to 500 (100)
+  --page       Opaque nextPage token from this host
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for the read, from 100ms to 60s (5s)
 ```
 
 ## mesh sig
