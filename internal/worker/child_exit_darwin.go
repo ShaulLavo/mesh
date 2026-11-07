@@ -3,6 +3,8 @@ package worker
 import (
 	"errors"
 	"fmt"
+	"os"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -25,8 +27,11 @@ func observeChildExit(pid int) error {
 	if err != nil {
 		return err
 	}
-	if info.Proc.P_pid != int32(pid) {
+	if int(info.Proc.P_pid) != pid {
 		return fmt.Errorf("worker: child exit identity unavailable")
+	}
+	if int(info.Eproc.Ppid) != os.Getpid() {
+		return unix.ECHILD
 	}
 	// SZOMB is the public Darwin sys/proc.h state. No other state authorizes reaping.
 	if info.Proc.P_stat == 5 {

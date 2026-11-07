@@ -279,3 +279,72 @@ mesh session request --host HOST_ID --request-key job-17 --json
 - `--request-key KEY`: saved logical request key.
 - `--json`: write one agent result.
 - `--timeout D`: finite request deadline.
+
+## mesh session wait
+
+Wait for a durable exact-instance result.
+
+```sh
+mesh session wait --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+
+## mesh session logs
+
+Read exact bounded PTY bytes with independent cursors.
+
+```sh
+mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--stream pty`: exact PTY stream.
+- `--cursor TOKEN`: independent output cursor.
+- `--max-bytes N`: page size from 1 to 1048576.
+
+## mesh session signal
+
+Signal one exact keyed command instance.
+
+```sh
+mesh session signal --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--signal SIGNAL`: process group signal.
+
+## mesh session kill
+
+Stop one exact keyed command instance.
+
+```sh
+mesh session kill --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+
+## mesh session rm
+
+Remove finished output while retaining the creation receipt.
+
+```sh
+mesh session rm --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
