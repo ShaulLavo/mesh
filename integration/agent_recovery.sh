@@ -13,4 +13,5 @@ mesh_ssh=${MESH_INTEGRATION_BINARY:-$build_root/mesh-ssh}
 if [[ -z ${MESH_INTEGRATION_BINARY:-} ]]; then
   (cd "$repo_root" && go build -tags mesh_integration -o "$mesh_ssh" ./cmd/mesh)
 fi
+python3 "$repo_root/integration/helpers/agent_recovery_test.py"
 python3 "$repo_root/integration/helpers/agent_recovery.py" "$MESH" "$mesh_ssh"
