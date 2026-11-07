@@ -45,7 +45,7 @@ func (a *application) updateAutomaticCommand(options *updateOptions) *cobra.Comm
 	return command
 }
 func existingAutomaticEnvironment(ctx context.Context, coordinator string) (updateEnvironment, error) {
-	stateDir, err := paths.StateDir()
+	stateDir, err := paths.StateDirPath()
 	if err != nil {
 		return updateEnvironment{}, fmt.Errorf("automatic state directory: %w", err)
 	}

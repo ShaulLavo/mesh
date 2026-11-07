@@ -16,15 +16,15 @@ import (
 )
 
 func TestAutomaticCLIRequiresExistingIdentityAndNeverCreatesIt(t *testing.T) {
-	state := t.TempDir()
+	state := filepath.Join(t.TempDir(), "absent")
 	t.Setenv("MESH_STATE_DIR", state)
 	t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	_, _, err := executeCommand(t, Dependencies{}, "update", "automatic", "status", "--json")
 	if err == nil {
 		t.Fatal("automatic status created an identity")
 	}
-	if _, err := os.Stat(filepath.Join(state, "identity.key")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("identity created: %v", err)
+	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("status created state directory: %v", err)
 	}
 }
 func TestAutomaticCLIEnablesOnlyDisplayedSavedMembership(t *testing.T) {
