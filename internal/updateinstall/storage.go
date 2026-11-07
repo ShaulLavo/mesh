@@ -45,7 +45,7 @@ func readJournal(check func() error, stateDir string) (Status, error) {
 	if status.Schema != 1 {
 		return status, errors.New("unsupported installation journal schema")
 	}
-	return status, nil
+	return status, settleJournalPublication(stateDir)
 }
 
 func ReadSettings(stateDir string) (Settings, error) {
@@ -66,7 +66,57 @@ func (e *Engine) save(status *Status) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(journalPath(e.cfg.StateDir), append(data, '\n'), 0600)
+	if err := atomicWrite(journalPath(e.cfg.StateDir), append(data, '\n'), 0600); err != nil {
+		return err
+	}
+	return settleJournalParents(transactionDir(e.cfg.StateDir))
+}
+
+// Journal readers also settle a prior rename whose directory barrier failed.
+// The helper and retransmissions must not act on unconfirmed visible state.
+func settleJournalPublication(stateDir string) error {
+	directory := transactionDir(stateDir)
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("settle installation publication: %w", err)
+	}
+	return settleJournalParents(directory)
+}
+
+// A filesystem root predates this journal's MkdirAll. Walk resolved parents so
+// aliases and API reopens cannot lose the complete creation barrier chain.
+func settleJournalParents(directory string) error {
+	current, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return fmt.Errorf("resolve installation publication directory: %w", err)
+	}
+	for {
+		parent, err := journalPublicationParent(current)
+		if err != nil || parent == "" {
+			return err
+		}
+		if err := syncDirectory(parent); err != nil {
+			return fmt.Errorf("settle installation publication parent: %w", err)
+		}
+		current = parent
+	}
+}
+
+func journalPublicationParent(directory string) (string, error) {
+	parent := filepath.Dir(directory)
+	if parent == directory {
+		return "", nil
+	}
+	var current, ancestor unix.Stat_t
+	if err := unix.Stat(directory, &current); err != nil {
+		return "", fmt.Errorf("inspect installation publication directory: %w", err)
+	}
+	if err := unix.Stat(parent, &ancestor); err != nil {
+		return "", fmt.Errorf("inspect installation publication parent: %w", err)
+	}
+	if current.Dev != ancestor.Dev {
+		return "", nil
+	}
+	return parent, nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
@@ -120,13 +170,16 @@ func readJSON(data []byte, value any) error {
 	return nil
 }
 
-func syncDirectory(path string) error {
+var syncDirectory = func(path string) error {
 	dir, err := os.Open(path) //nolint:gosec // fixed journal, gate, or executable path beneath configured local directories
 	if err != nil {
-		return err
+		return fmt.Errorf("open publication directory: %w", err)
 	}
 	defer func() { _ = dir.Close() }()
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync publication directory: %w", err)
+	}
+	return nil
 }
 
 func lockInstallation(ctx context.Context, stateDir string) (*os.File, error) {

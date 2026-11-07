@@ -20,6 +20,7 @@ cp "$repo_root/scripts/plan-release.sh" "$checkout/scripts/plan-release.sh"
 cat >"$fake_bin/gh" <<'GH'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"$GH_CALLS"
 case " $* " in
   *'/releases/latest '*) printf '%s\n' "${GH_LATEST_TAG:-v0.1.38}" ;;
   *'/check-runs '*) printf '%s\n' "${GH_GATE_COUNT:-1}" ;;
@@ -37,7 +38,20 @@ case " $* " in
   *) printf 'unexpected gh invocation: %s\n' "$*" >&2; exit 1 ;;
 esac
 GH
-chmod 0755 "$fake_bin/gh"
+real_grep=$(command -v grep)
+cat >"$fake_bin/grep" <<'GREP'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -eq 2 && $1 == -Ev && $2 == '^Casks/mesh\.rb$' ]]; then
+  printf '%s\n' "${GREP_CLASSIFIER_STATUS:-real}" >>"$GREP_CLASSIFIER_LOG"
+  if [[ -n ${GREP_CLASSIFIER_STATUS:-} ]]; then
+    printf 'fixture classifier failed with status %s\n' "$GREP_CLASSIFIER_STATUS" >&2
+    exit "$GREP_CLASSIFIER_STATUS"
+  fi
+fi
+exec "$REAL_GREP" "$@"
+GREP
+chmod 0755 "$fake_bin/gh" "$fake_bin/grep"
 
 printf 'base\n' >"$checkout/source"
 git -C "$checkout" add source
@@ -56,8 +70,15 @@ git -C "$checkout" push -q origin main
 
 run_reserve() {
   (cd "$checkout" && env PATH="$fake_bin:$PATH" GITHUB_REPOSITORY=ShaulLavo/mesh \
-    RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" "$repo_root/scripts/reserve-release.sh" "$@")
+    RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" GH_CALLS="$test_root/gh.calls" \
+    REAL_GREP="$real_grep" GREP_CLASSIFIER_LOG="$test_root/classifier.log" \
+    "$repo_root/scripts/reserve-release.sh" "$@")
 }
+
+result=$(GREP_CLASSIFIER_STATUS=2 run_reserve "$base")
+grep -Fqx 'action=reconcile' <<<"$result"
+grep -Fqx "source=$base" <<<"$result"
+[[ ! -e $test_root/classifier.log ]]
 
 result=$(run_reserve "$cask")
 grep -Fqx 'action=skip' <<<"$result"
@@ -67,6 +88,36 @@ printf 'code\n' >>"$checkout/source"
 git -C "$checkout" commit -qam code
 source_sha=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
+assert_classifier_failure() {
+  local source=$1 expected_status=$2 status=0
+  local tags calls
+  tags=$(git --git-dir="$remote" show-ref --tags) || return 1
+  calls=$(cat "$test_root/gh.calls") || return 1
+  GREP_CLASSIFIER_STATUS=$expected_status run_reserve "$source" \
+    >"$test_root/classifier.out" 2>"$test_root/classifier.err" || status=$?
+  if [[ $status != "$expected_status" ]]; then
+    printf 'FAIL: classifier status %s for %s returned %s:\n' "$expected_status" "$source" "$status" >&2
+    cat "$test_root/classifier.out" "$test_root/classifier.err" >&2
+    return 1
+  fi
+  [[ ! -s $test_root/classifier.out ]] || return 1
+  grep -Fqx "fixture classifier failed with status $expected_status" "$test_root/classifier.err" || return 1
+  grep -Fqx "release reservation: changed-file classifier failed with status $expected_status" "$test_root/classifier.err" || return 1
+  [[ $(tail -n 1 "$test_root/classifier.log") == "$expected_status" ]] || return 1
+  [[ $(git --git-dir="$remote" show-ref --tags) == "$tags" ]] || return 1
+  [[ $(cat "$test_root/gh.calls") == "$calls" ]] || return 1
+  [[ ! -e $test_root/gh.log ]] || return 1
+  printf 'PASS: classifier status %s for %s fails before release access or tag changes\n' "$expected_status" "$source"
+}
+
+classifier_failures=0
+for classifier_source in "$cask" "$source_sha"; do
+  for classifier_status in 2 127 42; do
+    assert_classifier_failure "$classifier_source" "$classifier_status" || classifier_failures=$((classifier_failures + 1))
+  done
+done
+[[ $classifier_failures -eq 0 ]]
+
 result=$(run_reserve "$source_sha")
 # The workflow appends this output to GITHUB_OUTPUT, which accepts only
 # key=value lines.
@@ -161,4 +212,22 @@ if run_reserve_step 1; then
   exit 1
 fi
 
-echo 'PASS: release reservation requires tested source, preserves retries, and advances past failed reservations'
+git -C "$checkout" commit -q --allow-empty -m empty
+empty_source=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" push -q origin main
+result=$(GREP_CLASSIFIER_STATUS=2 run_reserve "$empty_source")
+grep -Fqx 'action=publish' <<<"$result"
+grep -Fqx "source=$empty_source" <<<"$result"
+grep -Fqx 'version=v0.1.43' <<<"$result"
+
+printf 'mixed code\n' >>"$checkout/source"
+printf 'mixed cask\n' >>"$checkout/Casks/mesh.rb"
+git -C "$checkout" commit -qam mixed
+mixed_source=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" push -q origin main
+result=$(run_reserve "$mixed_source")
+grep -Fqx 'action=publish' <<<"$result"
+grep -Fqx 'version=v0.1.44' <<<"$result"
+[[ $(git --git-dir="$remote" rev-list -n 1 v0.1.44) == "$mixed_source" ]]
+
+echo 'PASS: release reservation rejects classifier errors, requires tested source, preserves retries, and advances past failed reservations'

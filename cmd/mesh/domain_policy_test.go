@@ -89,7 +89,7 @@ func verifyPickerServiceCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cache.Close() //nolint:errcheck // isolated test cache
-	if err := cache.SaveServices(t.Context(), cli.HostRecord{ID: host.ID, MeshIdentity: host.ID}, "pc.mesh.mesh.test", []protocol.ServiceInfo{{Name: "site", Kind: "static", Target: t.TempDir(), Healthy: true}}); err != nil {
+	if _, err := cache.SaveServices(t.Context(), cli.HostRecord{ID: host.ID, MeshIdentity: host.ID}, "pc.mesh.mesh.test", []protocol.ServiceInfo{{Name: "site", Kind: "static", Target: t.TempDir(), Healthy: true}}); err != nil {
 		t.Fatal(err)
 	}
 }

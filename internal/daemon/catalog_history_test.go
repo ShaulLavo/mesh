@@ -453,7 +453,11 @@ func (h historyCatalog) seed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.store.ReconcileHost(t.Context(), h.catalog.host, observed); err != nil {
+	rows := make([]storage.ObservedSession, len(observed))
+	for i, session := range observed {
+		rows[i].Session = session
+	}
+	if err := h.store.ReconcileHost(t.Context(), h.catalog.host, rows); err != nil {
 		t.Fatal(err)
 	}
 }

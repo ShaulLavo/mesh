@@ -28,9 +28,20 @@ git merge-base --is-ancestor "$source_sha" origin/main || {
 }
 
 changed=$(git diff-tree --no-commit-id --name-only -r "$source_sha")
-if [[ -n $changed ]] && ! grep -Ev '^Casks/mesh\.rb$' <<<"$changed" >/dev/null; then
-  printf 'action=skip\nsource=%s\nreason=cask-only\n' "$source_sha"
-  exit 0
+if [[ -n $changed ]]; then
+  classifier_status=0
+  grep -Ev '^Casks/mesh\.rb$' <<<"$changed" >/dev/null || classifier_status=$?
+  case "$classifier_status" in
+    0) ;;
+    1)
+      printf 'action=skip\nsource=%s\nreason=cask-only\n' "$source_sha"
+      exit 0
+      ;;
+    *)
+      printf 'release reservation: changed-file classifier failed with status %s\n' "$classifier_status" >&2
+      exit "$classifier_status"
+      ;;
+  esac
 fi
 
 latest_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)

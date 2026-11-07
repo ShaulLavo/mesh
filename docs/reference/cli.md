@@ -24,6 +24,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh recover`](#mesh-recover) | Recover a saved session and retain its previous output |
 | [`mesh recovery-command`](#mesh-recovery-command) | Save an explicit restart command |
 | [`mesh rm`](#mesh-rm) | Forget finished sessions and delete what they left behind |
+| [`mesh session`](#mesh-session) | Read sessions without attaching or starting work |
 | [`mesh sig`](#mesh-sig) | Send a signal to a session process group |
 | [`mesh add`](#mesh-add) | Install Mesh on an SSH-reachable host |
 | [`mesh cp`](#mesh-cp) | Copy files or directories through an authenticated Mesh connection |
@@ -31,7 +32,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh fleet`](#mesh-fleet) | Share connections with explicitly trusted devices |
 | [`mesh hosts`](#mesh-hosts) | Read machine context without waking machines |
 | [`mesh inspect`](#mesh-inspect) | Read full host and fleet notes and current access |
-| [`mesh profile`](#mesh-profile) | Read and edit this machine's owner-written notes |
+| [`mesh profile`](#mesh-profile) | Read and edit owner-written host and fleet notes |
 | [`mesh rename`](#mesh-rename) | Change the destination machine's name |
 | [`mesh ssh`](#mesh-ssh) | Open a shell or command that ends when the connection closes |
 | [`mesh wake`](#mesh-wake) | Wake a configured host |
@@ -92,6 +93,7 @@ SESSIONS
   recover SESSION [--flags]                             Recover a saved session and retain its previous output
   recovery-command SESSION -- PROGRAM ARG... [--flags]  Save an explicit restart command
   rm session...                                         Forget finished sessions and delete what they left behind
+  session [command] [--flags]                           Read sessions without attaching or starting work
   sig session signal                                    Send a signal to a session process group
 
 HOSTS
@@ -102,7 +104,7 @@ HOSTS
   fleet [command]                                       Share connections with explicitly trusted devices
   hosts [--flags]                                       Read machine context without waking machines
   inspect HOST [--flags]                                Read full host and fleet notes and current access
-  profile [command] [--flags]                           Read and edit this machine's owner-written notes
+  profile [command] [--flags]                           Read and edit owner-written host and fleet notes
   rename host new-name                                  Change the destination machine's name
   ssh HOST [-- command...] [--flags]                    Open a shell or command that ends when the connection closes
   wake host [command]                                   Wake a configured host
@@ -466,6 +468,74 @@ FLAGS
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
+## mesh session
+
+```text
+Read sessions without attaching or starting work
+
+USAGE
+
+  mesh session [command] [--flags]
+
+COMMANDS
+
+  inspect SESSION_ID [--flags]  Read live or saved session details without attaching
+  list [--flags]                List one host's sessions with bounded pages
+
+FLAGS
+
+  -h --help                     Help for session
+  --json                        Write one agent result
+  --leave-key                   Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy                     Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh session inspect
+
+```text
+Read a session's launch metadata and live or saved inspection.
+Without --preview, Mesh reads one cell internally and discards its preview.
+With --preview, Mesh reads at most 80 columns by 24 rows. Neither changes
+terminal size or attachment.
+
+USAGE
+
+  mesh session inspect SESSION_ID [--flags]
+
+FLAGS
+
+  -h --help    Help for inspect
+  --host       Machine name or exact host ID, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --preview    Include a control-free preview, at most 80 by 24
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for the read, from 100ms to 60s (5s)
+```
+
+## mesh session list
+
+```text
+List one host's sessions with bounded pages
+
+USAGE
+
+  mesh session list [--flags]
+
+FLAGS
+
+  --all        Include exited and interrupted sessions
+  --detail     Include launch command and working directory
+  -h --help    Help for list
+  --host       Machine name or exact host ID, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --limit      Maximum sessions in this page, from 1 to 500 (100)
+  --page       Opaque nextPage token from this host
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline for the read, from 100ms to 60s (5s)
+```
+
 ## mesh sig
 
 ```text
@@ -661,7 +731,7 @@ FLAGS
 ## mesh profile
 
 ```text
-Read and edit this machine's owner-written notes
+Read and edit owner-written host and fleet notes
 
 USAGE
 
@@ -669,16 +739,17 @@ USAGE
 
 COMMANDS
 
-  edit [--flags]  Edit the local profile with VISUAL or EDITOR, for humans only
-  set [--flags]   Replace the local host profile at an expected revision
-  show [--flags]  Read the local host profile without contacting the daemon
+  edit [--flags]    Edit the local profile with VISUAL or EDITOR, for humans only
+  set [--flags]     Replace host or fleet notes at an expected revision
+  show [--flags]    Read the local host or fleet profile without contacting peers
+  status [--flags]  Read local fleet delivery state without contacting members
 
 FLAGS
 
-  -h --help       Help for profile
-  --json          Write one agent result
-  --leave-key     Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy       Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  -h --help         Help for profile
+  --json            Write one agent result
+  --leave-key       Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy         Mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh profile edit
@@ -692,6 +763,7 @@ USAGE
 
 FLAGS
 
+  --fleet      Edit signed fleet notes
   -h --help    Help for edit
   --json       Unsupported; use profile set for JSON input
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -701,7 +773,7 @@ FLAGS
 ## mesh profile set
 
 ```text
-Replace the local host profile at an expected revision
+Replace host or fleet notes at an expected revision
 
 USAGE
 
@@ -711,6 +783,7 @@ FLAGS
 
   --expected-revision  Revision read before this edit; 0 for an absent profile
   --file               Editable JSON path, or - to explicitly read stdin
+  --fleet              Replace signed fleet notes and queue saved members
   -h --help            Help for set
   --json               Write one agent result
   --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
@@ -720,7 +793,7 @@ FLAGS
 ## mesh profile show
 
 ```text
-Read the local host profile without contacting the daemon
+Read the local host or fleet profile without contacting peers
 
 USAGE
 
@@ -728,10 +801,30 @@ USAGE
 
 FLAGS
 
+  --fleet      Read the local signed fleet replica
   -h --help    Help for show
   --json       Write one agent result
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh profile status
+
+```text
+Read local fleet delivery state without contacting members
+
+USAGE
+
+  mesh profile status [--flags]
+
+FLAGS
+
+  --fleet      Read fleet delivery state
+  -h --help    Help for status
+  --json       Write one agent result
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --retry      Reset pending and stale delivery age and retry
 ```
 
 ## mesh rename
@@ -1561,8 +1654,9 @@ Usage:
   mesh version [flags]
 
 Flags:
-  -h, --help   help for version
-      --json   write build metadata as JSON
+  -h, --help       help for version
+      --json       write build metadata as JSON
+      --licenses   print the bundled Brotli notice
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

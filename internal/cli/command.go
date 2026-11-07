@@ -395,7 +395,7 @@ func NewCommand(dependencies Dependencies) *Command {
 		&cobra.Group{ID: groupSetup, Title: "Setup"},
 	)
 	root.AddCommand(
-		inGroup(groupSessions, app.listCommand(), app.attachCommand(), app.localCommand(),
+		inGroup(groupSessions, app.listCommand(), app.sessionCommand(), app.attachCommand(), app.localCommand(),
 			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.copyCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand(), app.profileCommand(), app.hostsCommand(), app.inspectHostCommand())...)
@@ -1784,6 +1784,7 @@ func (a *application) daemonCommand() *cobra.Command {
 			}
 			return runManagedDaemon(cmd.Context(), meshdaemon.Config{
 				ConfigDir:              sharing.Directory,
+				FleetMembershipPath:    filepath.Join(sharing.Directory, "fleet.json"),
 				FleetShare:             sharing,
 				SSHSessionHandler:      a.dependencies.SSHSessionHandler,
 				WakePeerIdentity:       configuredWakeIdentity,

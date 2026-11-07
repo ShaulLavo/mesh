@@ -18,6 +18,7 @@ import (
 var FleetLimits = Limits{1 << 10, 64 << 10, 32, 64, 256, 16, 512, 96 << 10}
 
 const StateUntrusted ProfileState = "untrusted"
+const fleetRevisionField = "revision"
 const fleetSignaturePrefix = "mesh-fleet-profile-v1\x00"
 
 type FleetDocument struct {
@@ -70,7 +71,7 @@ func VerifyFleet(d FleetDocument) error {
 
 func parseFleet(data []byte) (FleetDocument, error) {
 	var doc FleetDocument
-	fields := append(append([]string{}, editableFields...), "fleet", "revision", "updatedAt", "author", "signature")
+	fields := append(append([]string{}, editableFields...), "fleet", fleetRevisionField, "updatedAt", "author", "signature")
 	if err := strictObject(data, FleetLimits.Encoded, fields); err != nil {
 		return doc, err
 	}
@@ -82,11 +83,6 @@ func parseFleet(data []byte) (FleetDocument, error) {
 	}
 	return doc, nil
 }
-
-// FleetStore reads the local replica. Publication and outbox ownership land separately.
-type FleetStore struct{ dir string }
-
-func OpenFleetStore(stateDir string) *FleetStore { return &FleetStore{dir: stateDir} }
 
 func (s *FleetStore) ReadReplica(trusted func(string) bool) (Snapshot[FleetDocument], error) {
 	revision := uint64(0)
@@ -107,6 +103,12 @@ func (s *FleetStore) ReadReplica(trusted func(string) bool) (Snapshot[FleetDocum
 		return fleetUnavailable(err), err
 	}
 	defer func() { _ = dir.Close() }()
+	return readReplica(dir, trusted)
+}
+
+func readReplica(dir *os.File, trusted func(string) bool) (Snapshot[FleetDocument], error) {
+	revision := uint64(0)
+	absent := Snapshot[FleetDocument]{State: StateAbsent, Revision: &revision}
 	data, err := readPrivate(dir, "profile.json", FleetLimits.Encoded)
 	if errors.Is(err, os.ErrNotExist) {
 		return absent, nil
@@ -120,7 +122,7 @@ func (s *FleetStore) ReadReplica(trusted func(string) bool) (Snapshot[FleetDocum
 	}
 	doc, err := parseFleet(data)
 	if err != nil {
-		return Snapshot[FleetDocument]{State: StateInvalid, Problem: problemText(err.Error())}, nil
+		return Snapshot[FleetDocument]{State: StateInvalid, Revision: fleetRevision(data), Problem: problemText(err.Error())}, nil
 	}
 	snapshot := Snapshot[FleetDocument]{State: StateValid, Value: &doc, Revision: &doc.Revision}
 	if trusted == nil || !trusted(doc.Author) {
@@ -164,4 +166,18 @@ func openPrivateDirectoryChild(parent *os.File, name string, create bool) (*os.F
 		return nil, errors.New("profile directory must be owned by this user and not writable by others")
 	}
 	return dir, nil
+}
+
+// Only strictly decoded metadata is revision evidence. A damaged signature never
+// makes an older document safe to install, and malformed JSON is not absence.
+func fleetRevision(data []byte) *uint64 {
+	fields := append(append([]string{}, editableFields...), "fleet", fleetRevisionField, "updatedAt", "author", "signature")
+	if strictObject(data, FleetLimits.Encoded, fields) != nil {
+		return nil
+	}
+	var doc FleetDocument
+	if json.Unmarshal(data, &doc) != nil || doc.Revision == 0 {
+		return nil
+	}
+	return &doc.Revision
 }

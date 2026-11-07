@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "operation": "profile.status",
+  "status": "ok",
+  "requestId": "01JA0000000000000000000000",
+  "data": {
+    "replica": {
+      "state": "valid",
+      "revision": 1,
+      "digest": "DIGEST",
+      "freshness": "live",
+      "completeness": "full",
+      "profile": {
+        "description": "",
+        "labels": {},
+        "warnings": [],
+        "instructions": "fleet notes",
+        "instructionsBytes": 11
+      },
+      "author": "AUTHOR"
+    },
+    "fleetSaved": false,
+    "fleet": "",
+    "members": []
+  },
+  "errors": []
+}

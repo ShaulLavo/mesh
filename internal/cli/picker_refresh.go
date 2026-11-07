@@ -9,7 +9,7 @@ import (
 
 type pickerServiceCache interface {
 	LoadServices(context.Context, HostRecord) ([]storage.CachedService, error)
-	SaveServices(context.Context, HostRecord, string, []protocol.ServiceInfo) error
+	SaveServices(context.Context, HostRecord, string, []protocol.ServiceInfo) (bool, error)
 }
 
 type pickerCatalogCache interface {
@@ -33,7 +33,7 @@ func (a *application) refreshPickerServices(ctx context.Context, host HostRecord
 	if queryErr == nil {
 		rows := liveServiceCatalogRows(snapshot.Host, snapshot)
 		cacheContext, cancelCache := context.WithTimeout(operationContext, serviceCacheWriteTimeout)
-		_ = cache.SaveServices(cacheContext, host, snapshot.PrivateName, snapshot.Services)
+		_, _ = cache.SaveServices(cacheContext, host, snapshot.PrivateName, snapshot.Services)
 		cancelCache()
 		return &PickerServiceCatalog{Rows: rows}
 	}
