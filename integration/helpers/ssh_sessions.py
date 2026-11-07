@@ -3,23 +3,24 @@
 
 import json
 import os
-from pathlib import Path
 import socket
 import subprocess
 import sys
 
-sys.dont_write_bytecode = True
 from terminal_window import Fixture, Terminal, PROMPT, eventually, require, run_fixture, run_outside_containing_session
 
 
 class SSHFixture(Fixture):
-    def start_ssh(self):
-        self.local.mkdir()
-        self.key = self.root / "client-key"
-        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.key)], check=True)
-        authorized = self.local / "authorized_keys"
-        authorized.write_bytes(self.key.with_suffix(".pub").read_bytes())
-        authorized.chmod(0o600)
+    def start_ssh(self, keys=None):
+        self.local.mkdir(exist_ok=keys is not None)
+        if keys is None:
+            self.key = self.root / "client-key"
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.key)], check=True)
+            authorized = self.local / "authorized_keys"
+            authorized.write_bytes(self.key.with_suffix(".pub").read_bytes())
+            authorized.chmod(0o600)
+        else:
+            self.key = keys[0]
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         (bin_dir / "tailscale").symlink_to(self.helpers / "fake_tailscale")
@@ -47,20 +48,20 @@ class SSHFixture(Fixture):
         except OSError:
             return False
 
-    def ssh_command(self, command=(), tty=False):
-        return ["ssh", "-F", "/dev/null", "-p", str(self.port), "-i", str(self.key),
+    def ssh_command(self, command=(), tty=False, key=None):
+        return ["ssh", "-F", "/dev/null", "-p", str(self.port), "-i", str(self.key if key is None else key),
                 "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=2",
                 "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                 "-o", "LogLevel=ERROR", *( ["-tt"] if tty else ["-T"] ),
                 "mesh@127.0.0.2", *command]
 
-    def ssh_terminal(self, command=()):
-        terminal = Terminal(self.ssh_command(command, tty=True), self.environment, self.root)
+    def ssh_terminal(self, command=(), key=None):
+        terminal = Terminal(self.ssh_command(command, tty=True, key=key), self.environment, self.root)
         self.terminals.append(terminal)
         return terminal
 
-    def exec_ssh(self, *command):
-        return subprocess.run(self.ssh_command(command), env=self.environment, stdin=subprocess.DEVNULL,
+    def exec_ssh(self, *command, key=None):
+        return subprocess.run(self.ssh_command(command, key=key), env=self.environment, stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=4)
 
 
@@ -129,6 +130,9 @@ def exercise(fixture):
 
 
 def main():
+    if sys.argv[2:]:
+        from ssh_revocation import run_revocation
+        return run_revocation(sys.argv[1], sys.argv[2:])
     run_fixture(SSHFixture, sys.argv[1], "mesh-ssh-session-", exercise, "SSH fixture exceeded 25 seconds")
     print("PASS: SSH picker, attach, resize, detach, steal, crash survival, new shell and exit status")
 

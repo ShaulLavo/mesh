@@ -64,10 +64,16 @@ func newDaemonRunFixture(t *testing.T) *daemonRunFixture {
 
 func (f *daemonRunFixture) start(t *testing.T, runner func(context.Context) error) {
 	t.Helper()
+	if f.done != nil && !f.joined {
+		t.Fatal("daemon fixture: previous run has not joined")
+	}
+	if f.done == nil {
+		t.Cleanup(func() { f.stop(t) })
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancel = cancel
 	f.done = make(chan struct{})
-	t.Cleanup(func() { f.stop(t) })
+	f.joined = false
 	t.Log("daemon fixture: starting")
 	go func() {
 		f.err = runner(ctx)
@@ -77,6 +83,9 @@ func (f *daemonRunFixture) start(t *testing.T, runner func(context.Context) erro
 
 func (f *daemonRunFixture) stop(t *testing.T) {
 	t.Helper()
+	if f.joined {
+		return
+	}
 	t.Log("daemon fixture: canceling")
 	f.cancel()
 	timer := time.NewTimer(runtimeTestTimeout)
