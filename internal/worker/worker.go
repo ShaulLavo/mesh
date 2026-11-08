@@ -507,7 +507,7 @@ func Run(cfg Config) (int, error) {
 	if capture != nil {
 		defer func() { _, _ = capture.Finish(context.Background(), "interrupted") }()
 	}
-	pty, err := xpty.NewPty(cfg.Cols, cfg.Rows)
+	pty, err := newWorkerPTY(cfg.Cols, cfg.Rows)
 	if err != nil {
 		return 0, fmt.Errorf("worker: open pty: %w", err)
 	}
