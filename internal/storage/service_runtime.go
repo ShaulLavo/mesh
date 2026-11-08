@@ -107,11 +107,13 @@ func (s *Store) CompareServiceRuntime(ctx context.Context, before, next *Service
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := dbsqlc.New(tx)
-	if err := compareServiceRuntime(ctx, q, before, next); err != nil {
-		return err
-	}
+	// Acquire the writer before reading: a deferred read-to-write upgrade can
+	// return SQLITE_BUSY without waiting for another catalog writer.
 	if err := q.ConfirmServiceRuntime(ctx); err != nil {
 		return fmt.Errorf("storage: confirm runtime: %w", err)
+	}
+	if err := compareServiceRuntime(ctx, q, before, next); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("storage: commit runtime: %w", err)
