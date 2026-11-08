@@ -370,6 +370,8 @@ jobs:
 
   gate:
     name: Complete CI gate
+    permissions:
+      statuses: write
     if: always()
     needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
@@ -380,6 +382,7 @@ jobs:
           echo '::error::Mark this PR ready for review to run the required checks.'
           exit 1
       - name: Require every CI job
+        id: verdict
         env:
           CHANGES: ${{ needs.changes.result }}
           CODE: ${{ needs.changes.outputs.code }}
@@ -402,12 +405,29 @@ jobs:
           [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]] || exit 1
           [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]] || exit 1
 
+      # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
+      - name: Report the real CI verdict on the tested commit
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/cask-updates' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD: ${{ github.sha }}
+          RESULT: ${{ steps.verdict.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          if [[ "$RESULT" == success ]]; then state=success; fi
+          gh api --method POST "repos/$GH_REPO/statuses/$HEAD" \
+            -f context="Complete CI gate" -f state="$state" -f target_url="$RUN_URL" \
+            -f description="Dispatched CI: $RESULT"
+
   publish:
     name: Publish tested main commit
     needs: gate
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       actions: write
+      statuses: write
       checks: read
       contents: write
       pull-requests: write

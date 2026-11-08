@@ -136,7 +136,8 @@ check_source_contract() {
   contains .github/workflows/ci.yml 'Complete CI gate'
   contains .github/workflows/ci.yml '  pull_request:'
   contains .github/workflows/ci.yml 'types: [opened, synchronize, reopened, ready_for_review]'
-  does_not_contain scripts/finalize-release.sh 'gh workflow run'
+  contains scripts/finalize-release.sh 'gh workflow run'
+  contains scripts/finalize-release.sh 'branch=automation/cask-updates'
   contains .github/workflows/ci.yml 'uses: ./.github/workflows/release.yml'
   contains .github/workflows/ci.yml "python3 scripts/check-default-branch.py '\${{ github.repository }}'"
   contains .github/workflows/ci.yml 'python3 scripts/test-check-default-branch.py'
