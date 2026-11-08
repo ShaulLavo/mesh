@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	charmssh "charm.land/ssh"
@@ -272,9 +273,12 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 	hostKey := generatePrivateKey(t)
 	authorizedKeys := writeAuthorizedKeys(t, clientKey, 0o600)
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	stopped := make(chan struct{})
+	lifetime := sshFixtureShutdown{cancel: cancel, served: stopped}
+	t.Cleanup(func() { lifetime.cleanup(t) })
 	done := make(chan error, 1)
 	go func() {
+		defer close(stopped)
 		done <- Serve(ctx, Config{ScopeMembership: fixtureNoScopes,
 			HostKey:        hostKey,
 			AuthorizedKeys: authorizedKeys,
@@ -297,6 +301,7 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	disconnected := make(chan struct{})
+	lifetime.disconnected = disconnected
 	go func() {
 		_ = client.Wait()
 		close(disconnected)
@@ -312,8 +317,8 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 		t.Fatal("SSH listener also accepted on 127.0.0.1")
 	}
 
-	cancel()
-	shutdown := time.NewTimer(2 * time.Second)
+	lifetime.stop()
+	shutdown := time.NewTimer(time.Until(lifetime.deadline))
 	defer shutdown.Stop()
 	select {
 	case err := <-done:
@@ -339,6 +344,89 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 		t.Fatalf("connect to replacement listener: %v", err)
 	}
 	_ = connection.Close()
+}
+
+type sshFixtureShutdown struct {
+	cancel               context.CancelFunc
+	deadline             time.Time
+	served, disconnected <-chan struct{}
+}
+
+func (s *sshFixtureShutdown) stop() {
+	if s.deadline.IsZero() {
+		s.deadline = time.Now().Add(2 * time.Second)
+	}
+	s.cancel()
+}
+
+func (s *sshFixtureShutdown) cleanup(t *testing.T) {
+	t.Helper()
+	s.stop()
+	timer := time.NewTimer(time.Until(s.deadline))
+	defer timer.Stop()
+	waits := []struct {
+		name string
+		done <-chan struct{}
+	}{{"Serve", s.served}, {"Wait", s.disconnected}}
+	for _, wait := range waits {
+		if wait.done == nil {
+			continue
+		}
+		select {
+		case <-wait.done:
+			continue
+		default:
+		}
+		select {
+		case <-wait.done:
+		case <-timer.C:
+			t.Errorf("SSH fixture %s goroutine did not join", wait.name)
+			return
+		}
+	}
+}
+
+func TestSSHFixtureShutdownJoinsServerAndWaiter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		served, disconnected := make(chan struct{}), make(chan struct{})
+		lifetime := sshFixtureShutdown{cancel: cancel, served: served, disconnected: disconnected}
+		joined := make(chan struct{})
+		go func() {
+			lifetime.cleanup(t)
+			close(joined)
+		}()
+		synctest.Wait()
+		if ctx.Err() == nil {
+			t.Error("fixture cleanup did not cancel the server")
+		}
+		select {
+		case <-joined:
+			t.Error("fixture cleanup returned before Serve completed")
+		default:
+		}
+		close(served)
+		synctest.Wait()
+		select {
+		case <-joined:
+			t.Error("fixture cleanup returned before Wait completed")
+		default:
+		}
+		close(disconnected)
+		synctest.Wait()
+		select {
+		case <-joined:
+		default:
+			t.Error("fixture cleanup did not join completed goroutines")
+		}
+		deadline := lifetime.deadline
+		time.Sleep(3 * time.Second)
+		lifetime.cleanup(t)
+		if lifetime.deadline != deadline {
+			t.Error("fixture cleanup renewed its shutdown budget")
+		}
+	})
 }
 
 func TestValidateConfigRejectsWildcardAndInvalidHostKey(t *testing.T) {
