@@ -473,6 +473,30 @@ Main source ad8ad3ac failed integration job 128441692746 in run 42385431420. `fl
 
 The shared fleet Device selected a port and immediately closed its socket before constructing all devices and starting their daemons. A deterministic regression now attempts competing binds before startup and between listener restarts, then requires the port to be reusable after fixture cleanup. It fails on the old helper. The fixture now retains a non-listening dual-stack socket until its own daemon and workers finish cleanup. Actual consumers are fleet sharing, fleet profiles, and automatic-update fixtures. No production code, timeout, retry, or assertion is relaxed. Source review and ordinary current-head CI remain delivery gates.
 
+### Window-entry cleanup acknowledgment, November 7, 2026
+
+- [ ] Revisit only on genuine recurrence. PR 406's normal integration job
+  [128508154961](https://github.com/ShaulLavo/mesh/actions/runs/42407465468/job/128508154961)
+  failed `window_entry.sh` during teardown with PR head
+  `85a94cfccf93cd5200d544c26ea3f5260a21a79f`, checked out as synthetic merge
+  `4b6bfad4e39c73bf9ca745a35b4b84ff802c2ff9`. One private generic worker did
+  not answer its kill before the fixture deadline. Its worker and interactive
+  Bash remained until the integration owner killed them. The log does not
+  identify the blocked worker operation or establish why the deadline expired.
+- Two selected-verifier attempts at that exact PR head passed on Linux with
+  four configured concurrent slots and the unchanged 60-second CI entry budget.
+  The first selected `window_entry.sh` alone. The second selected it alongside
+  `fixture_cleanup.sh`, `kill_waits.sh`, and `session_control.sh`; all four passed.
+  The 25-second scenario alarm, 25-second total fixture cleanup allowance,
+  10-second kill exchange, and product deadlines were unchanged. These bounded
+  controls did not repeat the complete hosted suite or establish its cause.
+- Source inspection and focused worker lifecycle race controls found no
+  demonstrated defect. No product, fixture, diagnostic, retry, timeout, workflow,
+  assertion, or baseline change follows from this non-reproduction. Normal green
+  CI on reviewed source remains required. Preserve the hosted failure and the
+  bounded controls in
+  `/work/reports/wave-20261106/audits2/mesh/execution/008/u2/main410-integration/window-entry-failure/REPORT.md`.
+
 
 ### Current main delivery failures, November 7, 2026
 

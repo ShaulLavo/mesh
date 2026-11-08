@@ -28,6 +28,10 @@ const (
 	RequestNotFound          Code = "request.not_found"
 	AccessDenied             Code = "access.denied"
 	ResourceLimit            Code = "resource.limit"
+	LogsCursorExpired        Code = "logs.cursor_expired"
+	LogsCursorInvalid        Code = "logs.cursor_invalid"
+	ResultExpired            Code = "result.expired"
+	SessionInstanceMismatch  Code = "session.instance_mismatch"
 	InternalError            Code = "internal.error"
 )
 
@@ -46,6 +50,6 @@ var Codes = map[Code]ErrorClass{
 	FleetSignerUntrusted: {Exit: 1, Retryable: true}, FleetDeliveryRejected: {Exit: 1, Retryable: true},
 	FleetRevisionConflict: {Exit: 1}, FleetStale: {Exit: 1}, SkillConflict: {Exit: 1}, SkillUnsafePath: {Exit: 2}, InternalError: {Exit: 1},
 	RequestKeyConflict: {Exit: 1}, RequestInProgress: {Exit: 1, Retryable: true}, RequestNotFound: {Exit: 1},
-	RequestOutcomeUnknown: {Exit: 1}, "logs.cursor_expired": {Exit: 1, Reserved: true},
-	"result.expired": {Exit: 1, Reserved: true}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
+	RequestOutcomeUnknown: {Exit: 1}, LogsCursorExpired: {Exit: 1}, LogsCursorInvalid: {Exit: 1}, SessionInstanceMismatch: {Exit: 1},
+	ResultExpired: {Exit: 1}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 }

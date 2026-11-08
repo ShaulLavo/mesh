@@ -66,6 +66,7 @@ type lifecycle struct {
 	executionOnce    sync.Once
 	execution        *execution.Journal
 	executionErr     error
+	executionOutput  *execution.Output
 	names            *machinename.Store
 	nameChanged      func(protocol.HostInfo)
 	renameMu         sync.Mutex
@@ -272,6 +273,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 	}
 	switch request.Type {
+	case protocol.TypeExecutionLogs, protocol.TypeExecutionWait, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove:
+		response, err := l.boundExecutionControl(ctx, request)
+		return response, true, err
 	case protocol.TypeExecutionCreate, protocol.TypeExecutionRequest:
 		response, err := l.executionControl(ctx, request)
 		return response, true, err

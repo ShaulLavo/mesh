@@ -16,6 +16,9 @@
     "publication": "published",
     "removal": "present",
     "receiptRetainUntil": "2026-12-07T10:00:00Z",
+    "outputRetainUntil": null,
+    "outputExpired": false,
+    "killRequested": false,
     "result": {
       "termination": {
         "kind": "exit",

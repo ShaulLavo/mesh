@@ -21,10 +21,15 @@ const executionLivePhase = "live"
 const executionUsageInvalidCode = "usage.invalid"
 
 type executionError struct {
-	receipt *protocol.ExecutionReceipt
-	err     error
+	receipt  *protocol.ExecutionReceipt
+	page     *protocol.ExecutionPage
+	delivery string
+	err      error
 }
 
+func executionFailure(response protocol.Control, err error) error {
+	return &executionError{receipt: response.ExecutionReceipt, page: response.ExecutionPage, delivery: response.ExecutionDelivery, err: err}
+}
 func (e *executionError) Error() string { return e.err.Error() }
 func (e *executionError) Unwrap() error { return e.err }
 func (l *lifecycle) executionJournal() (*execution.Journal, error) {
@@ -35,6 +40,9 @@ func (l *lifecycle) executionJournal() (*execution.Journal, error) {
 			return
 		}
 		l.execution, l.executionErr = execution.Open(filepath.Dir(l.sessionsDir), worker.BootID(), hex.EncodeToString(token[:]))
+		if l.executionErr == nil {
+			l.executionOutput, l.executionErr = execution.OpenOutput(filepath.Dir(l.sessionsDir))
+		}
 	})
 	return l.execution, l.executionErr
 }
@@ -82,7 +90,7 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 		return executionResponse(request, r, err)
 	}
 	r.Phase = "dispatched"
-	r.LaunchOutcome = "unknown"
+	r.LaunchOutcome = executionUnknownOutcome
 	if err := owned.Err(); err != nil {
 		return executionResponse(request, r, err)
 	}
@@ -152,19 +160,22 @@ func executionResponse(request protocol.Control, r execution.Receipt, err error)
 		response.ExecutionReceipt = executionWireReceipt(r)
 	}
 	if err != nil {
-		return response, &executionError{receipt: response.ExecutionReceipt, err: err}
+		return response, executionFailure(response, err)
 	}
 	return response, nil
 }
 func executionWireReceipt(r execution.Receipt) *protocol.ExecutionReceipt {
-	out := &protocol.ExecutionReceipt{HostID: r.Binding.Host, SessionID: r.Binding.Reservation.ID, Instance: r.Binding.Reservation.Instance, RequestKey: r.Key.Opaque, KeyScope: r.Key.Class, Kind: "pty", Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.RetainUntil, RetentionReason: r.RetentionReason}
+	out := &protocol.ExecutionReceipt{HostID: r.Binding.Host, SessionID: r.Binding.Reservation.ID, Instance: r.Binding.Reservation.Instance, RequestKey: r.Key.Opaque, KeyScope: r.Key.Class, Kind: "pty", Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.RetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
 	if r.Result != nil {
 		t := r.Result.Termination
-		out.Result = &protocol.ExecutionResult{Termination: protocol.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture}
+		out.Result = &protocol.ExecutionResult{Termination: protocol.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: wireExecutionStreams(r.Result.Streams)}
 	}
 	return out
 }
 func executionCode(err error) string {
+	if code := executionOutputCode(err); code != "" {
+		return code
+	}
 	var invalid *protocol.ExecutionValidationError
 	if errors.As(err, &invalid) {
 		return executionUsageInvalidCode
@@ -198,6 +209,9 @@ func (l *lifecycle) restoreExecution(ctx context.Context) error {
 	return executionBoundaryError("execution.go restoreExecution", journal.Maintain(ctx))
 }
 func (l *lifecycle) closeExecution() {
+	if l.executionOutput != nil {
+		_ = l.executionOutput.Close()
+	}
 	if l.execution != nil {
 		_ = l.execution.Close()
 	}
@@ -208,7 +222,7 @@ func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Jour
 	if err != nil && !errors.Is(err, execution.ErrUnknown) {
 		return r, executionBoundaryError("read execution receipt", err)
 	}
-	if r.Phase == "terminal" {
+	if r.Phase == executionTerminalPhase {
 		return r, nil
 	}
 	if r.Binding.Reservation.BootID != worker.BootID() {
@@ -258,4 +272,12 @@ func executionBoundaryError(operation string, err error) error {
 
 func (l *lifecycle) cancelExecutionOnShutdown(cancel context.CancelFunc) func() bool {
 	return context.AfterFunc(l.context, cancel)
+}
+
+func wireExecutionStreams(streams []execution.StreamResult) []protocol.ExecutionStream {
+	out := make([]protocol.ExecutionStream, 0, len(streams))
+	for _, s := range streams {
+		out = append(out, protocol.ExecutionStream{Stream: s.Stream, Generation: s.Generation, Earliest: s.Earliest, End: s.End, ObservedEnd: s.ObservedEnd, EOF: s.EOF, CloseReason: s.CloseReason, Loss: s.Loss})
+	}
+	return out
 }

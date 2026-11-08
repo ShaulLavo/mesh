@@ -211,6 +211,7 @@ def exercise_unexpected_exchange(binary, root, operation):
         failure = SetupFailure(f"unexpected {operation} error")
         with patch("terminal_window.socket.socket") as constructor:
             connection = constructor.return_value.__enter__.return_value
+            connection.getsockopt.side_effect = OSError("fixture socket has no peer credentials")
             getattr(connection, "sendall" if operation == "send" else "recv").side_effect = failure
             close_started = True
             try:

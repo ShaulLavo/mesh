@@ -13,32 +13,32 @@ type Fence struct{ file *os.File }
 
 func (g *Fence) Close() error { return executionBoundaryError("lock.go Close", g.file.Close()) }
 func (f *Files) Lock(ctx context.Context, name string) (*Fence, error) {
-	return f.lockFile(ctx, name, os.O_CREATE|os.O_RDWR)
+	return f.lockFile(ctx, name, os.O_CREATE|os.O_RDWR, unix.LOCK_EX)
 }
 func (f *Files) LockExisting(ctx context.Context, name string) (*Fence, error) {
-	return f.lockFile(ctx, name, os.O_RDWR)
+	return f.lockFile(ctx, name, os.O_RDWR, unix.LOCK_EX)
 }
-func (f *Files) lockFile(ctx context.Context, name string, flags int) (*Fence, error) {
+func (f *Files) lockFile(ctx context.Context, name string, flags, mode int) (*Fence, error) {
 	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	file, err := f.open(name, flags)
 	if err != nil {
 		return nil, err
 	}
-	if err := f.waitLock(ctx, file, name); err != nil {
+	if err := f.waitLock(ctx, file, name, mode); err != nil {
 		_ = file.Close()
 		return nil, err
 	}
 	return &Fence{file: file}, nil
 }
-func (f *Files) waitLock(ctx context.Context, file *os.File, name string) error {
+func (f *Files) waitLock(ctx context.Context, file *os.File, name string, mode int) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
 			return executionBoundaryError("lock.go waitLock", err)
 		}
-		err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err := unix.Flock(int(file.Fd()), mode|unix.LOCK_NB)
 		if err == nil {
 			return f.currentLock(file, name)
 		}
@@ -65,4 +65,8 @@ func (f *Files) currentLock(file *os.File, name string) error {
 		return fmt.Errorf("execution: replaced lock inode")
 	}
 	return regular(file)
+}
+
+func (f *Files) lockShared(ctx context.Context, name string) (*Fence, error) {
+	return f.lockFile(ctx, name, os.O_RDWR, unix.LOCK_SH)
 }

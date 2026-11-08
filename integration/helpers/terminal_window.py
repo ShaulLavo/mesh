@@ -26,6 +26,7 @@ import time
 
 from isolation import protected_cleanup, refuse_live_paths, termination_cleanup
 from owned_command import DEFAULTS
+from worker_failure import WorkerFailure
 
 sys.dont_write_bytecode = True
 from mesh_control import round_trip
@@ -227,6 +228,7 @@ class Fixture:
             "TERM": "xterm-256color",
             "NO_COLOR": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
+            "GOTRACEBACK": "all",
         })
 
     def validate_destinations(self):
@@ -500,6 +502,10 @@ class Fixture:
         return connection
 
     def await_worker(self, socket_path, connection, deadline):
+        with WorkerFailure(self, socket_path, connection, deadline):
+            self.await_worker_completion(socket_path, connection, deadline)
+
+    def await_worker_completion(self, socket_path, connection, deadline):
         # Match the product's control exchange deadline, which includes kill
         # escalation and the retained output of a never-attached command.
         exchange = deadline.within(10)
