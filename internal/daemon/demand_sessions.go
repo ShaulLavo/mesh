@@ -4,10 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
+
+	meshserve "github.com/shaul/mesh/internal/serve"
+	"github.com/shaul/mesh/internal/session"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -32,6 +37,8 @@ const (
 	servedOutputTail = 16 << 10
 	servedStopPoll   = 50 * time.Millisecond
 )
+
+func labelledCommand(shell, command string) []string { return []string{shell, "-lc", command} }
 
 func demandRequestID(action string) string {
 	var random [8]byte
@@ -154,30 +161,196 @@ func (l *lifecycle) outputTail(ctx context.Context, id string) string {
 	return lastLines(ansi.Strip(string(output)), demandFailureLines, demandFailureLineBytes)
 }
 
-// findLabelled returns the newest live session carrying label.
-func (l *lifecycle) findLabelled(ctx context.Context, label string) (string, bool, error) {
-	sessions, err := l.catalog.List(ctx)
+type labelledSession struct {
+	ID        string
+	Reference *session.Reservation
+	Command   []string
+	Cwd       string
+}
+
+// Raw allocations participate even when catalog publication has not completed.
+func (l *lifecycle) findLabelled(ctx context.Context, label string) (labelledSession, bool, error) {
+	entries, err := os.ReadDir(l.sessionsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return labelledSession{}, false, nil
+	}
 	if err != nil {
-		return "", false, err
+		return labelledSession{}, false, fmt.Errorf("daemon: inventory sessions: %w", err)
 	}
-	var newest storage.Session
-	found := false
-	for _, stored := range sessions {
-		if stored.State != storage.StateRunning && stored.State != storage.StateDetached {
+	var found labelledSession
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return found, false, fmt.Errorf("daemon: discover labelled session: %w", err)
+		}
+		candidate, err := l.labelledCandidate(entry, label)
+		if err != nil {
+			return found, false, err
+		}
+		if candidate.ID == "" {
 			continue
 		}
-		meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, string(stored.ID)))
-		if err != nil || meta.Label != label {
-			continue
+		if found.ID != "" {
+			return found, false, fmt.Errorf("multiple sessions may run %s", label)
 		}
-		if _, ended := l.sessionExit(string(stored.ID)); ended {
-			continue
+		found = candidate
+	}
+	return found, found.ID != "", nil
+}
+
+func (l *lifecycle) labelledCandidate(entry os.DirEntry, label string) (labelledSession, error) {
+	id := entry.Name()
+	if !isCanonicalSessionID(id) {
+		return labelledSession{}, nil
+	}
+	dir := filepath.Join(l.sessionsDir, id)
+	meta, err := worker.ReadMeta(dir)
+	if err != nil {
+		return unpublishedCandidate(dir, id, err)
+	}
+	if meta.ID != id {
+		return labelledSession{}, fmt.Errorf("session %s has mismatched metadata", id)
+	}
+	if meta.State == worker.StateExited || knownOtherBoot(meta.BootID) {
+		return labelledSession{}, nil
+	}
+	if meta.Label != label {
+		return labelledSession{}, nil
+	}
+	return labelledSession{ID: id, Reference: meta.Reservation, Command: meta.Command, Cwd: meta.Cwd}, nil
+}
+
+func unpublishedCandidate(dir, id string, cause error) (labelledSession, error) {
+	if oldReservation(dir) {
+		return labelledSession{}, nil
+	}
+	return labelledSession{}, fmt.Errorf("session %s has unreadable metadata; Mesh cannot rule out a running service: %w", id, cause)
+}
+
+func knownOtherBoot(boot string) bool {
+	return boot != "" && worker.BootID() != "" && boot != worker.BootID()
+}
+
+func oldReservation(dir string) bool {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = root.Close() }()
+	data, err := root.ReadFile(".reservation")
+	if err != nil {
+		return false
+	}
+	var ref session.Reservation
+	return json.Unmarshal(data, &ref) == nil && ref.Validate() == nil && knownOtherBoot(ref.BootID)
+}
+
+type sessionFate int
+
+const (
+	sessionUnknown sessionFate = iota
+	sessionLive
+	sessionEnded
+)
+
+type ownedObservation struct {
+	fate        sessionFate
+	code        *int
+	exitedAt    time.Time
+	interrupted bool
+}
+
+func (l *lifecycle) reserveLabelled(ctx context.Context) (session.Reservation, error) {
+	if err := ctx.Err(); err != nil {
+		return session.Reservation{}, fmt.Errorf("daemon: reserve managed session: %w", err)
+	}
+	ref, err := worker.Reserve(l.sessionsDir, session.Managed)
+	if err != nil {
+		return ref, fmt.Errorf("daemon: reserve managed worker: %w", err)
+	}
+	return ref, nil
+}
+
+func (l *lifecycle) startReserved(ctx context.Context, ref session.Reservation, service meshserve.Service) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("daemon: managed launch cancelled: %w", err)
+	}
+	env := append([]string(nil), l.env...)
+	if env == nil {
+		env = os.Environ()
+	}
+	env = append(env, service.Demand.Env...)
+	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable,
+		Reservation: &ref, Command: labelledCommand(hostShell(), service.Demand.Command), Cwd: service.Demand.Cwd, Env: env,
+		Cols: servedSessionCols, Rows: servedSessionRows, Term: servedSessionTerm, Label: service.Label()})
+	if err != nil {
+		return err
+	}
+	if launched.Meta.ID != ref.ID || launched.Meta.Reservation == nil || *launched.Meta.Reservation != ref {
+		return fmt.Errorf("managed launcher returned another instance")
+	}
+	if err := l.catalog.Reconcile(ctx); err != nil {
+		return publicationError{fmt.Errorf("publish managed session %s: %w", ref.ID, err)}
+	}
+	return nil
+}
+
+func (l *lifecycle) ownedFate(ref session.Reservation) ownedObservation {
+	if ref.Validate() != nil || ref.Purpose != session.Managed {
+		return ownedObservation{}
+	}
+	currentBoot := worker.BootID()
+	if currentBoot == "" {
+		return ownedObservation{}
+	}
+	if ref.BootID != currentBoot {
+		return ownedObservation{fate: sessionEnded, interrupted: true}
+	}
+	meta, err := worker.ReadMeta(filepath.Join(l.sessionsDir, ref.ID))
+	if err != nil || meta.Reservation == nil || *meta.Reservation != ref || meta.ID != ref.ID || meta.BootID != ref.BootID {
+		return ownedObservation{}
+	}
+	if meta.State == worker.StateExited {
+		observation := ownedObservation{fate: sessionEnded, code: meta.ExitCode}
+		if meta.ExitedAt != nil {
+			observation.exitedAt = *meta.ExitedAt
 		}
-		if !found || stored.CreatedAt.After(newest.CreatedAt) {
-			newest, found = stored, true
+		return observation
+	}
+	if meta.State == worker.StateRunning || meta.State == worker.StateDetached {
+		return ownedObservation{fate: sessionLive}
+	}
+	return ownedObservation{}
+}
+
+func (l *lifecycle) stopOwned(ctx context.Context, ref session.Reservation) error {
+	if observation := l.ownedFate(ref); observation.fate == sessionEnded {
+		return nil
+	}
+	connect := func(ctx context.Context, id protocol.SessionID) (transport.Conn, error) {
+		conn, err := l.connectOwned(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if l.ownedFate(ref).fate != sessionLive {
+			_ = conn.Close()
+			return nil, fmt.Errorf("session %s instance is unresolved", ref.ID)
+		}
+		return conn, nil
+	}
+	_, err := l.forwardOneShot(ctx, protocol.Control{Type: protocol.TypeKill, RequestID: demandRequestID("stop"), SessionID: ref.ID}, connect)
+	if err != nil {
+		return err
+	}
+	for {
+		if l.ownedFate(ref).fate == sessionEnded {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("session %s: wait for exact exit: %w", ref.ID, ctx.Err())
+		case <-time.After(servedStopPoll):
 		}
 	}
-	return string(newest.ID), found, nil
 }
 
 // pruneLabelled bounds the ended sessions earlier starts of a route left

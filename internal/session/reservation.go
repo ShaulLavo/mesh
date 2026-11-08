@@ -47,7 +47,7 @@ func (r Reservation) Validate() error {
 	default:
 		return fmt.Errorf("invalid reservation purpose")
 	}
-	if (r.Purpose == Recovery || r.Purpose == Execution) && r.BootID == "" {
+	if (r.Purpose == Managed || r.Purpose == Recovery || r.Purpose == Execution) && r.BootID == "" {
 		return fmt.Errorf("reservation requires a known boot")
 	}
 	return nil

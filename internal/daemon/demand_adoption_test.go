@@ -36,7 +36,7 @@ type demandAdoptionSessions struct {
 	gate   *adoptionLookupGate
 }
 
-func (s *demandAdoptionSessions) findLabelled(ctx context.Context, label string) (string, bool, error) {
+func (s *demandAdoptionSessions) findLabelled(ctx context.Context, label string) (labelledSession, bool, error) {
 	s.mu.Lock()
 	s.labels = append(s.labels, label)
 	err, id, found, gate := s.err, s.id, s.found, s.gate
@@ -46,13 +46,13 @@ func (s *demandAdoptionSessions) findLabelled(ctx context.Context, label string)
 		select {
 		case <-gate.resume:
 		case <-ctx.Done():
-			return "", false, fmt.Errorf("adoption lookup: %w", ctx.Err())
+			return labelledSession{}, false, fmt.Errorf("adoption lookup: %w", ctx.Err())
 		}
 	}
 	s.fakeDemandSessions.mu.Lock()
 	found = found && s.live[id] == label
 	s.fakeDemandSessions.mu.Unlock()
-	return id, found, err
+	return labelledSession{ID: id}, found, err
 }
 
 func (s *demandAdoptionSessions) setLookup(err error, id string, found bool) {

@@ -461,6 +461,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	demand := newDemandManager(daemonCtx, lifecycle, reporter.report)
 	defer demand.Close()
+	if err := demand.restoreRuntime(store); err != nil {
+		return err
+	}
 	serviceControl.demand = demand
 	demand.onChange = state.serviceDemandChanged
 	serviceRegistry.SetDemandGate(demand, demand.logger)

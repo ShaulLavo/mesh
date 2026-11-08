@@ -62,6 +62,7 @@ const (
 // private routing snapshot. SQLite commits first, so a crash between the two steps
 // converges when the next daemon restores the registry.
 type serviceController struct {
+	runtimeRelease func()
 	lifetime       context.Context
 	home           string
 	store          serviceStore
@@ -248,7 +249,7 @@ func (c *serviceController) startOrStop(ctx context.Context, request protocol.Co
 }
 
 func (c *serviceController) commitUpsert(ctx context.Context, request protocol.Control) (meshserve.Service, error) {
-	if err := c.acquire(ctx); err != nil {
+	if err := c.acquireMutation(ctx); err != nil {
 		return meshserve.Service{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
@@ -339,6 +340,9 @@ func (c *serviceController) catalog(ctx context.Context, request protocol.Contro
 	}
 	defer c.release()
 	if c.catalogUnknown {
+		if err := c.beginRuntimeDefinition(ctx); err != nil {
+			return nil, err
+		}
 		reconcileErr := c.reconcileDurable("service list")
 		if c.catalogUnknown {
 			return nil, fmt.Errorf("daemon: service catalog is unavailable: %w", reconcileErr)
@@ -358,7 +362,7 @@ func (c *serviceController) delete(ctx context.Context, request protocol.Control
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 
-	if err := c.acquire(ctx); err != nil {
+	if err := c.acquireMutation(ctx); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s request: %w", request.Type, err)
 	}
 	defer c.release()
@@ -414,6 +418,10 @@ func (c *serviceController) syncDemand() {
 	if c.catalogUnknown {
 		return
 	}
+	if manager, ok := c.demand.(*demandManager); ok && c.runtimeRelease != nil {
+		manager.syncAccepted(c.registry.Services())
+		return
+	}
 	c.demand.Sync(c.registry.Services())
 }
 
@@ -436,7 +444,39 @@ func (c *serviceController) acquire(ctx context.Context) error {
 	}
 }
 
+func (c *serviceController) acquireMutation(ctx context.Context) error {
+	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	if err := c.beginRuntimeDefinition(ctx); err != nil {
+		<-c.gate
+		return err
+	}
+	return nil
+}
+func (c *serviceController) beginRuntimeDefinition(ctx context.Context) error {
+	manager, ok := c.demand.(*demandManager)
+	if !ok {
+		return nil
+	}
+	release, err := manager.BeginDefinition(ctx)
+	if err != nil {
+		return err
+	}
+	c.runtimeRelease = release
+	return nil
+}
+
 func (c *serviceController) release() {
+	if c.runtimeRelease != nil {
+		if manager, ok := c.demand.(*demandManager); ok && manager.persistence != nil {
+			manager.persistence.mu.Lock()
+			manager.persistence.definitionUnknown = c.catalogUnknown
+			manager.persistence.mu.Unlock()
+		}
+		c.runtimeRelease()
+		c.runtimeRelease = nil
+	}
 	c.publishCommitted()
 	<-c.gate
 }
@@ -537,7 +577,7 @@ func (c *serviceController) label(ctx context.Context, request protocol.Control)
 	if err := meshserve.ValidateDisplayName(request.ServiceDisplayName); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: service label: %w", err)
 	}
-	if err := c.acquire(ctx); err != nil {
+	if err := c.acquireMutation(ctx); err != nil {
 		return protocol.Control{}, fmt.Errorf("daemon: service label: %w", err)
 	}
 	defer c.release()

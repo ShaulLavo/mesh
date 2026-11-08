@@ -180,6 +180,42 @@ grep -Eq "daemon: route /keep: session $first ended \(.+\); restarting in 1s$" "
 second=$(await_session 'route /keep: started session ([0-9A-Z]{4}) \(kept route restart\)')
 [ -n "$second" ] && [ "$second" != "$first" ] || fail "the restart was not logged as a new session"
 
+runtime_backoff() {
+  python3 - "$ORIGIN_STATE/mesh.db" "$1" <<'PYRUNTIME'
+import json, sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    row = db.execute("SELECT record FROM service_runtime WHERE name = 'keep'").fetchone()
+record = json.loads(row[0]) if row else {}
+sys.exit(0 if record.get("Phase") == "none" and record.get("Failures", 0) >= int(sys.argv[2]) else 1)
+PYRUNTIME
+}
+
+previous_pid=$(server_pid "$KEPT")
+kill -9 "$previous_pid"
+wait_until 50 runtime_backoff 2 || fail "the crash loop did not record its backoff"
+kill -9 "$ORIGIN_PID"
+wait "$ORIGIN_PID" 2>/dev/null
+ORIGIN_PID=""
+start_origin
+python3 - "$ORIGIN_STATE/mesh.db" "$KEPT/server.pid" "$previous_pid" <<'PYRUNTIME' || fail "daemon replacement lost backoff or started a duplicate"
+import datetime, json, sqlite3, sys, time
+with sqlite3.connect(sys.argv[1]) as db:
+    record = json.loads(db.execute("SELECT record FROM service_runtime WHERE name = 'keep'").fetchone()[0])
+assert record["Failures"] == 2, record
+until = datetime.datetime.fromisoformat(record["RestartAt"].replace("Z", "+00:00")).timestamp()
+assert time.time() < until, "fixture failed to observe the retained delay"
+while time.time() < until:
+    with open(sys.argv[2], encoding="utf-8") as source:
+        assert source.read().strip() == sys.argv[3], "a replacement started before its durable deadline"
+    time.sleep(0.02)
+PYRUNTIME
+wait_until 100 server_replaced "$KEPT" "$previous_pid" || fail "the persisted backoff never admitted a successor"
+wait_until 100 direct_answers "$KEEP_UP" after-backoff || fail "the backoff successor does not answer"
+kept_starts_settled() { [ "$(grep -c 'daemon: route /keep: started session' "$TEST_ROOT/origin.log")" -eq 3 ]; }
+wait_until 50 kept_starts_settled || fail "backoff daemon replacement did not finish exactly one successor"
+
+second=$(sed -n -E 's#.*daemon: route /keep: started session ([0-9A-Z]{4}) .*#\1#p' "$TEST_ROOT/origin.log" | tail -n 1)
+
 # --- mesh serve stop holds it; only mesh serve start runs it again. --------
 "${CLI[@]}" serve stop /keep >"$TEST_ROOT/stop.out" 2>&1 || fail "serve stop: $(<"$TEST_ROOT/stop.out")"
 wait_until 50 server_stopped "$KEPT" || fail "serve stop left the command running"

@@ -30,7 +30,7 @@ type demandSessions interface {
 	// recorded one, its exit code.
 	sessionExit(id string) (code *int, ended bool)
 	outputTail(ctx context.Context, id string) string
-	findLabelled(ctx context.Context, label string) (string, bool, error)
+	findLabelled(ctx context.Context, label string) (labelledSession, bool, error)
 	// pruneLabelled bounds a route's ended sessions after a start and returns
 	// the ones it actually removed.
 	pruneLabelled(ctx context.Context, label, current string) []string
@@ -41,10 +41,11 @@ type demandSessions interface {
 // owns the process, so a daemon restart drops connections but never the
 // server behind them.
 type demandManager struct {
-	onChange func(protocol.ServiceInfo, bool)
-	ctx      context.Context
-	sessions demandSessions
-	report   func(error)
+	persistence *demandPersistence
+	onChange    func(protocol.ServiceInfo, bool)
+	ctx         context.Context
+	sessions    demandSessions
+	report      func(error)
 	// Correlated diagnostics must bypass report's lossy queue.
 	logger *log.Logger
 	bind   func(port uint16) (net.Listener, error)
@@ -142,9 +143,19 @@ func (m *demandManager) releaseLocked(ports []uint16) {
 
 // Sync makes routes and listeners match the committed services.
 func (m *demandManager) Sync(services []meshserve.Service) {
+	release, err := m.BeginDefinition(m.ctx)
+	if err != nil {
+		m.report(err)
+		return
+	}
+	defer release()
+	m.syncAccepted(services)
+}
+
+func (m *demandManager) syncAccepted(services []meshserve.Service) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed.Load() {
+		m.mu.Unlock()
 		return
 	}
 	wanted := make(map[string]meshserve.Service)
@@ -153,31 +164,11 @@ func (m *demandManager) Sync(services []meshserve.Service) {
 			wanted[service.Name] = service
 		}
 	}
-	for name, route := range m.routes {
-		if _, keep := wanted[name]; !keep {
-			delete(m.routes, name)
-			m.retiring[name] = route
-		}
-	}
-	for name, route := range m.retiring {
-		if _, back := wanted[name]; !back && route.retire() {
-			delete(m.retiring, name)
-		}
-	}
-	for name, service := range wanted {
-		route := m.routes[name]
-		if route == nil && m.retiring[name] != nil {
-			route = m.retiring[name]
-			delete(m.retiring, name)
-			m.routes[name] = route
-		}
-		if route != nil {
-			route.redefine(service)
-			continue
-		}
-		route = &demandRoute{manager: m, service: service, state: protocol.DemandStopped, unbound: map[uint16]string{}}
-		m.routes[name] = route
-		route.adopt()
+	definitions := m.syncRoutesLocked(wanted)
+	m.restoreRetiringRuntime()
+	retiring := make([]*demandRoute, 0, len(m.retiring))
+	for _, route := range m.retiring {
+		retiring = append(retiring, route)
 	}
 	m.publishLocked()
 	listens := make(map[uint16]meshserve.Service)
@@ -187,12 +178,105 @@ func (m *demandManager) Sync(services []meshserve.Service) {
 		}
 	}
 	for port, listener := range m.listeners {
-		if service, keep := listens[port]; !keep || service.Name != listener.owner {
+		service, keep := listens[port]
+		if !keep || service.Name != listener.owner {
 			listener.close()
 			delete(m.listeners, port)
 		}
 	}
 	m.bindMissingLocked(listens)
+	m.mu.Unlock()
+	m.syncRuntimeBindings(services)
+	for _, definition := range definitions {
+		m.syncRoute(definition.route, definition.service, definition.fresh)
+	}
+	for _, route := range retiring {
+		m.retireRoute(route)
+	}
+}
+
+type demandDefinition struct {
+	route   *demandRoute
+	service meshserve.Service
+	fresh   bool
+}
+
+func (m *demandManager) syncRoutesLocked(wanted map[string]meshserve.Service) []demandDefinition {
+	for name, route := range m.routes {
+		if _, keep := wanted[name]; !keep {
+			delete(m.routes, name)
+			m.retiring[name] = route
+		}
+	}
+	var definitions []demandDefinition
+	for name, service := range wanted {
+		route := m.routes[name]
+		readded := route == nil
+		if readded {
+			route = m.retiring[name]
+			delete(m.retiring, name)
+		}
+		fresh := route == nil
+		if fresh {
+			route = newDemandRoute(m, service, false)
+		}
+		if !fresh {
+			route = route.bindDefinition(service, readded)
+		}
+		m.routes[name] = route
+		definitions = append(definitions, demandDefinition{route, service, fresh})
+	}
+	return definitions
+}
+
+func newDemandRoute(manager *demandManager, service meshserve.Service, removed bool) *demandRoute {
+	return &demandRoute{demandRouteState: &demandRouteState{
+		manager: manager, service: service, removed: removed,
+		state: protocol.DemandStopped, unbound: map[uint16]string{},
+	}}
+}
+
+func (r *demandRoute) bindDefinition(service meshserve.Service, readded bool) *demandRoute {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !readded && r.service.Equal(service) {
+		return r
+	}
+	r.activeGeneration++
+	return &demandRoute{demandRouteState: r.demandRouteState, generation: r.activeGeneration}
+}
+
+func (m *demandManager) syncRoute(route *demandRoute, service meshserve.Service, fresh bool) {
+	if fresh {
+		route.initRuntime()
+		return
+	}
+	route.redefine(service)
+}
+
+func (m *demandManager) retireRoute(route *demandRoute) {
+	if m.persistence != nil {
+		record, exists := route.runtimeRecord()
+		route.mu.Lock()
+		uninitialized := route.owned == ownsNothing && route.pending == nil && route.sessionID == "" && exists && record.Attempt != nil
+		route.mu.Unlock()
+		if uninitialized {
+			route.initRuntime()
+			return
+		}
+	}
+	if !route.retire() {
+		return
+	}
+	if m.persistence != nil {
+		m.deleteRuntimeRoute(route)
+		return
+	}
+	m.mu.Lock()
+	if m.retiring[route.service.Name] == route {
+		delete(m.retiring, route.service.Name)
+	}
+	m.mu.Unlock()
 }
 
 func (m *demandManager) bindMissingLocked(listens map[uint16]meshserve.Service) {
@@ -262,7 +346,7 @@ func (m *demandManager) Start(ctx context.Context, name string) error {
 	if route == nil || !route.onDemand() {
 		return fmt.Errorf("daemon: route %s is not on-demand", name)
 	}
-	return route.start(ctx)
+	return m.control(ctx, func() error { return route.start(ctx) })
 }
 
 // Stop stops an on-demand route now. Its listeners stay bound. A finite
@@ -273,7 +357,21 @@ func (m *demandManager) Stop(ctx context.Context, name string) error {
 	if route == nil || !route.onDemand() {
 		return fmt.Errorf("daemon: route %s is not on-demand", name)
 	}
-	return route.stop(ctx)
+	return m.control(ctx, func() error { return route.stop(ctx) })
+}
+
+func (m *demandManager) control(ctx context.Context, run func() error) error {
+	if m.persistence == nil {
+		return run()
+	}
+	result := make(chan error, 1)
+	m.goroutines.Go(func() { result <- run() })
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("daemon: waiting for service control: %w", ctx.Err())
+	}
 }
 
 func (m *demandManager) beforeStopLook() {
@@ -314,10 +412,15 @@ func (m *demandManager) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (m *demandManager) supervise() {
+	m.reconcileRuntime()
 	m.mu.Lock()
 	routes := make([]*demandRoute, 0, len(m.routes))
 	for _, route := range m.routes {
 		routes = append(routes, route)
+	}
+	retiring := make([]*demandRoute, 0, len(m.retiring))
+	for _, route := range m.retiring {
+		retiring = append(retiring, route)
 	}
 	listens := make(map[uint16]meshserve.Service)
 	for _, route := range routes {
@@ -328,13 +431,14 @@ func (m *demandManager) supervise() {
 	}
 	if !m.closed.Load() {
 		m.bindMissingLocked(listens)
-		for name, route := range m.retiring {
-			if route.retire() {
-				delete(m.retiring, name)
-			}
-		}
 	}
 	m.mu.Unlock()
+	if m.closed.Load() {
+		return
+	}
+	for _, route := range retiring {
+		m.retireRoute(route)
+	}
 	for _, route := range routes {
 		route.checkSession()
 		route.retryCleanup()
@@ -369,10 +473,16 @@ func (m *demandManager) Retiring() []protocol.ServiceInfo {
 // launch admitted before shutdown finishes creating its worker, which the next
 // daemon adopts; a kill already sent may finish.
 func (m *demandManager) Close() {
+	if m.persistence != nil {
+		m.persistence.mu.Lock()
+	}
 	m.admission.mu.Lock()
 	m.admission.closed = true
 	m.closed.Store(true)
 	m.admission.mu.Unlock()
+	if m.persistence != nil {
+		m.persistence.mu.Unlock()
+	}
 	m.mu.Lock()
 	for port, listener := range m.listeners {
 		listener.close()
@@ -385,4 +495,7 @@ func (m *demandManager) Close() {
 	}
 	m.mu.Unlock()
 	m.admission.phases.Wait()
+	if m.persistence != nil {
+		m.persistence.phases.Wait()
+	}
 }

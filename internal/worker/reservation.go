@@ -40,7 +40,7 @@ func Reserve(root string, purpose session.Purpose) (session.Reservation, error) 
 	return session.Reservation{}, fmt.Errorf("launch worker: exhausted session IDs")
 }
 func publishReservation(root string, ref session.Reservation) error {
-	if ref.Purpose == session.Execution || ref.Purpose == session.Recovery {
+	if ref.Purpose == session.Managed || ref.Purpose == session.Execution || ref.Purpose == session.Recovery {
 		return strictReservation(root, ref)
 	}
 	data, err := json.Marshal(ref)
@@ -86,7 +86,7 @@ func validateReservation(root string, ref session.Reservation) error {
 		if saved != ref {
 			return fmt.Errorf("launch worker: reservation identity mismatch")
 		}
-		if ref.Purpose != session.Execution && ref.Purpose != session.Recovery {
+		if ref.Purpose != session.Managed && ref.Purpose != session.Execution && ref.Purpose != session.Recovery {
 			continue
 		}
 		if err := f.Confirm(filepath.Join(ref.ID, name)); err != nil {

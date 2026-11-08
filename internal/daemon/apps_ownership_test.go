@@ -136,8 +136,8 @@ func TestAppWorkersPreservePostLaunchIdentity(t *testing.T) {
 		t.Fatalf("appWorkers.Start = %q, %v; want exact ID and publication error", id, err)
 	}
 	found, alive, err := adapter.Find(ctx, "app-setup synthetic")
-	if found != "" || alive || err != nil {
-		t.Fatalf("appWorkers.Find = %q, %t, %v; want successful empty discovery", found, alive, err)
+	if found != id || !alive || err != nil {
+		t.Fatalf("appWorkers.Find = %q, %t, %v; want the exact unpublished worker", found, alive, err)
 	}
 	if _, ended := lifecycle.sessionExit(id); ended {
 		t.Fatal("unpublished fixture worker unexpectedly has an exit record")
@@ -156,5 +156,5 @@ func TestAppWorkersPreservePostLaunchIdentity(t *testing.T) {
 	if _, ended := lifecycle.sessionExit(id); !ended {
 		t.Fatal("direct stop did not leave verified exit metadata")
 	}
-	t.Log("actual appWorkers preserved ID 7K3D plus publication error; Find was empty while running; direct Stop delivered TypeKill and recorded exit")
+	t.Log("actual appWorkers preserved ID 7K3D plus publication error; Find returned its raw unpublished identity while running; direct Stop delivered TypeKill and recorded exit")
 }
