@@ -1971,7 +1971,7 @@ Usage:
 Available Commands:
   automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
-  config      Deliver explicitly approved usage-feed settings
+  config      Deliver explicitly approved feed and domain settings
   retry       Retry unfinished targets at the originally approved release
   status      Show persisted fleet update progress
   trust       Authorize an update administrator on this machine
@@ -2154,13 +2154,13 @@ Global Flags:
 ## mesh update config
 
 ```text
-Deliver explicitly approved usage-feed settings
+Deliver explicitly approved feed and domain settings
 
 Usage:
   mesh update config [command]
 
 Available Commands:
-  allow       Allow usage-feed delivery from an exact coordinator
+  allow       Allow selected configuration groups from an exact coordinator
   apply       Approve the exact verified proposal for durable delivery
   cancel      Stop new dispatch intentions; earlier issued work may still finish
   preview     Capture exact targets, selected values and recipient grants without delivery
@@ -2184,15 +2184,16 @@ Use "mesh update config [command] --help" for more information about a command.
 ## mesh update config allow
 
 ```text
-Allow usage-feed delivery from an exact coordinator
+Allow selected configuration groups from an exact coordinator
 
 Usage:
   mesh update config allow COORDINATOR_ID [flags]
 
 Flags:
+      --domain-policy            allow primary domain and complete aliases; preserve existing accepted domains
       --expected-revision uint   expected target-local configuration grant revision
   -h, --help                     help for allow
-      --usage-feed               allow only dashboard usage-feed URL delivery
+      --usage-feed               allow dashboard usage-feed URL delivery
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine
@@ -2313,7 +2314,7 @@ Global Flags:
 Show saved, issued and actual dashboard observations separately
 
 Usage:
-  mesh update config status CHANGE_ID [flags]
+  mesh update config status [CHANGE_ID] [flags]
 
 Flags:
   -h, --help   help for status

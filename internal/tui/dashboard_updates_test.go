@@ -1,6 +1,12 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"context"
+	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/update"
+	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -71,5 +77,87 @@ func TestConfigurationRendererGenerationResetAndRealAcknowledgement(t *testing.T
 		if got := <-acknowledgements; got != update.Acknowledgement() {
 			t.Fatal(got)
 		}
+	}
+}
+
+func TestFleetDriftClockFrameBoundedWithdrawnAndIndependent(t *testing.T) {
+	now := time.Now()
+	model := dashboardTickFixture(t, true, 4)
+	model.now = now
+	initial, _ := model.Update(tea.WindowSizeMsg{Width: 160, Height: 45})
+	model = initial.(dashboardModel)
+	plain := model.render()
+	next, _ := model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 1}))
+	model = next.(dashboardModel)
+	if model.render() != plain {
+		t.Fatal("no enrollment reserved a blank update row")
+	}
+	source := cli.DashboardUpdateSource{Coordinator: update.Host{ID: model.hosts[0].Host.ID}, Automatic: &cli.DashboardStatus[update.AutomaticStatus]{Observation: cli.DashboardStatusObservation{State: cli.DashboardStatusObserved, At: now}, Value: &update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "failed"}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, Targets: []update.Target{{Host: update.Host{ID: model.hosts[0].Host.ID}, State: update.Offline}}}}}}}
+	model.hosts[0].Connection = cli.StateRefused
+	oldUsage := model.usage
+	oldServices := model.hosts[0].Services
+	previous := model.View().Content
+	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2, Sources: []cli.DashboardUpdateSource{source}}))
+	model = next.(dashboardModel)
+	if model.View().Content != previous {
+		t.Fatal("update publication painted outside clock frame")
+	}
+	for _, size := range [][2]int{{80, 24}, {140, 40}, {160, 45}, {210, 60}} {
+		next, _ = model.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		model = next.(dashboardModel)
+		assertFits(t, model.View().Content, size[0], size[1])
+		frame := ansi.Strip(model.View().Content)
+		if !strings.Contains(frame, "Updates") || !strings.Contains(frame, "manual bridge") {
+			t.Fatal(frame)
+		}
+	}
+	if model.hosts[0].Connection != cli.StateRefused || !reflect.DeepEqual(oldServices, model.hosts[0].Services) || !reflect.DeepEqual(oldUsage, model.usage) {
+		t.Fatal("status changed identity, catalog, quota or observation age")
+	}
+	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 3}))
+	model = next.(dashboardModel)
+	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2, Sources: []cli.DashboardUpdateSource{source}}))
+	model = next.(dashboardModel)
+	next, _ = model.Update(dashboardTickMsg(now))
+	model = next.(dashboardModel)
+	if strings.Contains(ansi.Strip(model.View().Content), "Updates") {
+		t.Fatal("late generation restored withdrawn status")
+	}
+}
+func TestDashboardUpdateReaderJoinsOnProgramClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started, joined := make(chan struct{}), make(chan struct{})
+	input := cli.DashboardInput{Watch: func(ctx context.Context, _ func(cli.DashboardHostView)) error { <-ctx.Done(); return nil }, UpdateWatch: func(ctx context.Context, publish func(cli.DashboardUpdates)) error {
+		defer close(joined)
+		publish(cli.DashboardUpdates{Generation: 1, Problem: "Status unavailable"})
+		close(started)
+		<-ctx.Done()
+		return nil
+	}}
+	done := make(chan error, 1)
+	go func() { done <- runDashboard(ctx, input, io.Discard, tea.WithWindowSize(80, 24)) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-joined:
+		case <-time.After(time.Second):
+			t.Error("status reader retained")
+		}
+	})
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("program failed to join status watcher")
+	}
+	select {
+	case <-joined:
+	default:
+		t.Fatal("program returned before update reader")
 	}
 }

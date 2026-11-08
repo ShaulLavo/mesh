@@ -1,6 +1,6 @@
-# Deliver dashboard feed settings
+# Deliver feed and domain settings
 
-Mesh can deliver one explicitly approved dashboard usage-feed URL to selected
+Mesh can deliver explicitly approved dashboard feed and domain settings to selected
 members of a saved fleet. This permission is separate from automatic binary
 updates and update-administrator admission. Delivery does not restart a daemon,
 install a release, publish a feed, or contact a provider account.
@@ -19,11 +19,17 @@ grant using that revision. It does not add an update administrator. The
 coordinator must already have update-administrator admission on the recipient.
 No binary policy needs to be enabled.
 
-Only the usage-feed URL is writable. Delivered URLs must use HTTPS and an
-existing private service hostname accepted by the recipient's active deployment
-policy. Credentials, queries, fragments, custom ports, arbitrary keys, file
+The grant selects usage-feed delivery, domain-policy delivery, or both. Add
+`--domain-policy` to allow the primary domain and complete alias list. Each
+allowance replaces the complete selected groups.
+
+Only those fields are writable. Delivered URLs must use HTTPS and an
+private service hostname accepted by the recipient's active or explicitly
+proposed deployment policy. Credentials, queries, fragments, custom ports, arbitrary keys, file
 paths, and headers are refused. An explicit empty string disables the feed.
-`--domain-policy` is not available.
+A domain change retains every accepted private domain and the existing
+`legacyCertificateDomain`. It cannot change services, private names, roots,
+credentials, tokens, or other configuration keys.
 
 ## Preview and approve exact values
 
@@ -134,3 +140,61 @@ upstream observation times remain original. Unknown quota stays null.
 Mesh's writer lock coordinates supported local edits. Quiesce external editors
 that ignore it during delivery. The configuration writer cannot provide a
 portable filesystem compare-and-swap against an editor that bypasses its lock.
+
+
+## Deliver domains and inspect actual consumers
+
+Select the primary domain and the complete alias list. Keep every currently
+accepted domain, moving the old primary into aliases when necessary.
+
+```json
+{
+  "targets": ["RECIPIENT_ID"],
+  "domain": {"primary": "NEW_PRIVATE_DOMAIN", "aliases": ["OLD_PRIVATE_DOMAIN"]}
+}
+```
+
+You can select `domain`, `usageFeed`, or both in one proposal. Each component
+has its own expectation, revision and durable receipt. One saved component
+survives a conflict in the other component. Delivery does not roll back a saved
+component over a later local edit.
+
+Saving a domain policy does not reload a process. `domainConsumerState` reports
+`daemon restart required` until the actual signed daemon observation matches
+its saved digest. That observation includes a fresh process instance identity.
+Use the host's existing native service manager during approved maintenance.
+Configuration delivery does not restart the daemon or any session. Reopen old
+dashboards to load their immutable domain policy too.
+
+A policy generation fences all remote service-cache commits and retained live
+service and private-name observations. Old-policy processes cannot republish
+invalidated snapshots as current, even after a crash between domain publication
+and cache invalidation. Only affected remote snapshots are deleted. Local
+services, sessions, routes and certificate slots remain intact. A failed or
+incomplete advisory cache publication stays unavailable until a complete fresh
+observation replaces it. SQLite contention remains a skipped advisory write,
+not a failed live host observation.
+
+Actual service HTTPS verification is unknown. Mesh does not send verification
+requests because the current HTTP admission contract can start an on-demand
+service after a previously running or non-demand snapshot. Catalog health and
+feed reads remain separate observations. Neither proves an application-specific
+HTTPS check.
+
+## Read drift in the CLI and TV
+
+`mesh update config status` selects the coordinator's current change. Supply a
+change identity to inspect history. Default output is a human summary; `--json`
+returns the complete status without a preamble. Retry and cancel still require
+an exact change identity and administrative revision.
+
+The dashboard's configuration status is independent of binary opt-in. A saved
+file and a healthy daemon running an old domain policy produce a restart-needed
+message. An old dashboard needs reopening even if the daemon loaded the policy.
+Use that host's native service manager for approved daemon maintenance.
+
+A matching renderer observation can report feed transport or parse failure.
+Successful parsing does not refresh upstream timestamps or turn unknown quota
+into a value. HTTP, publication, upstream observation, and observer lease times
+remain separate. Expired or absent observers are unknown. Service HTTPS
+verification remains unknown; status presentation sends no service requests.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/shaul/mesh/internal/dnsname"
@@ -187,4 +188,27 @@ func cachedServiceFromRow(row dbsqlc.CachedService) (CachedService, error) {
 		return CachedService{}, err
 	}
 	return cached, nil
+}
+
+// CatalogDirectory locates the policy gate beside this advisory database.
+func (s *Store) CatalogDirectory() string { return filepath.Dir(s.path) }
+
+// InvalidateCachedServices removes only the named remote snapshots.
+func (s *Store) InvalidateCachedServices(ctx context.Context, hosts []string) error {
+	tx, release, err := s.beginCatalogWrite(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cached-service invalidation: %w", err)
+	}
+	defer release()
+	defer func() { _ = tx.Rollback() }()
+	queries := s.queries.WithTx(tx)
+	for _, id := range hosts {
+		if err := queries.DeleteCachedServicesForHost(ctx, id); err != nil {
+			return fmt.Errorf("invalidate cached services: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cached-service invalidation: %w", err)
+	}
+	return nil
 }

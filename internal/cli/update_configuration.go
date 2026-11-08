@@ -23,13 +23,13 @@ const (
 )
 
 type configurationOptions struct {
-	file, commandID    string
-	expected           uint64
-	yes, usage, retire bool
+	file, commandID            string
+	expected                   uint64
+	yes, usage, retire, domain bool
 }
 
 func (a *application) updateConfigurationCommand() *cobra.Command {
-	command := &cobra.Command{Use: "config", Short: "Deliver explicitly approved usage-feed settings", Args: cobra.NoArgs}
+	command := &cobra.Command{Use: "config", Short: "Deliver explicitly approved feed and domain settings", Args: cobra.NoArgs}
 	command.AddCommand(a.configurationGrantCommand(true), a.configurationGrantCommand(false))
 	for _, action := range []string{configurationPreview, configurationApply, configurationStatus, configurationRetry, configurationCancel} {
 		command.AddCommand(a.configurationActionCommand(action))
@@ -40,11 +40,12 @@ func (a *application) configurationGrantCommand(allow bool) *cobra.Command {
 	options := configurationOptions{}
 	command := &cobra.Command{Use: "revoke", Short: "Withdraw this account's configuration grant", Args: cobra.NoArgs}
 	if allow {
-		command.Use, command.Short, command.Args = "allow COORDINATOR_ID", "Allow usage-feed delivery from an exact coordinator", cobra.ExactArgs(1)
+		command.Use, command.Short, command.Args = "allow COORDINATOR_ID", "Allow selected configuration groups from an exact coordinator", cobra.ExactArgs(1)
 	}
 	command.Flags().Uint64Var(&options.expected, "expected-revision", 0, "expected target-local configuration grant revision")
 	if allow {
-		command.Flags().BoolVar(&options.usage, "usage-feed", false, "allow only dashboard usage-feed URL delivery")
+		command.Flags().BoolVar(&options.usage, "usage-feed", false, "allow dashboard usage-feed URL delivery")
+		command.Flags().BoolVar(&options.domain, "domain-policy", false, "allow primary domain and complete aliases; preserve existing accepted domains")
 	}
 	command.RunE = func(cmd *cobra.Command, args []string) error {
 		return a.runConfigurationGrant(cmd, args, allow, options)
@@ -56,8 +57,8 @@ func (a *application) runConfigurationGrant(cmd *cobra.Command, args []string, a
 	if coordinator, _ := cmd.Flags().GetString("coordinator"); coordinator != "" {
 		return errors.New("configuration grants are target-local; omit --coordinator")
 	}
-	if !cmd.Flags().Changed("expected-revision") || allow && !options.usage {
-		return errors.New("--expected-revision and explicit --usage-feed are required for allowance")
+	if !cmd.Flags().Changed("expected-revision") || allow && !options.usage && !options.domain {
+		return errors.New("--expected-revision and at least one explicit configuration group are required for allowance")
 	}
 	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
 	if err != nil {
@@ -71,7 +72,7 @@ func (a *application) runConfigurationGrant(cmd *cobra.Command, args []string, a
 	if allow {
 		coordinator = args[0]
 	}
-	grant, err := store.SetConfigurationGrant(cmd.Context(), options.expected, environment.local.ID, coordinator, allow)
+	grant, err := store.SetConfigurationGrant(cmd.Context(), options.expected, environment.local.ID, coordinator, allow && options.usage, allow && options.domain)
 	if err != nil {
 		return fmt.Errorf("change configuration grant: %w", err)
 	}
@@ -85,6 +86,10 @@ func (a *application) configurationActionCommand(action string) *cobra.Command {
 	} else {
 		command.Use += " CHANGE_ID"
 		command.Args = cobra.ExactArgs(1)
+		if action == configurationStatus {
+			command.Use = action + " [CHANGE_ID]"
+			command.Args = cobra.MaximumNArgs(1)
+		}
 	}
 	if action == configurationApply {
 		command.Flags().BoolVar(&options.yes, "yes", false, "approve the exact verified proposal")
@@ -125,6 +130,9 @@ func (a *application) runConfigurationAction(cmd *cobra.Command, action string, 
 	}
 	if action == configurationApply {
 		return a.approveConfiguration(cmd, environment, options)
+	}
+	if action == configurationStatus {
+		return a.readConfigurationStatusCommand(cmd, environment, args)
 	}
 	input := any(struct {
 		ID string `json:"id"`
@@ -217,4 +225,21 @@ func configurationDescription(action string) string {
 	default:
 		return "Show saved, issued and actual dashboard observations separately"
 	}
+}
+
+func (a *application) readConfigurationStatusCommand(cmd *cobra.Command, environment updateEnvironment, args []string) error {
+	id := ""
+	if len(args) > 0 {
+		id = args[0]
+	}
+	var status update.ConfigurationStatus
+	_, err := dashboardStatusCall(cmd.Context(), environment.client, environment.coordinator, "configuration.status", struct {
+		ID string `json:"id"`
+	}{id}, &status)
+	if err != nil {
+		return err
+	}
+	structured, _ := cmd.Flags().GetBool("json")
+	details, _ := cmd.Flags().GetBool("details")
+	return printConfigurationStatusOutput(cmd.OutOrStdout(), status, structured, details, a.privacy)
 }

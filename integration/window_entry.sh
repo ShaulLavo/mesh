@@ -6,4 +6,5 @@ if [[ -z ${MESH:-} ]]; then
   MESH="$repo_root/mesh"
   (cd "$repo_root" && go build -o "$MESH" ./cmd/mesh)
 fi
+python3 -B "$repo_root/integration/helpers/worker_failure_test.py" "$MESH"
 exec python3 "$repo_root/integration/helpers/terminal_window.py" window-entry "$MESH"

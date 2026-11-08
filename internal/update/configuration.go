@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"slices"
 	"strings"
@@ -52,6 +53,7 @@ type ConfigurationGrant struct {
 	Revision      uint64 `json:"revision"`
 	LocalHostID   string `json:"localHostId"`
 	CoordinatorID string `json:"coordinatorId"`
+	DomainPolicy  bool   `json:"domainPolicy"`
 	UsageFeed     bool   `json:"usageFeed"`
 }
 type ComponentExpectation struct {
@@ -62,6 +64,8 @@ type ComponentExpectation struct {
 type ConfigurationSnapshot struct {
 	HostID    string                     `json:"hostId"`
 	Grant     ConfigurationGrant         `json:"grant"`
+	Domain    *DomainExpectation         `json:"domain,omitempty"`
+	Daemon    *DomainObservation         `json:"daemon,omitempty"`
 	Feed      ComponentExpectation       `json:"feed"`
 	Receipt   *ConfigurationReceipt      `json:"receipt,omitempty"`
 	Observers []ConfigurationObservation `json:"observers"`
@@ -70,14 +74,17 @@ type FeedChange struct {
 	URL string `json:"url"`
 }
 type ConfigurationSelection struct {
-	Targets   []string   `json:"targets"`
-	UsageFeed FeedChange `json:"usageFeed"`
+	Targets   []string      `json:"targets"`
+	UsageFeed *FeedChange   `json:"usageFeed,omitempty"`
+	Domain    *DomainChange `json:"domain,omitempty"`
 }
 type RecipientConfiguration struct {
-	Host          Host                 `json:"host"`
-	GrantRevision uint64               `json:"grantRevision"`
-	Expected      ComponentExpectation `json:"expected"`
-	Feed          FeedChange           `json:"usageFeed"`
+	Host           Host                  `json:"host"`
+	GrantRevision  uint64                `json:"grantRevision"`
+	Expected       *ComponentExpectation `json:"expected,omitempty"`
+	Feed           *FeedChange           `json:"usageFeed,omitempty"`
+	Domain         *DomainChange         `json:"domain,omitempty"`
+	DomainExpected *DomainExpectation    `json:"domainExpected,omitempty"`
 }
 type ConfigurationProposal struct {
 	ID               string                   `json:"id"`
@@ -100,17 +107,20 @@ type ConfigurationCommand struct {
 	Retire           bool   `json:"retire,omitempty"`
 }
 type ConfigurationTarget struct {
-	ObservedFeed *ComponentExpectation      `json:"observedFeed,omitempty"`
-	Consumer     string                     `json:"consumerState"`
-	HostID       string                     `json:"hostId"`
-	State        string                     `json:"state"`
-	DispatchID   string                     `json:"dispatchId,omitempty"`
-	Attempt      uint64                     `json:"attempt"`
-	Issued       bool                       `json:"issued"`
-	RetryAt      time.Time                  `json:"retryAt,omitempty"`
-	Problem      string                     `json:"problem,omitempty"`
-	Receipt      *ConfigurationReceipt      `json:"receipt,omitempty"`
-	Observers    []ConfigurationObservation `json:"observers"`
+	DomainConsumer string                     `json:"domainConsumerState,omitempty"`
+	ObservedDomain *DomainExpectation         `json:"observedDomain,omitempty"`
+	Daemon         *DomainObservation         `json:"daemon,omitempty"`
+	ObservedFeed   *ComponentExpectation      `json:"observedFeed,omitempty"`
+	Consumer       string                     `json:"consumerState"`
+	HostID         string                     `json:"hostId"`
+	State          string                     `json:"state"`
+	DispatchID     string                     `json:"dispatchId,omitempty"`
+	Attempt        uint64                     `json:"attempt"`
+	Issued         bool                       `json:"issued"`
+	RetryAt        time.Time                  `json:"retryAt,omitempty"`
+	Problem        string                     `json:"problem,omitempty"`
+	Receipt        *ConfigurationReceipt      `json:"receipt,omitempty"`
+	Observers      []ConfigurationObservation `json:"observers"`
 }
 type ConfigurationChange struct {
 	Proposal  ConfigurationProposal `json:"proposal"`
@@ -139,6 +149,8 @@ type ConfigurationPut struct {
 	Recipient      RecipientConfiguration `json:"recipient"`
 }
 type ConfigurationReceipt struct {
+	FeedState      string               `json:"feedState,omitempty"`
+	Domain         *DomainReceipt       `json:"domain,omitempty"`
 	Schema         int                  `json:"schema"`
 	ChangeID       string               `json:"changeId"`
 	ProposalDigest string               `json:"proposalDigest"`
@@ -166,6 +178,9 @@ func DecodeConfiguration(data []byte, value any) error {
 	return decodeAuthority(data, value)
 }
 func ValidateDeliveredFeed(value string) error {
+	return validateDeliveredFeedPolicy(value, domainpolicy.Current())
+}
+func validateDeliveredFeedPolicy(value string, policy domainpolicy.Policy) error {
 	if value == "" {
 		return nil
 	}
@@ -176,7 +191,7 @@ func ValidateDeliveredFeed(value string) error {
 		return problem("configuration.invalid", err.Error())
 	}
 	parsed, _ := url.Parse(value)
-	_, _, private := domainpolicy.Label(parsed.Hostname(), false)
+	_, _, private := policy.Label(parsed.Hostname(), false)
 	if parsed.Scheme != "https" || !private || parsed.Port() != "" && parsed.Port() != "443" {
 		return problem("configuration.invalid", "delivered usage feed needs a private HTTPS service hostname in the active domain policy")
 	}
@@ -230,13 +245,13 @@ func validateConfigurationRecipient(f Fleet, recipient RecipientConfiguration) e
 	if index < 0 || configurationDigest(f.Members[index]) != configurationDigest(recipient.Host) {
 		return errors.New("configuration: recipient differs from saved membership")
 	}
-	if recipient.GrantRevision == 0 || recipient.Expected.Digest != recipient.Expected.Value.Digest() {
-		return errors.New("configuration: invalid recipient expectation")
+	if recipient.GrantRevision == 0 || recipient.Feed == nil && recipient.Domain == nil {
+		return errors.New("configuration: explicit selected component required")
 	}
-	if err := validateFeedValue(recipient.Expected.Value); err != nil {
+	if err := validateFeedSelection(recipient); err != nil {
 		return err
 	}
-	return ValidateDeliveredFeed(recipient.Feed.URL)
+	return validateDomainSelection(recipient.Domain, recipient.DomainExpected)
 }
 func configurationAction(action string) bool { return strings.HasPrefix(action, "configuration.") }
 func (c ConfigurationChange) settled() bool {
@@ -275,32 +290,130 @@ func (f *FeedChange) UnmarshalJSON(data []byte) error {
 	return nil
 }
 func (s *ConfigurationSelection) UnmarshalJSON(data []byte) error {
-	var input struct {
-		Targets   []string    `json:"targets"`
-		UsageFeed *FeedChange `json:"usageFeed"`
-	}
+	type selection ConfigurationSelection
+	var input selection
 	if err := decodeAuthority(data, &input); err != nil {
 		return err
 	}
-	if input.UsageFeed == nil {
-		return problem("configuration.invalid", "explicit usageFeed selection required")
+	if input.UsageFeed == nil && input.Domain == nil {
+		return problem("configuration.invalid", "explicit configuration component required")
 	}
-	s.Targets, s.UsageFeed = input.Targets, *input.UsageFeed
+	*s = ConfigurationSelection(input)
 	return nil
 }
 func (r *RecipientConfiguration) UnmarshalJSON(data []byte) error {
+	type recipient RecipientConfiguration
+	var input recipient
+	if err := decodeAuthority(data, &input); err != nil {
+		return err
+	}
+	if input.Feed == nil && input.Domain == nil || (input.Feed == nil) != (input.Expected == nil) || (input.Domain == nil) != (input.DomainExpected == nil) {
+		return problem("configuration.invalid", "selected components require exact expectations")
+	}
+	*r = RecipientConfiguration(input)
+	return nil
+}
+
+// DomainValue includes the excluded certificate owner so delivery cannot change it.
+type DomainValue struct {
+	Present bool                `json:"present"`
+	Policy  domainpolicy.Policy `json:"policy"`
+}
+
+func (v DomainValue) Digest() string { return v.Policy.Digest() }
+
+type DomainChange struct {
+	Primary string   `json:"primary"`
+	Aliases []string `json:"aliases"`
+}
+type DomainExpectation struct {
+	Revision uint64      `json:"revision"`
+	Value    DomainValue `json:"value"`
+	Digest   string      `json:"digest"`
+}
+type DomainReceipt struct {
+	Expected   DomainExpectation         `json:"expected"`
+	Desired    DomainValue               `json:"desired"`
+	Revision   uint64                    `json:"revision"`
+	State      string                    `json:"state"`
+	Generation domainpolicy.CatalogToken `json:"generation"`
+	Problem    string                    `json:"problem,omitempty"`
+}
+type DomainObservation struct {
+	Digest     string    `json:"digest"`
+	InstanceID string    `json:"instanceId"`
+	ObservedAt time.Time `json:"observedAt"`
+}
+type DomainFile interface {
+	Value() DomainValue
+	Prepare(string) (domainpolicy.CatalogToken, error)
+	Save(DomainValue) error
+	Settle() error
+}
+type DomainWriter func(context.Context, func(DomainFile) error) error
+
+func domainDesired(change DomainChange, before DomainValue) DomainValue {
+	return DomainValue{Present: true, Policy: domainpolicy.Policy{Primary: change.Primary, Aliases: slices.Clone(change.Aliases), LegacyCertificateDomain: before.Policy.LegacyCertificateDomain}}
+}
+func validateDomainSelection(change *DomainChange, expected *DomainExpectation) error {
+	if change == nil && expected == nil {
+		return nil
+	}
+	if change == nil || expected == nil || expected.Revision == math.MaxUint64 || expected.Digest != expected.Value.Digest() {
+		return errors.New("configuration: invalid domain expectation")
+	}
+	desired := domainDesired(*change, expected.Value)
+	if err := desired.Policy.Validate(); err != nil {
+		return fmt.Errorf("validate proposed domain policy: %w", err)
+	}
+	for _, domain := range expected.Value.Policy.Domains() {
+		if !slices.Contains(desired.Policy.Domains(), domain) {
+			return errors.New("configuration: every accepted private domain must be retained")
+		}
+	}
+	return nil
+}
+
+func validateRecipientFeed(recipient RecipientConfiguration) error {
+	if recipient.Feed == nil {
+		return nil
+	}
+	if recipient.Domain == nil {
+		return ValidateDeliveredFeed(recipient.Feed.URL)
+	}
+	policy := domainpolicy.Current()
+	if recipient.Domain != nil && recipient.DomainExpected != nil {
+		policy = domainDesired(*recipient.Domain, recipient.DomainExpected.Value).Policy
+	}
+	return validateDeliveredFeedPolicy(recipient.Feed.URL, policy)
+}
+func (d *DomainChange) UnmarshalJSON(data []byte) error {
 	var input struct {
-		Host          Host                  `json:"host"`
-		GrantRevision uint64                `json:"grantRevision"`
-		Expected      *ComponentExpectation `json:"expected"`
-		Feed          *FeedChange           `json:"usageFeed"`
+		Primary string    `json:"primary"`
+		Aliases *[]string `json:"aliases"`
 	}
 	if err := decodeAuthority(data, &input); err != nil {
 		return err
 	}
-	if input.Expected == nil || input.Feed == nil {
-		return problem("configuration.invalid", "selected usage feed and exact expectation required")
+	if input.Aliases == nil {
+		return problem("configuration.invalid", "complete domain aliases are required, including an explicit empty array")
 	}
-	*r = RecipientConfiguration{input.Host, input.GrantRevision, *input.Expected, *input.Feed}
+	d.Primary, d.Aliases = input.Primary, *input.Aliases
 	return nil
+}
+
+func validateFeedSelection(recipient RecipientConfiguration) error {
+	if recipient.Feed == nil {
+		if recipient.Expected != nil {
+			return errors.New("configuration: unselected feed expectation")
+		}
+		return nil
+	}
+	if recipient.Expected == nil || recipient.Expected.Digest != recipient.Expected.Value.Digest() {
+		return errors.New("configuration: invalid feed expectation")
+	}
+	if err := validateFeedValue(recipient.Expected.Value); err != nil {
+		return err
+	}
+	return validateRecipientFeed(recipient)
 }

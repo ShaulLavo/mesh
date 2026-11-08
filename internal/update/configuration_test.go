@@ -2,10 +2,13 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -45,7 +48,7 @@ func configurationProposalFixture(t *testing.T, c *Coordinator, actor VerifiedAc
 	p := ConfigurationProposal{ID: mustAutomaticID(t), CoordinatorID: c.ID, OwnerID: actor.id, Fleet: fleet, Membership: fleet.Digest()}
 	for _, host := range fleet.Members {
 		v := FeedValue{}
-		p.Recipients = append(p.Recipients, RecipientConfiguration{Host: host, GrantRevision: 1, Expected: ComponentExpectation{Value: v, Digest: v.Digest()}})
+		p.Recipients = append(p.Recipients, RecipientConfiguration{Host: host, GrantRevision: 1, Feed: &FeedChange{}, Expected: &ComponentExpectation{Value: v, Digest: v.Digest()}})
 	}
 	p.Digest = p.approvalDigest()
 	if err := c.saveConfigurationPreview(t.Context(), actor, p); err != nil {
@@ -107,7 +110,7 @@ func TestConfigurationCompetingInitialApprovals(t *testing.T) {
 func TestConfigurationReceiptIntentCASRecoveryAndGrantFence(t *testing.T) {
 	c, actor, file := configurationFixture(t, 1)
 	host := actor.id
-	grant, err := c.Store.SetConfigurationGrant(t.Context(), 0, host, host, true)
+	grant, err := c.Store.SetConfigurationGrant(t.Context(), 0, host, host, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,7 @@ func TestConfigurationReceiptIntentCASRecoveryAndGrantFence(t *testing.T) {
 	if err != nil || saved.State != configurationSaved || saved.Revision != 1 || file.writes != 1 {
 		t.Fatalf("same-value recovery: %+v %v writes=%d", saved, err, file.writes)
 	}
-	if _, err = c.Store.SetConfigurationGrant(t.Context(), grant.Revision, host, "", false); err != nil {
+	if _, err = c.Store.SetConfigurationGrant(t.Context(), grant.Revision, host, "", false, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = c.Store.PutConfiguration(t.Context(), actor, host, c.Trusted, file.writer, request); err == nil {
@@ -141,7 +144,7 @@ func TestConfigurationReceiptIntentCASRecoveryAndGrantFence(t *testing.T) {
 }
 func TestConfigurationSelectedEditAndThirdValueSurvive(t *testing.T) {
 	c, actor, file := configurationFixture(t, 1)
-	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, actor.id, actor.id, true); err != nil {
+	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, actor.id, actor.id, true, false); err != nil {
 		t.Fatal(err)
 	}
 	approval := configurationProposalFixture(t, c, actor)
@@ -319,7 +322,7 @@ func TestConfigurationRequiresExplicitSelectedFeed(t *testing.T) {
 }
 func TestConfigurationCancelPreservesLateIssuedAcceptance(t *testing.T) {
 	c, actor, file := configurationFixture(t, 1)
-	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, c.ID, c.ID, true); err != nil {
+	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, c.ID, c.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
 	approval := configurationProposalFixture(t, c, actor)
@@ -350,15 +353,160 @@ func TestConfigurationCancelPreservesLateIssuedAcceptance(t *testing.T) {
 func TestConfigurationSavedStatusRequiresActiveMatchingObserver(t *testing.T) {
 	target := ConfigurationTarget{State: configurationSaved}
 	desired := FeedChange{}
-	if got := configurationConsumerState(target, desired); got != "saved; no active dashboard observation" {
+	if got := configurationConsumerState(target, &desired); got != "saved; no active dashboard observation" {
 		t.Fatal(got)
 	}
 	target.Observers = []ConfigurationObservation{{Digest: (FeedValue{Present: true}).Digest(), State: "disabled"}}
-	if got := configurationConsumerState(target, desired); got != "loaded by active dashboard" {
+	if got := configurationConsumerState(target, &desired); got != "loaded by active dashboard" {
 		t.Fatal(got)
 	}
 	target.Observers[0].Digest = (FeedValue{}).Digest()
-	if got := configurationConsumerState(target, desired); got != "saved; dashboard reload pending" {
+	if got := configurationConsumerState(target, &desired); got != "saved; dashboard reload pending" {
 		t.Fatal(got)
+	}
+}
+
+type configurationDomainFixture struct {
+	value      DomainValue
+	generation domainpolicy.CatalogToken
+	fail       error
+}
+
+func (f *configurationDomainFixture) Value() DomainValue { return f.value }
+func (f *configurationDomainFixture) Prepare(digest string) (domainpolicy.CatalogToken, error) {
+	f.generation = domainpolicy.CatalogToken{Digest: digest, Generation: 2}
+	return f.generation, nil
+}
+func (f *configurationDomainFixture) Save(value DomainValue) error { f.value = value; return f.fail }
+func (f *configurationDomainFixture) Settle() error                { return f.fail }
+func (f *configurationDomainFixture) writer(_ context.Context, operation func(DomainFile) error) error {
+	return operation(f)
+}
+
+func TestConfigurationDomainReceiptRecoveryPartialAndFeedHistory(t *testing.T) {
+	c, actor, feed := configurationFixture(t, 1)
+	if _, err := c.Store.SetConfigurationGrant(t.Context(), 0, actor.id, actor.id, true, true); err != nil {
+		t.Fatal(err)
+	}
+	approval := configurationProposalFixture(t, c, actor)
+	feedRequest := ConfigurationPut{approval.Proposal.ID, approval.Proposal.Digest, approval.Proposal.Membership, c.ID, approval.Proposal.Recipients[0]}
+	first, err := c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, feedRequest)
+	if err != nil || first.Revision != 1 {
+		t.Fatal(first, err)
+	}
+	domain := &configurationDomainFixture{value: DomainValue{Present: true, Policy: domainpolicy.Current()}}
+	expected := &DomainExpectation{Value: domain.value, Digest: domain.value.Digest()}
+	recipient := RecipientConfiguration{Host: approval.Proposal.Recipients[0].Host, GrantRevision: 1, Domain: &DomainChange{Primary: "new.test", Aliases: domain.value.Policy.Domains()}, DomainExpected: expected}
+	request := ConfigurationPut{mustAutomaticID(t), strings.Repeat("c", 64), approval.Proposal.Membership, c.ID, recipient}
+	domain.fail = errors.New("domain directory barrier failed after rename")
+	if _, err := c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, request, domain.writer); !errors.Is(err, domain.fail) {
+		t.Fatal(err)
+	}
+	intent, err := c.Store.configurationReceipt()
+	if err != nil || intent.Domain.State != configurationPrepared || intent.Domain.Generation.Generation != 2 {
+		t.Fatal(intent, err)
+	}
+	domain.fail = nil
+	result, err := c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, request, domain.writer)
+	if err != nil || result.Domain.State != configurationSaved || result.Domain.Revision != 1 || result.Revision != 1 {
+		t.Fatal(result, err)
+	}
+	if domain.value.Policy.LegacyCertificateDomain != expected.Value.Policy.LegacyCertificateDomain {
+		t.Fatal("legacy certificate owner changed")
+	}
+	snapshot, err := c.Store.ConfigurationSnapshot(t.Context(), actor.id, feed.writer, nil, domain.writer)
+	if err != nil || snapshot.Feed.Revision != 1 || snapshot.Domain.Revision != 1 {
+		t.Fatal(snapshot, err)
+	}
+	// A later combined change retains the saved domain even when the feed CAS conflicts.
+	request.ChangeID = mustAutomaticID(t)
+	request.Recipient.DomainExpected = snapshot.Domain
+	request.Recipient.Domain = &DomainChange{Primary: "next.test", Aliases: domain.value.Policy.Domains()}
+	request.Recipient.Expected, request.Recipient.Feed = &snapshot.Feed, &FeedChange{}
+	feed.value = FeedValue{Present: true, URL: "http://localhost/local-edit"}
+	result, err = c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, request, domain.writer)
+	if err != nil || result.State != configurationConflict || result.Domain.State != configurationSaved || feed.value.URL != "http://localhost/local-edit" {
+		t.Fatalf("partial domain/feed receipt: %+v %v", result, err)
+	}
+}
+
+func TestConfigurationDomainConsumerUsesActualProcessObservations(t *testing.T) {
+	before := DomainValue{Present: true, Policy: domainpolicy.Current()}
+	desired := domainDesired(DomainChange{Primary: "new.test", Aliases: before.Policy.Domains()}, before)
+	token := domainpolicy.CatalogToken{Digest: desired.Digest(), Generation: 3}
+	recipient := RecipientConfiguration{Domain: &DomainChange{Primary: desired.Policy.Primary, Aliases: desired.Policy.Aliases}}
+	target := ConfigurationTarget{State: configurationSaved, Receipt: &ConfigurationReceipt{Domain: &DomainReceipt{State: configurationSaved, Desired: desired, Generation: token}}, Daemon: &DomainObservation{Digest: before.Digest(), InstanceID: mustAutomaticID(t), ObservedAt: time.Now()}}
+	if got := configurationDomainConsumer(target, recipient); got != "saved; daemon restart required" {
+		t.Fatal(got)
+	}
+	target.Daemon.Digest = desired.Digest()
+	target.Observers = []ConfigurationObservation{{DomainDigest: before.Digest(), CatalogGeneration: 2}}
+	if got := configurationDomainConsumer(target, recipient); got != "daemon loaded; dashboard reopen required" {
+		t.Fatal(got)
+	}
+	target.Observers[0].DomainDigest, target.Observers[0].CatalogGeneration = desired.Digest(), 3
+	if got := configurationDomainConsumer(target, recipient); !strings.Contains(got, "service HTTPS verification unknown") {
+		t.Fatal(got)
+	}
+}
+
+func TestConfigurationGrantReportsBothSelectedGroupsAfterRevoke(t *testing.T) {
+	c, actor, _ := configurationFixture(t, 1)
+	granted, err := c.Store.SetConfigurationGrant(t.Context(), 0, actor.id, actor.id, false, true)
+	if err != nil || !granted.DomainPolicy || granted.UsageFeed {
+		t.Fatal(granted, err)
+	}
+	revoked, err := c.Store.SetConfigurationGrant(t.Context(), 1, actor.id, "", false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(revoked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["domainPolicy"]) != "false" || string(fields["usageFeed"]) != "false" {
+		t.Fatalf("revoked groups are not explicit: %s", data)
+	}
+}
+
+func TestConfigurationGrantReadOnlyAbsentRevokedMalformedAndContended(t *testing.T) {
+	c, _, _ := configurationFixture(t, 1)
+	grant, err := c.Store.ConfigurationGrant(t.Context())
+	if err != nil || grant.Revision != 0 {
+		t.Fatal(grant, err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(c.Store.directory), "config-grant.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("read created grant", err)
+	}
+	for _, groups := range [][2]bool{{true, false}, {false, true}, {false, false}} {
+		grant, err = c.Store.SetConfigurationGrant(t.Context(), grant.Revision, c.ID, c.ID, groups[0], groups[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		read, err := c.Store.ConfigurationGrant(t.Context())
+		if err != nil || read != grant {
+			t.Fatal(read, grant, err)
+		}
+	}
+	unlock, err := c.Store.lockContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = c.Store.ConfigurationGrant(ctx)
+	unlock()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read ignored lock: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(c.Store.directory), "config-grant.json"), []byte(`{"schema":1,"revision":9,"usageFeed":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Store.ConfigurationGrant(t.Context()); err == nil {
+		t.Fatal("malformed grant became absence")
 	}
 }

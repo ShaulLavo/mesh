@@ -15,6 +15,10 @@ import (
 )
 
 func listAgentServices(ctx context.Context, host HostRecord, dial HostDialer) (remoteServiceSnapshot, error) {
+	token, err := loadedServicePolicy(ctx)
+	if err != nil {
+		return remoteServiceSnapshot{}, err
+	}
 	conn, info, err := openAgentHostInfo(ctx, host, dial)
 	if err != nil {
 		return remoteServiceSnapshot{}, err
@@ -28,7 +32,9 @@ func listAgentServices(ctx context.Context, host HostRecord, dial HostDialer) (r
 	if err != nil {
 		return remoteServiceSnapshot{}, err
 	}
-	return decodeRemoteServices(host, response, info)
+	snapshot, err := decodeRemoteServices(host, response, info)
+	snapshot.Policy = token
+	return snapshot, err
 }
 
 type agentServiceCache struct {
@@ -36,10 +42,10 @@ type agentServiceCache struct {
 	err   error
 }
 
-func (c *agentServiceCache) LoadAllServices(ctx context.Context) (map[string][]storage.CachedService, error) {
+func (c *agentServiceCache) LoadAllServices(ctx context.Context, hosts []HostRecord) (map[string][]storage.CachedService, error) {
 	var rows map[string][]storage.CachedService
 	if c.err == nil {
-		rows, c.err = c.cache.LoadAllServices(ctx)
+		rows, c.err = c.cache.LoadAllServices(ctx, hosts)
 	}
 	if err := ctx.Err(); err != nil {
 		return rows, fmt.Errorf("load passive service cache: %w", err)

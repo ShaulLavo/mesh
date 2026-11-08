@@ -33,7 +33,13 @@ def wait_saved(coordinator, change):
     def saved():
         _, status = config(coordinator, "status", change)
         return status if status["change"]["targets"][0]["state"] == "saved" else None
-    return eventually(saved, "approved configuration was not saved", timeout=8)
+    status = eventually(saved, "approved configuration was not saved", timeout=8)
+    human = coordinator.command("update", "config", "status").stdout.decode("utf-8")
+    require("Configuration publication" in human, human)
+    require(change not in human, "default configuration status exposed change ID")
+    current = coordinator.command("update", "config", "status", "--json")
+    require(json.loads(current.stdout)["change"]["proposal"]["id"] == change, current.stdout)
+    return status
 
 
 @contextmanager
@@ -113,6 +119,40 @@ def renderer_controls(device, feed, screen):
     terminal.expect_exit(3)
 
 
+def domain_controls(coordinator, recipient, selection, preview):
+    _, grant = config(recipient, "allow", coordinator.id, "--usage-feed",
+                      "--domain-policy", "--expected-revision", "1")
+    require(grant["usageFeed"] and grant["domainPolicy"] and grant["revision"] == 2,
+            "selected configuration groups did not replace the exact grant")
+    path = recipient.config / "domains.json"
+    original = json.loads(path.read_text())
+    desired = {"primary": "new.test", "aliases": [original["primary"]] + (original.get("aliases") or [])}
+    selection.write_text(json.dumps({"targets": [recipient.id], "domain": desired}))
+    proposed = proposal(coordinator, selection, preview)
+    config(coordinator, "apply", "--file", str(preview), "--yes", "--command-id", "3" * 32)
+    saved = wait_saved(coordinator, proposed["id"])["change"]["targets"][0]
+    require(saved["receipt"]["domain"]["revision"] == 1, "domain revision was not saved")
+    require("daemon restart required" in saved["domainConsumerState"], str(saved))
+    instance = saved["daemon"]["instanceId"]
+    actual = json.loads(path.read_text())
+    require(actual["primary"] == desired["primary"] and actual["aliases"] == desired["aliases"], str(actual))
+    require(actual["legacyCertificateDomain"] == original["legacyCertificateDomain"], "certificate owner changed")
+    coordinator.stop_daemon()
+    recipient.stop_daemon()
+    recipient.start()
+    coordinator.start()
+
+    def loaded():
+        _, status = config(coordinator, "status", proposed["id"])
+        target = status["change"]["targets"][0]
+        return target if target.get("domainConsumerState", "").startswith("daemon loaded;") else None
+
+    observed = eventually(loaded, "actual restarted daemon policy was not observed",
+                          timeout=8)
+    require(observed["daemon"]["instanceId"] != instance, "saved bytes posed as a restarted daemon")
+    require("service HTTPS verification unknown" in observed["domainConsumerState"], str(observed))
+
+
 def main(binary, screen):
     check_environment()
     with termination_cleanup(), ExitStack() as cleanup:
@@ -163,12 +203,10 @@ def main(binary, screen):
             book = json.loads((recipient.config / "hosts.json").read_text())
             require(book["dashboard"]["theme"] == "rose-pine" and book["hosts"][0]["id"] == coordinator.id, "delivery changed unrelated settings")
             renderer_controls(recipient, feed, screen)
-        _, revoked = config(recipient, "revoke", "--expected-revision", "1")
-        require(not revoked["usageFeed"] and revoked["revision"] == 2, str(revoked))
-        denied, _ = config(recipient, "allow", coordinator.id, "--domain-policy",
-                           "--expected-revision", "2", success=False)
-        require(denied.returncode != 0, "unit 3 exposed domain delivery")
-        print("PASS: real configuration CLI, CAS, restart replay, feed A/B generation, disable and invalid recovery")
+        domain_controls(coordinator, recipient, selection, preview)
+        _, revoked = config(recipient, "revoke", "--expected-revision", "2")
+        require(not revoked["usageFeed"] and not revoked["domainPolicy"] and revoked["revision"] == 3, str(revoked))
+        print("PASS: real signed configuration CLI, feed renderer generations, saved domain versus actual process policy; HTTPS verification remains unknown")
 
 
 if __name__ == "__main__":

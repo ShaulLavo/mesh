@@ -109,7 +109,12 @@ func TestMigrationPreservesExistingPolicy(t *testing.T) {
 	if Primary() != "new.example" {
 		t.Fatal("migration replaced an explicit policy")
 	}
-	if err := publishMigration(path, Policy{Primary: legacyDeploymentDomain}); err != nil {
+	if err := WithDomainFile(t.Context(), path, func(file *DomainFile) error {
+		if file.Present {
+			return nil
+		}
+		return file.Save(Policy{Primary: legacyDeploymentDomain})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(path) //nolint:gosec // path belongs to the isolated policy fixture

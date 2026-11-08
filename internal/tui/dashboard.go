@@ -71,17 +71,11 @@ func watchDashboard(ctx context.Context, input cli.DashboardInput, program *tea.
 		readers.Go(func() { watchDashboardConfig(ctx, input, program) })
 		return readers
 	}
+	if input.UpdateWatch != nil {
+		readers.Go(func() { watchDashboardUpdates(ctx, input, program) })
+	}
 	if input.UsageWatch != nil {
-		readers.Go(func() {
-			err := input.UsageWatch(ctx, func(result cli.DashboardUsageUpdate) {
-				if ctx.Err() == nil {
-					program.Send(dashboardUsageMsg(result))
-				}
-			})
-			if err != nil && ctx.Err() == nil {
-				program.Send(dashboardDoneMsg{err: err})
-			}
-		})
+		readers.Go(func() { watchDashboardUsage(ctx, input, program) })
 	}
 	readers.Go(func() {
 		err := input.Watch(ctx, func(view cli.DashboardHostView) {
@@ -106,6 +100,8 @@ type dashboardRenderWork struct {
 }
 
 type dashboardModel struct {
+	updates           cli.DashboardUpdates
+	updateFrame       []string
 	privacy           *privacy.Mask
 	layout            dashboardLayout
 	layoutPrepared    bool
@@ -178,6 +174,8 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
 		m.frame, m.layout = m.renderFrame()
+	case dashboardUpdatesMsg:
+		m.applyUpdates(cli.DashboardUpdates(message))
 	case dashboardUsageMsg:
 		m.applyUsage(cli.DashboardUsageUpdate(message))
 	case dashboardHostMsg:
@@ -284,4 +282,15 @@ func (m *dashboardModel) acknowledgeUsage() {
 	}
 	m.usageAcknowledge(*m.usagePendingAck)
 	m.usagePendingAck = nil
+}
+
+func watchDashboardUsage(ctx context.Context, input cli.DashboardInput, program *tea.Program) {
+	err := input.UsageWatch(ctx, func(result cli.DashboardUsageUpdate) {
+		if ctx.Err() == nil {
+			program.Send(dashboardUsageMsg(result))
+		}
+	})
+	if err != nil && ctx.Err() == nil {
+		program.Send(dashboardDoneMsg{err: err})
+	}
 }

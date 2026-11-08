@@ -41,7 +41,7 @@ func checkCachedServiceIsolation(t *testing.T, host HostRecord, isolated bool) {
 	if len(catalog) != 1 || catalog[0].Service.Isolate != isolated || catalog[0].Service.PrivateHost != "fregat.mesh.test" {
 		t.Fatalf("cached catalog = %#v, want isolation %t", catalog, isolated)
 	}
-	all, err := cache.LoadAllServices(t.Context())
+	all, err := cache.LoadAllServices(t.Context(), []HostRecord{host})
 	if err != nil {
 		t.Fatal(err)
 	}

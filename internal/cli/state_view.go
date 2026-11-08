@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
@@ -36,7 +37,8 @@ const (
 )
 
 type StateView struct {
-	Name machinename.Claim
+	Policy domainpolicy.CatalogToken
+	Name   machinename.Claim
 	// NameVerified records owner-declaration provenance; connection and section ages determine freshness.
 	NameVerified           bool
 	PrivateName            string
@@ -226,7 +228,7 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{Name: v.Name, NameVerified: v.NameVerified, PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{Policy: v.Policy, Name: v.Name, NameVerified: v.NameVerified, PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
 	if s.Host != nil {
 		v.Name = declaredName(*s.Host)
 		v.NameVerified = true

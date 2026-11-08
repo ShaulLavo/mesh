@@ -74,7 +74,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 			if _, err := result.cache.Save(t.Context(), host, nil); err != nil {
 				t.Fatalf("cache open warning repeated on save: %v", err)
 			}
-			services, err := result.cache.LoadAllServices(t.Context())
+			services, err := result.cache.LoadAllServices(t.Context(), []HostRecord{host})
 			if err != nil || len(services) != 0 {
 				t.Fatalf("optional service cache blocks live fan-out: %#v, %v", services, err)
 			}
@@ -91,6 +91,7 @@ func TestCatalogOpenContentionKeepsAnOptionalCache(t *testing.T) {
 
 func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
 	t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
+	token := initializeTestServicePolicy(t)
 	release := holdCatalogWriter(t, os.Getenv("MESH_STATE_DIR"))
 	defer release()
 	cache, err := OpenCatalogCache(t.Context())
@@ -105,7 +106,7 @@ func TestCatalogOpenContentionKeepsServiceFanoutLive(t *testing.T) {
 	hosts := []HostRecord{{ID: "host-pc", MachineName: "pc"}, {ID: "qLbsc6bxf2DLhLKs2gwZRWw1rlAlmU5yU3vUyjhSBBQ", MachineName: "pi"}}
 	rows, diagnostics, err := CollectServiceCatalog(t.Context(), hosts, 40*time.Millisecond,
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) {
-			return remoteServiceSnapshot{Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
+			return remoteServiceSnapshot{Policy: token, Services: []protocol.ServiceInfo{{Name: "api", Kind: "proxy", Target: "3000", Healthy: true}}}, nil
 		}, cache)
 	if err != nil || len(rows) != len(hosts) {
 		t.Fatalf("live service fan-out = %#v, %v", rows, err)

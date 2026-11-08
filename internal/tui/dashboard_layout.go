@@ -2,7 +2,7 @@ package tui
 
 // Only geometry lives across frames; ages, colors and metric values are painted anew.
 type dashboardLayoutKey struct {
-	width, height, hosts, overhead, summaries int
+	width, height, hosts, overhead, summaries, updates int
 }
 
 type dashboardLayout struct {
@@ -11,7 +11,7 @@ type dashboardLayout struct {
 }
 
 func (m dashboardModel) layoutForSummaries(summaryHeight int) dashboardLayout {
-	key := dashboardLayoutKey{m.width, m.height, len(m.hosts), m.cardOverhead(), summaryHeight}
+	key := dashboardLayoutKey{m.width, m.height, len(m.hosts), m.cardOverhead(), summaryHeight, len(m.updateLines())}
 	if key == m.layout.key {
 		return m.layout
 	}
@@ -21,7 +21,7 @@ func (m dashboardModel) layoutForSummaries(summaryHeight int) dashboardLayout {
 	layout := dashboardLayout{key: key, graph: 4}
 	rows := (len(m.hosts) + 1) / 2
 	if m.width >= 140 && m.height >= 40 {
-		available := m.height - 5 - summaryHeight - key.overhead
+		available := m.height - 5 - summaryHeight - key.overhead - len(m.updateLines())
 		layout.graph = max(1, available/max(1, rows))
 		layout.remainder = max(0, available) % max(1, rows)
 	}
