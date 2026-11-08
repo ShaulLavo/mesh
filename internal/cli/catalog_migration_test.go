@@ -55,7 +55,7 @@ func TestConcurrentCatalogOpenersKeepFreshMigrationsOptional(t *testing.T) {
 						t.Error(err)
 					}
 				}()
-				if _, err := cache.LoadAllServices(t.Context()); err != nil {
+				if _, err := cache.LoadAllServices(t.Context(), nil); err != nil {
 					t.Errorf("opened cache has incomplete service schema: %v", err)
 				}
 				host := HostRecord{ID: "host-pc", MachineName: "pc"}

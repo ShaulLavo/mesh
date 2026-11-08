@@ -412,6 +412,11 @@ func (a *Authority) dispatch(ctx context.Context, message Message) (any, error) 
 	if !a.IsAdministrator(actor.id) {
 		return nil, problem("automatic.conflict", "update administrator was withdrawn")
 	}
+	if configurationAction(message.Action) {
+		if err := requireConfigurationActor(ctx, actor, message.Action == "configuration.observe", a.ID); err != nil {
+			return nil, err
+		}
+	}
 	if automaticAction(message.Action) {
 		if err := RequireAutomaticActor(ctx, actor); err != nil {
 			return nil, err

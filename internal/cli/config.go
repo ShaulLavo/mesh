@@ -240,6 +240,10 @@ func writeLockedHostConfig(dir *os.File, config hostConfig) error {
 	if err != nil {
 		return fmt.Errorf("encode host config: %w", err)
 	}
+	contents, err = preserveExplicitFeedDisable(dir, config, contents)
+	if err != nil {
+		return err
+	}
 	return publishClientConfig(dir, append(contents, '\n'), syncClientConfig)
 }
 

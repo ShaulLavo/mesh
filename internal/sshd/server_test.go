@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	charmssh "charm.land/ssh"
@@ -272,39 +273,160 @@ func TestServeBindsOnlyConfiguredAddressAndStopsWithContext(t *testing.T) {
 	hostKey := generatePrivateKey(t)
 	authorizedKeys := writeAuthorizedKeys(t, clientKey, 0o600)
 	ctx, cancel := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	lifetime := sshFixtureShutdown{cancel: cancel, served: stopped}
+	t.Cleanup(func() { lifetime.cleanup(t) })
 	done := make(chan error, 1)
 	go func() {
+		defer close(stopped)
 		done <- Serve(ctx, Config{ScopeMembership: fixtureNoScopes,
 			HostKey:        hostKey,
 			AuthorizedKeys: authorizedKeys,
 			Addr:           endpoint,
 		})
 	}()
-	waitForListener(t, endpoint)
+	connection := waitForListener(t, endpoint)
+	expectedHost, err := gossh.NewPublicKey(hostKey.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshConnection, channels, requests, err := gossh.NewClientConn(connection, endpoint,
+		clientConfig(t, clientKey, gossh.FixedHostKey(expectedHost)))
+	if err != nil {
+		t.Fatalf("connect to owned SSH server: %v", err)
+	}
+	client := gossh.NewClient(sshConnection, channels, requests)
+	t.Cleanup(func() { _ = client.Close() })
+	if err := connection.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	disconnected := make(chan struct{})
+	lifetime.disconnected = disconnected
+	go func() {
+		_ = client.Wait()
+		close(disconnected)
+	}()
 
 	_, port, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", port), 50*time.Millisecond)
+	otherConnection, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", port), 50*time.Millisecond)
 	if err == nil {
-		_ = connection.Close()
+		_ = otherConnection.Close()
 		t.Fatal("SSH listener also accepted on 127.0.0.1")
 	}
 
-	cancel()
+	lifetime.stop()
+	shutdown := time.NewTimer(time.Until(lifetime.deadline))
+	defer shutdown.Stop()
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Fatalf("Serve() shutdown error = %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-shutdown.C:
 		t.Fatal("Serve() did not stop after cancellation")
 	}
-	if connection, err := net.DialTimeout("tcp4", endpoint, 50*time.Millisecond); err == nil {
-		_ = connection.Close()
-		t.Fatal("SSH listener still accepts after shutdown")
+	select {
+	case <-disconnected:
+	case <-shutdown.C:
+		t.Fatal("owned SSH connection stayed open after cancellation")
 	}
+	// A successful rebind proves closure; a TCP dial could reach a new owner.
+	replacement, err := net.Listen("tcp4", endpoint)
+	if err != nil {
+		t.Fatalf("SSH listener did not release its address: %v", err)
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+	connection, err = net.DialTimeout("tcp4", endpoint, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("connect to replacement listener: %v", err)
+	}
+	_ = connection.Close()
+}
+
+type sshFixtureShutdown struct {
+	cancel               context.CancelFunc
+	deadline             time.Time
+	served, disconnected <-chan struct{}
+}
+
+func (s *sshFixtureShutdown) stop() {
+	if s.deadline.IsZero() {
+		s.deadline = time.Now().Add(2 * time.Second)
+	}
+	s.cancel()
+}
+
+func (s *sshFixtureShutdown) cleanup(t *testing.T) {
+	t.Helper()
+	s.stop()
+	timer := time.NewTimer(time.Until(s.deadline))
+	defer timer.Stop()
+	waits := []struct {
+		name string
+		done <-chan struct{}
+	}{{"Serve", s.served}, {"Wait", s.disconnected}}
+	for _, wait := range waits {
+		if wait.done == nil {
+			continue
+		}
+		select {
+		case <-wait.done:
+			continue
+		default:
+		}
+		select {
+		case <-wait.done:
+		case <-timer.C:
+			t.Errorf("SSH fixture %s goroutine did not join", wait.name)
+			return
+		}
+	}
+}
+
+func TestSSHFixtureShutdownJoinsServerAndWaiter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		served, disconnected := make(chan struct{}), make(chan struct{})
+		lifetime := sshFixtureShutdown{cancel: cancel, served: served, disconnected: disconnected}
+		joined := make(chan struct{})
+		go func() {
+			lifetime.cleanup(t)
+			close(joined)
+		}()
+		synctest.Wait()
+		if ctx.Err() == nil {
+			t.Error("fixture cleanup did not cancel the server")
+		}
+		select {
+		case <-joined:
+			t.Error("fixture cleanup returned before Serve completed")
+		default:
+		}
+		close(served)
+		synctest.Wait()
+		select {
+		case <-joined:
+			t.Error("fixture cleanup returned before Wait completed")
+		default:
+		}
+		close(disconnected)
+		synctest.Wait()
+		select {
+		case <-joined:
+		default:
+			t.Error("fixture cleanup did not join completed goroutines")
+		}
+		deadline := lifetime.deadline
+		time.Sleep(3 * time.Second)
+		lifetime.cleanup(t)
+		if lifetime.deadline != deadline {
+			t.Error("fixture cleanup renewed its shutdown budget")
+		}
+	})
 }
 
 func TestValidateConfigRejectsWildcardAndInvalidHostKey(t *testing.T) {
@@ -387,18 +509,23 @@ func reserveEndpoint(t *testing.T, host string) string {
 	return endpoint
 }
 
-func waitForListener(t *testing.T, endpoint string) {
+func waitForListener(t *testing.T, endpoint string) net.Conn {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		connection, err := net.DialTimeout("tcp4", endpoint, 25*time.Millisecond)
-		if err == nil {
-			_ = connection.Close()
-			return
+		if err != nil {
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
-		time.Sleep(10 * time.Millisecond)
+		t.Cleanup(func() { _ = connection.Close() })
+		if err := connection.SetDeadline(deadline); err != nil {
+			t.Fatal(err)
+		}
+		return connection
 	}
 	t.Fatalf("listener %s did not start", endpoint)
+	return nil
 }
 
 func TestMarshalHostKeyUsesOpenSSHFormat(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/transport"
@@ -94,6 +95,7 @@ func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, 
 }
 
 type remoteServiceSnapshot struct {
+	Policy                 domainpolicy.CatalogToken
 	Host                   HostRecord
 	PrivateName            string
 	Services               []protocol.ServiceInfo
@@ -101,11 +103,17 @@ type remoteServiceSnapshot struct {
 }
 
 func listRemoteServices(ctx context.Context, host HostRecord, dial HostDialer) (remoteServiceSnapshot, error) {
+	token, err := loadedServicePolicy(ctx)
+	if err != nil {
+		return remoteServiceSnapshot{}, err
+	}
 	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{Type: protocol.TypeServiceList}, nil)
 	if err != nil {
 		return remoteServiceSnapshot{}, err
 	}
-	return decodeRemoteServices(host, response, info)
+	snapshot, err := decodeRemoteServices(host, response, info)
+	snapshot.Policy = token
+	return snapshot, err
 }
 
 func decodeRemoteServices(host HostRecord, response protocol.Control, info protocol.HostInfo) (remoteServiceSnapshot, error) {
@@ -119,8 +127,8 @@ func decodeRemoteServices(host HostRecord, response protocol.Control, info proto
 	seen := make(map[string]struct{}, len(response.Services))
 	previous := ""
 	for index, candidate := range response.Services {
-		service, err := validateRemoteService(candidate)
-		if err != nil {
+		service := candidate
+		if err := validateServiceStructure(service); err != nil {
 			return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", HostLabel(host), err)
 		}
 		if _, exists := seen[service.Name]; exists {
@@ -132,6 +140,9 @@ func decodeRemoteServices(host HostRecord, response protocol.Control, info proto
 		seen[service.Name] = struct{}{}
 		previous = service.Name
 		services[index] = service
+	}
+	if err := validatePolicyServices(services); err != nil {
+		return remoteServiceSnapshot{}, fmt.Errorf("host %s returned an invalid service list: %w", HostLabel(host), err)
 	}
 	host.NameVerified = info.MachineName != ""
 	if host.NameVerified {
@@ -179,6 +190,12 @@ func remoteServiceRequest(ctx context.Context, host HostRecord, dial HostDialer,
 }
 
 func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, error) {
+	if err := validateServiceStructure(info); err != nil {
+		return protocol.ServiceInfo{}, err
+	}
+	if err := loadedServiceHost(info.PrivateHost); err != nil {
+		return protocol.ServiceInfo{}, err
+	}
 	received := protocol.ServiceFromInfo(info)
 	service, err := meshserve.Normalize(received)
 	if err != nil {
@@ -189,9 +206,6 @@ func validateRemoteService(info protocol.ServiceInfo) (protocol.ServiceInfo, err
 	}
 	if err := validateServiceDemand(info.Demand); err != nil {
 		return protocol.ServiceInfo{}, err
-	}
-	if len(info.Problem) > meshserve.MaximumServiceProblemBytes || info.Healthy && info.Problem != "" || !utf8.ValidString(info.Problem) {
-		return protocol.ServiceInfo{}, errors.New("service health is invalid")
 	}
 	return info, nil
 }

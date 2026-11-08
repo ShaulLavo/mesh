@@ -168,7 +168,9 @@ def prepare_isolation(owner):
     })
     config = Path(environment["MESH_CONFIG_DIR"])
     config.mkdir(parents=True, exist_ok=True, mode=0o700)
-    (config / "domains.json").write_text('{"primary":"mesh.test","aliases":["old.test"],"legacyCertificateDomain":"mesh.test"}')
+    policy = config / "domains.json"
+    policy.write_text('{"primary":"mesh.test","aliases":["old.test"],"legacyCertificateDomain":"mesh.test"}')
+    policy.chmod(0o600)
     for name, suffix in (("XDG_CONFIG_HOME", "config-home"), ("XDG_STATE_HOME", "state-home"),
                          ("XDG_CACHE_HOME", "cache"), ("XDG_DATA_HOME", "data"), ("XDG_RUNTIME_DIR", "runtime")):
         directory = root / suffix

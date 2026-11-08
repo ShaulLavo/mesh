@@ -121,7 +121,7 @@ class Producer:
                     "seq": 2, "kind": "metrics", "payload": {"metrics": self.metrics}}})
             self.stop.wait(8)
             return True
-        elif kind in ("state.watch", "host.metrics"):
+        elif kind in ("state.watch", "host.metrics", "update.control"):
             response.update(type="error", message=f'daemon: unknown control "{kind}"')
         elif kind == "session.list":
             response.update(type="session.listed", sessions=[])

@@ -37,7 +37,7 @@ func testStore(t *testing.T) (*Store, Subject, time.Time) {
 func noRoles(context.Context, Subject) (OtherRoles, error) { return OtherRoles{}, nil }
 func testGrant(t *testing.T, store *Store, revision uint64, subject Subject, expiry time.Time) Change {
 	t.Helper()
-	result, err := store.Grant(t.Context(), revision, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	result, err := store.Grant(t.Context(), revision, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry}, noRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestScopePublicationFailureRepairsWithoutNewIncarnation(t *testing.T) {
 	store, subject, expiry := testStore(t)
 	cause := errors.New("directory barrier failed")
 	store.syncDir = func(*os.File) error { return cause }
-	change, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	change, err := store.Grant(t.Context(), 0, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry}, noRoles)
 	var visible *VisibleUnconfirmed
 	if !errors.As(err, &visible) || !errors.Is(err, cause) || visible.Revision != 1 || change.Changed {
 		t.Fatalf("unconfirmed outcome: %+v %v", change, err)
@@ -289,7 +289,7 @@ func TestScopeCASAndExhaustion(t *testing.T) {
 	results := make(chan error, 2)
 	for range 2 {
 		wait.Go(func() {
-			_, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+			_, err := store.Grant(t.Context(), 0, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry}, noRoles)
 			results <- err
 		})
 	}
@@ -300,7 +300,7 @@ func TestScopeCASAndExhaustion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry.Add(time.Hour)}, noRoles); !errors.Is(err, ErrRevision) {
+	if _, err := store.Grant(t.Context(), 0, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry.Add(time.Hour)}, noRoles); !errors.Is(err, ErrRevision) {
 		t.Fatalf("CAS: %v", err)
 	}
 	policy, err := store.List(t.Context())
@@ -348,7 +348,7 @@ func TestScopeParentBarrierFailureRemainsVisibleUnconfirmed(t *testing.T) {
 		}
 		return file.Sync()
 	}
-	_, err := store.Grant(t.Context(), 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	_, err := store.Grant(t.Context(), 0, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry}, noRoles)
 	var visible *VisibleUnconfirmed
 	if !errors.As(err, &visible) || !errors.Is(err, cause) || visible.Revision != 1 {
 		t.Fatalf("parent barrier acknowledged: %v", err)
@@ -370,7 +370,7 @@ func TestScopeCancellationAfterPublicationKeepsRequiredBarriers(t *testing.T) {
 	defer cancel()
 	calls := 0
 	store.syncDir = func(file *os.File) error { calls++; cancel(); return file.Sync() }
-	change, err := store.Grant(ctx, 0, GrantInput{Subject: subject, ExpiresAt: expiry}, noRoles)
+	change, err := store.Grant(ctx, 0, GrantInput{Permissions: []string{"metadata"}, Subject: subject, ExpiresAt: expiry}, noRoles)
 	if err != nil || !change.Changed || calls != 2 {
 		t.Fatalf("accepted publication lost barriers after cancellation: %+v %v calls=%d", change, err, calls)
 	}

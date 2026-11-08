@@ -17,7 +17,6 @@ import (
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updateinstall"
-	"github.com/shaul/mesh/internal/usagefeed"
 	"github.com/spf13/cobra"
 )
 
@@ -114,17 +113,13 @@ func (a *application) runConfiguredDashboard(ctx context.Context, wall bool, ove
 	dial := dashboardControlDialer(localID, socket, a.dependencies.DialControl)
 	monitor := dashboardMonitor{records: records, localID: localID, watcher: NewStateWatcher(dial), cache: cache}
 	input := DashboardInput{Privacy: a.privacy, Wall: wall, Theme: theme, Watch: monitor.Run}
-	config, err := loadHostConfig()
-	if err != nil {
-		return err
+	feed := newDashboardFeedWatcher(localID, socket)
+	input.UsageWatch, input.UsageAcknowledge = feed.Run, feed.acknowledge
+	caller := a.dependencies.UpdateCaller
+	if caller == nil {
+		caller = existingDashboardUpdateCaller(filepath.Dir(socket), localID)
 	}
-	if config.Dashboard != nil && config.Dashboard.UsageFeedURL != "" {
-		feed, err := usagefeed.New(usagefeed.Config{URL: config.Dashboard.UsageFeedURL})
-		if err != nil {
-			return fmt.Errorf("dashboard usage feed: %w", err)
-		}
-		input.UsageWatch = feed.Run
-	}
+	input.UpdateWatch = newDashboardUpdateWatcher(filepath.Dir(socket), localID, caller).Run
 	for _, record := range records {
 		input.Hosts = append(input.Hosts, dashboardHost(record, localID))
 	}

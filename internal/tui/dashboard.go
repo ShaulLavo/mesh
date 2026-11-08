@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/shaul/mesh/internal/cli"
 	"github.com/shaul/mesh/internal/privacy"
-	"github.com/shaul/mesh/internal/usagefeed"
 )
 
 func NewCLIDashboard(output *os.File) cli.DashboardFunc {
@@ -72,17 +71,11 @@ func watchDashboard(ctx context.Context, input cli.DashboardInput, program *tea.
 		readers.Go(func() { watchDashboardConfig(ctx, input, program) })
 		return readers
 	}
+	if input.UpdateWatch != nil {
+		readers.Go(func() { watchDashboardUpdates(ctx, input, program) })
+	}
 	if input.UsageWatch != nil {
-		readers.Go(func() {
-			err := input.UsageWatch(ctx, func(result usagefeed.Result) {
-				if ctx.Err() == nil {
-					program.Send(dashboardUsageMsg(result))
-				}
-			})
-			if err != nil && ctx.Err() == nil {
-				program.Send(dashboardUsageMsg{Failing: true})
-			}
-		})
+		readers.Go(func() { watchDashboardUsage(ctx, input, program) })
 	}
 	readers.Go(func() {
 		err := input.Watch(ctx, func(view cli.DashboardHostView) {
@@ -97,7 +90,7 @@ func watchDashboard(ctx context.Context, input cli.DashboardInput, program *tea.
 	return readers
 }
 
-type dashboardUsageMsg usagefeed.Result
+type dashboardUsageMsg cli.DashboardUsageUpdate
 type dashboardHostMsg cli.DashboardHostView
 type dashboardTickMsg time.Time
 type dashboardDoneMsg struct{ err error }
@@ -107,6 +100,8 @@ type dashboardRenderWork struct {
 }
 
 type dashboardModel struct {
+	updates           cli.DashboardUpdates
+	updateFrame       []string
 	privacy           *privacy.Mask
 	layout            dashboardLayout
 	layoutPrepared    bool
@@ -128,6 +123,11 @@ type dashboardModel struct {
 	usageEnabled      bool
 	usageFailing      bool
 	usageRevision     uint64
+	usageGeneration   uint64
+	usageDigest       string
+	usageState        string
+	usageAcknowledge  func(cli.DashboardUsageAcknowledgement)
+	usagePendingAck   *cli.DashboardUsageAcknowledgement
 	usage             dashboardUsage
 	ctx               context.Context
 	inspect           cli.PickerInspectFunc
@@ -156,7 +156,7 @@ func newDashboard(input cli.DashboardInput, now time.Time) dashboardModel {
 	if input.ConfigError != nil {
 		model.configError = safeText(input.ConfigError.Error())
 	}
-	model.usageEnabled = input.UsageWatch != nil
+	model.usageAcknowledge = input.UsageAcknowledge
 	model.ctx, model.inspect = context.Background(), input.Inspect
 	model.sessionSummaries = map[dashboardSessionTarget]sessionLiveSummary{}
 	model.sortHosts()
@@ -174,12 +174,10 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, message.Width), max(1, message.Height)
 		m.frame, m.layout = m.renderFrame()
+	case dashboardUpdatesMsg:
+		m.applyUpdates(cli.DashboardUpdates(message))
 	case dashboardUsageMsg:
-		m.usageFailing = message.Failing
-		if message.Snapshot != nil && message.Revision != m.usageRevision {
-			m.usage = projectDashboardUsage(message.Snapshot)
-			m.usageRevision = message.Revision
-		}
+		m.applyUsage(cli.DashboardUsageUpdate(message))
 	case dashboardHostMsg:
 		m.receive(cli.DashboardHostView(message))
 		m.pruneSessionSummaries()
@@ -191,6 +189,7 @@ func (m dashboardModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.now = time.Time(message)
 		m.pruneHistory()
 		m.frame, m.layout = m.renderFrame()
+		m.acknowledgeUsage()
 		inspection := m.inspectSessions()
 		return m, tea.Batch(dashboardTick(), inspection)
 	case dashboardConfigMsg:
@@ -255,6 +254,43 @@ func watchDashboardConfig(ctx context.Context, input cli.DashboardInput, program
 		}
 	})
 	if ctx.Err() == nil {
+		program.Send(dashboardDoneMsg{err: err})
+	}
+}
+
+func (m *dashboardModel) applyUsage(message cli.DashboardUsageUpdate) {
+	if message.Generation < m.usageGeneration {
+		return
+	}
+	if message.Generation != m.usageGeneration {
+		m.usage, m.usageRevision = dashboardUsage{}, 0
+	}
+	m.usageEnabled = message.Enabled || message.State == "invalid"
+	m.usageGeneration, m.usageDigest, m.usageState = message.Generation, message.Digest, message.State
+	m.usageFailing = message.Result.Failing
+	if message.Enabled && message.Result.Snapshot != nil && message.Result.Revision != m.usageRevision {
+		m.usage = projectDashboardUsage(message.Result.Snapshot)
+		m.usageRevision = message.Result.Revision
+	}
+	ack := message.Acknowledgement()
+	m.usagePendingAck = &ack
+}
+
+func (m *dashboardModel) acknowledgeUsage() {
+	if m.usagePendingAck == nil || m.usageAcknowledge == nil {
+		return
+	}
+	m.usageAcknowledge(*m.usagePendingAck)
+	m.usagePendingAck = nil
+}
+
+func watchDashboardUsage(ctx context.Context, input cli.DashboardInput, program *tea.Program) {
+	err := input.UsageWatch(ctx, func(result cli.DashboardUsageUpdate) {
+		if ctx.Err() == nil {
+			program.Send(dashboardUsageMsg(result))
+		}
+	})
+	if err != nil && ctx.Err() == nil {
 		program.Send(dashboardDoneMsg{err: err})
 	}
 }

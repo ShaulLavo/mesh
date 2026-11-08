@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/shaul/mesh/internal/domainpolicy"
 	"os"
+	"time"
 
 	"github.com/shaul/mesh/internal/hostprofile"
 	"github.com/shaul/mesh/internal/protocol"
@@ -19,11 +21,15 @@ import (
 )
 
 type updateController struct {
-	stateDir     string
-	id           string
-	coordinator  *update.Coordinator
-	authority    *update.Authority
-	fleetProfile *fleetProfileController
+	domainWriter           update.DomainWriter
+	instanceID             string
+	configurationWriter    update.ConfigurationWriter
+	configurationObservers configurationObservers
+	stateDir               string
+	id                     string
+	coordinator            *update.Coordinator
+	authority              *update.Authority
+	fleetProfile           *fleetProfileController
 }
 
 func executingBuild() *release.Build { build := release.Current(); return &build }
@@ -37,7 +43,11 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 	if err != nil {
 		return nil, err
 	}
-	controller := &updateController{stateDir: stateDir, id: id}
+	instanceID, err := update.NewAutomaticCommandID()
+	if err != nil {
+		return nil, fmt.Errorf("allocate daemon policy instance: %w", err)
+	}
+	controller := &updateController{stateDir: stateDir, id: id, instanceID: instanceID}
 	controller.coordinator = &update.Coordinator{ID: id, Store: runs, Remote: update.Client{ID: id, Key: key}, CacheDir: cache}
 	controller.authority = &update.Authority{StateDir: stateDir, ID: id, Key: key, Handle: controller.handle}
 	controller.coordinator.Trusted = controller.authority.IsAdministrator
@@ -52,6 +62,8 @@ func (u *updateController) HandleControl(ctx context.Context, request protocol.C
 
 func (u *updateController) handle(ctx context.Context, actor update.VerifiedActor, action string, data json.RawMessage) (any, error) {
 	switch action {
+	case "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe":
+		return u.configuration(ctx, actor, action, data)
 	case "automatic.status", "automatic.consent", "automatic.change":
 		return u.automatic(ctx, actor, action, data)
 	case hostprofile.ActionFleetPut:
@@ -143,7 +155,7 @@ func (u *updateController) info(ctx context.Context) (update.Info, error) {
 	if err != nil {
 		return update.Info{}, err
 	}
-	info := update.Info{Health: observed.Health, AcceptsIdentityFleet: true}
+	info := update.Info{Domain: &update.DomainObservation{Digest: domainpolicy.Current().Digest(), InstanceID: u.instanceID, ObservedAt: time.Now().UTC()}, Health: observed.Health, AcceptsIdentityFleet: true}
 	home, _ := os.UserHomeDir()
 	info.Commands = updateinstall.OtherCommands(observed.Executable, updateinstall.CommandSearchDirs(home, os.Getenv("PATH")))
 	status, err := updateinstall.Read(u.stateDir)

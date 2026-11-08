@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,31 +26,7 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 	var commandID string
 	command := &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: args,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id := ""
-			if len(args) > 0 {
-				id = args[0]
-			}
-			if id != "" && !update.ValidRunID(id) {
-				return errors.New("invalid update run ID")
-			}
-			resolved, _, err := a.resolveUpdateNameIntents(cmd.Context(), *options)
-			if err != nil {
-				return err
-			}
-			environment, err := openUpdateEnvironment(cmd.Context(), resolved.coordinator)
-			if err != nil {
-				return err
-			}
-			if a.dependencies.UpdateCaller != nil {
-				environment.client = a.dependencies.UpdateCaller
-			}
-			output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy, options.details}
-			request, err := automaticOperationRequest(cmd, action, id, expected, commandID)
-			if err != nil {
-				return err
-			}
-
-			return a.runUpdateOperation(cmd.Context(), environment, action, request, options.json, output)
+			return a.runUpdateOperationCommand(cmd, args, action, options, expected, commandID)
 		},
 	}
 	if action != "status" {
@@ -59,6 +34,43 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 		command.Flags().StringVar(&commandID, "command-id", "", "exact administrative command identity for response-loss replay")
 	}
 	return command
+}
+
+func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []string, action string, options *updateOptions, expected uint64, commandID string) error {
+
+	id := ""
+	if len(args) > 0 {
+		id = args[0]
+	}
+	if id != "" && !update.ValidRunID(id) {
+		return errors.New("invalid update run ID")
+	}
+	resolved := *options
+	var err error
+	if action != "status" {
+		resolved, _, err = a.resolveUpdateNameIntents(cmd.Context(), *options)
+		if err != nil {
+			return err
+		}
+	}
+	open := openUpdateEnvironment
+	if action == "status" {
+		open = existingAutomaticEnvironment
+	}
+	environment, err := open(cmd.Context(), resolved.coordinator)
+	if err != nil {
+		return err
+	}
+	if a.dependencies.UpdateCaller != nil {
+		environment.client = a.dependencies.UpdateCaller
+	}
+	output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy, options.details}
+	request, err := automaticOperationRequest(cmd, action, id, expected, commandID)
+	if err != nil {
+		return err
+	}
+
+	return a.runUpdateOperation(cmd.Context(), environment, action, request, options.json, output)
 }
 
 func updateActionDescription(action string) string {
@@ -175,12 +187,29 @@ func listUpdateOperations(ctx context.Context, environment updateEnvironment, st
 	if err != nil {
 		return err
 	}
+	return printListedUpdateOperations(ctx, environment, runs, structured, output)
+}
+func printListedUpdateOperations(ctx context.Context, environment updateEnvironment, runs []update.Run, structured bool, output updateOutput) error {
+	updates := readUpdatePresentation(ctx, environment)
 	if structured {
-		return json.NewEncoder(output.out).Encode(runs)
+		if len(updates.Sources) == 0 && updates.Problem == "" {
+			return writeAutomaticJSON(output.out, runs)
+		}
+		return writeAutomaticJSON(output.out, struct {
+			Runs    []update.Run     `json:"runs"`
+			Updates DashboardUpdates `json:"updates"`
+		}{runs, updates})
+	}
+	if err := printDashboardUpdateRows(output.out, updates, output.privacy); err != nil {
+		return err
+	}
+	if output.details && (len(updates.Sources) > 0 || updates.Problem != "") {
+		if err := printUpdateDetails(output.out, updates, output.privacy); err != nil {
+			return err
+		}
 	}
 	if len(runs) == 0 {
-		_, err := fmt.Fprintln(output.out, "No saved update operations.")
-		return err
+		return writeUpdateLines(output.out, []string{"No saved update operations."})
 	}
 	for _, run := range runs {
 		if err := printDeclaredUpdateRun(ctx, output.out, run, false, output.details, output.privacy); err != nil {
@@ -290,4 +319,18 @@ func automaticOperationRequest(cmd *cobra.Command, action, id string, expected u
 	}
 	request.CommandID = generated
 	return request, nil
+}
+
+func readUpdatePresentation(ctx context.Context, environment updateEnvironment) DashboardUpdates {
+	selection, err := readDashboardUpdateSelection(ctx, environment.stateDir, environment.local.ID)
+	if err != nil {
+		return DashboardUpdates{Problem: "Saved update status unavailable; inspect mesh update automatic status or mesh update config status with --details."}
+	}
+	watcher := newDashboardUpdateWatcher(environment.stateDir, environment.local.ID, environment.client)
+	sources := watcher.observe(ctx, selection)
+	current, err := readDashboardUpdateSelection(ctx, environment.stateDir, environment.local.ID)
+	if err != nil || current.Fingerprint != selection.Fingerprint {
+		return DashboardUpdates{Problem: "Saved update enrollment changed; read status again."}
+	}
+	return DashboardUpdates{Generation: 1, Sources: sources}
 }

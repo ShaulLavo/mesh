@@ -217,8 +217,8 @@ func validateEntry(entry Entry) error {
 	if err != nil || len(incarnation) != 16 || hex.EncodeToString(incarnation) != entry.Incarnation {
 		return errors.New("access: invalid grant incarnation")
 	}
-	if !slices.Equal(entry.Permissions, []string{"metadata"}) {
-		return errors.New("access: only metadata permission is supported")
+	if !ValidPermissions(entry.Permissions) {
+		return errors.New("access: invalid scoped permission set")
 	}
 	if entry.CreatedAt.IsZero() || !entry.ExpiresAt.After(entry.CreatedAt) || entry.ExpiresAt.Sub(entry.CreatedAt) > 7*24*time.Hour {
 		return errors.New("access: invalid grant times")
@@ -228,6 +228,9 @@ func validateEntry(entry Entry) error {
 func (s *Store) Grant(ctx context.Context, expected uint64, input GrantInput, observe ObserveOtherRoles) (Change, error) {
 	if err := ValidateSubject(input.Subject); err != nil {
 		return Change{}, err
+	}
+	if !ValidPermissions(input.Permissions) {
+		return Change{}, errors.New("access: invalid scoped permission set")
 	}
 	if string(input.Subject) == s.target || observe == nil {
 		return Change{}, errors.New("access: dedicated subject and role observer required")
@@ -244,7 +247,7 @@ func (s *Store) Grant(ctx context.Context, expected uint64, input GrantInput, ob
 	})
 }
 func (s *Store) nextGrant(policy *PolicyView, input GrantInput) (*Entry, error) {
-	if existing, ok := findEntry(policy, input.Subject); ok && existing.ExpiresAt.Equal(input.ExpiresAt) {
+	if existing, ok := findEntry(policy, input.Subject); ok && existing.ExpiresAt.Equal(input.ExpiresAt) && slices.Equal(existing.Permissions, input.Permissions) {
 		entry := cloneEntry(existing)
 		return &entry, nil
 	}
@@ -256,7 +259,7 @@ func (s *Store) nextGrant(policy *PolicyView, input GrantInput) (*Entry, error) 
 	if err != nil {
 		return nil, err
 	}
-	return &Entry{Subject: input.Subject, Incarnation: incarnation, Permissions: []string{"metadata"}, CreatedAt: now, ExpiresAt: input.ExpiresAt.UTC()}, nil
+	return &Entry{Subject: input.Subject, Incarnation: incarnation, Permissions: append([]string{}, input.Permissions...), CreatedAt: now, ExpiresAt: input.ExpiresAt.UTC()}, nil
 }
 func (s *Store) Revoke(ctx context.Context, expected uint64, subject Subject) (Change, error) {
 	if err := ValidateSubject(subject); err != nil {

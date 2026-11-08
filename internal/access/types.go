@@ -6,8 +6,14 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	MetadataPermission      = "metadata"
+	SessionOutputPermission = "session-output"
 )
 
 type Class uint8
@@ -49,8 +55,9 @@ type PolicyView struct {
 	Entries  []Entry `json:"entries"`
 }
 type GrantInput struct {
-	Subject   Subject
-	ExpiresAt time.Time
+	Permissions []string
+	Subject     Subject
+	ExpiresAt   time.Time
 }
 type OtherRoles struct{ FullDevice, UpdateAdministrator bool }
 type ObserveOtherRoles func(context.Context, Subject) (OtherRoles, error)
@@ -108,4 +115,18 @@ func (b Binding) Constrain(check func() bool) Binding {
 		return Binding{}
 	}
 	return Binding{state: &bindingState{principal: b.state.principal, current: func() bool { return b.Current() && check() }}}
+}
+
+func (b Binding) RequireOutput() error {
+	if err := b.RequireMetadata(); err != nil {
+		return err
+	}
+	if !slices.Equal(b.state.principal.entry.Permissions, []string{MetadataPermission, SessionOutputPermission}) {
+		return ErrDenied
+	}
+	return nil
+}
+
+func ValidPermissions(permissions []string) bool {
+	return slices.Equal(permissions, []string{MetadataPermission}) || slices.Equal(permissions, []string{MetadataPermission, SessionOutputPermission})
 }

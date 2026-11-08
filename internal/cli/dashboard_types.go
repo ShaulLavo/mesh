@@ -7,6 +7,7 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
 
@@ -16,16 +17,18 @@ type DashboardFunc func(context.Context, DashboardInput) error
 type DashboardWatch func(context.Context, func(DashboardHostView)) error
 
 type DashboardInput struct {
-	ConfigError error
-	ConfigWatch func(context.Context, func(error)) error
-	Notice      string
-	Privacy     *privacy.Mask
-	Hosts       []DashboardHost
-	Wall        bool
-	Theme       string
-	Watch       DashboardWatch
-	UsageWatch  func(context.Context, func(usagefeed.Result)) error
-	Inspect     PickerInspectFunc
+	ConfigError      error
+	ConfigWatch      func(context.Context, func(error)) error
+	Notice           string
+	Privacy          *privacy.Mask
+	Hosts            []DashboardHost
+	Wall             bool
+	Theme            string
+	Watch            DashboardWatch
+	UpdateWatch      func(context.Context, func(DashboardUpdates)) error
+	UsageWatch       func(context.Context, func(DashboardUsageUpdate)) error
+	UsageAcknowledge func(DashboardUsageAcknowledgement)
+	Inspect          PickerInspectFunc
 }
 
 type DashboardHost struct {
@@ -114,4 +117,61 @@ func (h DashboardHostView) NameLabel(now time.Time) string {
 
 func (h DashboardHost) Label() string {
 	return HostLabel(HostRecord{ID: h.ID, MachineName: h.MachineName, NameConflict: h.NameConflict, NamePriority: h.NamePriority, NameSuffix: h.NameSuffix})
+}
+
+// DashboardUsageUpdate carries one configuration generation through the renderer.
+type DashboardUsageUpdate struct {
+	Publication uint64
+	Generation  uint64
+	Enabled     bool
+	State       string
+	Digest      string
+	URL         string
+	Result      usagefeed.Result
+}
+type DashboardUsageAcknowledgement struct {
+	Publication  uint64
+	Generation   uint64
+	Enabled      bool
+	State        string
+	Digest       string
+	FeedRevision uint64
+}
+
+func (u DashboardUsageUpdate) Acknowledgement() DashboardUsageAcknowledgement {
+	return DashboardUsageAcknowledgement{u.Publication, u.Generation, u.Enabled, u.State, u.Digest, u.Result.Revision}
+}
+
+// DashboardStatusState describes a read without asserting host reachability.
+type DashboardStatusState string
+
+const (
+	DashboardStatusObserved    DashboardStatusState = "observed"
+	DashboardStatusUnavailable DashboardStatusState = agentUnavailable
+	DashboardStatusRefused     DashboardStatusState = "refused"
+)
+
+type DashboardStatusObservation struct {
+	State   DashboardStatusState `json:"state"`
+	At      time.Time            `json:"at"`
+	Problem string               `json:"problem,omitempty"`
+}
+type DashboardStatus[T any] struct {
+	Observation DashboardStatusObservation `json:"observation"`
+	Value       *T                         `json:"value"`
+}
+type DashboardUpdateSource struct {
+	Coordinator   update.Host                                  `json:"coordinator"`
+	Automatic     *DashboardStatus[update.AutomaticStatus]     `json:"automatic,omitempty"`
+	Configuration *DashboardStatus[update.ConfigurationStatus] `json:"configuration,omitempty"`
+}
+type DashboardUpdates struct {
+	Generation uint64                  `json:"generation"`
+	Sources    []DashboardUpdateSource `json:"sources"`
+	Problem    string                  `json:"problem,omitempty"`
+}
+type DashboardUpdateRow struct {
+	HostID    string
+	Text      string
+	Attention bool
 }

@@ -16,6 +16,9 @@
     "publication": "pending",
     "removal": "present",
     "receiptRetainUntil": null,
+    "outputRetainUntil": null,
+    "outputExpired": false,
+    "killRequested": false,
     "result": null
   },
   "errors": [

@@ -426,7 +426,7 @@ func TestAutomaticAuthorityPreservesLegacyRelaysAndBindsNewActions(t *testing.T)
 	defer func() { _ = conn.Close() }()
 	client := Client{ID: actorID, Key: actorKey}
 	host := Host{ID: serverID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
-	for _, action := range []string{"info", "automatic.status"} {
+	for _, action := range []string{"info", "automatic.status", "configuration.status", "configuration.observe"} {
 		request := Message{Actor: actorID, Target: serverID, Action: "challenge", Nonce: mustAutomaticID(t)}
 		challenge, err := client.exchange(conn, host, request)
 		if err != nil {
@@ -442,8 +442,12 @@ func TestAutomaticAuthorityPreservesLegacyRelaysAndBindsNewActions(t *testing.T)
 			continue
 		}
 		var denied *RemoteError
-		if !errors.As(err, &denied) || denied.Code != "automatic.conflict" {
-			t.Fatalf("new automatic boundary accepted relay: %v", err)
+		code := ProblemCode("automatic.conflict")
+		if configurationAction(action) {
+			code = "configuration.denied"
+		}
+		if !errors.As(err, &denied) || denied.Code != code {
+			t.Fatalf("new %s boundary accepted relay: %v", action, err)
 		}
 	}
 }
@@ -571,7 +575,7 @@ func TestAutomaticResponseReplacesWholeSnapshot(t *testing.T) {
 }
 
 func serveAutomaticRelay(ctx context.Context, conn transport.Conn, authority *Authority) error {
-	for range 4 {
+	for range 8 {
 		if err := exchangeDownloadPlan(ctx, conn, authority); err != nil {
 			return err
 		}

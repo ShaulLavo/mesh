@@ -4,8 +4,10 @@ Status: Approved, 2026-10-09. Execution follow-up to
 [T26: fleet updates](../tasks/T26-mesh-updates.md). T26's requested operations,
 release reminders and installation helper are implemented. Automatic binary policy source is implemented in Approved audit Plan 017 unit 2,
 subject to independent review, current checks and merge.
-Configuration delivery, dashboard drift presentation and actual fleet enrollment
-remain separate later units and maintenance. Source acceptance does not enroll
+Feed-only configuration delivery is implemented in Approved audit Plan 017 unit 3,
+subject to independent source review, current checks and merge. Domain delivery,
+dashboard fleet drift presentation and actual fleet enrollment remain separate
+later units and maintenance. Source acceptance does not enroll
 the owner's fleet.
 
 ## Outcome
@@ -86,3 +88,71 @@ restarted the daemon and TV dashboard. All four hosts and three feed accounts
 then appeared on the TV. Source anchors are `internal/cli/update.go`,
 `update_bridge.go`, `update_helper.go`, `update_notice.go`, `remote.go` and
 `internal/tui/dashboard_usage.go`.
+
+
+## Feed-only source boundary
+
+Plan 017 unit 3 adds target-local usage-feed grants and signed exact preview,
+approval, status, retry and cancellation. Recipient intent and selected-value
+CAS use the existing CLI configuration writer. The running dashboard replaces
+its joined fetcher and acknowledges its generation through its real renderer.
+Observer renewal is independent of the feed fetch interval. No active dashboard
+is reported as saved without consumer observation. Cancellation stops new
+intentions, while target-local revocation separately fences acceptance.
+
+Domain-policy delivery, catalog generation and actual service verification are
+unit 4. Fleet drift presentation is unit 5. No real feed URL, fleet enrollment,
+owner configuration, provider account or installed service was changed by unit 3.
+
+
+## Domain source boundary
+
+Plan 017 unit 4 adds explicit domain grants, component receipts and actual
+signed daemon policy observations. The primary and complete aliases retain all
+accepted private domains and the legacy certificate owner. Policy generation
+serializes domain publication with every advisory service-cache operation and
+invalidates retained live service and private-name observations. Process policy
+stays immutable. Saved changes remain restart or reopen required until actual
+consumer observations match.
+
+Each process retains its first catalog generation across cache and watcher
+reconstruction. Returning to the same policy bytes does not admit an older
+process into a newer generation. Temporary observation failure keeps retained
+rows explicitly stale instead of reporting a policy change. A domain conflict
+does not strand an independently prepared feed, and a terminal conflict cannot
+resume through replay. Native and SSH one-shot commands infer naming policy
+without publishing deployment metadata.
+
+Service HTTPS verification is explicitly unknown pending a request-time passive
+admission contract. No service probe, automatic restart, enrollment, installed
+update or owner configuration change is part of this source unit. Direct
+historical release transitions remain blocked with explicit manual bridge-review
+advice; automatic reconciliation does not traverse historical releases.
+
+## Unit 5 source presentation
+
+The CLI and dashboard now join read-only binary and configuration status from
+exact saved pinned coordinators. Configuration-only grants remain independent
+of binary consent. Default copy names actions without exposing authority IDs;
+structured output retains full contracts and original observation times.
+Saved settings, running daemon policy, live renderer leases, feed failures,
+upstream age and unknown service HTTPS acceptance remain independent.
+
+The bounded dashboard area shares the existing frame/layout owner and reserves
+no row without status. Its CLI watcher has a five-second per-read deadline and
+30-second cadence, joins cancellation, and discards responses when saved source
+enrollment changes. No release fetch, wake, enrollment, trust change or restart
+is part of presentation. Actual fleet enrollment, rollout and passive HTTPS
+acceptance remain separate unfinished work.
+
+A stale binary enrollment or malformed authority record reports its own source
+as unavailable without hiding a separately valid configuration grant. The
+reverse separation also holds. Selection fingerprints include source failures,
+so a response from a withdrawn grant cannot appear after a membership change.
+
+The first unit 5 local package run inherited the operator's default configuration
+paths and reported domain-generation refusals plus a legacy-topic timeout. The
+single later campaign used isolated HOME, XDG and Mesh paths and passed all
+package races. These are setup-distinct observations, not a same-source A/B
+proof or a diagnosed cause for the timeout. The retained unit 5 report records
+both commands and outcomes. Normal corrected-source CI remains required.

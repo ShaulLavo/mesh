@@ -43,19 +43,32 @@ type Files struct {
 }
 
 func OpenFiles(path string) (*Files, error) {
-	info, err := os.Lstat(path)
+	parent, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
-		return nil, executionBoundaryError("files.go OpenFiles", err)
+		return nil, executionBoundaryError("open execution parent", err)
+	}
+	name := filepath.Base(path)
+	if name == string(filepath.Separator) {
+		name = "."
+	}
+	info, err := parent.Lstat(name)
+	if err != nil {
+		return nil, errors.Join(executionBoundaryError("inspect execution root", err), parent.Close())
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("execution: unsafe state root")
+		return nil, errors.Join(fmt.Errorf("execution: unsafe state root"), parent.Close())
 	}
-	root, err := os.OpenRoot(path)
+	root, err := parent.OpenRoot(name)
+	err = errors.Join(err, parent.Close())
 	if err != nil {
-		return nil, executionBoundaryError("files.go OpenFiles", err)
+		if root != nil {
+			err = errors.Join(err, root.Close())
+		}
+		return nil, executionBoundaryError("open execution root", err)
 	}
 	return &Files{root: root}, nil
 }
+
 func (f *Files) Close() error { return executionBoundaryError("files.go Close", f.root.Close()) }
 
 func validPath(name string) bool {
@@ -170,6 +183,9 @@ func (f *Files) PublishBounded(name string, value any, exclusive bool, limit int
 	if err != nil || len(data) > limit || limit > 256<<10 || limit < 1 {
 		return BeforePublish, fmt.Errorf("execution: encode bounded record: %w", err)
 	}
+	return f.publishBytes(name, data, exclusive)
+}
+func (f *Files) publishBytes(name string, data []byte, exclusive bool) (Stage, error) {
 	if err := f.check(name, true); err != nil {
 		return BeforePublish, err
 	}

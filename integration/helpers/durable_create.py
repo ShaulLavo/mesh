@@ -57,7 +57,7 @@ def exercise(fixture):
     fast_lookup = dict(type="execution.request", requestId="fast-lookup", requestKey="fast-exit")
     terminal = eventually(lambda: terminal_receipt(fixture, fast_lookup, fast["data"]), "fast exit never became terminal")
     assert terminal["result"]["termination"] == {"kind": "exit", "code": 7, "signal": None}, terminal
-    assert terminal["result"]["capture"] == "not_recorded" and terminal["receiptRetainUntil"], terminal
+    assert terminal["result"]["capture"] == "complete" and terminal["receiptRetainUntil"], terminal
     symlink_cwd(fixture)
     print(json.dumps(dict(first=first, instance=original["instance"], sideEffects=counter.read_text(), terminal=terminal)), flush=True)
 
@@ -78,9 +78,22 @@ def symlink_cwd(fixture):
     assert meta["cwd"] == str(alias), meta
 
 
+def unsettled_publication(response, expected):
+    assert response.get("message") == "read execution receipt: execution: linked private record", response
+    value = response["executionReceipt"]
+    for name in ("hostId", "sessionId", "instance", "requestKey", "keyScope", "kind"):
+        assert value[name] == expected[name], response
+    assert value["phase"] == "live" and value["acceptance"] == "durable", response
+    assert value["launchOutcome"] == "started" and value["publication"] == "published", response
+    assert value["removal"] == "present" and value["result"] is None, response
+    return value
+
+
 def terminal_receipt(fixture, request, expected):
     response = exchange(fixture, request)
-    if response.get("type") == "error":
+    if response.get("type") == "error" and response.get("errorCode") == "state.unavailable":
+        value = unsettled_publication(response, expected)
+    elif response.get("type") == "error":
         assert response.get("errorCode") == "request.outcome_unknown", response
         value = response["executionReceipt"]
         assert value["phase"] == "uncertain" and value["result"] is None, response

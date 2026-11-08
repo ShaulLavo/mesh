@@ -352,9 +352,17 @@ type Control struct {
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
 	// Keyed detached PTY admission is distinct from legacy correlation IDs.
-	ExecutionKind    string            `json:"kind,omitempty"`
-	RequestKey       string            `json:"requestKey,omitempty"`
-	ExecutionReceipt *ExecutionReceipt `json:"executionReceipt,omitempty"`
+	ExecutionKind     string            `json:"kind,omitempty"`
+	RequestKey        string            `json:"requestKey,omitempty"`
+	ExecutionReceipt  *ExecutionReceipt `json:"executionReceipt,omitempty"`
+	Instance          string            `json:"instance,omitempty"`
+	Stream            string            `json:"stream,omitempty"`
+	Cursor            string            `json:"cursor,omitempty"`
+	MaxBytes          int               `json:"maxBytes,omitempty"`
+	TimeoutMillis     int               `json:"timeoutMillis,omitempty"`
+	ExecutionPage     *ExecutionPage    `json:"executionPage,omitempty"`
+	ExecutionWait     string            `json:"executionWait,omitempty"`
+	ExecutionDelivery string            `json:"executionDelivery,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

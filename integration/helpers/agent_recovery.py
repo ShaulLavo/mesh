@@ -28,7 +28,10 @@ root = pathlib.Path(os.environ["MESH_TEST_AGENT_ROOT"])
 resumed = next((arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--resume=")), None)
 identity = resumed or sys.argv[sys.argv.index("--model") + 1]
 session = os.environ["MESH_SESSION_ID"]
-(root / ("launch-" + session + ".json")).write_text(json.dumps({"argv":sys.argv[1:], "id":identity, "cwd":os.getcwd(), "root":os.environ.get("CLAUDE_CONFIG_DIR")}))
+invocation = root / ("launch-" + session + ".json")
+pending = invocation.with_suffix(".tmp")
+pending.write_text(json.dumps({"argv":sys.argv[1:], "id":identity, "cwd":os.getcwd(), "root":os.environ.get("CLAUDE_CONFIG_DIR")}))
+pending.replace(invocation)
 if resumed:
     while not (root / "allow-resume").exists():
         time.sleep(0.01)

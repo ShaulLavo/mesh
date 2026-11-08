@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Standalone integration entry points must not read the caller's address book."""
 
+from contextlib import ExitStack
 import ctypes
 import errno
 import fcntl
@@ -22,6 +23,7 @@ import unittest
 from unittest.mock import patch
 
 from isolation import refuse_live_paths
+from fleet_sharing import Device
 from terminal_window import Fixture
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,6 +58,80 @@ def stop_entry(entry, groups):
     for group in groups:
         signal_group(group, signal.SIGKILL)
     entry.wait(timeout=3)
+
+
+class DurablePublicationPollTest(unittest.TestCase):
+    def response(self):
+        binding = dict(hostId="host", sessionId="7K3D", instance="a" * 32,
+                       requestKey="key", keyScope="local-account", kind="pty")
+        receipt = dict(binding, phase="live", acceptance="durable", launchOutcome="started",
+                       publication="published", removal="present", result=None)
+        return dict(type="error", errorCode="state.unavailable", executionReceipt=receipt,
+                    message="read execution receipt: execution: linked private record"), binding
+
+    def test_exact_publication_race_remains_pending(self):
+        from durable_create import terminal_receipt
+        response, expected = self.response()
+        with patch("durable_create.exchange", return_value=response):
+            self.assertIsNone(terminal_receipt(None, {}, expected))
+
+    def test_other_failures_or_shortened_binding_are_rejected(self):
+        from durable_create import terminal_receipt
+        variants = [("errorCode", "state.other"), ("message", "disk failed"),
+                    ("instance", "b" * 32), ("hostId", "other"), ("result", {}),
+                    ("phase", "terminal"), ("acceptance", "visible_unconfirmed"),
+                    ("publication", "pending"), ("launchOutcome", "unknown"),
+                    ("removal", "pending")]
+        for field, value in variants:
+            response, expected = self.response()
+            target = response if field in ("errorCode", "message") else response["executionReceipt"]
+            target[field] = value
+            self.assert_rejected(terminal_receipt, response, expected)
+        response, expected = self.response()
+        del response["executionReceipt"]["instance"]
+        self.assert_rejected(terminal_receipt, response, expected)
+
+    def assert_rejected(self, poll, response, expected):
+        with patch("durable_create.exchange", return_value=response):
+            with self.assertRaises((AssertionError, KeyError)):
+                poll(None, {}, expected)
+
+
+class DashboardMetricsControlTest(unittest.TestCase):
+    def test_configuration_observation_is_explicitly_unsupported(self):
+        from dashboard_metrics import Producer
+        producer = object.__new__(Producer)
+        request = {"type": "update.control", "requestId": "observer-challenge"}
+        connection = object()
+        with patch("dashboard_metrics.send") as send:
+            self.assertFalse(producer.reply(connection, request))
+        send.assert_called_once_with(connection, {
+            "type": "error", "requestId": "observer-challenge",
+            "message": 'daemon: unknown control "update.control"',
+        })
+
+    def test_unrelated_unexpected_control_still_fails(self):
+        from dashboard_metrics import Producer
+        producer = object.__new__(Producer)
+        with self.assertRaisesRegex(AssertionError, "unexpected fixture request unrelated.control"):
+            producer.reply(None, {"type": "unrelated.control"})
+
+
+class IsolationPolicyPermissionsTest(unittest.TestCase):
+    def test_policy_is_private_under_the_hosted_umask(self):
+        from isolation import prepare_isolation
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
+        with tempfile.TemporaryDirectory(prefix="m-policy-mode-") as temporary:
+            root = Path(temporary)
+            owner = SimpleNamespace(root=root, name="policy-mode",
+                                    admission={"isolation": {"script": str(root / "probe.sh"), "bash": "/bin/bash"}})
+            with patch.dict(os.environ, {"HOME": str(root / "caller-home")}, clear=True), patch("isolation.owned_go_environment", return_value={}):
+                _, environment = prepare_isolation(owner)
+            policy = Path(environment["MESH_CONFIG_DIR"]) / "domains.json"
+            self.assertEqual(policy.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(policy.stat().st_nlink, 1)
+            self.assertEqual(json.loads(policy.read_text())["primary"], "mesh.test")
 
 
 class EntryPointContractTest(unittest.TestCase):
@@ -150,6 +226,29 @@ class ServedPortOwnershipTest(unittest.TestCase):
             return process.communicate(input=b"\n" if signum is None else None, timeout=15)
         finally:
             stop_entry(process, [])
+
+    def new_devices(self, root, cleanup):
+        devices = []
+        for name in ("pc", "mac", "server-a", "server-b"):
+            directory = root / name
+            directory.mkdir(mode=0o700)
+            device = Device.__new__(Device)
+            cleanup.callback(device.close)
+            device.__init__(os.environ["MESH"], directory, name)
+            devices.append(device)
+        return devices
+
+    def test_fleet_device_ports_stay_owned_before_start_and_across_restart(self):
+        with tempfile.TemporaryDirectory(prefix="m-fleet-ports-") as temporary, ExitStack() as cleanup:
+            devices = self.new_devices(Path(temporary), cleanup)
+            ports = [device.port for device in devices]
+            self.assertEqual(len(set(ports)), len(devices))
+            for port in ports:
+                self.assert_port_reserved(port)
+                self.assert_start_restart(port)
+        for port in ports:
+            with socket.socket() as competitor:
+                competitor.bind(("127.0.0.1", port))
 
     def test_kept_ports_stay_reserved_until_the_fixture_owner_exits(self):
         source = (REPO / "integration/serve_kept.sh").read_text()
