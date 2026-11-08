@@ -36,16 +36,22 @@ cat >"$test_root/bin/gh" <<'GH'
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_LOG"
 case "$1 $2" in
+  'api --method')
+    head=$(cat "$PR_CREATED.validated")
+    [[ $* == "api --method POST repos/ShaulLavo/mesh/statuses/$head -f context=Complete CI gate -f state=pending -f description=Waiting for dispatched CI" ]]
+    [[ ${FAIL_STATUS:-0} == 0 ]] || { echo 'status API failed' >&2; exit 1; } ;;
   'api repos/ShaulLavo/mesh/releases/latest') echo "${LATEST_TAG:-v0.1.1}" ;;
   'release edit'|'auth setup-git') ;;
   'pr list')
     [[ ${FAIL_LIST:-0} == 0 ]] || { echo 'list API failed' >&2; exit 1; }
     [[ ! -f $PR_CREATED ]] || echo 17 ;;
-  'pr create') touch "$PR_CREATED"; echo 'https://example.invalid/pr/17' ;;
+  'pr create') touch "$PR_CREATED"; echo 17 ;;
+  'pr edit') [[ $* == *"--title Update Cask for ${CASK_VERSION:-v0.1.2}"* ]] ;;
   'pr view')
     if [[ $* == *headRefOid* ]]; then
-      head=$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/release/cask-v0.1.2)
-      printf '%s\tmain\trelease/cask-v0.1.2\t%s\tfalse\n' "${PR_REPOSITORY:-ShaulLavo/mesh}" "$head"
+      head=$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/automation/cask-updates)
+      printf '%s\n' "$head" > "$PR_CREATED.validated"
+      printf '%s\tmain\tautomation/cask-updates\t%s\tfalse\n' "${PR_REPOSITORY:-ShaulLavo/mesh}" "$head"
     elif [[ $* == *isDraft* ]]; then
       [[ ${FAIL_DRAFT:-0} == 0 ]] || { echo 'draft API failed' >&2; exit 1; }
       echo "${PR_DRAFT:-false}"
@@ -54,13 +60,20 @@ case "$1 $2" in
     else
       echo 17
     fi
-    if [[ -n ${RACE_HEAD:-} ]]; then git --git-dir="$FIXTURE_REMOTE" update-ref refs/heads/release/cask-v0.1.2 "$RACE_HEAD"; fi ;;
+    if [[ -n ${RACE_HEAD:-} ]]; then git --git-dir="$FIXTURE_REMOTE" update-ref refs/heads/automation/cask-updates "$RACE_HEAD"; fi ;;
   'pr merge')
-    if [[ $* == *--match-head-commit* && ${*: -1} != $(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/release/cask-v0.1.2) ]]; then
+    if [[ $* == *--match-head-commit* && ${*: -1} != $(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/automation/cask-updates) ]]; then
       echo 'PR head changed after validation' >&2; exit 1
     fi
     [[ ${FAIL_MERGE:-0} == 0 ]] || { echo 'merge API failed' >&2; exit 1; }; touch "$PR_CREATED.auto" ;;
-  'workflow run') echo 'unexpected CI dispatch: use the normal approved PR workflow' >&2; exit 1 ;;
+  'run list')
+    head=$(git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/automation/cask-updates)
+    if [[ -f $PR_CREATED.ci && $(cat "$PR_CREATED.ci") == "$head" ]]; then
+      echo '{"status":"completed","conclusion":"success"}'
+    fi ;;
+  'workflow run')
+    [[ ${FAIL_DISPATCH:-0} == 0 ]] || { echo 'dispatch API failed' >&2; exit 1; }
+    git --git-dir="$FIXTURE_REMOTE" rev-parse refs/heads/automation/cask-updates > "$PR_CREATED.ci" ;;
   *) echo "unexpected gh: $*" >&2; exit 1 ;;
 esac
 GH
@@ -69,20 +82,20 @@ echo new >"$test_root/cask"
 run_finalize() {
   (cd "$checkout" && env PATH="$test_root/bin:$PATH" GIT_CONFIG_GLOBAL="$test_root/gitconfig" \
     GITHUB_REPOSITORY=ShaulLavo/mesh RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" \
-    PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" v0.1.2 "$source_sha" v0.1.1 "$test_root/cask")
+    PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" "${CASK_VERSION:-v0.1.2}" "$source_sha" v0.1.1 "$test_root/cask")
 }
 run_finalize >"$test_root/output"
 cat "$test_root/output"
-branch=release/cask-v0.1.2
+branch=automation/cask-updates
 head=$(git --git-dir="$remote" rev-parse "refs/heads/$branch")
 [[ $(git --git-dir="$remote" rev-parse refs/heads/main) == "$source_sha" ]]
 grep -Fq 'pr merge 17 --repo ShaulLavo/mesh --auto --squash' "$test_root/gh.log"
-grep -Fq 'Normal pull_request CI must pass before auto-merge' "$test_root/output"
-grep -Fq 'If GitHub requests approval, a maintainer must select "Approve workflows to run" on PR 17' "$test_root/output"
+grep -Fq 'waits for dispatched CI before auto-merge' "$test_root/output"
 run_finalize
 [[ $(git --git-dir="$remote" rev-parse "refs/heads/$branch") == "$head" ]]
 [[ $(grep -c '^pr create ' "$test_root/gh.log") == 1 ]]
 [[ $(grep -c '^pr merge ' "$test_root/gh.log") == 1 ]]
+[[ $(grep -c '^workflow run ' "$test_root/gh.log") == 1 ]]
 check_draft_pr() {
   local before
   before=$(grep -c '^pr merge ' "$test_root/gh.log")
@@ -144,14 +157,25 @@ case ${1:-all} in
   all) check_draft_pr; check_foreign_pr; check_moved_head; check_conflicting_main ;;
   *) echo 'unknown control' >&2; exit 2 ;;
 esac
+for failure in FAIL_STATUS FAIL_DISPATCH; do
+  rm -f "$test_root/pr.ci"
+  merges=$(grep -c '^pr merge ' "$test_root/gh.log")
+  if (export "$failure=1"; run_finalize >"$test_root/error" 2>&1); then
+    echo "$failure was ignored" >&2; exit 1
+  fi
+  [[ $(grep -c '^pr merge ' "$test_root/gh.log") == "$merges" ]]
+done
 if FAIL_LIST=1 run_finalize >"$test_root/error" 2>&1; then echo 'list failure was swallowed' >&2; exit 1; fi
 grep -Fq 'list API failed' "$test_root/error"
 rm "$test_root/pr.auto"
 if FAIL_MERGE=1 run_finalize >"$test_root/error" 2>&1; then echo 'merge failure was swallowed' >&2; exit 1; fi
 grep -Fq 'merge API failed' "$test_root/error"
 echo different >"$test_root/cask"
-if run_finalize >"$test_root/error" 2>&1; then echo 'mismatched branch was reused' >&2; exit 1; fi
-grep -Fq 'does not contain only the expected Cask' "$test_root/error"
+CASK_VERSION=v0.1.3 run_finalize
+[[ $(grep -c '^pr create ' "$test_root/gh.log") == 1 ]]
+grep -Fq -- '--title Update Cask for v0.1.3' "$test_root/gh.log"
+git --git-dir="$remote" show "refs/heads/$branch:Casks/mesh.rb" | cmp -s - "$test_root/cask"
+[[ $(git --git-dir="$remote" for-each-ref --format='%(refname)' 'refs/heads/automation/cask*') == "refs/heads/$branch" ]]
 cp "$checkout/Casks/mesh.rb" "$test_root/cask"
 before=$(wc -l <"$test_root/gh.log")
 run_finalize
@@ -164,7 +188,7 @@ git -C "$checkout" tag v0.1.3
 before=$(wc -l <"$test_root/gh.log")
 LATEST_TAG=v0.1.3 run_finalize
 [[ $(wc -l <"$test_root/gh.log") -eq $((before + 1)) ]]
-if grep -q '^workflow ' "$test_root/gh.log"; then
-  echo 'Cask finalizer dispatched a redundant workflow' >&2; exit 1
-fi
+[[ $(grep -c '^workflow run ' "$test_root/gh.log") -ge 3 ]]
 echo 'PASS: Cask PR handoff and retry contract'
+
+bash "$repo_root/scripts/test-report-update-status.sh"
