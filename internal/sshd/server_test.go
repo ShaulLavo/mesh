@@ -614,19 +614,14 @@ func TestBoundedListenerCapsConcurrentConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer inner.Close() //nolint:errcheck // test cleanup
-
 	bounded := newBoundedListener(inner, 1)
 	accepted := make(chan net.Conn, 2)
-	go func() {
-		for {
-			conn, err := bounded.Accept()
-			if err != nil {
-				return
-			}
-			accepted <- conn
-		}
-	}()
+	stopped := make(chan struct{})
+	t.Cleanup(func() {
+		_ = bounded.Close()
+		waitSSHCompletion(t, stopped, time.Now().Add(2*time.Second), "bounded Accept cleanup")
+	})
+	go pumpBoundedAccepts(bounded, accepted, stopped)
 
 	first, err := net.Dial("tcp", inner.Addr().String())
 	if err != nil {

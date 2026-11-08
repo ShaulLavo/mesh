@@ -94,21 +94,28 @@ func (c *gracedConn) watchGrant(ctx context.Context, allowed func() bool) {
 	}()
 }
 
-// boundedListener refuses to hold more than maximum live connections. Accepting
-// and immediately closing keeps the listener backlog draining rather than
-// letting the kernel queue grow behind a server that will never catch up.
+// boundedListener owns sockets from Accept through Close, including handshakes
+// that the SSH server has not registered yet. Excess connections are closed
+// immediately so they cannot accumulate in the listener backlog.
 type boundedListener struct {
 	net.Listener
-	slots chan struct{}
+	maximum  int
+	mu       sync.Mutex
+	conns    map[*boundedConn]struct{}
+	closed   bool
+	once     sync.Once
+	closeErr error
 }
 
 type boundedConn struct {
 	net.Conn
-	release func()
+	listener *boundedListener
+	once     sync.Once
+	closeErr error
 }
 
 func newBoundedListener(listener net.Listener, maximum int) *boundedListener {
-	return &boundedListener{Listener: listener, slots: make(chan struct{}, maximum)}
+	return &boundedListener{Listener: listener, maximum: maximum, conns: make(map[*boundedConn]struct{})}
 }
 
 func (l *boundedListener) Accept() (net.Conn, error) {
@@ -117,21 +124,49 @@ func (l *boundedListener) Accept() (net.Conn, error) {
 		if err != nil {
 			return nil, err //nolint:wrapcheck // the caller reports listener failures with its own context
 		}
-		select {
-		case l.slots <- struct{}{}:
-			var once sync.Once
-			return &boundedConn{Conn: conn, release: func() {
-				once.Do(func() { <-l.slots })
-			}}, nil
-		default:
+		l.mu.Lock()
+		if l.closed {
+			l.mu.Unlock()
 			_ = conn.Close()
+			return nil, net.ErrClosed
 		}
+		if len(l.conns) >= l.maximum {
+			l.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		owned := &boundedConn{Conn: conn, listener: l}
+		l.conns[owned] = struct{}{}
+		l.mu.Unlock()
+		return owned, nil
 	}
 }
 
+func (l *boundedListener) Close() error {
+	l.once.Do(func() {
+		l.mu.Lock()
+		l.closed = true
+		connections := make([]*boundedConn, 0, len(l.conns))
+		for conn := range l.conns {
+			connections = append(connections, conn)
+		}
+		l.mu.Unlock()
+		l.closeErr = l.Listener.Close()
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+	})
+	return l.closeErr //nolint:wrapcheck // preserve the underlying listener close result
+}
+
 func (c *boundedConn) Close() error {
-	defer c.release()
-	return c.Conn.Close() //nolint:wrapcheck // the caller only needs to know the close failed
+	c.once.Do(func() {
+		c.closeErr = c.Conn.Close()
+		c.listener.mu.Lock()
+		delete(c.listener.conns, c)
+		c.listener.mu.Unlock()
+	})
+	return c.closeErr //nolint:wrapcheck // preserve the underlying socket close result
 }
 
 // Config identifies one concrete SSH listener and its authentication state.
@@ -184,13 +219,17 @@ func Serve(ctx context.Context, cfg Config, opts ...charmssh.Option) error {
 	}
 
 	bounded := newBoundedListener(listener, maximumConnections)
+	shutdownDone := make(chan struct{})
 	stopShutdown := context.AfterFunc(ctx, func() {
-		_ = listener.Close()
+		defer close(shutdownDone)
+		_ = bounded.Close()
 		_ = server.Close()
 	})
 	serveErr := server.Serve(bounded)
-	stopShutdown()
-	closeErr := errors.Join(normalCloseError(listener.Close()), normalCloseError(server.Close()))
+	if !stopShutdown() {
+		<-shutdownDone
+	}
+	closeErr := errors.Join(normalCloseError(bounded.Close()), normalCloseError(server.Close()))
 	if ctx.Err() != nil {
 		return closeErr
 	}
