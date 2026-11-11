@@ -54,6 +54,8 @@ func (e *Engine) settings() Settings {
 		RequiredMount: e.cfg.RequiredMount, ClientOnly: e.cfg.ClientOnly, HealthTimeout: e.cfg.HealthTimeout, Service: e.cfg.ServiceSpec}
 }
 
+func (e *Engine) Settings() Settings { return e.settings() }
+
 func (e *Engine) Stage(ctx context.Context, request Request) (Status, error) {
 	lock, err := lockInstallation(ctx, e.cfg.StateDir)
 	if err != nil {
@@ -238,7 +240,7 @@ func (e *Engine) stage(ctx context.Context, status Status) (Status, error) {
 		return status, err
 	}
 	status.Phase = Staged
-	return status, e.save(&status)
+	return status, e.authorize(ctx, status.Request, AcceptanceStage, func() error { return e.save(&status) })
 }
 
 func (e *Engine) Grant(ctx context.Context, id string, generation uint64) (Status, error) {
@@ -353,11 +355,14 @@ func (e *Engine) RetryWithToken(ctx context.Context, id string, generation, toke
 }
 
 func (e *Engine) authorize(ctx context.Context, request Request, kind AcceptanceKind, commit func() error) error {
-	if request.Automatic == nil {
-		return commit()
+	if e.hostOrigin {
+		ctx = context.WithValue(ctx, hostAcceptanceKey{}, true)
 	}
 	if e.cfg.AuthorizeAcceptance == nil {
-		return errors.New("automatic installation requires recipient acceptance authority")
+		if request.Automatic != nil || e.hostOrigin {
+			return errors.New("automatic installation requires recipient acceptance authority")
+		}
+		return commit()
 	}
 	return e.cfg.AuthorizeAcceptance(ctx, request, kind, commit)
 }
