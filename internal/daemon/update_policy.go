@@ -3,10 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -15,9 +13,8 @@ func (u *updateController) hostPolicy(ctx context.Context, actor update.Verified
 		policy, err := u.coordinator.Store.HostPolicy(ctx)
 		return policy, hostControllerError(err)
 	}
-	_, remote := transport.Peer(ctx)
-	if ctx.Value(localClientKey{}) != true || remote || actor.ID() != u.id {
-		return nil, errors.New("update policy changes require this machine's owner through its local Unix socket")
+	if err := u.requireLocalUpdateOwner(ctx, actor); err != nil {
+		return nil, err
 	}
 	if action == "host-policy.forget" {
 		var dependent update.HostDependentForget

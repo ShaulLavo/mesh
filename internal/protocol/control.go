@@ -153,6 +153,7 @@ type HostUpdateSummary struct {
 	Revision       uint64             `json:"revision"`
 	Installation   string             `json:"installation"`
 	Target         *HostUpdateRelease `json:"target"`
+	Next           *HostUpdateRelease `json:"next"`
 	Head           *HostUpdateRelease `json:"head"`
 	Latest         *HostUpdateRelease `json:"latest"`
 	LatestEpoch    uint32             `json:"latestEpoch"`

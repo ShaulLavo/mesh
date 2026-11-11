@@ -43,10 +43,37 @@ func summarizeHostUpdate(status update.HostStatus, build release.Build, installa
 	if owned := status.State.Owned; owned != nil && summary.Target == nil {
 		summary.Target = &protocol.HostUpdateRelease{Version: owned.Installation.Manifest.Version, Metadata: owned.Metadata}
 	}
+	if owned := status.State.Owned; owned != nil {
+		summary.Next = &protocol.HostUpdateRelease{Version: owned.Installation.Manifest.Version, Metadata: owned.Metadata}
+	}
+	summaryLocalTarget(summary, status.LocalTarget)
 	if last := status.Last; last != nil {
 		summary.Last = &protocol.HostUpdateCommit{Version: last.Version, Metadata: last.Metadata, Binary: last.Binary, At: last.CommittedAt}
 	}
 	return summary
+}
+
+func summaryLocalTarget(summary *protocol.HostUpdateSummary, target *update.HostTargetStatus) {
+	if target == nil || target.Phase == update.HostTargetIdle || target.Phase == update.HostTargetCommitted || target.Phase == update.HostTargetCancelled {
+		return
+	}
+	summary.Target = &protocol.HostUpdateRelease{Version: target.Target.Version, Metadata: target.Target.Metadata}
+	if target.Next != nil {
+		summary.Next = &protocol.HostUpdateRelease{Version: target.Next.Version, Metadata: target.Next.Metadata}
+	}
+	at := target.PendingSince
+	summary.PendingSince = &at
+	summary.Pending = "An approved local update is in progress."
+	summary.Phase = string(update.HostInstalling)
+	if target.Phase == update.HostTargetWaiting {
+		summary.Phase = string(update.HostWaiting)
+	}
+	if target.Phase == update.HostTargetAttention {
+		summary.Phase, summary.Problem = string(update.HostAttention), "An approved local update needs attention."
+	}
+	if target.Problem != nil {
+		summary.Pending = target.Problem.Detail
+	}
 }
 
 func summarySourceMatches(status update.HostStatus, build release.Build) bool {

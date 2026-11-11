@@ -6,6 +6,7 @@ func CloneHostUpdateSummary(value *HostUpdateSummary) *HostUpdateSummary {
 	}
 	cloned := *value
 	cloned.Target = cloneHostUpdateValue(value.Target)
+	cloned.Next = cloneHostUpdateValue(value.Next)
 	cloned.Head = cloneHostUpdateValue(value.Head)
 	cloned.Latest = cloneHostUpdateValue(value.Latest)
 	cloned.Lag = cloneHostUpdateValue(value.Lag)

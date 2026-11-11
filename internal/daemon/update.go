@@ -150,6 +150,8 @@ func (u *updateController) handle(ctx context.Context, actor update.VerifiedActo
 	switch action {
 	case "host-policy.show", "host-policy.set", "host-policy.forget":
 		return u.hostPolicy(ctx, actor, action, data)
+	case update.HostTargetPlanAction, update.HostTargetSubmitAction, update.HostTargetStatusAction, update.HostTargetCancelAction:
+		return u.localTarget(ctx, actor, action, data)
 	case "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe":
 		return u.configuration(ctx, actor, action, data)
 	case "automatic.status", "automatic.consent", "automatic.change":

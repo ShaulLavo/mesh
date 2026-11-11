@@ -28,11 +28,12 @@ type HostDiscoveryObservation struct {
 }
 
 type HostStatus struct {
-	Policy    HostPolicy
-	State     HostUpdate
-	Discovery *HostDiscoveryObservation
-	Last      *LedgerEntry
-	Peers     []HostPeer
+	Policy      HostPolicy
+	State       HostUpdate
+	Discovery   *HostDiscoveryObservation
+	Last        *LedgerEntry
+	Peers       []HostPeer
+	LocalTarget *HostTargetStatus
 }
 
 func hostProblemSince(prior, next HostUpdate, now time.Time) time.Time {
@@ -72,6 +73,13 @@ func (s *Store) HostStatus(ctx context.Context) (HostStatus, error) {
 	}
 	peers, err := s.readHostPeers()
 	status.Peers = peers.Entries
+	if err != nil {
+		return status, err
+	}
+	intent, err := s.hostTarget()
+	if intent != nil {
+		status.LocalTarget = &intent.Status
+	}
 	return status, err
 }
 
