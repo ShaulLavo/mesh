@@ -56,6 +56,7 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 	controller.coordinator.CheckedRelease = notices.CheckedRelease
 	controller.hostUpdater = &update.HostUpdater{Store: runs, ID: id, Current: release.Current,
 		Engine: func(ctx context.Context) (*updateinstall.Engine, error) { return hostInstallation(ctx, stateDir) },
+		Order:  &update.HostOrder{Store: runs, Client: update.Client{ID: id, Key: key}},
 		Source: update.OfficialHostSource(stateDir), Probe: update.LocalProbe(stateDir),
 		Helper: func(ctx context.Context, source release.Manifest) error { return hostHelper(ctx, stateDir, source) }}
 	return controller, nil
@@ -139,6 +140,9 @@ func finishedHostJournal(phase updateinstall.Phase) bool {
 }
 
 func (u *updateController) HandleControl(ctx context.Context, request protocol.Control) (protocol.Control, bool, error) {
+	if request.Type == protocol.TypeUpdateEvidence {
+		return u.evidence(ctx, request)
+	}
 	return u.authority.HandleControl(ctx, request)
 }
 
