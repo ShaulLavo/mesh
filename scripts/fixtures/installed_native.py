@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from fixtures import native_services
@@ -200,8 +201,9 @@ class Installation:
         return image
 
     def seed(self):
-        self.terminal = terminal_module.Terminal([str(self.binary), "local", "--", str(HELPERS / "window_shell.sh")],
-            self.environment, self.root, timeout=10)
+        client_environment = self.prepare_client()
+        self.terminal = terminal_module.Terminal([str(self.binary), "installed.fixture.test", "--", str(HELPERS / "window_shell.sh")],
+            client_environment, self.root, timeout=10)
         self.terminal.expect(terminal_module.PROMPT)
         sessions = self.control("session.list")["sessions"]
         if len(sessions) != 1:
@@ -211,6 +213,7 @@ class Installation:
         self.shell = json.loads((self.state / "s" / self.session / "meta.json").read_text())["pid"]
         self.io()
         marker = self.root / "listener.json"
+        self.challenge = marker.with_suffix(".challenge")
         command = shlex.join([sys.executable, str(Path(__file__).with_name("installed_listener.py")), str(marker)])
         self.terminal.send(command + " &\n")
         native_services.wait_for(marker.exists, "session listener did not start")
@@ -220,6 +223,23 @@ class Installation:
         if response.get("type") != "service.upserted":
             raise RuntimeError(f"native service registration failed: {response!r}")
         self.open_stream()
+
+    def prepare_client(self):
+        config = self.root / "cc"
+        config.mkdir()
+        environment = self.environment | {"MESH_STATE_DIR": str(self.root / "c"), "MESH_CONFIG_DIR": str(config)}
+        result = subprocess.run([str(self.binary), "device", "identity", "--json"], env=environment,
+            capture_output=True, text=True, check=True, timeout=10)
+        client_id = json.loads(result.stdout)["id"]
+        subprocess.run([str(self.binary), "device", "approve", "--allow-root", "--", client_id],
+            env=self.environment, capture_output=True, text=True, check=True, timeout=10)
+        host = self.control("host.info")["host"]
+        path = config / "hosts.json"
+        path.write_text(json.dumps({"version": 1, "hosts": [{"id": host["id"], "meshIdentity": host["meshIdentity"],
+            "tailscaleName": "installed.fixture.test", "addresses": ["127.0.0.1"],
+            "endpoint": f"ws://127.0.0.1:{self.port}/mesh"}]}))
+        path.chmod(0o600)
+        return environment
 
     def io(self):
         start = len(self.terminal.drain())
@@ -247,6 +267,7 @@ class Installation:
         self.units.start("daemon")
         native_services.wait_for(self.ready, "baseline did not reconnect after native restart")
         self.open_stream()
+        self.wait_attachment_resume()
         gap_bound = time.monotonic() - start
         if gap_bound > 10 or daemon.pid == original:
             raise RuntimeError("native restart did not replace daemon within the route-gap bound")
@@ -261,6 +282,14 @@ class Installation:
         return {"control": "actual published pair native restart; no update acceptance claimed", "host": self.host["name"],
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "attachedClient": self.terminal.pid,
             "originalDaemon": original, "daemon": daemon.pid, "routeGapUpperBoundSeconds": gap_bound, "helper": helper}
+
+    def wait_attachment_resume(self):
+        token = uuid.uuid4().hex
+        temporary = self.challenge.with_suffix(".tmp")
+        temporary.write_text(token)
+        start = len(self.terminal.drain())
+        temporary.replace(self.challenge)
+        self.terminal.expect("__RESUMED__" + token + "__", since=start)
 
     def require_stream_closed(self):
         for _ in range(256):
@@ -291,6 +320,8 @@ class Installation:
     def stop_listener(self):
         if self.listener and native_services.alive(self.listener["pid"]):
             os.kill(self.listener["pid"], signal.SIGTERM)
+            if self.terminal.poll() is not None:
+                return
             start = len(self.terminal.drain())
             self.terminal.send("wait\n")
             self.terminal.expect(terminal_module.PROMPT, since=start)

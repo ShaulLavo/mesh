@@ -37,6 +37,15 @@ def interrupted(_number, _frame):
     STOP.set()
 
 
+def emit_challenge(path, previous):
+    if not path.exists():
+        return previous
+    token = path.read_text()
+    if token != previous:
+        print("__RESUMED__" + token + "__", flush=True)
+    return token
+
+
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
@@ -46,5 +55,7 @@ if __name__ == "__main__":
         temporary = marker.with_suffix(".tmp")
         temporary.write_text(json.dumps({"pid": os.getpid(), "port": server.server_port}))
         temporary.replace(marker)
+        previous = None
         while not STOP.is_set():
             server.handle_request()
+            previous = emit_challenge(marker.with_suffix(".challenge"), previous)
