@@ -100,8 +100,8 @@ func (metadata UpdateMetadata) Validate() error {
 	if err := metadata.Page.Validate(); err != nil {
 		return err
 	}
-	if order, _ := CompareVersions(metadata.Page.Tag, metadata.Version); order >= 0 {
-		return errors.New("release: anchor page must belong to a prior published release")
+	if order, _ := CompareVersions(metadata.Page.Tag, metadata.Version); order > 0 {
+		return errors.New("release: anchor page tag must not follow the release")
 	}
 	contents, err := json.Marshal(metadata)
 	if err != nil {

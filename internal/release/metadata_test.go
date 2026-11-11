@@ -50,7 +50,6 @@ func TestUpdateMetadataRejectsInvalidIdentity(t *testing.T) {
 		"manifest":           func(m *UpdateMetadata) { m.Manifest = strings.Repeat("A", 64) },
 		"time":               func(m *UpdateMetadata) { m.PublishedAt = time.Time{} },
 		"anchor range":       func(m *UpdateMetadata) { m.Direct.AnchorsFrom = 3 },
-		"same release page":  func(m *UpdateMetadata) { m.Page.Tag = m.Version },
 		"future page":        func(m *UpdateMetadata) { m.Page.Tag = "v0.1.5" },
 		"source target":      func(m *UpdateMetadata) { m.Direct.Since = []string{m.Version} },
 		"source duplicate":   func(m *UpdateMetadata) { m.Direct.Since = []string{"v0.1.2", "v0.1.2"} },
@@ -61,6 +60,14 @@ func TestUpdateMetadataRejectsInvalidIdentity(t *testing.T) {
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) { assertInvalidMetadata(t, change) })
+	}
+}
+
+func TestUpdateMetadataCurrentReleasePage(t *testing.T) {
+	metadata := testUpdateMetadata()
+	metadata.Page.Tag = metadata.Version
+	if err := metadata.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }
 
