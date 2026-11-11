@@ -156,7 +156,7 @@ if (( fast )); then
   exit
 fi
 run_report deadcode "$report_dir/deadcode.json" \
-  go run golang.org/x/tools/cmd/deadcode@v0.49.0 -json -filter '^github\.com/shaul/mesh/' ./cmd/...
+  go run golang.org/x/tools/cmd/deadcode@v0.49.0 -json -filter '^github\.com/shaul/mesh/' ./cmd/... ./internal/storage/cmd/boundary
 require_version ruff '^ruff 0\.16\.9$'
 run_report ruff "$report_dir/ruff.json" ruff check --isolated --select E4,E7,E9,F \
   --output-format=json scripts integration .gates

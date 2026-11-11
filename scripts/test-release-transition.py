@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise the release proof's inventory assertions with a bounded CLI fixture."""
 
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -25,7 +27,9 @@ def failure_functions():
     return match.group(0)
 
 
-FIXTURE = '''import os
+FIXTURE = '''import hashlib
+import json
+import os
 import signal
 import sys
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -105,6 +109,36 @@ read_state_version() { echo 14; }
                 self.assertIn("inventory command failed", result.stderr)
                 self.assertTrue(any(text == "fixture inventory command failed\n"
                                     for name, text in snapshots.items() if name.endswith(".err")))
+
+
+class ProofAssemblyTest(unittest.TestCase):
+    def test_separate_rollback_asset_preserves_forward_assembly(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-proof-assembly-") as directory:
+            root = Path(directory)
+            receipt = {
+                "schema": 1, "platform": {"os": "linux", "arch": "amd64"},
+                "fromDigest": "a" * 64, "toDigest": "b" * 64,
+                "stateReadMin": 14, "stateReadMax": 16, "stateWrite": 16,
+                "workerMin": 1, "workerMax": 1, "workerWrite": 1, "journalVersion": 1,
+                "candidateOpenedRetainedState": True, "sessionsPreserved": True,
+                "recoveryRecordsPreserved": True,
+            }
+            contents = json.dumps(receipt, separators=(",", ":"), sort_keys=True).encode()
+            digest = hashlib.sha256(contents).hexdigest()
+            forward = root / (digest + ".json")
+            forward.write_bytes(contents)
+            (root / "rollback").mkdir()
+            rollback = {"schema": 1, "forward": digest, "boundaries": []}
+            rollback_bytes = json.dumps(rollback).encode()
+            rollback_digest = hashlib.sha256(rollback_bytes).hexdigest()
+            (root / "rollback" / (rollback_digest + ".rollback.json")).write_bytes(rollback_bytes)
+            result = subprocess.run(["python3", str(ROOT / "assemble-release-compatibility.py"),
+                                     str(root), str(root / "compatibility")],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            assembled = json.loads((root / "compatibility").read_bytes())
+            self.assertEqual([transition["proof"] for transition in assembled["transitions"]], [digest])
+            self.assertEqual(forward.read_bytes(), contents)
 
 
 if __name__ == "__main__":
