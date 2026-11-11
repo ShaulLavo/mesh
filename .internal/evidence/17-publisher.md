@@ -1,9 +1,9 @@
 # Automatic update publisher
 
 Unit 3 implements the release policy and publication producer. The PR remains a
-draft until the corrected signing-cache source and native matrix validation
-arrive. Corrected rollback source 512fb62 and the real Unit 6 reader at 4037372
-are integrated. No release or fleet update ran.
+draft until native matrix validation and independent review finish. Corrected
+signing source 81f7efcd, rollback source 512fb62, and the real Unit 6 reader at
+4037372 are integrated. Generated public provenance fixtures use 8f05b6db. No release or fleet update ran.
 
 ## Policy and graph
 
@@ -95,7 +95,9 @@ version v0.1.307, and `modified=false`. Its actual digest is
 `9d8ca669dad41410272d98bb72d56347e81f0779c5092b02ebd392d7f0322c0f`. The
 startup-fault fixture has a separate digest and never supplies the marker.
 
-Final validation must consume the coordinator's corrected signing-cache source.
+Corrected-source validation passes full Go 1.27.4 races for the publisher,
+release, manifest, signer, and host-update packages, with isolated state and
+configuration. Packaging, module tidiness, and full quality gates also pass.
 Candidate signatures and all three native platform gates remain required
 before publication. Public history currently contains no updater marker, so
 no historical source is described as having accepted an automatic edge. The
