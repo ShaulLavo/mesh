@@ -1,0 +1,20 @@
+{
+  "epoch": 1,
+  "at": {
+    "anchor": true,
+    "ordinal": 0
+  },
+  "from": {
+    "version": "v0.1.304",
+    "commit": "0654ae933a7b3915853b8b27c7d17877e612d434",
+    "digest": "9c364075b1721525b5880cf1f5172b1a38229749246fe30fc5062658644115a4",
+    "platform": {
+      "os": "linux",
+      "arch": "amd64"
+    },
+    "modified": false,
+    "stateVersion": 15,
+    "workerProtocol": 1,
+    "updateProtocol": 1
+  }
+}
