@@ -107,3 +107,34 @@ func assertInvalidDiscoveryPage(t *testing.T, base AnchorPage, change func(*Anch
 		t.Fatal("decoder accepted invalid page")
 	}
 }
+
+func TestDiscoverySameReleaseBackrefsRemainAcyclic(t *testing.T) {
+	entries := make([]AnchorEntry, 65)
+	for index := range entries {
+		entries[index] = AnchorEntry{Ordinal: uint64(index), Version: fmt.Sprintf("v0.1.%d", index), Metadata: strings.Repeat("a", 64), PublishedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	}
+	first, err := BuildAnchorPage(1, 0, entries[:64], nil, "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstData, err := EncodeAnchorPage(first, "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AssetRef{Tag: "v0.2.0", Name: "anchors-0.json", SHA256: digestBytes(firstData)}
+	second, err := BuildAnchorPage(1, 1, entries[64:], map[uint64]AssetRef{0: ref}, "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := EncodeAnchorPage(second, "v0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeAnchorPage(data, AssetRef{Tag: "v0.2.0", Name: "anchors-1.json", SHA256: digestBytes(data)}); err != nil {
+		t.Fatal(err)
+	}
+	second.Back[0].Page = 1
+	if _, err := EncodeAnchorPage(second, "v0.2.0"); err == nil {
+		t.Fatal("accepted a page self reference")
+	}
+}

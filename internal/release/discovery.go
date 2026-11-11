@@ -183,8 +183,8 @@ func (page AnchorPage) validateBackrefs(publishedBy string) error {
 			return err
 		}
 		order, _ := CompareVersions(ref.Tag, publishedBy)
-		if order >= 0 {
-			return errors.New("release: anchor back reference must already be published")
+		if order > 0 {
+			return errors.New("release: anchor back reference tag must not follow the page publisher")
 		}
 		index++
 		if distance > page.Page/2 {
