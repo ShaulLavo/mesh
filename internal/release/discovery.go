@@ -93,8 +93,9 @@ func DecodeDiscoveryRoot(data []byte) (DiscoveryRoot, error) {
 	return root, root.Validate()
 }
 
-// BuildAnchorPage requires locations of already published pages. The publisher
-// adds its current anchor only when building a subsequent release's page.
+// BuildAnchorPage links lower pages, allowing several seed pages under one tag.
+// Only prior anchors enter the page; the publisher adds its current anchor to a
+// subsequent release's page so the metadata/page hashes cannot form a cycle.
 func BuildAnchorPage(epoch uint32, page uint64, entries []AnchorEntry, previous map[uint64]AssetRef, publishedBy string) (AnchorPage, error) {
 	result := AnchorPage{Schema: 1, Epoch: epoch, Page: page, Entries: entries}
 	for distance := uint64(1); distance <= page; distance *= 2 {
