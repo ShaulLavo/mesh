@@ -432,6 +432,7 @@ func checkPreservedDashboardState(t *testing.T, view DashboardHostView) {
 
 func initializeTestServicePolicy(t *testing.T) domainpolicy.CatalogToken {
 	t.Helper()
+	prepareCommandEnvironment(t)
 	directory, err := paths.StateDirPath()
 	if err != nil {
 		t.Fatal(err)
