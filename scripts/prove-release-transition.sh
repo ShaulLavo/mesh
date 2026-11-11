@@ -19,7 +19,9 @@ esac
   exit 1
 }
 
-short_tmp=${MESH_SHORT_TMP:-/tmp}
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+fixture=$repo_root/scripts/fixtures/release_transition.py
+short_tmp=${MESH_SHORT_TMP:-${TMPDIR:-/tmp}}
 test_root=$(mktemp -d "$short_tmp/mesh-transition.XXXXXX")
 state=$test_root/state
 config=$test_root/config
@@ -223,7 +225,93 @@ stop_daemon() {
   fail 'daemon socket remained live after its process exited'
 }
 
+
+fixture() {
+  python3 "$fixture" "$@"
+}
+
+restore_test_database() {
+  rm -f -- "$state/mesh.db" "$state/mesh.db-wal" "$state/mesh.db-shm"
+  fixture snapshot "$test_root/source.db" "$state/mesh.db"
+}
+
+assert_saved_recovery() {
+  cmp -s "$test_root/saved-recovery.json" "$state/s/$saved_session/recovery.json" ||
+    fail "rollback changed saved recovery at $boundary/$scenario"
+}
+
+rollback_source() {
+  local label=$1
+  env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/source-$label.log" 2>&1 &
+  old_daemon=$!
+  wait_for_daemon "$old_binary" "$old_daemon" || fail "source did not start at $label: $(cat "$test_root/source-$label.log")"
+  mesh "$old_binary" ls --daemon --all >"$test_root/source-$label.inventory.out" || fail "source inventory failed at $label"
+  grep -Fq "$session" "$test_root/source-$label.inventory.out" || fail "source lost live session at $label"
+  grep -Fq "$saved_session" "$test_root/source-$label.inventory.out" || fail "source lost saved session at $label"
+  assert_session_processes
+  mkfifo "$test_root/source-$label.input"
+  mesh "$old_binary" attach "$session" --daemon --detach-key=ctrl+] <"$test_root/source-$label.input" >"$test_root/source-$label.out" 2>"$test_root/source-$label.err" &
+  client=$!
+  exec 6>"$test_root/source-$label.input"
+  send_token 6 "ROLLBACK_${label}_$session"
+  wait_for_token "$test_root/source-$label.out" "ROLLBACK_${label}_$session" || fail "source session I/O failed at $label"
+  assert_session_processes
+  assert_live_recovery || fail "source did not accept retained checkpoint at $label"
+  assert_saved_recovery
+  printf '\035' >&6
+  exec 6>&-
+  wait_for_exit "$client" || fail "source client did not detach at $label"
+  wait "$client" 2>/dev/null || true
+  client=''
+  stop_daemon "$old_daemon" "$old_binary"
+  old_daemon=''
+  printf 'rollback boundary %s passed, worker %s, shell %s\n' "$label" "$worker_pid" "$shell_pid" >&2
+}
+
+apply_boundary() {
+  local target=$1 fault=$2 expected=$3 status=0
+  "$boundary_tool" -database "$state/mesh.db" -version "$target" -fault "$fault" >"$test_root/boundary.log" 2>&1 || status=$?
+  [[ $status == "$expected" ]] || fail "boundary driver $target/$fault exited $status, expected $expected: $(cat "$test_root/boundary.log")"
+}
+
+prove_boundaries() {
+  local target
+  for boundary in $(seq "$old_state_version" "$candidate_state_version"); do
+    for scenario in before after-commit failure interrupt; do
+      restore_test_database
+      apply_boundary "$boundary" none 0
+      target=$boundary
+      if [[ $scenario == after-commit ]]; then
+        # The abrupt exit follows the actual Goose commit on this database.
+        restore_test_database
+        apply_boundary "$boundary" after-commit 86
+      elif [[ $scenario == failure || $scenario == interrupt ]]; then
+        target=$((boundary + 1))
+        [[ $target -le $candidate_state_version ]] || continue
+        apply_boundary_fault "$target" "$scenario"
+      fi
+      [[ $(read_state_version) == "$boundary" ]] || fail "fault left unexpected state at $boundary/$scenario"
+      fixture boundary-writes "$state/mesh.db"
+      if [[ $boundary == "$candidate_state_version" ]]; then
+        fixture schema "$state/mesh.db" "$test_root/boundary-final-schema.json"
+      fi
+      rollback_source "$boundary-$scenario"
+    done
+  done
+  restore_test_database
+}
+
+apply_boundary_fault() {
+  local target=$1 fault=$2 expected=1
+  [[ $fault != interrupt ]] || expected=86
+  apply_boundary "$target" "$fault" "$expected"
+}
+
 mkdir -p "$state" "$config"
+boundary_tool=${MESH_BOUNDARY_TOOL:-$test_root/boundary}
+if [[ -z ${MESH_BOUNDARY_TOOL:-} ]]; then
+  (cd "$repo_root" && go build -o "$boundary_tool" ./internal/storage/cmd/boundary)
+fi
 mkfifo "$test_root/input"
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/old-first.log" 2>&1 &
 old_daemon=$!
@@ -295,15 +383,22 @@ record = {
 print(saved_session)
 PY
 )
+cp "$state/s/$saved_session/recovery.json" "$test_root/saved-recovery.json"
+fixture snapshot "$state/mesh.db" "$test_root/source.db"
 recovery_before=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
 
 candidate_state_version=$(build_field "$candidate_binary" stateVersion 0)
 candidate_worker_protocol=$(build_field "$candidate_binary" workerProtocol 0)
 [[ $candidate_state_version =~ ^[1-9][0-9]*$ && $candidate_worker_protocol =~ ^[1-9][0-9]*$ ]] ||
   fail 'candidate did not report release compatibility metadata'
+[[ $candidate_state_version -ge $old_state_version ]] || fail 'candidate schema predates source schema'
+prove_boundaries
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$candidate_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/candidate.log" 2>&1 &
 candidate_daemon=$!
 wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate daemon did not open retained state: $(cat "$test_root/candidate.log")"
+fixture schema "$state/mesh.db" "$test_root/candidate-final-schema.json"
+cmp -s "$test_root/boundary-final-schema.json" "$test_root/candidate-final-schema.json" || fail 'boundary driver schema/history differs from actual candidate startup'
+fixture candidate-writes "$state" || fail 'candidate representative writes failed'
 candidate_written_state=$(read_state_version)
 [[ $candidate_written_state == "$candidate_state_version" ]] || fail 'candidate database schema differs from its reported state version'
 mesh "$candidate_binary" ls --daemon >"$test_root/candidate-live.inventory.out" 2>"$test_root/candidate-live.inventory.err" || fail 'candidate live inventory command failed'
@@ -351,11 +446,21 @@ exec 5>&-
 wait_for_exit "$client" || fail 'restart client did not detach'
 wait "$client" 2>/dev/null || true
 client=''
-mesh "$candidate_binary" kill "$session" >/dev/null
-shell_pid=''
-worker_pid=''
 stop_daemon "$candidate_daemon" "$candidate_binary"
 candidate_daemon=''
+boundary=$candidate_written_state
+scenario=candidate-writes
+rollback_source "$boundary-$scenario"
+# Reopen source once more to inspect representative writes through its handlers.
+env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/rollback-final.log" 2>&1 &
+old_daemon=$!
+wait_for_daemon "$old_binary" "$old_daemon" || fail 'source final rollback restart failed'
+fixture verify-writes "$state" || fail 'source could not read candidate persistent settings and service'
+mesh "$old_binary" kill "$session" >/dev/null
+shell_pid=''
+worker_pid=''
+stop_daemon "$old_daemon" "$old_binary"
+old_daemon=''
 
 from_digest=$(sha256sum "$old_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$old_binary" | awk '{print $1}')
 to_digest=$(sha256sum "$candidate_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$candidate_binary" | awk '{print $1}')
@@ -389,4 +494,26 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps(receipt, separators=(",", ":"), 
 PY
 proof_digest=$(sha256sum "$temporary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$temporary" | awk '{print $1}')
 mv "$temporary" "$output_directory/$proof_digest.json"
+mkdir -p "$output_directory/rollback"
+python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" <<'PYROLLBACK'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+output, forward, platform, source, target, first, last = sys.argv[1:]
+os_name, arch = platform.split("/")
+proof = {
+    "schema": 1, "platform": {"os": os_name, "arch": arch},
+    "fromDigest": source, "toDigest": target, "forward": forward,
+    "workers": [source],
+    "boundaries": [{"state": state, "candidateWrote": True, "sourceStarted": True,
+                    "sessionIO": True, "recoveryPreserved": True}
+                   for state in range(int(first), int(last) + 1)],
+}
+contents = json.dumps(proof, separators=(",", ":"), sort_keys=True).encode()
+digest = hashlib.sha256(contents).hexdigest()
+(Path(output) / "rollback" / (digest + ".rollback.json")).write_bytes(contents)
+print("rollback proof " + digest, file=sys.stderr)
+PYROLLBACK
 printf '%s\n' "$proof_digest"
