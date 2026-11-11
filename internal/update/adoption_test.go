@@ -66,10 +66,16 @@ func newAdoptionFixture(t *testing.T) *adoptionFixture {
 	f.files = []string{filepath.Join(b.store.stateDir(), "authorized_keys"), filepath.Join(b.store.stateDir(), "updates", "administrators.json")}
 	f.start = AdoptionStart{ID: strings.Repeat("a", 32), Version: "v0.1.3", Expected: f.id, Policy: HostPolicy{Mode: HostAutomatic}, Files: f.files}
 	f.supervisor = &AdoptionSupervisor{Store: b.store, Documents: b.documents, Side: side, Build: b.builds["v0.1.3"], Inspect: f.inspect, Caller: f,
-		Service: func(context.Context, updateinstall.Settings) (string, error) { return strings.Repeat("d", 64), nil },
-		Now:     func() time.Time { return b.now }, Promote: f.promote, Helper: f.helper, Engine: func(Adoption) (*updateinstall.Engine, error) { return b.engine, nil },
+		Installation: f.installation,
+		Service:      func(context.Context, updateinstall.Settings) (string, error) { return strings.Repeat("d", 64), nil },
+		Now:          func() time.Time { return b.now }, Promote: f.promote, Helper: f.helper, Engine: func(Adoption) (*updateinstall.Engine, error) { return b.engine, nil },
 		Evidence: func(_ context.Context, peer Host) (HostAdoption, error) { return f.peers[peer.ID], f.peerError }}
 	return f
+}
+
+func (f *adoptionFixture) installation(ctx context.Context, stateDir string) (updatebootstrap.Installation, error) {
+	observed, err := f.inspect(ctx, stateDir)
+	return updatebootstrap.Installation{Observation: observed, Settings: f.base.engine.Settings(), Journal: true}, err
 }
 
 func (f *adoptionFixture) probe(ctx context.Context) (updateinstall.Health, error) {

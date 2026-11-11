@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updatebootstrap"
+	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 // The installed-service scenarios live in the native catch-up gate. This
@@ -62,7 +63,7 @@ func TestAdoptionLegacyOwnIdentity(t *testing.T) {
 	if err := (Client{ID: other.ID, Key: otherKey}).Call(t.Context(), local, "info", nil, &Info{}); err == nil {
 		t.Fatal("old daemon accepted another local identity")
 	}
-	checkLegacyAdoptionJournalHold(t, state, observed.Health.Build)
+	checkLegacyAdoptionSource(t, state, observed.Health.Build)
 }
 
 func startAdoptionLegacy(t *testing.T, binary string) string {
@@ -112,7 +113,7 @@ func startAdoptionLegacy(t *testing.T, binary string) string {
 	return ""
 }
 
-func checkLegacyAdoptionJournalHold(t *testing.T, state string, current release.Build) {
+func checkLegacyAdoptionSource(t *testing.T, state string, current release.Build) {
 	t.Helper()
 	signer := newSigningFixture(t)
 	side := buildOriginalHostReader(t, signer, HostReaderEpoch, "v0.1.400")
@@ -129,14 +130,16 @@ func checkLegacyAdoptionJournalHold(t *testing.T, state string, current release.
 	}
 	documents := signedReaderDocuments(t, signer, target, HostReaderEpoch, metadata.Position, metadata.Updater, metadata.Rollback)
 	server := adoptionLegacyOrigin(t, documents, target.Version, packet)
-	supervisor, err := NewLocalAdoptionSupervisor(state, side, HostDocuments{Trust: signer.trust, Client: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}})
+	descriptor := HostDocuments{Trust: signer.trust, Client: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}}
+	pinned, err := ReadAdoptionRelease(t.Context(), descriptor, build.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
-	supervisor.Build = build
-	err = supervisor.Start(t.Context(), AdoptionStart{Version: build.Version, Policy: HostPolicy{Mode: HostAutomatic}})
-	if err == nil || !strings.Contains(err.Error(), "installation settings") || !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy missing journal did not block explicitly: %v", err)
+	if err := pinned.verifySide(t.Context(), side, build); err != nil {
+		t.Fatal(err)
+	}
+	if err := pinned.verifySource(t.Context(), descriptor, updateinstall.Health{Build: current}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(state, "updates", "host-adoption.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("missing legacy journal produced a fabricated adoption record")

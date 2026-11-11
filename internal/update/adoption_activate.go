@@ -4,25 +4,29 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"time"
 
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
-func (u *AdoptionSupervisor) activate(ctx context.Context, operation Adoption) error {
+func (u *AdoptionSupervisor) activate(ctx context.Context, operation Adoption, pinned AdoptionRelease) error {
 	if u.Caller == nil || u.Helper == nil || u.Engine == nil {
 		return u.hold(ctx, operation, errors.New("update: adoption activation boundaries unavailable"))
 	}
 	if err := u.checkPeers(ctx, operation); err != nil {
 		return u.hold(ctx, operation, err)
 	}
+	if handled, err := u.migrateAdoption(ctx, operation, pinned); handled || err != nil {
+		return err
+	}
 	pid, err := u.Helper(ctx, operation)
 	if err != nil {
 		return u.hold(ctx, operation, err)
 	}
 	status, err := updateinstall.ReadContext(ctx, operation.Settings.StateDir)
-	if err != nil {
+	if err != nil && !(operation.Unjournaled && errors.Is(err, os.ErrNotExist)) {
 		return u.hold(ctx, operation, err)
 	}
 	if !sameAdoptionTransaction(operation, status) {
@@ -52,7 +56,9 @@ func checkAdoptionTransaction(operation Adoption, status updateinstall.Status) e
 }
 
 func (u *AdoptionSupervisor) stageAdoption(ctx context.Context, operation Adoption, prior updateinstall.Status) (updateinstall.Status, error) {
-	if !hostFinished(prior.Phase) || prior.Request.Generation >= operation.Request.Generation || prior.Settings != operation.Settings {
+	initial := operation.Unjournaled && prior.Phase == "" && prior.Request.ID == "" && operation.Request.Generation == 1
+	settingsMatch := prior.Settings == operation.Settings || operation.Migration != nil && prior.Settings == operation.Migration.PriorSettings
+	if !initial && (!hostFinished(prior.Phase) || prior.Request.Generation >= operation.Request.Generation || !settingsMatch) {
 		return prior, errors.New("update: another transaction owns the adoption installation")
 	}
 	local := LocalHost(operation.Settings.StateDir, operation.Host.Health.HostID)
@@ -169,5 +175,5 @@ func (u *AdoptionSupervisor) confirm(ctx context.Context, operation Adoption) er
 		}
 		return observed.Health, err
 	}
-	return u.Store.confirmAdoption(ctx, operation, status, probe, u.Service)
+	return u.Store.confirmAdoption(ctx, operation, status, probe, u.adoptionConfirmationService(operation))
 }

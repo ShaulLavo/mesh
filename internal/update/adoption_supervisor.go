@@ -29,19 +29,22 @@ type AdoptionStart struct {
 }
 
 type AdoptionSupervisor struct {
-	Store     *Store
-	Documents HostDocuments
-	Side      string
-	Build     release.Build
-	Inspect   func(context.Context, string) (updatebootstrap.Observation, error)
-	Service   func(context.Context, updateinstall.Settings) (string, error)
-	Caller    Caller
-	Promote   func(context.Context, Adoption, AdoptionRelease) (updateinstall.HelperInstallation, error)
-	Helper    func(context.Context, Adoption) (int, error)
-	Engine    func(Adoption) (*updateinstall.Engine, error)
-	Evidence  func(context.Context, Host) (HostAdoption, error)
-	Deploy    func(context.Context, Adoption, AdoptionRemote) error
-	Now       func() time.Time
+	Store            *Store
+	Documents        HostDocuments
+	Side             string
+	Build            release.Build
+	Inspect          func(context.Context, string) (updatebootstrap.Observation, error)
+	Installation     func(context.Context, string) (updatebootstrap.Installation, error)
+	PlanMigration    func(context.Context, updatebootstrap.Installation) (*updatebootstrap.ManagedMigration, error)
+	MigrationInspect func(context.Context, string, updatebootstrap.ManagedMigration) (updatebootstrap.Installation, error)
+	Service          func(context.Context, updateinstall.Settings) (string, error)
+	Caller           Caller
+	Promote          func(context.Context, Adoption, AdoptionRelease) (updateinstall.HelperInstallation, error)
+	Helper           func(context.Context, Adoption) (int, error)
+	Engine           func(Adoption) (*updateinstall.Engine, error)
+	Evidence         func(context.Context, Host) (HostAdoption, error)
+	Deploy           func(context.Context, Adoption, AdoptionRemote) error
+	Now              func() time.Time
 }
 
 func (u *AdoptionSupervisor) now() time.Time {
@@ -61,17 +64,26 @@ func NewLocalAdoptionSupervisor(stateDir, side string, documents HostDocuments) 
 		return nil, err
 	}
 	client := Client{ID: host.ID, Key: key}
-	u := &AdoptionSupervisor{Store: store, Documents: documents, Side: side, Build: release.Current(), Inspect: updatebootstrap.Inspect, Caller: client}
-	u.Promote = func(ctx context.Context, operation Adoption, pinned AdoptionRelease) (updateinstall.HelperInstallation, error) {
-		cfg := adoptionHelperConfig(operation, side)
-		artifact, err := pinned.Manifest.Artifact(u.Build.Platform)
-		if err != nil {
-			return updateinstall.HelperInstallation{}, hostError(err)
-		}
-		return updateinstall.PromoteHelper(ctx, cfg, pinned.Manifest, artifact.BinarySHA256)
-	}
+	u := &AdoptionSupervisor{Store: store, Documents: documents, Side: side, Build: release.Current(), Inspect: updatebootstrap.Inspect, Installation: updatebootstrap.InspectInstallation, Caller: client}
+	u.Promote = u.promoteLocalHelper
 	u.Helper = inspectAdoptionHelper
-	u.Service = adoptionServiceDigest
+	u.PlanMigration, u.MigrationInspect = updatebootstrap.PlanManagedMigration, updatebootstrap.InspectMigrationInstallation
+	u.Service = inspectAdoptionService
+	u.Evidence = func(ctx context.Context, peer Host) (HostAdoption, error) {
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		reply, err := client.Evidence(ctx, peer, EvidenceRequest{Limit: 1})
+		if err != nil {
+			return HostAdoption{}, err
+		}
+		if reply.Attention != "" {
+			return HostAdoption{}, fmt.Errorf("update: predecessor requires attention: %s", reply.Attention)
+		}
+		if reply.Adoption == nil {
+			return HostAdoption{}, errors.New("update: predecessor has no retained adoption milestones")
+		}
+		return *reply.Adoption, nil
+	}
 	u.Engine = func(operation Adoption) (*updateinstall.Engine, error) {
 		cfg := operation.Settings.Config()
 		cfg.Client, cfg.Probe = documents.Client, updatebootstrap.Probe(stateDir)
@@ -80,9 +92,30 @@ func NewLocalAdoptionSupervisor(stateDir, side string, documents HostDocuments) 
 	return u, nil
 }
 
+func (u *AdoptionSupervisor) promoteLocalHelper(ctx context.Context, operation Adoption, pinned AdoptionRelease) (updateinstall.HelperInstallation, error) {
+	cfg := adoptionHelperConfig(operation, u.Side)
+	artifact, err := pinned.Manifest.Artifact(u.Build.Platform)
+	if err != nil {
+		return updateinstall.HelperInstallation{}, hostError(err)
+	}
+	if operation.Unjournaled {
+		approval := updateinstall.AdoptionHelperApproval{Operation: operation.ID, Pin: operation.Pin,
+			Authorize: func(ctx context.Context, commit func() error) error {
+				return u.authorizeInitialHelper(ctx, operation, pinned, commit)
+			}}
+		installed, err := updateinstall.PrepareAdoptionHelper(ctx, cfg, pinned.Manifest, artifact.BinarySHA256, approval)
+		return installed, hostError(err)
+	}
+	installed, err := updateinstall.PromoteHelper(ctx, cfg, pinned.Manifest, artifact.BinarySHA256)
+	return installed, hostError(err)
+}
+
 func adoptionHelperConfig(operation Adoption, side string) updateinstall.HelperConfig {
 	cfg := updateinstall.HelperConfig{StateDir: operation.Settings.StateDir, Executable: side, Kind: operation.Settings.Service.Kind, Domain: operation.Settings.Service.Domain}
 	cfg.Probe = updatebootstrap.HelperProcessProbe(cfg)
+	cfg.State = func(ctx context.Context) (updateinstall.HelperProcessState, error) {
+		return updatebootstrap.HelperServiceState(ctx, cfg)
+	}
 	return cfg
 }
 
@@ -103,7 +136,7 @@ func inspectAdoptionHelper(ctx context.Context, operation Adoption) (int, error)
 }
 
 func (u *AdoptionSupervisor) Start(ctx context.Context, start AdoptionStart) error {
-	if u.Store == nil || u.Inspect == nil || u.Promote == nil || u.Service == nil {
+	if u.Store == nil || u.Inspect == nil || u.Installation == nil || u.Promote == nil || u.Service == nil {
 		return errors.New("update: adoption supervisor is incomplete")
 	}
 	if found, err := u.existingStart(ctx, start); found || err != nil {
@@ -147,29 +180,7 @@ func (u *AdoptionSupervisor) existingStart(ctx context.Context, start AdoptionSt
 }
 
 func (u *AdoptionSupervisor) prepare(ctx context.Context, start AdoptionStart, pinned AdoptionRelease) (Adoption, uint64, error) {
-	stateDir := u.Store.stateDir()
-	observed, err := u.Inspect(ctx, stateDir)
-	if err != nil {
-		return Adoption{}, 0, hostError(err)
-	}
-	if start.Expected != "" && observed.Health.HostID != start.Expected {
-		return Adoption{}, 0, errors.New("update: SSH account does not contain the expected daemon identity")
-	}
-	if err := checkAdoptionIdentity(stateDir, observed.Health.HostID); err != nil {
-		return Adoption{}, 0, err
-	}
-	if err := pinned.verifySource(ctx, u.Documents, observed.Health); err != nil {
-		return Adoption{}, 0, err
-	}
-	settings, generation, err := adoptionSettings(ctx, stateDir, observed)
-	if err != nil {
-		return Adoption{}, 0, err
-	}
-	service, err := u.Service(ctx, settings)
-	if err != nil {
-		return Adoption{}, 0, err
-	}
-	files, err := SnapshotAdoptionFiles(start.Files)
+	operation, err := u.captureAdoption(ctx, start, pinned)
 	if err != nil {
 		return Adoption{}, 0, err
 	}
@@ -184,9 +195,50 @@ func (u *AdoptionSupervisor) prepare(ctx context.Context, start AdoptionStart, p
 		}
 	}
 	start.Policy.Schema, start.Policy.Revision = 1, policy.Revision+1
-	operation := Adoption{Schema: 1, ID: start.ID, Pin: pinned.Pin, Signature: pinned.Signature, Version: start.Version, Host: AdoptionHost{Health: observed.Health, Preserved: files, Service: service}, Policy: start.Policy, Require: start.Require, Notice: start.Notice, Remotes: start.Remotes, Phase: AdoptionRecorded, Settings: settings,
-		Request: updateinstall.Request{ID: start.ID, TargetID: observed.Health.HostID, Generation: generation, Manifest: pinned.Manifest, Current: observed.Health.Build}}
+	operation.ID, operation.Request.ID, operation.Policy = start.ID, start.ID, start.Policy
 	return operation, policy.Revision, operation.validate()
+}
+
+func (u *AdoptionSupervisor) captureAdoption(ctx context.Context, start AdoptionStart, pinned AdoptionRelease) (Adoption, error) {
+	stateDir := u.Store.stateDir()
+	installation, err := u.Installation(ctx, stateDir)
+	if err != nil {
+		return Adoption{}, hostError(err)
+	}
+	observed := installation.Observation
+	if start.Expected != "" && observed.Health.HostID != start.Expected {
+		return Adoption{}, errors.New("update: SSH account does not contain the expected daemon identity")
+	}
+	if err := checkAdoptionIdentity(stateDir, observed.Health.HostID); err != nil {
+		return Adoption{}, err
+	}
+	if err := pinned.verifySource(ctx, u.Documents, observed.Health); err != nil {
+		return Adoption{}, err
+	}
+	settings, generation, err := adoptionSettings(ctx, installation)
+	if err != nil {
+		return Adoption{}, err
+	}
+	service, err := u.Service(ctx, settings)
+	if err != nil {
+		return Adoption{}, err
+	}
+	files, err := SnapshotAdoptionFiles(adoptionInstallationFiles(installation, start.Files))
+	if err != nil {
+		return Adoption{}, err
+	}
+	operation := Adoption{Schema: 1, ID: start.ID, Pin: pinned.Pin, Signature: pinned.Signature, Version: start.Version, Host: AdoptionHost{Health: observed.Health, Preserved: files, Service: service}, Policy: start.Policy, Require: start.Require, Notice: start.Notice, Remotes: start.Remotes, Phase: AdoptionRecorded, Settings: settings,
+		Request: updateinstall.Request{ID: start.ID, TargetID: observed.Health.HostID, Generation: generation, Manifest: pinned.Manifest, Current: observed.Health.Build}, Unjournaled: !installation.Journal}
+	if installation.PackagePath != "" {
+		if u.PlanMigration == nil {
+			return Adoption{}, errors.New("update: package-owned installation requires its approved managed migration planner")
+		}
+		operation.Migration, err = u.PlanMigration(ctx, installation)
+		if err != nil {
+			return Adoption{}, hostError(err)
+		}
+	}
+	return operation, nil
 }
 
 func (u *AdoptionSupervisor) Resume(ctx context.Context) error {
@@ -215,7 +267,7 @@ func (u *AdoptionSupervisor) Resume(ctx context.Context) error {
 	case AdoptionWaiting:
 		return u.wait(ctx, operation)
 	case AdoptionActivating:
-		return u.activate(ctx, operation)
+		return u.activate(ctx, operation, pinned)
 	case AdoptionConfirming:
 		return u.confirm(ctx, operation)
 	case AdoptionComplete, AdoptionRolledBack, AdoptionAttention:
@@ -241,6 +293,9 @@ func (u *AdoptionSupervisor) verifyResume(ctx context.Context, operation Adoptio
 	}
 	if err := checkAdoptionFiles(operation.Host.Preserved); err != nil {
 		return pinned, err
+	}
+	if operation.Migration != nil {
+		return pinned, u.checkMigrationResume(ctx, operation)
 	}
 	service, err := u.Service(ctx, operation.Settings)
 	if err != nil {

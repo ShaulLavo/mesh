@@ -17,11 +17,12 @@ import (
 )
 
 type AdoptionRelease struct {
-	Pin       string
-	Signature string
-	Metadata  []byte
-	Manifest  release.Manifest
-	Published release.UpdateMetadata
+	Pin           string
+	Signature     string
+	Metadata      []byte
+	Manifest      release.Manifest
+	Published     release.UpdateMetadata
+	ProvedWorkers []string
 }
 
 func ReadAdoptionRelease(ctx context.Context, documents HostDocuments, version string) (AdoptionRelease, error) {
@@ -83,7 +84,7 @@ func (r AdoptionRelease) verifySide(ctx context.Context, side string, build rele
 	return nil
 }
 
-func (r AdoptionRelease) verifySource(ctx context.Context, documents HostDocuments, health updateinstall.Health) error {
+func (r *AdoptionRelease) verifySource(ctx context.Context, documents HostDocuments, health updateinstall.Health) error {
 	if health.Build.Modified || health.Build.Platform != release.CurrentPlatform() {
 		return errors.New("update: adoption source has a modified or foreign-platform image")
 	}
@@ -96,24 +97,29 @@ func (r AdoptionRelease) verifySource(ctx context.Context, documents HostDocumen
 			continue
 		}
 		next := release.PlannedRelease{Metadata: &r.Published, Position: r.Published.Position, Manifest: r.Manifest, Transition: transition}
-		_, err := verifyHostHop(ctx, health.Build, health.Workers, next, r.Metadata, documents.Source())
+		proof, err := verifyHostHop(ctx, health.Build, health.Workers, next, r.Metadata, documents.Source())
+		r.ProvedWorkers = proof.Workers
 		return err
 	}
 	return errors.New("update: adoption has no full forward and rollback proof for the observed source")
 }
 
-func adoptionSettings(ctx context.Context, stateDir string, observed updatebootstrap.Observation) (updateinstall.Settings, uint64, error) {
+func adoptionSettings(ctx context.Context, installation updatebootstrap.Installation) (updateinstall.Settings, uint64, error) {
+	stateDir, observed := installation.Settings.StateDir, installation.Observation
 	status, err := updateinstall.ReadContext(ctx, stateDir)
+	if errors.Is(err, os.ErrNotExist) && !installation.Journal {
+		return installation.Settings, 1, nil
+	}
 	if err != nil {
 		return updateinstall.Settings{}, 0, fmt.Errorf("update: adoption requires inspected installation settings: %w", err)
 	}
 	if !hostFinished(status.Phase) || status.Phase == updateinstall.RollbackFailed || status.Settings.ClientOnly {
 		return status.Settings, 0, errors.New("update: adoption requires a finished daemon journal without failed rollback")
 	}
-	if status.Settings.StateDir != stateDir || status.Settings.Executable != observed.Executable || status.Request.Generation == ^uint64(0) {
+	if status.Settings != installation.Settings || status.Settings.StateDir != stateDir || status.Settings.Executable != observed.Executable || status.Request.Generation == ^uint64(0) {
 		return status.Settings, 0, errors.New("update: adoption installation settings differ from the running daemon")
 	}
-	if err := updateinstall.ValidateInstallationPath(observed.Executable); err != nil {
+	if err := updateinstall.ValidateInstallationPath(observed.Executable); err != nil && installation.PackagePath == "" {
 		return status.Settings, 0, fmt.Errorf("update: adoption installation path: %w", err)
 	}
 	return status.Settings, status.Request.Generation + 1, nil
@@ -240,7 +246,7 @@ func (s *Store) confirmAdoption(ctx context.Context, operation Adoption, status 
 	if err != nil {
 		return err
 	}
-	entry := LedgerEntry{Request: operation.ID, Generation: operation.Request.Generation, Version: operation.Version, Metadata: operation.Pin, Binary: health.Build.Digest, From: operation.Host.Health.Build.Digest, Origin: "adoption", CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: len(status.Original.Workers)}
+	entry := LedgerEntry{Request: operation.ID, Generation: operation.Request.Generation, Version: operation.Version, Metadata: operation.Pin, Binary: health.Build.Digest, From: operation.Host.Health.Build.Digest, Origin: adoptionOrigin, CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: len(status.Original.Workers)}
 	return s.publishAdoptionCommit(envelope, operation, entry)
 }
 

@@ -11,11 +11,14 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 	"golang.org/x/sys/unix"
 )
 
 type AdoptionPhase string
+
+const adoptionOrigin = "adoption"
 
 const (
 	AdoptionRecorded   AdoptionPhase = "recorded"
@@ -43,6 +46,8 @@ type Adoption struct {
 	Phase       AdoptionPhase                     `json:"phase"`
 	Request     updateinstall.Request             `json:"request"`
 	Settings    updateinstall.Settings            `json:"settings"`
+	Unjournaled bool                              `json:"unjournaled,omitempty"`
+	Migration   *updatebootstrap.ManagedMigration `json:"migration,omitempty"`
 	Helper      *updateinstall.HelperInstallation `json:"helper,omitempty"`
 	Problem     string                            `json:"problem,omitempty"`
 	NextAttempt time.Time                         `json:"nextAttempt,omitempty"`
