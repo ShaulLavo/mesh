@@ -51,14 +51,15 @@ type HostProblem struct {
 }
 
 type HostUpdate struct {
-	Schema         int           `json:"schema"`
-	Phase          HostPhase     `json:"phase"`
-	Owned          *OwnedRequest `json:"owned,omitempty"`
-	Problem        *HostProblem  `json:"problem,omitempty"`
-	NextAttempt    time.Time     `json:"nextAttempt,omitempty"`
-	Failures       uint32        `json:"failures,omitempty"`
-	LastRequest    string        `json:"lastRequest,omitempty"`
-	LastGeneration uint64        `json:"lastGeneration,omitempty"`
+	Schema         int                 `json:"schema"`
+	Phase          HostPhase           `json:"phase"`
+	Owned          *OwnedRequest       `json:"owned,omitempty"`
+	Problem        *HostProblem        `json:"problem,omitempty"`
+	NextAttempt    time.Time           `json:"nextAttempt,omitempty"`
+	Failures       uint32              `json:"failures,omitempty"`
+	LastRequest    string              `json:"lastRequest,omitempty"`
+	LastGeneration uint64              `json:"lastGeneration,omitempty"`
+	LastPhase      updateinstall.Phase `json:"lastPhase,omitempty"`
 }
 
 type FailedEdge struct {
@@ -87,6 +88,14 @@ type hostLedger struct {
 	Schema int    `json:"schema"`
 	First  uint64 `json:"first"`
 	Last   uint64 `json:"last"`
+}
+
+type hostLedgerIdentity struct {
+	Seq uint64 `json:"seq"`
+}
+
+func ledgerIdentityName(entry LedgerEntry) string {
+	return "host-ledger-request-" + discoveryDigest([]byte(fmt.Sprintf("%s:%d", entry.Request, entry.Generation))) + ".json"
 }
 
 // HostAdoption milestones live separately from the pageable ledger until the fleet
@@ -199,14 +208,11 @@ func (s *Store) appendLedger(entry LedgerEntry) error {
 	if err != nil {
 		return err
 	}
-	if head.Last > 0 {
-		var last LedgerEntry
-		if err := s.readAuthority(ledgerName(head.Last), &last); err != nil {
-			return err
-		}
-		if last.Request == entry.Request && last.Generation == entry.Generation {
-			return nil
-		}
+	if found, err := s.existingLedgerIdentity(head, entry); err != nil || found {
+		return err
+	}
+	if found, err := s.recoverLedgerTail(head, entry); found || err != nil {
+		return err
 	}
 	entry.Seq = head.Last + 1
 	if entry.Seq == math.MaxUint64 {
@@ -224,7 +230,46 @@ func (s *Store) appendLedger(entry LedgerEntry) error {
 		return err
 	}
 	head.Last = entry.Seq
-	return s.writeAuthority("host-ledger.json", head)
+	if err := s.writeAuthority("host-ledger.json", head); err != nil {
+		return err
+	}
+	return s.writeAuthority(ledgerIdentityName(entry), hostLedgerIdentity{Seq: entry.Seq})
+}
+
+func (s *Store) recoverLedgerTail(head hostLedger, entry LedgerEntry) (bool, error) {
+	if head.Last == 0 {
+		return false, nil
+	}
+	var last LedgerEntry
+	if err := s.readAuthority(ledgerName(head.Last), &last); err != nil {
+		return false, err
+	}
+	if last.Request != entry.Request || last.Generation != entry.Generation {
+		return false, nil
+	}
+	return true, s.writeAuthority(ledgerIdentityName(entry), hostLedgerIdentity{Seq: last.Seq})
+}
+
+func (s *Store) existingLedgerIdentity(head hostLedger, entry LedgerEntry) (bool, error) {
+	var identity hostLedgerIdentity
+	err := s.readAuthority(ledgerIdentityName(entry), &identity)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if identity.Seq < head.First || identity.Seq > head.Last {
+		return false, errors.New("update: ledger request identity outside retained history")
+	}
+	var existing LedgerEntry
+	if err := s.readAuthority(ledgerName(identity.Seq), &existing); err != nil {
+		return false, err
+	}
+	if existing.Seq != identity.Seq || existing.Request != entry.Request || existing.Generation != entry.Generation {
+		return false, errors.New("update: ledger request identity differs from entry")
+	}
+	return true, nil
 }
 
 func (s *Store) HostLedger(ctx context.Context, after uint64, limit int) ([]LedgerEntry, bool, error) {

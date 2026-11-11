@@ -108,13 +108,41 @@ func TestHostLedgerCrashAfterAppendBeforeOwnershipClear(t *testing.T) {
 	}
 }
 
-func TestHostLedgerPagesBeyondAuthorityDecoderLimit(t *testing.T) {
+func TestHostLedgerRecordsManualRetryOfEarlierFinalPhase(t *testing.T) {
+	f := newHostFixture(t)
+	if _, err := f.store.SetHostPolicy(t.Context(), 1, HostPolicy{Mode: HostManual}); err != nil {
+		t.Fatal(err)
+	}
+	request := updateinstall.Request{ID: "manual", TargetID: "host", Generation: 1, Manifest: f.manifests["v0.1.2"], Current: f.current}
+	if _, err := f.engine.Stage(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	failHostBeforeActivation(t, f, f.engine, OwnedRequest{Request: request.ID, Generation: request.Generation})
+	f.tick()
+	if _, err := f.engine.Retry(t.Context(), request.ID, request.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.engine.Grant(t.Context(), request.ID, request.Generation); err != nil {
+		t.Fatal(err)
+	}
+	f.finish()
+	f.tick()
+	entries, _, err := f.store.HostLedger(t.Context(), 0, 64)
+	if err != nil || len(entries) != 1 || entries[0].Origin != "manual" {
+		t.Fatalf("manual retry commit missing: %+v %v", entries, err)
+	}
+}
+
+func TestHostLedgerUsesBoundedEntryFilesAndPages(t *testing.T) {
 	f := newHostFixture(t)
 	for seq := uint64(1); seq <= 150; seq++ {
 		entry := LedgerEntry{Request: fmt.Sprintf("%032d", seq), Generation: seq, Binary: f.current.Digest, Version: f.current.Version, Origin: "manual", Metadata: strings.Repeat("a", 64), CommittedAt: f.now}
 		if err := f.store.appendLedger(entry); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := f.store.appendLedger(LedgerEntry{Request: fmt.Sprintf("%032d", 1), Generation: 1}); err != nil {
+		t.Fatal(err)
 	}
 	entries, more, err := f.store.HostLedger(t.Context(), 64, 64)
 	if err != nil || !more || len(entries) != 64 || entries[0].Seq != 65 || entries[63].Seq != 128 {

@@ -25,6 +25,27 @@ type HostDocuments struct {
 	Trust  release.TrustRoot
 }
 
+// The signed marker binds this reader's source coordinates independently of
+// the epoch in which a waypoint was originally published.
+type hostSourceReader struct {
+	Schema   int              `json:"schema"`
+	Epoch    uint32           `json:"epoch"`
+	Position release.Position `json:"position"`
+}
+
+func authenticatedSourceReader(data []byte, epoch uint32) (hostSourceReader, error) {
+	var marked struct {
+		Updater *hostSourceReader `json:"updater"`
+	}
+	if err := json.Unmarshal(data, &marked); err != nil {
+		return hostSourceReader{}, fmt.Errorf("update: decode signed source reader: %w", err)
+	}
+	if marked.Updater == nil || marked.Updater.Schema != 1 || marked.Updater.Epoch != epoch {
+		return hostSourceReader{}, errors.New("update: authenticated updater-capable source marker unavailable for this reader epoch")
+	}
+	return *marked.Updater, nil
+}
+
 func (d HostDocuments) Source() release.DocumentSource {
 	return release.DocumentSource{Read: func(ctx context.Context, ref release.AssetRef, kind release.DocumentKind) ([]byte, error) {
 		return d.read(ctx, ref.Tag, ref.Name, release.DocumentLimit(kind))
@@ -50,14 +71,29 @@ func (d HostDocuments) verifyMetadata(ctx context.Context, ref release.AssetRef,
 }
 
 func (d HostDocuments) Current(ctx context.Context, current release.Build) (HostSource, error) {
+	return d.current(ctx, current, hostReaderEpoch)
+}
+
+func (d HostDocuments) current(ctx context.Context, current release.Build, epoch uint32) (HostSource, error) {
 	data, err := d.read(ctx, current.Version, release.UpdateMetadataAssetName, release.MaxMetadataBytes)
 	if err != nil {
 		return HostSource{}, err
 	}
 	ref := release.AssetRef{Tag: current.Version, Name: release.UpdateMetadataAssetName, SHA256: discoveryDigest(data)}
-	metadata, err := release.AuthenticateMetadata(ctx, d.Source(), ref, data, hostReaderEpoch)
+	publication, err := release.DecodeUpdateMetadata(data)
 	if err != nil {
 		return HostSource{}, hostError(err)
+	}
+	if publication.Epoch > epoch {
+		return HostSource{}, errors.New("update: source publication epoch exceeds this reader")
+	}
+	metadata, err := release.AuthenticateMetadata(ctx, d.Source(), ref, data, publication.Epoch)
+	if err != nil {
+		return HostSource{}, hostError(err)
+	}
+	reader, err := authenticatedSourceReader(data, epoch)
+	if err != nil {
+		return HostSource{}, err
 	}
 	manifest, err := d.read(ctx, current.Version, release.ManifestAssetName, release.DocumentLimit(release.ManifestDocument))
 	if err != nil {
@@ -70,7 +106,7 @@ func (d HostDocuments) Current(ctx context.Context, current release.Build) (Host
 	if err := json.Unmarshal(manifest, &frozen); err != nil {
 		return HostSource{}, fmt.Errorf("update: decode authenticated source manifest: %w", err)
 	}
-	source := HostSource{Epoch: metadata.Epoch, Position: metadata.Position, Manifest: frozen}
+	source := HostSource{Epoch: reader.Epoch, Position: reader.Position, Manifest: frozen}
 	return source, verifyHostSource(current, source)
 }
 

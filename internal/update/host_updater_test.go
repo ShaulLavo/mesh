@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +47,59 @@ type hostFixture struct {
 	worker       *exec.Cmd
 	input        io.WriteCloser
 	output       io.ReadCloser
+}
+
+type blockedHostArchive struct {
+	base    http.RoundTripper
+	entered chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (b *blockedHostArchive) RoundTrip(request *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(request.URL.Path, ".tar.gz") {
+		b.once.Do(func() { close(b.entered) })
+		select {
+		case <-b.resume:
+		case <-request.Context().Done():
+			return nil, hostError(request.Context().Err())
+		}
+	}
+	response, err := b.base.RoundTrip(request)
+	return response, hostError(err)
+}
+
+func TestHostOffDuringArchiveDownloadRefusesStagedCommit(t *testing.T) {
+	f := newHostFixture(t)
+	owned := reserveHostWithoutStage(t, f)
+	client := *f.documents.Client.HTTPClient
+	blocked := &blockedHostArchive{base: client.Transport, entered: make(chan struct{}), resume: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(blocked.resume) })
+	t.Cleanup(release)
+	client.Transport = blocked
+	f.settings.Client.HTTPClient = &client
+	engine, err := updateinstall.New(f.settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine = engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	done := make(chan error, 1)
+	go func() { _, err := engine.Stage(t.Context(), owned.Installation); done <- err }()
+	<-blocked.entered
+	if _, err := f.store.SetHostPolicy(t.Context(), 1, HostPolicy{Mode: HostManual}); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := <-done; err == nil {
+		t.Fatal("off during archive download accepted staged commit")
+	}
+	if got := f.installation(); got.Phase != updateinstall.Accepted {
+		t.Fatalf("download crossed off fence: %s", got.Phase)
+	}
+	f.tick()
+	if got := f.installation(); got.Phase != updateinstall.Cancelled {
+		t.Fatalf("off did not retire ungranted journal: %s", got.Phase)
+	}
 }
 
 func hostImage(build release.Build) []byte {
@@ -258,7 +312,11 @@ func (f *hostFixture) anchor(number uint64) release.AnchorEntry {
 }
 
 func (f *hostFixture) signMetadata(version string) {
-	data := mustHostJSON(f.metadata[version])
+	metadata := f.metadata[version]
+	data := mustHostJSON(struct {
+		release.UpdateMetadata
+		Updater hostSourceReader `json:"updater"`
+	}{metadata, hostSourceReader{Schema: 1, Epoch: 1, Position: metadata.Position}})
 	f.files[version+"/"+release.UpdateMetadataAssetName] = data
 	f.files[version+"/mesh-update.sig.json"] = f.signer.envelope(f.t, data)
 }
@@ -380,7 +438,7 @@ func TestHostUpdaterManualReconcilesGrantedResultIdempotently(t *testing.T) {
 }
 
 func TestHostUpdaterRejectsUnsignedAndIncompleteRollback(t *testing.T) {
-	for _, kind := range []string{"unsigned", "wrong signer", "missing rollback", "missing boundary", "old worker"} {
+	for _, kind := range []string{"unsigned", "wrong signer", "missing rollback", "missing boundary", "old worker", "unproved worker"} {
 		t.Run(kind, func(t *testing.T) { testHostInvalidProof(t, kind) })
 	}
 }
@@ -401,10 +459,11 @@ func testHostInvalidProof(t *testing.T, kind string) {
 		f.signMetadata(version)
 		f.head(2)
 	case "missing boundary":
-		ref := f.metadata[version].Rollback[0]
-		delete(f.files, version+"/"+ref.Rollback+".rollback.json")
+		removeHostBoundary(t, f, version)
 	case "old worker":
 		f.workers[0].Build = nil
+	case "unproved worker":
+		f.workers[0].Build.Digest = strings.Repeat("c", 64)
 	}
 	if err := f.updater.Tick(t.Context()); err == nil {
 		t.Fatal("invalid proof allowed")
@@ -415,4 +474,23 @@ func testHostInvalidProof(t *testing.T, kind string) {
 	if f.stops != 0 {
 		t.Fatal("preactivation failure stopped daemon")
 	}
+}
+
+func removeHostBoundary(t *testing.T, f *hostFixture, version string) {
+	t.Helper()
+	metadata := f.metadata[version]
+	for i, ref := range metadata.Rollback {
+		data := f.files[version+"/"+ref.Rollback+".rollback.json"]
+		var proof release.RollbackProof
+		if err := json.Unmarshal(data, &proof); err != nil {
+			t.Fatal(err)
+		}
+		proof.Boundaries = nil
+		data = mustHostJSON(proof)
+		metadata.Rollback[i].Rollback = discoveryDigest(data)
+		f.files[version+"/"+discoveryDigest(data)+".rollback.json"] = data
+	}
+	f.metadata[version] = metadata
+	f.signMetadata(version)
+	f.head(2)
 }

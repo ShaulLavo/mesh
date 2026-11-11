@@ -24,6 +24,11 @@ type HostSource struct {
 	Manifest release.Manifest
 }
 
+type hostHopProof struct {
+	Metadata string
+	Workers  []string
+}
+
 func hostError(err error) error {
 	if err == nil {
 		return nil
@@ -42,6 +47,7 @@ type HostUpdater struct {
 	Now      func() time.Time
 	mu       sync.Mutex
 	lastTick time.Time
+	observed release.Build
 }
 
 func (u *HostUpdater) now() time.Time {
@@ -71,6 +77,7 @@ func (u *HostUpdater) Tick(ctx context.Context) error {
 	defer u.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	u.observed = release.Build{}
 	if u.Store == nil || u.Current == nil {
 		return errors.New("update: host updater configuration incomplete")
 	}
@@ -92,6 +99,17 @@ func (u *HostUpdater) Tick(ctx context.Context) error {
 		return err
 	}
 	return u.tickAvailable(ctx, state, journal, journalErr == nil)
+}
+
+func sameHostIdentity(a, b release.Build) bool {
+	return a.Version == b.Version && a.Commit == b.Commit && a.Digest == b.Digest && a.Platform == b.Platform && a.Modified == b.Modified
+}
+
+func (u *HostUpdater) currentBuild() release.Build {
+	if u.observed.Digest != "" {
+		return u.observed
+	}
+	return u.Current()
 }
 
 func (u *HostUpdater) tickAvailable(ctx context.Context, state HostUpdate, journal updateinstall.Status, exists bool) error {
@@ -162,6 +180,10 @@ func (u *HostUpdater) wait(ctx context.Context, state HostUpdate, reason string)
 }
 
 func (u *HostUpdater) backoff(ctx context.Context, state HostUpdate, cause error) error {
+	if errors.Is(cause, release.ErrTrustRefreshBudget) || errors.Is(cause, release.ErrPassExhausted) {
+		state.NextAttempt = time.Time{}
+		return u.save(ctx, state)
+	}
 	state.Failures = min(state.Failures+1, 6)
 	state.NextAttempt = u.now().Add(min(15*time.Minute*time.Duration(1<<(state.Failures-1)), 6*time.Hour))
 	state.Problem = &HostProblem{Kind: "retry", Detail: boundedProblem(cause.Error())}
@@ -190,7 +212,7 @@ func (u *HostUpdater) reconcile(ctx context.Context, state HostUpdate, journal u
 	if !hostFinished(journal.Phase) {
 		return state, false, nil
 	}
-	if state.LastRequest == journal.Request.ID && state.LastGeneration == journal.Request.Generation && owned == nil {
+	if state.LastRequest == journal.Request.ID && state.LastGeneration == journal.Request.Generation && state.LastPhase == journal.Phase && owned == nil {
 		return state, false, nil
 	}
 	if journal.Phase == updateinstall.RollbackFailed {
@@ -234,6 +256,7 @@ func (u *HostUpdater) recordFinal(ctx context.Context, state HostUpdate, journal
 	}
 	state.Owned, state.Phase, state.Problem = nil, HostIdle, nil
 	state.LastRequest, state.LastGeneration = journal.Request.ID, journal.Request.Generation
+	state.LastPhase = journal.Phase
 	state.NextAttempt, state.Failures = time.Time{}, 0
 	return state, false, u.Store.writeAuthority("host-update.json", state)
 }
@@ -251,21 +274,25 @@ func (u *HostUpdater) recordCommit(owned *OwnedRequest, status updateinstall.Sta
 	if owned != nil {
 		entry.Origin, entry.Metadata = "host", owned.Metadata
 	}
-	if entry.WorkersPreserved != entry.Workers {
+	if entry.WorkersPreserved != entry.Workers && !hostRebooted(status) {
 		return errors.New("update: committed journal did not preserve every worker")
 	}
 	if err := u.Store.appendLedger(entry); err != nil {
 		return err
 	}
-	head, err := u.Store.ledgerHead()
-	if err != nil {
+	var identity hostLedgerIdentity
+	if err := u.Store.readAuthority(ledgerIdentityName(entry), &identity); err != nil {
 		return err
 	}
-	entry.Seq = head.Last
+	entry.Seq = identity.Seq
 	if err := u.Store.pruneFailedSource(entry.From); err != nil {
 		return err
 	}
 	return u.Store.recordAdoptionMilestone(entry)
+}
+
+func hostRebooted(status updateinstall.Status) bool {
+	return status.Verified != nil && status.Original.BootID != "" && status.Verified.BootID != "" && status.Original.BootID != status.Verified.BootID
 }
 
 func preservedHostWorkers(status updateinstall.Status) int {
@@ -311,7 +338,7 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	if exists && journal.Request.ID == owned.Request && journal.Request.Generation == owned.Generation && journal.Phase != updateinstall.Accepted && journal.Phase != updateinstall.Staged && journal.Phase != updateinstall.Failed {
 		return nil
 	}
-	if policy.Mode != HostAutomatic || policy.Revision != owned.PolicyRevision || u.Current() != owned.Installation.Current {
+	if policy.Mode != HostAutomatic || policy.Revision != owned.PolicyRevision || !sameHostIdentity(u.Current(), owned.Installation.Current) {
 		return u.retireUngrantable(ctx, state, journal, exists)
 	}
 	if u.now().Before(state.NextAttempt) {
@@ -327,10 +354,11 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	if engine.Settings() != owned.Settings {
 		return u.attention(ctx, state, "settings", errors.New("host installation settings changed before acceptance"))
 	}
-	if err := u.verifyOwned(ctx, *owned); err != nil {
+	proof, err := u.verifyOwned(ctx, *owned)
+	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
-	engine = engine.WithHostOrigin().WithAcceptance(u.Store.AuthorizeHostAcceptance(nil))
+	engine = engine.WithHostOrigin().WithAcceptance(u.acceptWorkers(proof))
 	if exists && journal.Request.ID == owned.Request && journal.Phase == updateinstall.Failed {
 		_, err = engine.Retry(ctx, owned.Request, owned.Generation)
 	} else {
@@ -346,44 +374,75 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	return nil
 }
 
-func (u *HostUpdater) verifyOwned(ctx context.Context, owned OwnedRequest) error {
+func (u *HostUpdater) verifyOwned(ctx context.Context, owned OwnedRequest) (hostHopProof, error) {
 	if u.Source == nil || u.Helper == nil || u.Probe == nil {
-		return errors.New("update: owned request verification unavailable")
+		return hostHopProof{}, errors.New("update: owned request verification unavailable")
 	}
-	source, documents, err := u.Source(ctx, u.Current())
+	source, documents, err := u.Source(ctx, u.currentBuild())
 	if err != nil {
-		return err
+		return hostHopProof{}, err
 	}
-	if err := verifyHostSource(u.Current(), source); err != nil {
-		return err
+	if err := verifyHostSource(u.currentBuild(), source); err != nil {
+		return hostHopProof{}, err
 	}
 	budget := release.NewPassBudget()
 	ref := release.AssetRef{Tag: owned.Installation.Manifest.Version, Name: release.UpdateMetadataAssetName, SHA256: owned.Metadata}
 	data, err := release.ReadDocument(ctx, documents, ref, release.MetadataDocument, &budget)
 	if err != nil {
-		return hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	metadata, err := release.AuthenticateMetadata(ctx, documents, ref, data, owned.Epoch)
 	if err != nil {
-		return hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	health, err := u.Probe(ctx)
 	if err != nil {
-		return err
+		return hostHopProof{}, err
 	}
-	if health.HostID != u.ID || health.Build != u.Current() {
-		return errors.New("update: owned request source is no longer running")
+	if health.HostID != u.ID || health.Build != owned.Installation.Current {
+		return hostHopProof{}, errors.New("update: owned request source is no longer running")
 	}
+	u.observed = health.Build
 	next := release.PlannedRelease{Metadata: &metadata, Manifest: owned.Installation.Manifest}
 	for _, transition := range next.Manifest.Compatibility.Transitions {
 		if transition.Platform == owned.Edge.Platform && transition.FromDigest == owned.Edge.From && transition.ToDigest == owned.Edge.To {
 			next.Transition = transition
 		}
 	}
-	if _, err := verifyHostHop(ctx, u.Current(), health.Workers, next, data, documents); err != nil {
+	proof, err := verifyHostHop(ctx, u.currentBuild(), health.Workers, next, data, documents)
+	if err != nil {
+		return hostHopProof{}, err
+	}
+	if err := u.Helper(ctx, source.Manifest); err != nil {
+		return hostHopProof{}, err
+	}
+	return proof, nil
+}
+
+func (u *HostUpdater) acceptWorkers(proof hostHopProof) updateinstall.Acceptance {
+	authorize := u.Store.AuthorizeHostAcceptance(nil)
+	return func(ctx context.Context, request updateinstall.Request, kind updateinstall.AcceptanceKind, commit func() error) error {
+		if err := u.checkAcceptanceWorkers(ctx, request, proof.Workers); err != nil {
+			return err
+		}
+		return authorize(ctx, request, kind, commit)
+	}
+}
+
+func (u *HostUpdater) checkAcceptanceWorkers(ctx context.Context, request updateinstall.Request, proved []string) error {
+	health, err := u.Probe(ctx)
+	if err != nil {
 		return err
 	}
-	return u.Helper(ctx, source.Manifest)
+	if health.HostID != request.TargetID || health.Build != request.Current {
+		return errors.New("update: host source changed before acceptance")
+	}
+	for _, worker := range health.Workers {
+		if err := verifyHostWorker(worker, request.Manifest.Compatibility, proved); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (u *HostUpdater) retireUngrantable(ctx context.Context, state HostUpdate, journal updateinstall.Status, exists bool) error {
@@ -401,7 +460,7 @@ func (u *HostUpdater) retireUngrantable(ctx context.Context, state HostUpdate, j
 }
 
 func (u *HostUpdater) discover(ctx context.Context, state HostUpdate, policy HostPolicy, journal updateinstall.Status, exists bool) error {
-	current := u.Current()
+	current := u.currentBuild()
 	if current.Modified || !hostDigest(current.Digest) {
 		return u.wait(ctx, state, "modified or unidentified build requires manual updates")
 	}
@@ -411,6 +470,18 @@ func (u *HostUpdater) discover(ctx context.Context, state HostUpdate, policy Hos
 	if u.Source == nil || u.Probe == nil || u.Helper == nil {
 		return u.attention(ctx, state, "configuration", errors.New("host verification services unavailable"))
 	}
+	return u.discoverObserved(ctx, state, policy, current, journal, exists)
+}
+
+func (u *HostUpdater) discoverObserved(ctx context.Context, state HostUpdate, policy HostPolicy, current release.Build, journal updateinstall.Status, exists bool) error {
+	health, err := u.Probe(ctx)
+	if err != nil {
+		return u.backoff(ctx, state, err)
+	}
+	if health.HostID != u.ID || !sameHostIdentity(health.Build, current) {
+		return u.attention(ctx, state, "installation", errors.New("executing host identity differs from local observation"))
+	}
+	u.observed, current = health.Build, health.Build
 	source, documents, err := u.Source(ctx, current)
 	if err != nil {
 		return u.backoff(ctx, state, err)
@@ -450,10 +521,18 @@ func hostCheckDelay() time.Duration {
 func hostDiscoveryPass(ctx context.Context, current release.Build, source HostSource, cursor DiscoveryCursor, documents release.DocumentSource) (DiscoveryStep, error) {
 	step := DiscoveryStep{Cursor: cursor, Budget: release.NewPassBudget()}
 	if err := discoverHead(ctx, source.Epoch, &step, documents); err != nil {
+		if errors.Is(err, release.ErrPassExhausted) {
+			step.Exhausted = true
+			return step, nil
+		}
 		return step, err
 	}
 	metadata, err := discoveryMetadata(ctx, source.Epoch, &step, documents)
 	if err != nil {
+		if errors.Is(err, release.ErrPassExhausted) {
+			step.Exhausted = true
+			return step, nil
+		}
 		return step, err
 	}
 	order, err := release.CompareVersions(metadata.Version, current.Version)
@@ -494,11 +573,11 @@ func (u *HostUpdater) saveCursor(ctx context.Context, cursor DiscoveryCursor) er
 
 func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, documents release.DocumentSource, step DiscoveryStep, journal updateinstall.Status, exists bool) error {
 	next := *step.Next
-	artifact, err := next.Manifest.Artifact(u.Current().Platform)
+	artifact, err := next.Manifest.Artifact(u.currentBuild().Platform)
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
-	edge := Edge{u.Current().Digest, artifact.BinarySHA256, u.Current().Platform}
+	edge := Edge{u.currentBuild().Digest, artifact.BinarySHA256, u.currentBuild().Platform}
 	failed, err := u.Store.failedHostEdge(edge)
 	if err != nil {
 		return u.attention(ctx, state, "failed edge", err)
@@ -514,21 +593,21 @@ func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy Host
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
-	if health.HostID != u.ID || health.Build != u.Current() {
+	if health.HostID != u.ID || health.Build != u.currentBuild() {
 		return u.attention(ctx, state, "installation", errors.New("running host differs from updater source"))
 	}
 	metadataBytes := step.Cursor.Metadata
 	if pending := step.Cursor.Route.Search; pending != nil && pending.Pending != nil && len(pending.Pending.Metadata) > 0 {
 		metadataBytes = pending.Pending.Metadata
 	}
-	metadataDigest, err := verifyHostHop(ctx, u.Current(), health.Workers, next, metadataBytes, documents)
+	proof, err := verifyHostHop(ctx, u.currentBuild(), health.Workers, next, metadataBytes, documents)
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
 	if err := u.Helper(ctx, source.Manifest); err != nil {
 		return u.backoff(ctx, state, fmt.Errorf("verify current running helper: %w", err))
 	}
-	return u.issue(ctx, state, policy, source, next, edge, metadataDigest, journal, exists)
+	return u.issue(ctx, state, policy, source, next, edge, proof.Metadata, journal, exists)
 }
 
 func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, next release.PlannedRelease, edge Edge, metadataDigest string, journal updateinstall.Status, exists bool) error {
@@ -551,7 +630,7 @@ func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPo
 	if exists {
 		generation = journal.Request.Generation + 1
 	}
-	request := updateinstall.Request{ID: id, TargetID: u.ID, Generation: generation, Manifest: next.Manifest, Current: u.Current()}
+	request := updateinstall.Request{ID: id, TargetID: u.ID, Generation: generation, Manifest: next.Manifest, Current: u.currentBuild()}
 	state.Owned = &OwnedRequest{Request: id, Generation: generation, PolicyRevision: policy.Revision, Edge: edge, Installation: request, Metadata: metadataDigest, Position: next.Position, Epoch: source.Epoch, Settings: settings}
 	state.Phase, state.Problem, state.NextAttempt = HostInstalling, nil, time.Time{}
 	if err := u.reserve(ctx, policy, state); err != nil {
@@ -583,53 +662,53 @@ func (u *HostUpdater) reserve(ctx context.Context, policy HostPolicy, state Host
 	return u.Store.writeAuthority("host-update.json", state)
 }
 
-func verifyHostHop(ctx context.Context, current release.Build, workers []updateinstall.Worker, next release.PlannedRelease, data []byte, documents release.DocumentSource) (string, error) {
+func verifyHostHop(ctx context.Context, current release.Build, workers []updateinstall.Worker, next release.PlannedRelease, data []byte, documents release.DocumentSource) (hostHopProof, error) {
 	if next.Metadata == nil {
-		return "", errors.New("update: hop has no authenticated update metadata")
+		return hostHopProof{}, errors.New("update: hop has no authenticated update metadata")
 	}
 	metadata := *next.Metadata
 	ref := release.AssetRef{Tag: metadata.Version, Name: release.UpdateMetadataAssetName, SHA256: discoveryDigest(data)}
 	verified, err := release.AuthenticateMetadata(ctx, documents, ref, data, metadata.Epoch)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	if verified.Manifest != metadata.Manifest || verified.Version != next.Manifest.Version {
-		return "", errors.New("update: authenticated hop changed")
+		return hostHopProof{}, errors.New("update: authenticated hop changed")
 	}
 	budget := release.NewPassBudget()
 	manifest, err := release.ReadDocument(ctx, documents, release.AssetRef{Tag: verified.Version, Name: release.ManifestAssetName, SHA256: verified.Manifest}, release.ManifestDocument, &budget)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	var frozen release.Manifest
 	if err := json.Unmarshal(manifest, &frozen); err != nil {
-		return "", fmt.Errorf("update: decode hop manifest: %w", err)
+		return hostHopProof{}, fmt.Errorf("update: decode hop manifest: %w", err)
 	}
 	if frozen.Digest() != next.Manifest.Digest() {
-		return "", errors.New("update: signed hop manifest differs")
+		return hostHopProof{}, errors.New("update: signed hop manifest differs")
 	}
 	if err := frozen.Allows(current); err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	order, err := release.CompareVersions(frozen.Version, current.Version)
 	if err != nil || order <= 0 {
-		return "", errors.New("update: host hop must strictly advance a stable release")
+		return hostHopProof{}, errors.New("update: host hop must strictly advance a stable release")
 	}
 	return verifyHostRollback(ctx, current, workers, next, verified, ref.SHA256, documents, &budget)
 }
 
-func verifyHostRollback(ctx context.Context, current release.Build, workers []updateinstall.Worker, next release.PlannedRelease, metadata release.UpdateMetadata, metadataDigest string, documents release.DocumentSource, budget *release.PassBudget) (string, error) {
+func verifyHostRollback(ctx context.Context, current release.Build, workers []updateinstall.Worker, next release.PlannedRelease, metadata release.UpdateMetadata, metadataDigest string, documents release.DocumentSource, budget *release.PassBudget) (hostHopProof, error) {
 	transition := next.Transition
 	artifact, err := next.Manifest.Artifact(current.Platform)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	if transition.FromDigest != current.Digest || transition.ToDigest != artifact.BinarySHA256 || transition.Platform != current.Platform {
-		return "", errors.New("update: hop transition differs from exact running edge")
+		return hostHopProof{}, errors.New("update: hop transition differs from exact running edge")
 	}
 	forward, err := release.ReadDocument(ctx, documents, release.AssetRef{Tag: next.Manifest.Version, Name: transition.Proof + ".json", SHA256: transition.Proof}, release.ReceiptDocument, budget)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	rollback := ""
 	for _, proof := range metadata.Rollback {
@@ -638,22 +717,22 @@ func verifyHostRollback(ctx context.Context, current release.Build, workers []up
 		}
 	}
 	if rollback == "" {
-		return "", errors.New("update: exact rollback proof missing")
+		return hostHopProof{}, errors.New("update: exact rollback proof missing")
 	}
 	data, err := release.ReadDocument(ctx, documents, release.AssetRef{Tag: next.Manifest.Version, Name: rollback + ".rollback.json", SHA256: rollback}, release.ReceiptDocument, budget)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	proof, err := release.VerifyRollbackProof(data, rollback, forward, transition, next.Manifest.Compatibility)
 	if err != nil {
-		return "", hostError(err)
+		return hostHopProof{}, hostError(err)
 	}
 	for _, worker := range workers {
 		if err := verifyHostWorker(worker, next.Manifest.Compatibility, proof.Workers); err != nil {
-			return "", err
+			return hostHopProof{}, err
 		}
 	}
-	return metadataDigest, nil
+	return hostHopProof{Metadata: metadataDigest, Workers: proof.Workers}, nil
 }
 
 func verifyHostWorker(worker updateinstall.Worker, compatibility release.Compatibility, proved []string) error {

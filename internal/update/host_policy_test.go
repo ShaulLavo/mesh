@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
@@ -35,6 +36,29 @@ func reserveHostWithoutStage(t *testing.T, f *hostFixture) OwnedRequest {
 	f.updater = f.newUpdater()
 	f.now = f.now.Add(time.Hour)
 	return *state.Owned
+}
+
+func TestHostPolicyRevisionDuringDiscoveryPreventsOwnership(t *testing.T) {
+	f := newHostFixture(t)
+	read := f.updater.Source
+	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, error) {
+		source, documents, err := read(ctx, current)
+		if err != nil {
+			return source, documents, err
+		}
+		_, err = f.store.SetHostPolicy(ctx, 1, HostPolicy{Mode: HostManual})
+		return source, documents, err
+	}
+	if err := f.updater.Tick(t.Context()); err == nil {
+		t.Fatal("policy change did not fence discovery")
+	}
+	state, err := f.store.HostState(t.Context())
+	if err != nil || state.Owned != nil {
+		t.Fatalf("changed policy reserved ownership: %+v %v", state, err)
+	}
+	if _, err := f.engine.Read(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("changed policy staged during discovery")
+	}
 }
 
 func TestHostOwnershipBeforeJournalRecoversSameRequest(t *testing.T) {
