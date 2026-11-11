@@ -116,9 +116,20 @@ func checkAbruptExit(t *testing.T, fault string) {
 }
 
 func TestNonTransactionalMigrationsNeedStatementBoundaryProof(t *testing.T) {
+	for _, annotation := range []string{"-- +goose NO TRANSACTION", "-- +goose no transaction", "--\t+goose\tNo Transaction  ", "-- +goose -- no transaction"} {
+		t.Run(annotation, func(t *testing.T) { rejectNonTransactionalBoundary(t, annotation) })
+	}
+}
+
+func rejectNonTransactionalBoundary(t *testing.T, annotation string) {
+	t.Helper()
 	files := migrationFixture()
-	files["00002_intermediate.sql"].Data = append([]byte("-- +goose NO TRANSACTION\n"), files["00002_intermediate.sql"].Data...)
-	if _, err := boundaryFiles(files, 1, 2, "none"); err == nil || !strings.Contains(err.Error(), "statement states") {
+	files["00002_intermediate.sql"].Data = append([]byte(annotation+"\n"), files["00002_intermediate.sql"].Data...)
+	path := sourceDatabase(t)
+	if err := apply(t.Context(), path, 2, "none", files); err == nil || !strings.Contains(err.Error(), "statement states") {
 		t.Fatalf("nontransactional migration accepted: %v", err)
+	}
+	if err := readSource(path); err != nil {
+		t.Fatalf("rejected annotation allowed migration writes: %v", err)
 	}
 }

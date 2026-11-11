@@ -137,7 +137,7 @@ func addMigration(files fstest.MapFS, sources fs.FS, name string, current, versi
 	if err != nil {
 		return fmt.Errorf("boundary: read %s: %w", name, err)
 	}
-	if number > current && number <= version && strings.Contains(string(data), "-- +goose NO TRANSACTION") {
+	if number > current && number <= version && nonTransactionalMigration(data) {
 		return fmt.Errorf("boundary: %s has reachable uncommitted statement states; transactional boundary proof is insufficient", name)
 	}
 	if number == version && (fault == "failure" || fault == faultInterrupt) {
@@ -145,6 +145,20 @@ func addMigration(files fstest.MapFS, sources fs.FS, name string, current, versi
 	}
 	files[name] = &fstest.MapFile{Data: data, Mode: 0o600}
 	return nil
+}
+
+func nonTransactionalMigration(contents []byte) bool {
+	for _, line := range strings.Split(string(contents), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") || !strings.Contains(line, "+goose") {
+			continue
+		}
+		command := strings.ReplaceAll(line, "--", "")
+		command = strings.TrimSpace(strings.Replace(command, "+goose", "", 1))
+		if strings.EqualFold(command, "NO TRANSACTION") {
+			return true
+		}
+	}
+	return false
 }
 
 func injectFault(data []byte, fault string) []byte {

@@ -112,6 +112,20 @@ read_state_version() { echo 14; }
 
 
 class ProofAssemblyTest(unittest.TestCase):
+    def test_pending_migrations_without_fault_input_emit_no_rollback(self):
+        guard = re.search(r"^require_startup_fault_input\(\) \{.*?^\}", SOURCE, re.M | re.S)
+        self.assertIsNotNone(guard)
+        with tempfile.TemporaryDirectory(prefix="mesh-proof-input-") as directory:
+            output = Path(directory) / "rollback.json"
+            script = ('set -euo pipefail\nfail() { printf "%s\\n" "$*" >&2; exit 1; }\n'
+                      + guard.group(0) + '\nrequire_startup_fault_input\nprintf "unexpected proof" > "$PROOF_OUTPUT"\n')
+            environment = dict(os.environ, old_state_version="13", candidate_state_version="16", PROOF_OUTPUT=str(output))
+            environment.pop("MESH_STARTUP_FAULT_BINARY", None)
+            result = subprocess.run(["bash", "-c", script], env=environment, capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires MESH_STARTUP_FAULT_BINARY", result.stderr)
+            self.assertFalse(output.exists())
+
     def test_separate_rollback_asset_preserves_forward_assembly(self):
         with tempfile.TemporaryDirectory(prefix="mesh-proof-assembly-") as directory:
             root = Path(directory)

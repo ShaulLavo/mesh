@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func verifyProofDirectory(directory string) error {
 }
 
 func verifyRollbackAsset(root *os.Root, name string) error {
-	data, err := root.ReadFile(filepath.Join("rollback", name))
+	data, err := readProofFile(root, filepath.Join("rollback", name))
 	if err != nil {
 		return fmt.Errorf("boundary: read rollback asset: %w", err)
 	}
@@ -41,7 +42,7 @@ func verifyRollbackAsset(root *os.Root, name string) error {
 	if err := json.Unmarshal(data, &proof); err != nil {
 		return fmt.Errorf("boundary: rollback identity: %w", err)
 	}
-	forward, err := root.ReadFile(proof.Forward + ".json")
+	forward, err := readProofFile(root, proof.Forward+".json")
 	if err != nil {
 		return fmt.Errorf("boundary: read forward asset: %w", err)
 	}
@@ -56,4 +57,20 @@ func verifyRollbackAsset(root *os.Root, name string) error {
 		return fmt.Errorf("boundary: verify rollback asset %s: %w", name, err)
 	}
 	return nil
+}
+
+func readProofFile(root *os.Root, name string) ([]byte, error) {
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("boundary: open proof: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	contents, err := io.ReadAll(io.LimitReader(file, release.MaxTransitionProofBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("boundary: read proof: %w", err)
+	}
+	if len(contents) > release.MaxTransitionProofBytes {
+		return nil, errors.New("boundary: proof exceeds 1 MiB")
+	}
+	return contents, nil
 }
