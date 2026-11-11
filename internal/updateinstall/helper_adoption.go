@@ -166,6 +166,10 @@ func captureAdoptionHelperPrior(ctx context.Context, cfg HelperConfig, record *a
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	var existing HelperInstallation
+	if receiptErr := readHelperInstallation(ctx, cfg.StateDir, &existing); !errors.Is(receiptErr, os.ErrNotExist) {
+		return errors.Join(errors.New("existing unjournaled helper is incomplete; refusing an unrelated replacement"), receiptErr)
+	}
 	if state.Loaded || state.PID != 0 {
 		return errors.New("existing helper manager unit has no managed receipt")
 	}
