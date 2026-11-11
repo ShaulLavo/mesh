@@ -147,8 +147,7 @@ class ServiceHandler(socketserver.StreamRequestHandler):
             require(args[0] == "--user", "fixture accepts only user services")
             action = args[1]
             if action == "show":
-                require(args[2:] == ["mesh.service", "--property=KillMode", "--value"], "unexpected service query")
-                output = "process\n"
+                output = host.systemctl_show(args[2:])
             elif action == "daemon-reload":
                 require(len(args) == 2, "unexpected daemon reload")
             else:
@@ -235,6 +234,17 @@ sys.exit(data["status"])
         self.id = None
         HOSTS[name] = self
 
+    def service_pid(self, unit):
+        with LOCK:
+            process = self.processes.get(unit)
+            return process.pid if process and process.poll() is None else 0
+
+    def systemctl_show(self, args):
+        if args == ["mesh.service", "--property=KillMode", "--value"]:
+            return "process\n"
+        require(args == ["mesh-update-helper.service", "--property=MainPID", "--value"], "unexpected service query")
+        return str(self.service_pid("mesh-update-helper.service")) + "\n"
+
     def launchctl(self, args):
         domain = "gui/" + str(os.getuid())
         labels = {"dev.shaulavo.mesh": "mesh.service", "dev.shaulavo.mesh-update-helper": "mesh-update-helper.service"}
@@ -266,10 +276,10 @@ sys.exit(data["status"])
         scope, separator, label = args[-1].rpartition("/")
         require(separator and scope == domain and label in labels, "unexpected launchd service target")
         unit = labels[label]
-        process = self.processes.get(unit)
         if action == "print":
-            if process and process.poll() is None:
-                return 0, "fixture service running\n"
+            pid = self.service_pid(unit)
+            if pid:
+                return 0, f"{domain}/{label} = {{\n\tstate = running\n\tpid = {pid}\n}}\n"
             return 113, f'Bad request.\nCould not find service "{label}" in domain for user gui: {os.getuid()}\n'
         if action == "bootout":
             self.stop(unit)

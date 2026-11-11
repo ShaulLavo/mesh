@@ -37,28 +37,57 @@ func EnsureCurrentHelper(ctx context.Context, cfg HelperConfig, source release.M
 	if err != nil {
 		return HelperInstallation{}, fmt.Errorf("read current helper artifact: %w", err)
 	}
-	var installed HelperInstallation
-	if err = readHelperInstallation(ctx, cfg.StateDir, &installed); err != nil {
-		return installed, err
-	}
-	if installed.Digest == artifact.BinarySHA256 {
-		return PromoteHelper(ctx, cfg, source, artifact.BinarySHA256)
-	}
-	if _, err = verifyHelperReceipt(ctx, cfg.StateDir, installed, artifact.BinarySHA256); err != nil {
-		return installed, err
-	}
-	current, err := helperBuild(ctx, installed.Executable, installed.Digest)
+	promote, err := helperNeedsPromotion(ctx, cfg, source, artifact.BinarySHA256)
 	if err != nil {
-		return installed, err
+		return HelperInstallation{}, err
 	}
-	order, err := release.CompareVersions(source.Version, current.Version)
-	if err != nil {
-		return installed, fmt.Errorf("compare installed helper currency: %w", err)
-	}
-	if order >= 0 {
+	if promote {
 		return PromoteHelper(ctx, cfg, source, artifact.BinarySHA256)
 	}
 	return ensureHelper(ctx, cfg, source, artifact.BinarySHA256, true)
+}
+
+func helperNeedsPromotion(ctx context.Context, cfg HelperConfig, source release.Manifest, digest string) (bool, error) {
+	if cfg.Probe == nil {
+		return false, errors.New("helper readiness requires an executing-image process probe")
+	}
+	if cfg.ServiceDir == "" {
+		var err error
+		cfg.ServiceDir, err = serviceDirectory(cfg.Kind)
+		if err != nil {
+			return false, err
+		}
+	}
+	lock, err := lockInstallation(ctx, cfg.StateDir)
+	if err != nil {
+		return false, err
+	}
+	defer unlock(lock)
+	if err = helperPromotionJournal(ctx, cfg); err != nil {
+		return false, err
+	}
+	if err = resumeHelperPromotion(ctx, cfg); err != nil {
+		return false, err
+	}
+	var installed HelperInstallation
+	if err = readHelperInstallation(ctx, cfg.StateDir, &installed); err != nil {
+		return false, err
+	}
+	if installed.Digest == digest {
+		return true, nil
+	}
+	if _, err = verifyHelperReceipt(ctx, cfg.StateDir, installed, digest); err != nil {
+		return false, err
+	}
+	current, err := helperBuild(ctx, installed.Executable, installed.Digest)
+	if err != nil {
+		return false, err
+	}
+	order, err := release.CompareVersions(source.Version, current.Version)
+	if err != nil {
+		return false, fmt.Errorf("compare installed helper currency: %w", err)
+	}
+	return order >= 0, nil
 }
 
 // InspectHelper verifies the existing installation without starting, replacing,
@@ -113,11 +142,11 @@ func ensureHelper(ctx context.Context, cfg HelperConfig, source release.Manifest
 	if err = helperPromotionJournal(ctx, cfg); err != nil {
 		return HelperInstallation{}, err
 	}
-	candidate, err := verifiedHelperCandidate(ctx, cfg, source, digest)
-	if err != nil {
+	if err = resumeHelperPromotion(ctx, cfg); err != nil {
 		return HelperInstallation{}, err
 	}
-	if err = resumeHelperPromotion(ctx, cfg); err != nil {
+	candidate, err := verifiedHelperCandidate(ctx, cfg, source, digest)
+	if err != nil {
 		return HelperInstallation{}, err
 	}
 	prior, err := recoveryHelperSnapshot(ctx, cfg)

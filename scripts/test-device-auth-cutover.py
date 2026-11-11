@@ -7,6 +7,7 @@ import io
 import json
 import os
 import plistlib
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -50,15 +51,17 @@ class CutoverEventsTest(unittest.TestCase):
             "OLD_BUILD": {"platform": {"os": "darwin"}}, "threading": types.SimpleNamespace(Timer=JoiningTimer),
             "os": os, "json": json, "plistlib": plistlib, "subprocess": subprocess, "time": time,
             "require": require, "eventually": eventually, "Path": Path, "hashlib": hashlib,
+            "socketserver": socketserver,
         }
         # Importing the proof starts release acquisition and services.
         tree = ast.parse(SOURCE.read_text(), filename=str(SOURCE))
-        names = {"Host", "event", "digest", "local_cutover", "wait_for_restarts"}
+        names = {"Host", "ServiceHandler", "event", "digest", "local_cutover", "wait_for_restarts"}
         definitions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
                        and node.name in names]
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), self.scope)
         self.hosts = [self.host("h0"), self.host("h1")]
         self.scope["hosts"] = self.hosts
+        self.scope["HOSTS"] = {host.name: host for host in self.hosts}
         self.addCleanup(self.close)
         self.target_bytes = b"isolated candidate installation"
         self.target = {"version": "v0.1.160", "digest": hashlib.sha256(self.target_bytes).hexdigest()}
@@ -115,6 +118,27 @@ class CutoverEventsTest(unittest.TestCase):
 
     def kickstart(self, host):
         host.launchctl(["kickstart", "-k", "gui/" + str(os.getuid()) + "/dev.shaulavo.mesh-update-helper"])
+
+    def service_reply(self, tool, args):
+        handler = self.scope["ServiceHandler"].__new__(self.scope["ServiceHandler"])
+        request = {"host": self.hosts[0].name, "tool": tool, "args": args}
+        handler.rfile = io.BytesIO(json.dumps(request).encode() + b"\n")
+        handler.wfile = io.BytesIO()
+        handler.handle()
+        return json.loads(handler.wfile.getvalue())
+
+    def test_systemd_readiness_reports_live_helper_pid(self):
+        reply = self.service_reply("systemctl", ["--user", "show", "mesh-update-helper.service", "--property=MainPID", "--value"])
+        self.assertEqual(reply["status"], 0, reply)
+        self.assertEqual(int(reply["output"]), self.hosts[0].processes["mesh-update-helper.service"].pid)
+
+    def test_launchd_readiness_reports_running_helper_pid(self):
+        target = "gui/" + str(os.getuid()) + "/dev.shaulavo.mesh-update-helper"
+        reply = self.service_reply("launchctl", ["print", target])
+        self.assertEqual(reply["status"], 0, reply)
+        self.assertIn("\tstate = running\n", reply["output"])
+        pid = self.hosts[0].processes["mesh-update-helper.service"].pid
+        self.assertIn(f"\tpid = {pid}\n", reply["output"])
 
     def test_failed_listing_retains_bounded_nonsecret_config_diagnostic(self):
         host = self.hosts[0]

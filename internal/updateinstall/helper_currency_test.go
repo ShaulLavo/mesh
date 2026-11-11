@@ -184,6 +184,54 @@ func TestPromoteHelperResumesInterruptedPublication(t *testing.T) {
 	}
 }
 
+func TestEnsureCurrentHelperResumesInterruptedSideRestoration(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	f.commit(t, "v0.1.171", "")
+	daemonManifest := currentHelperManifest(t, f)
+	journal, err := os.ReadFile(journalPath(f.cfg.StateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := recoveryHelperSnapshot(t.Context(), f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side := f
+	side.cfg.Executable = filepath.Join(t.TempDir(), "side-helper")
+	side.commit(t, "v0.1.180", "")
+	sideManifest := currentHelperManifest(t, side)
+	sideDigest := sideManifest.Artifacts[0].BinarySHA256
+	if _, err = prepareHelper(t.Context(), side.cfg, true, sideDigest); err != nil {
+		t.Fatal(err)
+	}
+	record, err := json.Marshal(helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: sideDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicWrite(helperPromotionPath(f.cfg.StateDir), record, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = atomicWrite(journalPath(f.cfg.StateDir), journal, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Restoration published the old receipt before its launcher write completed.
+	if err = atomicWrite(helperRecord(f.cfg.StateDir), prior.receipt, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.Probe = fixtureHelperProbe
+	got, err := EnsureCurrentHelper(t.Context(), f.cfg, daemonManifest)
+	if err != nil || got.Digest != daemonManifest.Artifacts[0].BinarySHA256 {
+		t.Fatalf("interrupted side restoration = %+v, %v", got, err)
+	}
+	if _, err = os.Stat(helperPromotionPath(f.cfg.StateDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finished restoration retained its checkpoint: %v", err)
+	}
+	again, err := EnsureCurrentHelper(t.Context(), f.cfg, daemonManifest)
+	if err != nil || again != got {
+		t.Fatalf("repeated readiness = %+v, %v", again, err)
+	}
+}
+
 func checkInterruptedHelperPromotion(t *testing.T, boundary string) {
 	t.Helper()
 	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
