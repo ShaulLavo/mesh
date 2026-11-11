@@ -10,7 +10,7 @@ import (
 
 func validateEpoch(directory string, input publicationInput, history []publishedEvidence) error {
 	newest := newestEpoch(history)
-	if input.Epoch < newest || input.Epoch > newest+1 {
+	if input.Epoch < newest || input.Epoch-newest > 1 {
 		return errors.New("publisher: format epochs must advance one at a time")
 	}
 	if input.Epoch == 1 {

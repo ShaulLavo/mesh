@@ -58,6 +58,7 @@ jobs:
               - 'go.sum'
               - 'scripts/*release*'
               - 'scripts/*update-proof*'
+              - 'scripts/*update-reader*'
               - 'scripts/*legacy*'
               - 'scripts/*metadata*'
               - 'scripts/upgrade-policy.json'

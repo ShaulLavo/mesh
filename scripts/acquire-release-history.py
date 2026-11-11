@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import threading
 
 from fixtures import published_releases
 
@@ -84,7 +85,7 @@ def api_digest(asset, cache):
     return asset["digest"].removeprefix("sha256:"), hit
 
 
-def acquire_release(item, cache, documents):
+def acquire_release(item, cache, documents, cancelled):
     assets = item["assets"]
     if len(assets) >= 100:
         assets = api(f"repos/{REPOSITORY}/releases/{item['id']}/assets?per_page=100")
@@ -96,6 +97,8 @@ def acquire_release(item, cache, documents):
     hits = 0
     retained = []
     for asset in assets:
+        if cancelled.is_set():
+            raise RuntimeError("release acquisition cancelled after a required source failed")
         name = asset["name"]
         if "/" in name or "\\" in name or name in (".", ".."):
             raise ValueError(f"invalid release asset name: {name}")
@@ -111,6 +114,18 @@ def acquire_release(item, cache, documents):
     return {"tag": item["tag_name"], "publishedAt": item["published_at"], "assets": retained}, hits
 
 
+def collect_releases(pool, history, cache, documents):
+    cancelled = threading.Event()
+    futures = [pool.submit(acquire_release, item, cache, documents, cancelled) for item in history]
+    try:
+        return [future.result() for future in concurrent.futures.as_completed(futures)]
+    except BaseException:
+        cancelled.set()
+        for future in futures:
+            future.cancel()
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("documents", type=pathlib.Path)
@@ -123,7 +138,7 @@ def main():
     history = [item for item in history if not item["draft"] and not item["prerelease"]
                and TAG.fullmatch(item["tag_name"])]
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda item: acquire_release(item, args.cache, args.documents), history))
+        results = collect_releases(pool, history, args.cache, args.documents)
     releases = sorted((item for item, _ in results), key=lambda item: tuple(map(int, item["tag"][1:].split("."))))
     args.inventory.write_text(json.dumps(releases, indent=2) + "\n")
     print(f"acquired {len(releases)} published releases; verified immutable cache hits: {sum(hits for _, hits in results)}", file=sys.stderr)

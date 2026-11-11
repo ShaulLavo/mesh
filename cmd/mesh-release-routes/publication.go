@@ -13,15 +13,16 @@ import (
 )
 
 type publicationInput struct {
-	Version      string              `json:"version"`
-	PublishedAt  time.Time           `json:"publishedAt"`
-	Epoch        uint32              `json:"epoch"`
-	Trust        int                 `json:"trust"`
-	Policy       upgradePolicy       `json:"policy"`
-	History      []publishedEvidence `json:"history"`
-	Retained     []publishedEvidence `json:"retained,omitempty"`
-	PreviousRoot *release.AssetRef   `json:"previousRoot,omitempty"`
-	Waypoint     string              `json:"waypoint,omitempty"`
+	Version      string               `json:"version"`
+	PublishedAt  time.Time            `json:"publishedAt"`
+	Epoch        uint32               `json:"epoch"`
+	Trust        int                  `json:"trust"`
+	Policy       upgradePolicy        `json:"policy"`
+	History      []publishedEvidence  `json:"history"`
+	Retained     []publishedEvidence  `json:"retained,omitempty"`
+	PreviousRoot *release.AssetRef    `json:"previousRoot,omitempty"`
+	Waypoint     string               `json:"waypoint,omitempty"`
+	Readers      []readerCapabilities `json:"readers"`
 }
 
 func publishOperation(operation string, data []byte, directory, destination string, output io.Writer) error {
@@ -108,6 +109,10 @@ func publishRoutes(input publicationInput, selection sourceSelection, history []
 	if err != nil {
 		return err
 	}
+	updater, err := candidateUpdater(input, candidate.Manifest, &selection)
+	if err != nil {
+		return err
+	}
 	if err := addTargetEdges(directory, history, candidate, graph); err != nil {
 		return err
 	}
@@ -127,9 +132,13 @@ func publishRoutes(input publicationInput, selection sourceSelection, history []
 	if err != nil {
 		return err
 	}
-	metadata := release.UpdateMetadata{Schema: 1, Epoch: input.Epoch, Trust: input.Trust, Version: input.Version, Manifest: sum(candidate.ManifestBytes), PublishedAt: input.PublishedAt, Position: selection.Position, Direct: selection.Direct, Rollback: rollback, Page: page}
+	metadata := release.UpdateMetadata{Schema: 1, Epoch: input.Epoch, Trust: input.Trust, Version: input.Version, Manifest: sum(candidate.ManifestBytes), PublishedAt: input.PublishedAt, Position: selection.Position, Direct: selection.Direct, Rollback: rollback, Page: page, Updater: updater}
 	if err := metadata.Validate(); err != nil {
 		return fmt.Errorf("publisher: generated metadata: %w", err)
+	}
+	candidate.Metadata = &metadata
+	if err := verifyAutomaticHistory(directory, history, candidate, graph, input.Policy); err != nil {
+		return err
 	}
 	return finishPublication(input, metadata, history, destination, longest, selection, output)
 }
@@ -161,7 +170,7 @@ func verifyDirectSources(directory string, policy upgradePolicy, selection sourc
 			return nil, fmt.Errorf("publisher: required direct source %s lacks a verified edge on every platform", version)
 		}
 		source := history[index]
-		if source.Metadata == nil && !slices.Contains(policy.RequiredRollback, version) {
+		if !updaterSource(source) && !slices.Contains(policy.RequiredRollback, version) {
 			continue
 		}
 		verified, err := verifyRollbackAssets(directory, source, candidate, graph)

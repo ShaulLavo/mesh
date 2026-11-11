@@ -60,11 +60,7 @@ jobs:
           if [[ -z $VERSION ]]; then
             VERSION=$(python3 -c 'import sys; v=sys.argv[1].split("."); v[-1]=str(int(v[-1])+1); print(".".join(v))' "$PREVIOUS")
           fi
-          if [[ $DRAFT == true ]]; then
-            published_at=$(gh release view "$VERSION" --json createdAt --jq .createdAt)
-          else
-            published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          fi
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
           go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
@@ -137,6 +133,7 @@ jobs:
           else
             scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
           fi
+          python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
           if [[ $PLATFORM == darwin/arm64 ]]; then
             "$root/tools/worker-probe" -test.v -test.run=^TestDarwinMappedExecutableSurvivesAtomicReplacement$ | tee "$root/darwin-mapped-executable.log"
             grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$root/darwin-mapped-executable.log"

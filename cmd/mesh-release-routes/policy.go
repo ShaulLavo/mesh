@@ -42,7 +42,7 @@ func selectBaselines(selection *sourceSelection, history []publishedEvidence, po
 		}
 		item := history[index]
 		for _, artifact := range item.Manifest.Artifacts {
-			selection.Baselines = append(selection.Baselines, baselineArtifact{Version: version, Artifact: artifact, Rollback: item.Metadata != nil || slices.Contains(policy.RequiredRollback, version)})
+			selection.Baselines = append(selection.Baselines, baselineArtifact{Version: version, Artifact: artifact, Rollback: updaterSource(item) || slices.Contains(policy.RequiredRollback, version)})
 		}
 	}
 	return nil

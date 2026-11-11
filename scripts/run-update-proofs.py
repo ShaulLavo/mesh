@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import time
@@ -52,6 +53,7 @@ def main():
         parser.error("invalid shard position")
     root = Path(__file__).resolve().parent.parent
     args.output.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(args.tools / "candidate-reader.json", args.output / "candidate-reader.json")
     environment = dict(os.environ, MESH_BOUNDARY_TOOL=str(args.tools / "boundary"),
                        MESH_STARTUP_FAULT_BINARY=str(args.tools / "startup-fault-candidate"))
     results = []

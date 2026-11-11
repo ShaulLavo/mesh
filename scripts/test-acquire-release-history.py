@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -65,6 +66,16 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(HISTORY.api("endpoint"), [{"id": 1}, {"id": 2}])
             self.assertIn("--paginate", command.call_args.args[0])
             self.assertIn("--slurp", command.call_args.args[0])
+
+    def test_truncated_embedded_assets_use_the_paginated_asset_api(self):
+        assets = [{"name": f"asset-{index}.txt", "digest": "sha256:" + self.digest} for index in range(101)]
+        item = {"tag_name": "v0.1.306", "id": 42, "published_at": "2026-11-11T00:00:00Z", "assets": assets[:100]}
+        documents = self.cache / "documents"
+        with mock.patch.object(HISTORY, "api", return_value=assets) as api:
+            release, _ = HISTORY.acquire_release(item, self.cache, documents, threading.Event())
+            self.assertEqual(len(release["assets"]), 101)
+            self.assertEqual(release["assets"][-1]["name"], "asset-100.txt")
+            self.assertEqual(api.call_args.args[0], "repos/ShaulLavo/mesh/releases/42/assets?per_page=100")
 
 
 if __name__ == "__main__":

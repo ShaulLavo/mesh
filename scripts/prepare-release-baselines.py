@@ -29,9 +29,12 @@ def acquire(tag, name, expected, directory, cache):
         return cached
     destination = directory / name
     for attempt in range(3):
-        result = subprocess.run(["gh", "release", "download", tag, "--pattern", name,
-                                 "--dir", str(directory), "--clobber"], check=False, timeout=60)
-        if result.returncode == 0:
+        try:
+            result = subprocess.run(["gh", "release", "download", tag, "--pattern", name,
+                                     "--dir", str(directory), "--clobber"], check=False, timeout=60)
+        except subprocess.TimeoutExpired:
+            result = None
+        if result is not None and result.returncode == 0:
             break
         if attempt == 2:
             raise RuntimeError(f"required baseline acquisition failed: {tag}/{name}")
