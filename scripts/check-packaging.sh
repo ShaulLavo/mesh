@@ -157,8 +157,8 @@ check_source_contract() {
   contains scripts/run-update-proofs.py 'environment["MESH_LEGACY_BINARY"]'
   contains scripts/run-update-proofs.py '-test.run=^TestLegacyWorkerProcessProtocolAndVersion$'
   contains scripts/run-update-proofs.py '--- PASS: TestLegacyWorkerProcessProtocolAndVersion'
-  contains .github/workflows/update-proofs.yml '-test.run=^TestDarwinMappedExecutableSurvivesAtomicReplacement$'
-  contains .github/workflows/update-proofs.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
+  contains .github/workflows/ci.yml "go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap"
+  contains .github/workflows/ci.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
   contains .github/workflows/update-proofs.yml 'scripts/prepare-release-baselines.sh'
   contains .github/workflows/release.yml 'scripts/generate-release-manifest.sh'
   contains .github/workflows/release.yml 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4'

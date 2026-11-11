@@ -1,8 +1,9 @@
 # Automatic update publisher
 
 Unit 3 implements the release policy and publication producer. The PR remains a
-draft until the source-reader contract and corrected shared signing and rollback
-source arrive from the coordinator. No release or fleet update ran.
+draft until the corrected signing-cache source and native matrix validation
+arrive. Corrected rollback source 512fb62 and the real Unit 6 reader at 4037372
+are integrated. No release or fleet update ran.
 
 ## Policy and graph
 
@@ -24,8 +25,9 @@ once, then reuses those executables for every source.
 
 Sixteen historical sources produce forward receipts only. Fleet sources
 v0.1.249, v0.1.255, and v0.1.257 require separate rollback proofs and real
-startup faults. The Linux proof run took 125.75 seconds in total. Its full
-proofs took 28.66, 28.66, and 38.08 seconds. No sharding is needed at that
+startup faults. The first Linux proof run took 125.75 seconds in total. A second run against
+the corrected rollback source and real reader took 141.86 seconds. Its full
+proofs took 29.26, 29.56, and 38.97 seconds. No sharding is needed at that
 measurement. The workflow retains per-source timings for the other platforms.
 
 The pre232 verifier reads the actual historical
@@ -48,6 +50,20 @@ only earlier published anchors. The current anchor enters the next page.
 New epochs require an old-format bound waypoint, represented at ordinal zero
 in the new epoch. The schema 1 manifest and forward receipt formats stay
 unchanged. The manifest producer enforces the 512 KiB output bound.
+
+The publisher emits `updater` only after all three real native candidates
+report their implemented reader and match the manifest version, commit,
+platform, and executable digest. Ordinary marker coordinates match the
+publication. An old-format waypoint may mark the next reader epoch at anchor
+ordinal zero. Metadata presence alone grants no reader capability.
+
+Packets use the authoritative `update.HostReaderInput` type, retaining original
+source and target documents as base64 byte strings. Native jobs download the
+original source executable and invoke `mesh update-reader` after signing. The
+result must match the source, epoch, position, target, metadata hash, and target
+binary hash. Signed-draft preparation, original-reader verification, and final
+publication are separate jobs. A failed original reader leaves the draft
+unpublished.
 
 The release job signs the metadata and retention inventory, checks the original
 Sigstore bundle, refreshes candidate TUF trust, and verifies metadata binding.
@@ -74,11 +90,16 @@ Actionlint 1.7.12 accepts all changed workflows after omitting the pre-existing
 `concurrency.queue: max` line from its input. That installed version does not
 recognize the existing GitHub queue field. The workflow retains the field.
 
-Final validation must consume the coordinator's corrected trust-cache and
-rollback source. The signed capability marker and actual original source
-binary verifier still require an ownership agreement with Unit 6. Metadata
-presence must not certify an automatic reader. Candidate signatures and all
-three native platform gates remain required before publication.
+The staged Linux candidate from clean e2b02245 reports schema 1, epoch 1,
+version v0.1.307, and `modified=false`. Its actual digest is
+`9d8ca669dad41410272d98bb72d56347e81f0779c5092b02ebd392d7f0322c0f`. The
+startup-fault fixture has a separate digest and never supplies the marker.
+
+Final validation must consume the coordinator's corrected signing-cache source.
+Candidate signatures and all three native platform gates remain required
+before publication. Public history currently contains no updater marker, so
+no historical source is described as having accepted an automatic edge. The
+first real updater release supplies those original readers for later releases.
 
 Local commands and small results are retained under
 `/work/reports/mesh-auto-update/unit3-publisher`. Task scratch roots were removed

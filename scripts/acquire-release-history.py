@@ -86,9 +86,7 @@ def api_digest(asset, cache):
 
 
 def acquire_release(item, cache, documents, cancelled):
-    assets = item["assets"]
-    if len(assets) >= 100:
-        assets = api(f"repos/{REPOSITORY}/releases/{item['id']}/assets?per_page=100")
+    assets = api(f"repos/{REPOSITORY}/releases/{item['id']}/assets?per_page=100")
     names = [asset["name"] for asset in assets]
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate release assets: {item['tag_name']}")

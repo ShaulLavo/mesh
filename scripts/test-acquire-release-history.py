@@ -77,6 +77,13 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(release["assets"][-1]["name"], "asset-100.txt")
             self.assertEqual(api.call_args.args[0], "repos/ShaulLavo/mesh/releases/42/assets?per_page=100")
 
+    def test_small_embedded_asset_list_does_not_skip_the_authoritative_index(self):
+        assets = [{"name": "retained-page.json", "digest": "sha256:" + self.digest}]
+        item = {"tag_name": "v0.1.306", "id": 42, "published_at": "2026-11-11T00:00:00Z", "assets": []}
+        with mock.patch.object(HISTORY, "api", return_value=assets):
+            release, _ = HISTORY.acquire_release(item, self.cache, self.cache / "documents", threading.Event())
+            self.assertEqual(release["assets"][0]["name"], "retained-page.json")
+
 
 if __name__ == "__main__":
     unittest.main()

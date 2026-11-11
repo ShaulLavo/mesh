@@ -134,10 +134,6 @@ jobs:
             scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
           fi
           python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
-          if [[ $PLATFORM == darwin/arm64 ]]; then
-            "$root/tools/worker-probe" -test.v -test.run=^TestDarwinMappedExecutableSurvivesAtomicReplacement$ | tee "$root/darwin-mapped-executable.log"
-            grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$root/darwin-mapped-executable.log"
-          fi
           scripts/prepare-release-baselines.sh "$VERSION" "$PREVIOUS" "$PLATFORM" "$BASELINE_ASSETS" "$root/retained" "$root/retained.list"
           python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_text("".join(str(Path(v).relative_to(p.parent))+"\n" for v in p.read_text().splitlines()))' "$root/retained.list"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
