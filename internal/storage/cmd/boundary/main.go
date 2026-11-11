@@ -22,6 +22,8 @@ import (
 	"github.com/shaul/mesh/db/migrations"
 )
 
+const faultInterrupt = "interrupt"
+
 func main() {
 	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -34,13 +36,29 @@ func run(ctx context.Context, args []string) error {
 	databasePath := flags.String("database", "", "isolated source database")
 	version := flags.Int64("version", 0, "last candidate migration to commit")
 	fault := flags.String("fault", "none", "none, failure, interrupt, or after-commit")
+	cache := flags.Bool("write-cache", false, "write representative cached session facts using candidate storage code")
+	migrationDir := flags.String("migrations", "", "candidate migration directory; defaults to embedded candidate files")
+	proofs := flags.String("verify-proofs", "", "verify forward receipts and separate rollback assets in this directory")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("boundary: flags: %w", err)
+	}
+	if *proofs != "" {
+		return verifyProofDirectory(*proofs)
 	}
 	if *databasePath == "" || *version <= 0 || flags.NArg() != 0 {
 		return errors.New("boundary: -database and positive -version are required")
 	}
-	return apply(ctx, *databasePath, *version, *fault, migrations.Files)
+	var sources fs.FS = migrations.Files
+	if *migrationDir != "" {
+		sources = os.DirFS(*migrationDir)
+	}
+	if err := apply(ctx, *databasePath, *version, *fault, sources); err != nil {
+		return err
+	}
+	if *cache {
+		return writeCache(ctx, *databasePath)
+	}
+	return nil
 }
 
 func openDatabase(path string) (*sql.DB, error) {
@@ -59,7 +77,7 @@ func openDatabase(path string) (*sql.DB, error) {
 }
 
 func apply(ctx context.Context, path string, version int64, fault string, sources fs.FS) error {
-	if fault != "none" && fault != "failure" && fault != "interrupt" && fault != "after-commit" {
+	if fault != "none" && fault != "failure" && fault != faultInterrupt && fault != "after-commit" {
 		return fmt.Errorf("boundary: unknown fault %q", fault)
 	}
 	db, err := openDatabase(path)
@@ -83,11 +101,14 @@ func apply(ctx context.Context, path string, version int64, fault string, source
 		return fmt.Errorf("boundary: Goose migrations through %d: %w", version, err)
 	}
 	actual, err := provider.GetDBVersion(ctx)
-	if err != nil || actual != version {
-		return fmt.Errorf("boundary: expected state %d, got %d: %w", version, actual, err)
+	if err != nil {
+		return fmt.Errorf("boundary: read applied state: %w", err)
+	}
+	if actual != version {
+		return fmt.Errorf("boundary: expected state %d, got %d", version, actual)
 	}
 	if fault == "after-commit" {
-		os.Exit(86)
+		abruptExit()
 	}
 	return nil
 }
@@ -116,10 +137,10 @@ func addMigration(files fstest.MapFS, sources fs.FS, name string, current, versi
 	if err != nil {
 		return fmt.Errorf("boundary: read %s: %w", name, err)
 	}
-	if number > current && strings.Contains(string(data), "-- +goose NO TRANSACTION") {
+	if number > current && number <= version && strings.Contains(string(data), "-- +goose NO TRANSACTION") {
 		return fmt.Errorf("boundary: %s has reachable uncommitted statement states; transactional boundary proof is insufficient", name)
 	}
-	if number == version && (fault == "failure" || fault == "interrupt") {
+	if number == version && (fault == "failure" || fault == faultInterrupt) {
 		data = injectFault(data, fault)
 	}
 	files[name] = &fstest.MapFile{Data: data, Mode: 0o600}
@@ -128,7 +149,7 @@ func addMigration(files fstest.MapFS, sources fs.FS, name string, current, versi
 
 func injectFault(data []byte, fault string) []byte {
 	statement := "\nSELECT mesh_boundary_failure();\n"
-	if fault == "interrupt" {
+	if fault == faultInterrupt {
 		statement = "\nSELECT mesh_boundary_interrupt();\n"
 	}
 	up, down, found := strings.Cut(string(data), "-- +goose Down")
@@ -141,7 +162,11 @@ func injectFault(data []byte, fault string) []byte {
 func init() {
 	sqlite.MustRegisterScalarFunction("mesh_boundary_interrupt", 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
 		// Exit inside the migration transaction without closing its connection.
-		os.Exit(86)
+		abruptExit()
 		return nil, nil
 	})
+}
+
+func abruptExit() {
+	os.Exit(86)
 }

@@ -31,9 +31,12 @@ client=''
 session=''
 shell_pid=''
 worker_pid=''
+helper_pid=''
 
 cleanup() {
   discover_owned_session_processes
+  [[ ! -f $test_root/managed-daemon.pid ]] || old_daemon=$(cat "$test_root/managed-daemon.pid")
+  [[ -z $helper_pid ]] || kill -9 "$helper_pid" 2>/dev/null || true
   [[ -z $client ]] || kill -9 "$client" 2>/dev/null || true
   [[ -z $candidate_daemon ]] || kill -9 "$candidate_daemon" 2>/dev/null || true
   [[ -z $old_daemon ]] || kill -9 "$old_daemon" 2>/dev/null || true
@@ -42,6 +45,8 @@ cleanup() {
   rm -rf -- "$test_root"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 discover_owned_session_processes() {
   local pid ppid command
@@ -241,10 +246,18 @@ assert_saved_recovery() {
 }
 
 rollback_source() {
-  local label=$1
-  env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/source-$label.log" 2>&1 &
-  old_daemon=$!
-  wait_for_daemon "$old_binary" "$old_daemon" || fail "source did not start at $label: $(cat "$test_root/source-$label.log")"
+  local label=$1 candidate_image=${2:-$candidate_binary}
+  fixture prepare-rollback "$state" "$old_binary" "$candidate_image" "$label"
+  env PATH="$test_root/service-tools:$PATH" MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" \
+    "$candidate_binary" update-helper --state-dir "$state" >"$test_root/helper-$label.log" 2>&1 &
+  helper_pid=$!
+  wait_for_helper_rollback "$label"
+  old_daemon=$(cat "$test_root/managed-daemon.pid")
+  wait_for_daemon "$old_binary" "$old_daemon" || fail "source did not start at $label: $(cat "$test_root/managed-daemon.log")"
+  fixture verify-rollback "$state" || fail "helper rollback did not preserve source and worker identity at $label"
+  kill -TERM "$helper_pid"
+  wait "$helper_pid" 2>/dev/null || true
+  helper_pid=''
   mesh "$old_binary" ls --daemon --all >"$test_root/source-$label.inventory.out" || fail "source inventory failed at $label"
   grep -Fq "$session" "$test_root/source-$label.inventory.out" || fail "source lost live session at $label"
   grep -Fq "$saved_session" "$test_root/source-$label.inventory.out" || fail "source lost saved session at $label"
@@ -258,14 +271,36 @@ rollback_source() {
   assert_session_processes
   assert_live_recovery || fail "source did not accept retained checkpoint at $label"
   assert_saved_recovery
+  if [[ -f $test_root/$label.persist.json ]]; then
+    fixture verify-persistent "$state" "$test_root/$label.persist.json" || fail "source rollback lost candidate writes at $label"
+  fi
   printf '\035' >&6
   exec 6>&-
   wait_for_exit "$client" || fail "source client did not detach at $label"
   wait "$client" 2>/dev/null || true
   client=''
+  if [[ $label == "$candidate_state_version-candidate-writes" ]]; then
+    fixture verify-writes "$state" || fail 'source could not read candidate persistent settings and service'
+    mesh "$old_binary" kill "$session" >/dev/null
+    shell_pid=''
+    worker_pid=''
+  fi
   stop_daemon "$old_daemon" "$old_binary"
   old_daemon=''
+  rm -f -- "$test_root/managed-daemon.pid"
   printf 'rollback boundary %s passed, worker %s, shell %s\n' "$label" "$worker_pid" "$shell_pid" >&2
+}
+
+wait_for_helper_rollback() {
+  local label=$1 phase
+  for _ in $(seq 120); do
+    kill -0 "$helper_pid" 2>/dev/null || fail "helper exited before rollback at $label"
+    phase=$(fixture rollback-phase "$state")
+    [[ $phase != rollback_failed ]] || fail "source did not start at $label: $(cat "$test_root/managed-daemon.log")"
+    [[ $phase != rolled_back ]] || return 0
+    sleep 0.05
+  done
+  fail "helper rollback did not finish at $label: $(cat "$test_root/helper-$label.log")"
 }
 
 apply_boundary() {
@@ -275,36 +310,75 @@ apply_boundary() {
 }
 
 prove_boundaries() {
-  local target
   for boundary in $(seq "$old_state_version" "$candidate_state_version"); do
     for scenario in before after-commit failure interrupt; do
-      restore_test_database
-      apply_boundary "$boundary" none 0
-      target=$boundary
-      if [[ $scenario == after-commit ]]; then
-        # The abrupt exit follows the actual Goose commit on this database.
-        restore_test_database
-        apply_boundary "$boundary" after-commit 86
-      elif [[ $scenario == failure || $scenario == interrupt ]]; then
-        target=$((boundary + 1))
-        [[ $target -le $candidate_state_version ]] || continue
-        apply_boundary_fault "$target" "$scenario"
-      fi
-      [[ $(read_state_version) == "$boundary" ]] || fail "fault left unexpected state at $boundary/$scenario"
-      fixture boundary-writes "$state/mesh.db"
-      if [[ $boundary == "$candidate_state_version" ]]; then
-        fixture schema "$state/mesh.db" "$test_root/boundary-final-schema.json"
-      fi
-      rollback_source "$boundary-$scenario"
+      prove_boundary
     done
   done
   restore_test_database
+}
+
+prove_boundary() {
+  local target=$boundary
+  restore_test_database
+  apply_boundary "$boundary" none 0
+  if [[ $scenario == after-commit ]]; then
+    restore_test_database
+    apply_boundary "$boundary" after-commit 86
+  elif [[ $scenario == failure || $scenario == interrupt ]]; then
+    target=$((boundary + 1))
+    [[ $target -le $candidate_state_version ]] || return 0
+    apply_boundary_fault "$target" "$scenario"
+  fi
+  [[ $(read_state_version) == "$boundary" ]] || fail "fault left unexpected state at $boundary/$scenario"
+  fixture boundary-writes "$state/mesh.db"
+  if [[ $boundary == "$candidate_state_version" ]]; then
+    fixture schema "$state/mesh.db" "$test_root/boundary-final-schema.json"
+  fi
+  rollback_source "$boundary-$scenario"
 }
 
 apply_boundary_fault() {
   local target=$1 fault=$2 expected=1
   [[ $fault != interrupt ]] || expected=86
   apply_boundary "$target" "$fault" "$expected"
+}
+
+prove_actual_startup_faults() {
+  [[ -n ${MESH_STARTUP_FAULT_BINARY:-} ]] || return 0
+  fixture startup-identity "$old_binary" "$candidate_binary" "$MESH_STARTUP_FAULT_BINARY"
+  local version side
+  for version in $(seq "$((old_state_version + 1))" "$candidate_state_version"); do
+    for side in before after; do
+      prove_startup_commit_side "$version" "$side"
+    done
+  done
+  restore_test_database
+}
+
+prove_startup_commit_side() {
+  local version=$1 side=$2 mode label expected status wanted
+  for mode in failure interrupt; do
+    restore_test_database
+    label="startup-$version-$side-$mode"
+    expected=1
+    [[ $mode != interrupt ]] || expected=86
+    status=0
+    env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" MESH_STARTUP_FAULT_VERSION="$version" \
+      MESH_STARTUP_FAULT_SIDE="$side" MESH_STARTUP_FAULT_MODE="$mode" \
+      "$MESH_STARTUP_FAULT_BINARY" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/$label.log" 2>&1 || status=$?
+    [[ $status == "$expected" ]] || fail "actual candidate startup $label exited $status: $(cat "$test_root/$label.log")"
+    grep -Fq "event=armed version=$version side=$side mode=$mode " "$test_root/$label.log" || fail "startup hook did not arm at $label"
+    grep -Fq "event=fired version=$version side=$side mode=$mode " "$test_root/$label.log" || fail "startup hook did not fire at $label"
+    grep -F 'mesh startup commit hook ' "$test_root/$label.log" >&2
+    wanted=$version
+    [[ $side != before ]] || wanted=$((version - 1))
+    boundary=$(read_state_version)
+    [[ $boundary == "$wanted" ]] || fail "actual startup $label left state $boundary, expected $wanted"
+    scenario=$label
+    fixture persistent-snapshot "$state" "$test_root/$label.persist.json"
+    rollback_source "$label" "$MESH_STARTUP_FAULT_BINARY"
+  done
 }
 
 mkdir -p "$state" "$config"
@@ -393,12 +467,15 @@ candidate_worker_protocol=$(build_field "$candidate_binary" workerProtocol 0)
   fail 'candidate did not report release compatibility metadata'
 [[ $candidate_state_version -ge $old_state_version ]] || fail 'candidate schema predates source schema'
 prove_boundaries
+prove_actual_startup_faults
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$candidate_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/candidate.log" 2>&1 &
 candidate_daemon=$!
 wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate daemon did not open retained state: $(cat "$test_root/candidate.log")"
 fixture schema "$state/mesh.db" "$test_root/candidate-final-schema.json"
 cmp -s "$test_root/boundary-final-schema.json" "$test_root/candidate-final-schema.json" || fail 'boundary driver schema/history differs from actual candidate startup'
 fixture candidate-writes "$state" || fail 'candidate representative writes failed'
+"$boundary_tool" -database "$state/mesh.db" -version "$candidate_state_version" -write-cache || fail 'candidate cache writes failed'
+fixture verify-cache "$state/mesh.db"
 candidate_written_state=$(read_state_version)
 [[ $candidate_written_state == "$candidate_state_version" ]] || fail 'candidate database schema differs from its reported state version'
 mesh "$candidate_binary" ls --daemon >"$test_root/candidate-live.inventory.out" 2>"$test_root/candidate-live.inventory.err" || fail 'candidate live inventory command failed'
@@ -446,21 +523,13 @@ exec 5>&-
 wait_for_exit "$client" || fail 'restart client did not detach'
 wait "$client" 2>/dev/null || true
 client=''
-stop_daemon "$candidate_daemon" "$candidate_binary"
+kill -KILL "$candidate_daemon"
+wait "$candidate_daemon" 2>/dev/null || true
 candidate_daemon=''
+rm -f -- "$state/daemon.sock"
 boundary=$candidate_written_state
 scenario=candidate-writes
 rollback_source "$boundary-$scenario"
-# Reopen source once more to inspect representative writes through its handlers.
-env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/rollback-final.log" 2>&1 &
-old_daemon=$!
-wait_for_daemon "$old_binary" "$old_daemon" || fail 'source final rollback restart failed'
-fixture verify-writes "$state" || fail 'source could not read candidate persistent settings and service'
-mesh "$old_binary" kill "$session" >/dev/null
-shell_pid=''
-worker_pid=''
-stop_daemon "$old_daemon" "$old_binary"
-old_daemon=''
 
 from_digest=$(sha256sum "$old_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$old_binary" | awk '{print $1}')
 to_digest=$(sha256sum "$candidate_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$candidate_binary" | awk '{print $1}')
@@ -516,4 +585,5 @@ digest = hashlib.sha256(contents).hexdigest()
 (Path(output) / "rollback" / (digest + ".rollback.json")).write_bytes(contents)
 print("rollback proof " + digest, file=sys.stderr)
 PYROLLBACK
+"$boundary_tool" -verify-proofs "$output_directory" || fail 'generated rollback proof did not verify'
 printf '%s\n' "$proof_digest"

@@ -32,6 +32,9 @@ type RollbackBoundary struct {
 
 // VerifyRollbackProof binds complete rollback evidence to a verified forward receipt.
 func VerifyRollbackProof(data []byte, digest string, forward []byte, transition Transition, compatibility Compatibility) (RollbackProof, error) {
+	if !supportedPlatform(transition.Platform) || !validDigest(transition.FromDigest) || !validDigest(transition.ToDigest) {
+		return RollbackProof{}, errors.New("release: rollback transition has an invalid platform or executable digest")
+	}
 	actual := sha256.Sum256(data)
 	if !validDigest(digest) || hex.EncodeToString(actual[:]) != digest {
 		return RollbackProof{}, errors.New("release: rollback proof SHA-256 differs from its reference")

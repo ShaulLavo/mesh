@@ -32,7 +32,9 @@ from process_tree import Kernel, Unsupported  # noqa: E402
 # Packaging builds release archives; name observation crosses real freshness windows.
 # Large app transfers also sync hundreds of chunks to disk. These need the
 # slow budget independently of ordinary session tests.
-SLOW_TESTS = frozenset({"packaging_contract.sh", "name_observation.sh", "temporary_app_size.sh", "copy_files.sh"})
+# Release transitions build native fixtures and run complete rollback matrices.
+SLOW_TESTS = frozenset({"packaging_contract.sh", "name_observation.sh", "temporary_app_size.sh", "copy_files.sh",
+                        "release_transition_checkpoint.sh"})
 GO_PATHS = ("GOROOT", "GOCACHE", "GOMODCACHE")
 # Module downloads need the caller's network policy; loopback fixtures do not.
 GO_POLICY = ("GOPROXY", "GONOSUMDB", "GONOPROXY", "GOPRIVATE", "GOFLAGS", "GOINSECURE", "GOSUMDB")
