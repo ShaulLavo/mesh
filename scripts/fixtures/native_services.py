@@ -181,7 +181,9 @@ def positive_control(root, evidence):
 
 
 def child(marker, token):
-    Path(marker).write_text(json.dumps({"pid": os.getpid(), "token": token}))
+    temporary = Path(marker).with_suffix(".tmp")
+    temporary.write_text(json.dumps({"pid": os.getpid(), "token": token}))
+    temporary.replace(marker)
     # A fixed native executable supplies the image control on interpreter-based
     # macOS installations whose Python launcher execs a different framework file.
     os.execv("/bin/sleep", ["/bin/sleep", "60"])

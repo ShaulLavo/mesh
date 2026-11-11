@@ -59,11 +59,11 @@ class Units:
     def register(self, role, path):
         manager = self.managers[role]
         manager.plist = path
-        self.registered.append(role)
         if manager.system == "Darwin":
             data = plistlib.loads(path.read_bytes())
             data["EnvironmentVariables"] = self.environment
             path.write_bytes(plistlib.dumps(data))
+            self.registered.append(role)
             return
         runtime = Path(manager.environment["XDG_RUNTIME_DIR"]) / "systemd" / "user"
         link = runtime / (manager.label + ".service")
@@ -71,6 +71,7 @@ class Units:
         if link.exists() or link.is_symlink() or dropin.exists():
             raise RuntimeError("refusing to overwrite existing native service configuration")
         # Track each registration before invoking the manager or writing files.
+        self.registered.append(role)
         self.links.append((link, path))
         self.dropins.append(dropin)
         dropin.mkdir(parents=True)

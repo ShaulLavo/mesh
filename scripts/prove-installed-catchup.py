@@ -84,7 +84,8 @@ def inspect_pair(host, pair, root):
                                 capture_output=True, text=True, timeout=10, check=True)
         build = json.loads(result.stdout)
         expected = release["artifact"]["binarySha256"]
-        if build["version"] != host[role] or build["digest"] != expected or build["modified"]:
+        if (build["version"] != host[role] or build["digest"] != expected or build["modified"]
+                or build["platform"] != release["artifact"]["platform"]):
             raise RuntimeError("actual published executable reports a different baseline identity")
         builds[role] = {"build": build, "manifestSha256": release["manifestSha256"], "artifact": release["artifact"]}
     return {"host": host["name"], "helperRunning": host["helperRunning"], "releases": builds,

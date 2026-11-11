@@ -127,7 +127,8 @@ class FleetBaselinesTest(unittest.TestCase):
         self.assertEqual(observed, [("pc", "v0.1.249", "v0.1.196", False), ("pi", "v0.1.255", "v0.1.230", True),
                                     ("vps", "v0.1.255", "v0.1.196", True), ("mac", "v0.1.257", "v0.1.196", True)])
         with self.assertRaisesRegex(RuntimeError, "PR-source label cannot replace"):
-            fleet_baselines.first_updater(fixture)
+            fleet_baselines.first_updater(fixture | {"firstPublishedUpdater": None})
+        self.assertEqual(fleet_baselines.first_updater(fixture | {"firstPublishedUpdater": "v0.1.999"}), "v0.1.999")
 
     def test_acquisition_checks_both_hashes_and_inventory_binding(self):
         result = fleet_baselines.acquire(self.root, "v0.1.249", self.platform, self.artifact["binarySha256"], self.fetch)

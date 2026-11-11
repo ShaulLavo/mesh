@@ -42,6 +42,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, interrupted)
     with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         server.timeout = 0.1
-        Path(sys.argv[1]).write_text(json.dumps({"pid": os.getpid(), "port": server.server_port}))
+        marker = Path(sys.argv[1])
+        temporary = marker.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"pid": os.getpid(), "port": server.server_port}))
+        temporary.replace(marker)
         while not STOP.is_set():
             server.handle_request()
