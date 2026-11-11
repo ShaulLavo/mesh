@@ -589,15 +589,16 @@ func (u *HostUpdater) discoverOrdered(ctx context.Context, state HostUpdate, pol
 	if err != nil {
 		return u.attention(ctx, state, "failed edge", err)
 	}
-	if limit != nil && !newerHostVersion(limit.Version, current.Version) {
-		return u.wait(ctx, state, "predecessors have no newer soaked release")
-	}
 	step, selected, err := hostLimitedDiscoveryPass(ctx, current, source, cursor, documents, limit)
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
 	if err := u.saveCursor(ctx, step.Cursor); err != nil {
 		return err
+	}
+	if limit != nil && !newerHostVersion(limit.Version, current.Version) && len(selected) > 0 {
+		state.NextAttempt = u.now().Add(hostCheckDelay())
+		return u.wait(ctx, state, "predecessors have no newer soaked release")
 	}
 	if step.Next == nil {
 		state.Phase, state.Problem = HostDiscovering, nil

@@ -67,6 +67,11 @@ first ownership publication may restore that same reservation only while no
 journal was accepted. Missing ownership beside an accepted matching journal
 requires attention and cannot issue a grant.
 
+Settling a completed intent records a digest of its exact owned work before
+clearing that work. If the daemon stops before the separate ownership clear,
+reconciliation recognizes the settled work and repeats ledger publication
+idempotently. This settlement marker authorizes no stage, retry or grant.
+
 ## Adoption confirmation
 
 Before committed-journal deduplication or a manual ledger append, reconciliation
