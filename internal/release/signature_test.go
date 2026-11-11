@@ -2,11 +2,16 @@ package release
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 )
+
+// Recorded from cli/cli commit 233b470d3a189e89cf6fa69624e11c3fa9387d81,
+// pkg/cmd/attestation/test/data/reusable-workflow-attestation.sigstore.json.
 
 const recordedSubject = "49a3aa6075e0f49f82843e74b5baa614ad2a588e6675612bf108a0a008c5ac25"
 
@@ -165,4 +170,119 @@ func corruptLeafCertificate(bundle map[string]any) {
 	}
 	chain := material["x509CertificateChain"].(map[string]any)
 	chain["certificates"].([]any)[0].(map[string]any)["rawBytes"] = "AAAA"
+}
+
+func TestSignedMetadataBindsManifestArchiveAndPage(t *testing.T) {
+	fixture := newSigningFixture(t)
+	metadata := testUpdateMetadata()
+	manifest := testManifest()
+	metadata.Version = manifest.Version
+	metadata.Page.Tag = metadata.Version
+	page := []byte(`{"priorAnchors":[]}`)
+	archive := []byte("archive bytes")
+	archiveHash := sha256.Sum256(archive)
+	manifest.Artifacts[0].SHA256 = hex.EncodeToString(archiveHash[:])
+	frozen, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestHash, pageHash := sha256.Sum256(frozen), sha256.Sum256(page)
+	metadata.Manifest, metadata.Page.SHA256 = hex.EncodeToString(manifestHash[:]), hex.EncodeToString(pageHash[:])
+	contents, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := fixture.envelope(t, contents, archive)
+	if _, err := VerifyMetadata(fixture.trust, contents, envelope, frozen, page); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyArtifactSignature(fixture.trust, manifest.Artifacts[0].SHA256, envelope); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyMetadata(fixture.trust, contents, envelope, append(frozen, ' '), page); err == nil {
+		t.Fatal("accepted altered manifest")
+	}
+	if _, err := VerifyMetadata(fixture.trust, contents, envelope, frozen, append(page, ' ')); err == nil {
+		t.Fatal("accepted altered page")
+	}
+	if _, err := VerifyMetadata(fixture.trust, append(contents, ' '), envelope, frozen, page); err == nil {
+		t.Fatal("accepted altered metadata")
+	}
+	if err := VerifySignature(fixture.trust, []byte("changed archive"), envelope); err == nil {
+		t.Fatal("accepted altered archive")
+	}
+}
+
+func TestSignatureRejectsAnotherCAAndLogKeys(t *testing.T) {
+	fixture, other := newSigningFixture(t), newSigningFixture(t)
+	subject := []byte("test artifact")
+	envelope := fixture.envelope(t, subject)
+	for _, field := range []string{"certificateAuthorities", "ctlogs", "tlogs"} {
+		assertWrongTrustRejected(t, fixture.trust, other.trust, field, subject, envelope)
+	}
+}
+
+func assertWrongTrustRejected(t *testing.T, trust, other TrustRoot, field string, subject, envelope []byte) {
+	t.Helper()
+	var original, wrong map[string]any
+	if err := json.Unmarshal(trust.Trusted, &original); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(other.Trusted, &wrong); err != nil {
+		t.Fatal(err)
+	}
+	original[field] = wrong[field]
+	contents, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust.Trusted = contents
+	if err := VerifySignature(trust, subject, envelope); err == nil {
+		t.Fatalf("accepted wrong %s", field)
+	}
+}
+
+func TestSignatureRejectsInvalidObserverTimeAndLogProof(t *testing.T) {
+	fixture := newSigningFixture(t)
+	subject := []byte("timestamped artifact")
+	for _, change := range []func(map[string]any){corruptObserverTime, corruptInclusionProof} {
+		assertGeneratedEvidenceRejected(t, fixture, subject, change)
+	}
+}
+
+func assertGeneratedEvidenceRejected(t *testing.T, fixture *signingFixture, subject []byte, change func(map[string]any)) {
+	t.Helper()
+	var envelope SignatureEnvelope
+	if err := json.Unmarshal(fixture.envelope(t, subject), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(envelope.Signatures[0].Bundle, &raw); err != nil {
+		t.Fatal(err)
+	}
+	change(raw)
+	contents, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := WrapBundle(contents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySignature(fixture.trust, subject, wrapped); err == nil {
+		t.Fatal("accepted invalid observer or log proof")
+	}
+}
+
+func corruptObserverTime(bundle map[string]any) {
+	material := bundle["verificationMaterial"].(map[string]any)
+	entry := material["tlogEntries"].([]any)[0].(map[string]any)
+	entry["integratedTime"] = "1"
+}
+
+func corruptInclusionProof(bundle map[string]any) {
+	material := bundle["verificationMaterial"].(map[string]any)
+	entry := material["tlogEntries"].([]any)[0].(map[string]any)
+	proof := entry["inclusionProof"].(map[string]any)
+	proof["rootHash"] = "AAAA"
 }

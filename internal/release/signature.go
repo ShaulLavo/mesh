@@ -118,6 +118,9 @@ func verifyBundle(material root.TrustedMaterial, identity SignerIdentity, digest
 }
 
 func (identity SignerIdentity) policy() (verify.CertificateIdentity, error) {
+	if identity.Issuer == "" || identity.Workflow == "" || identity.Repository == "" || identity.RepositoryID == "" || identity.OwnerID == "" || identity.Ref == "" || identity.Runner == "" {
+		return verify.CertificateIdentity{}, errors.New("release: incomplete signer identity")
+	}
 	san, err := verify.NewSANMatcher(identity.Workflow, "")
 	if err != nil {
 		return verify.CertificateIdentity{}, fmt.Errorf("release: workflow identity: %w", err)

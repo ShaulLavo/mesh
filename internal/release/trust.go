@@ -70,6 +70,9 @@ func LoadTrustRoot(cache string) (TrustRoot, error) {
 }
 
 func loadTrustRoot(trust TrustRoot, cache string) (TrustRoot, error) {
+	if cache == "" {
+		return trust, nil
+	}
 	files, err := filepath.Glob(filepath.Join(cache, "material", "*.json"))
 	if err != nil {
 		return trust, fmt.Errorf("release: locate trust history: %w", err)
@@ -89,6 +92,7 @@ func loadTrustRoot(trust TrustRoot, cache string) (TrustRoot, error) {
 }
 
 type TrustRefreshBudget struct {
+	// Eight requests leave room for the final root probe and top-level metadata.
 	Documents int
 	Duration  time.Duration
 }
@@ -100,7 +104,7 @@ func RefreshTrust(ctx context.Context, cache string, budget TrustRefreshBudget) 
 }
 
 func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget TrustRefreshBudget, client *http.Client) (TrustRoot, error) {
-	if budget.Documents < 1 || budget.Documents > 64 || budget.Duration <= 0 || budget.Duration > 30*time.Second {
+	if budget.Documents < 8 || budget.Documents > 64 || budget.Duration <= 0 || budget.Duration > 30*time.Second {
 		return trust, errors.New("release: invalid trust refresh budget")
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget.Duration)

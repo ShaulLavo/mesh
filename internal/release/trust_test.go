@@ -127,14 +127,14 @@ func fixtureTargets(t *testing.T, fixture *fixtureTransport, signer signature.Si
 }
 
 func TestTrustRefreshResumesAuthenticatedRotationFromExpiredBootstrap(t *testing.T) {
-	trust, fixture := tufFixture(t, 5, recordedTrust().Trusted, time.Now().Add(time.Hour))
+	trust, fixture := tufFixture(t, 10, recordedTrust().Trusted, time.Now().Add(time.Hour))
 	cache := t.TempDir()
 	client := &http.Client{Transport: fixture}
-	_, err := refreshTrust(context.Background(), trust, cache, TrustRefreshBudget{Documents: 2, Duration: time.Second}, client)
+	_, err := refreshTrust(context.Background(), trust, cache, TrustRefreshBudget{Documents: 8, Duration: time.Second}, client)
 	if !errors.Is(err, ErrTrustRefreshBudget) {
 		t.Fatalf("want resumable budget error, got %v", err)
 	}
-	if _, err := readTrustFile(filepath.Join(cache, "roots", "3.root.json")); err != nil {
+	if _, err := readTrustFile(filepath.Join(cache, "roots", "9.root.json")); err != nil {
 		t.Fatal(err)
 	}
 	fixture.requests = nil
@@ -142,7 +142,7 @@ func TestTrustRefreshResumesAuthenticatedRotationFromExpiredBootstrap(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fixture.requests[0] != "/4.root.json" {
+	if fixture.requests[0] != "/10.root.json" {
 		t.Fatalf("repeated completed rotation: %v", fixture.requests)
 	}
 	if len(refreshed.history) != 1 {
@@ -216,5 +216,20 @@ func TestTrustFetcherBoundsAndOrigin(t *testing.T) {
 	}
 	if _, err := fetch.DownloadFile(tuf.DefaultMirror+"/oversized", 10, 0); err == nil || !strings.Contains(err.Error(), "oversized") {
 		t.Fatalf("accepted oversized trust document: %v", err)
+	}
+}
+
+func TestUnsetTrustCacheUsesOnlyEmbeddedMaterial(t *testing.T) {
+	cache := t.TempDir()
+	if err := persistTrustMaterial(cache, recordedTrust().Trusted); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(cache)
+	trust, err := LoadTrustRoot("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(trust.history) != 0 {
+		t.Fatal("loaded trust from the working directory")
 	}
 }

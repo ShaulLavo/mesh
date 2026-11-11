@@ -160,6 +160,15 @@ check_source_contract() {
   contains .github/workflows/release.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
   contains .github/workflows/release.yml 'scripts/prepare-release-baselines.sh'
   contains .github/workflows/release.yml 'scripts/generate-release-manifest.sh'
+  contains .github/workflows/release.yml 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4'
+  contains .github/workflows/release.yml 'id-token: write'
+  contains .github/workflows/release.yml 'attestations: write'
+  contains .github/workflows/release.yml 'artifact-metadata: write'
+  contains .github/workflows/release.yml 'gh attestation verify'
+  contains .github/workflows/release.yml '--source-ref refs/heads/main --deny-self-hosted-runners'
+  contains .github/workflows/release.yml 'go run ./cmd/mesh-release-sign wrap'
+  contains .github/workflows/release.yml 'go run ./cmd/mesh-release-sign verify'
+  contains .github/workflows/release.yml 'dist/mesh-release.json dist/mesh-update.sig.json'
   contains .github/workflows/release.yml 'scripts/finalize-release.sh'
   contains .github/workflows/release.yml 'Reconcile published Cask'
   contains scripts/finalize-release.sh 'gh release edit "$version" --draft=false --latest'
@@ -174,6 +183,7 @@ check_source_contract() {
   bash scripts/test-finalize-release.sh
   scripts/test-prepare-release-baselines.sh
   python3 scripts/test-release-transition.py
+  python3 scripts/test-release-signing.py
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
   contains scripts/verify.sh 'scripts/verify_runner.py'
