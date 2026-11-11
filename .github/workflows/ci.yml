@@ -46,6 +46,7 @@ jobs:
           filters: |
             updates:
               - 'cmd/**'
+              - 'internal/cli/**'
               - 'internal/release/**'
               - 'internal/update*/**'
               - 'internal/storage/**'
