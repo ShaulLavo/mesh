@@ -194,7 +194,9 @@ exactly like the CLI does.
 Keeping enrolled machines current is Approved in
 [14: fleet auto updates](14-fleet-auto-updates.md). It extends T26 with automatic
 release installation, verified catch-up steps, deployment configuration delivery
-and visible fleet drift.
+and visible fleet drift. Its binary rollout is replaced by
+[17: automatic updates](17-automatic-updates.md), Approved 2026-11-10: each
+host updates itself, and release CI refuses a release that strands an older one.
 
 Previewing a worktree from a short private link is Approved for later in
 [15: worktree previews](15-worktree-previews.md). It combines T28's on-demand
