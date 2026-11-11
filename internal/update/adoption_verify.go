@@ -217,7 +217,7 @@ func checkAdoptionHealth(operation Adoption, observed updateinstall.Health, inst
 	return nil
 }
 
-func (s *Store) confirmAdoption(ctx context.Context, operation Adoption, status updateinstall.Status, probe updateinstall.Probe) error {
+func (s *Store) confirmAdoption(ctx context.Context, operation Adoption, status updateinstall.Status, probe updateinstall.Probe, service func(context.Context, updateinstall.Settings) (string, error)) error {
 	unlock, err := s.lockContext(ctx)
 	if err != nil {
 		return err
@@ -228,32 +228,54 @@ func (s *Store) confirmAdoption(ctx context.Context, operation Adoption, status 
 		return err
 	}
 	if envelope.Confirmed {
-		return nil
+		if operation.ID == actual.ID && operation.Pin == actual.Pin {
+			return nil
+		}
+		return errors.New("update: confirmed adoption belongs to another operation")
 	}
 	if !reflect.DeepEqual(operation, actual) || status.Phase != updateinstall.Committed || !reflect.DeepEqual(status.Request, operation.Request) || status.Settings != operation.Settings {
 		return errors.New("update: adoption confirmation differs from the committed transaction")
 	}
-	policy, err := s.hostPolicy()
+	health, err := s.checkAdoptionConfirmation(ctx, operation, status, probe, service)
 	if err != nil {
 		return err
 	}
+	entry := LedgerEntry{Request: operation.ID, Generation: operation.Request.Generation, Version: operation.Version, Metadata: operation.Pin, Binary: health.Build.Digest, From: operation.Host.Health.Build.Digest, Origin: "adoption", CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: len(status.Original.Workers)}
+	return s.publishAdoptionCommit(envelope, operation, entry)
+}
+
+func (s *Store) checkAdoptionConfirmation(ctx context.Context, operation Adoption, status updateinstall.Status, probe updateinstall.Probe, service func(context.Context, updateinstall.Settings) (string, error)) (updateinstall.Health, error) {
+	policy, err := s.hostPolicy()
+	if err != nil {
+		return updateinstall.Health{}, err
+	}
 	if !reflect.DeepEqual(policy, operation.Policy) {
-		return errors.New("update: adoption seeded policy changed before confirmation")
+		return updateinstall.Health{}, errors.New("update: adoption seeded policy changed before confirmation")
 	}
 	if err := checkAdoptionFiles(operation.Host.Preserved); err != nil {
-		return err
+		return updateinstall.Health{}, err
 	}
 	if err := checkAdoptionIdentity(operation.Settings.StateDir, operation.Host.Health.HostID); err != nil {
-		return err
+		return updateinstall.Health{}, err
+	}
+	definition, err := service(ctx, operation.Settings)
+	if err != nil {
+		return updateinstall.Health{}, err
+	}
+	if definition != operation.Host.Service {
+		return updateinstall.Health{}, errors.New("update: adopted daemon service configuration changed")
 	}
 	health, err := probe(ctx)
 	if err != nil {
-		return hostError(err)
+		return health, hostError(err)
 	}
 	if err := checkAdoptionHealth(operation, health, true); err != nil {
-		return err
+		return health, err
 	}
-	entry := LedgerEntry{Request: operation.ID, Generation: operation.Request.Generation, Version: operation.Version, Metadata: operation.Pin, Binary: health.Build.Digest, From: operation.Host.Health.Build.Digest, Origin: "adoption", CommittedAt: status.UpdatedAt, Workers: len(operation.Host.Health.Workers), WorkersPreserved: len(operation.Host.Health.Workers)}
+	return health, checkAdoptionStageWorkers(status.Original.Workers, health.Workers)
+}
+
+func (s *Store) publishAdoptionCommit(envelope HostAdoption, operation Adoption, entry LedgerEntry) error {
 	if err := s.appendLedger(entry); err != nil {
 		return err
 	}
@@ -262,10 +284,26 @@ func (s *Store) confirmAdoption(ctx context.Context, operation Adoption, status 
 		return err
 	}
 	entry.Seq = saved.Seq
+	var actual LedgerEntry
+	if err := s.readAuthority(ledgerName(entry.Seq), &actual); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(actual, entry) {
+		return errors.New("update: adoption ledger entry belongs to another origin or commit")
+	}
 	envelope.Adopted, envelope.Confirmed = &entry, true
 	operation.Phase, operation.Problem = AdoptionComplete, ""
 	if err := encodeAdoption(&envelope, operation); err != nil {
 		return err
 	}
 	return s.writeAuthority("host-adoption.json", envelope)
+}
+
+func checkAdoptionStageWorkers(original, current []updateinstall.Worker) error {
+	for _, worker := range original {
+		if !hostWorkerPreserved(worker, current) {
+			return fmt.Errorf("update: staged adoption worker %s was not preserved", worker.ID)
+		}
+	}
+	return nil
 }

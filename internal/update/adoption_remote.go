@@ -74,6 +74,9 @@ func AdoptionRemoteCommand(operation Adoption, remote AdoptionRemote) (string, e
 	if err := operation.Request.Manifest.Validate(); err != nil {
 		return "", hostError(err)
 	}
+	if operation.Version != operation.Request.Manifest.Version {
+		return "", errors.New("update: remote adoption release differs from pinned manifest")
+	}
 	artifact, err := operation.Request.Manifest.Artifact(remote.Host.Platform)
 	if err != nil {
 		return "", hostError(err)

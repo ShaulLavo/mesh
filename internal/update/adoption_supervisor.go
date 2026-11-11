@@ -34,6 +34,7 @@ type AdoptionSupervisor struct {
 	Side      string
 	Build     release.Build
 	Inspect   func(context.Context, string) (updatebootstrap.Observation, error)
+	Service   func(context.Context, updateinstall.Settings) (string, error)
 	Caller    Caller
 	Promote   func(context.Context, Adoption, AdoptionRelease) (updateinstall.HelperInstallation, error)
 	Helper    func(context.Context, Adoption) (int, error)
@@ -51,13 +52,13 @@ func (u *AdoptionSupervisor) now() time.Time {
 }
 
 func NewLocalAdoptionSupervisor(stateDir, side string, documents HostDocuments) (*AdoptionSupervisor, error) {
-	store, err := OpenStore(stateDir)
-	if err != nil {
-		return nil, err
-	}
 	host, key, err := identity.LoadPrivate(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("update: adoption requires the daemon account identity: %w", err)
+	}
+	store, err := OpenStore(stateDir)
+	if err != nil {
+		return nil, err
 	}
 	client := Client{ID: host.ID, Key: key}
 	u := &AdoptionSupervisor{Store: store, Documents: documents, Side: side, Build: release.Current(), Inspect: updatebootstrap.Inspect, Caller: client}
@@ -70,6 +71,7 @@ func NewLocalAdoptionSupervisor(stateDir, side string, documents HostDocuments) 
 		return updateinstall.PromoteHelper(ctx, cfg, pinned.Manifest, artifact.BinarySHA256)
 	}
 	u.Helper = inspectAdoptionHelper
+	u.Service = adoptionServiceDigest
 	u.Engine = func(operation Adoption) (*updateinstall.Engine, error) {
 		cfg := operation.Settings.Config()
 		cfg.Client, cfg.Probe = documents.Client, updatebootstrap.Probe(stateDir)
@@ -101,7 +103,7 @@ func inspectAdoptionHelper(ctx context.Context, operation Adoption) (int, error)
 }
 
 func (u *AdoptionSupervisor) Start(ctx context.Context, start AdoptionStart) error {
-	if u.Store == nil || u.Inspect == nil || u.Promote == nil {
+	if u.Store == nil || u.Inspect == nil || u.Promote == nil || u.Service == nil {
 		return errors.New("update: adoption supervisor is incomplete")
 	}
 	if found, err := u.existingStart(ctx, start); found || err != nil {
@@ -136,6 +138,9 @@ func (u *AdoptionSupervisor) existingStart(ctx context.Context, start AdoptionSt
 		return true, err
 	}
 	if start.ID != "" && start.ID != prior.ID || start.Pin != "" && start.Pin != prior.Pin || start.Version != prior.Version {
+		if prior.Phase == AdoptionRolledBack || prior.Phase == AdoptionAttention {
+			return false, canReplaceAdoption(prior, start.Version)
+		}
 		return true, errors.New("update: adoption is already pinned to another operation or release")
 	}
 	return true, u.Resume(ctx)
@@ -160,6 +165,10 @@ func (u *AdoptionSupervisor) prepare(ctx context.Context, start AdoptionStart, p
 	if err != nil {
 		return Adoption{}, 0, err
 	}
+	service, err := u.Service(ctx, settings)
+	if err != nil {
+		return Adoption{}, 0, err
+	}
 	files, err := SnapshotAdoptionFiles(start.Files)
 	if err != nil {
 		return Adoption{}, 0, err
@@ -175,12 +184,17 @@ func (u *AdoptionSupervisor) prepare(ctx context.Context, start AdoptionStart, p
 		}
 	}
 	start.Policy.Schema, start.Policy.Revision = 1, policy.Revision+1
-	operation := Adoption{Schema: 1, ID: start.ID, Pin: pinned.Pin, Signature: pinned.Signature, Version: start.Version, Host: AdoptionHost{Health: observed.Health, Preserved: files}, Policy: start.Policy, Require: start.Require, Notice: start.Notice, Remotes: start.Remotes, Phase: AdoptionRecorded, Settings: settings,
+	operation := Adoption{Schema: 1, ID: start.ID, Pin: pinned.Pin, Signature: pinned.Signature, Version: start.Version, Host: AdoptionHost{Health: observed.Health, Preserved: files, Service: service}, Policy: start.Policy, Require: start.Require, Notice: start.Notice, Remotes: start.Remotes, Phase: AdoptionRecorded, Settings: settings,
 		Request: updateinstall.Request{ID: start.ID, TargetID: observed.Health.HostID, Generation: generation, Manifest: pinned.Manifest, Current: observed.Health.Build}}
 	return operation, policy.Revision, operation.validate()
 }
 
 func (u *AdoptionSupervisor) Resume(ctx context.Context) error {
+	unlock, err := u.Store.lockAdoptionPass(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	envelope, operation, err := u.Store.AdoptionStatus(ctx)
 	if err != nil {
 		return err
@@ -225,7 +239,17 @@ func (u *AdoptionSupervisor) verifyResume(ctx context.Context, operation Adoptio
 	if err := pinned.verifySource(ctx, u.Documents, operation.Host.Health); err != nil {
 		return pinned, err
 	}
-	return pinned, checkAdoptionFiles(operation.Host.Preserved)
+	if err := checkAdoptionFiles(operation.Host.Preserved); err != nil {
+		return pinned, err
+	}
+	service, err := u.Service(ctx, operation.Settings)
+	if err != nil {
+		return pinned, err
+	}
+	if service != operation.Host.Service {
+		return pinned, errors.New("update: daemon service definition, arguments or environment changed")
+	}
+	return pinned, nil
 }
 
 func (u *AdoptionSupervisor) promote(ctx context.Context, operation Adoption, pinned AdoptionRelease) error {
@@ -299,6 +323,7 @@ func (u *AdoptionSupervisor) deliverNotice(ctx context.Context, operation Adopti
 	next, notice := operation, *operation.Notice
 	notice.DeliveredAt = u.now()
 	next.Notice, next.Problem, next.Failures = &notice, "", 0
+	next.NextAttempt = notice.DeliveredAt.Add(notice.Lead)
 	return u.Store.saveAdoption(ctx, operation, next)
 }
 

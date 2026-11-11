@@ -206,7 +206,7 @@ func adoptionPreservedFiles(stateDir string) ([]string, error) {
 		return nil, err
 	}
 	directory := filepath.Dir(config)
-	return []string{config, filepath.Join(directory, "fleet.json"), filepath.Join(directory, "domains.json"), filepath.Join(stateDir, "authorized_keys"), filepath.Join(stateDir, "updates", "administrators.json")}, nil
+	return []string{config, filepath.Join(directory, "fleet.json"), filepath.Join(directory, "domains.json"), filepath.Join(stateDir, "authorized_keys"), filepath.Join(stateDir, "access", "scopes.json"), filepath.Join(stateDir, "updates", "administrators.json")}, nil
 }
 
 func writeAdoptionStatus(ctx context.Context, output io.Writer, structured bool) error {
@@ -248,9 +248,12 @@ func resumeAdoption(ctx context.Context, stateDir string) (bool, error) {
 	if err != nil {
 		return true, adoptionError(err)
 	}
-	envelope, _, err := store.AdoptionStatus(ctx)
+	envelope, operation, err := store.AdoptionStatus(ctx)
 	if err != nil || envelope.Confirmed {
 		return false, adoptionError(err)
+	}
+	if operation.Phase == update.AdoptionAttention || operation.Phase == update.AdoptionRolledBack || time.Now().Before(operation.NextAttempt) {
+		return true, nil
 	}
 	supervisor, err := localAdoptionSupervisor(ctx, stateDir)
 	if err != nil {

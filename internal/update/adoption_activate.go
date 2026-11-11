@@ -169,5 +169,5 @@ func (u *AdoptionSupervisor) confirm(ctx context.Context, operation Adoption) er
 		}
 		return observed.Health, err
 	}
-	return u.Store.confirmAdoption(ctx, operation, status, probe)
+	return u.Store.confirmAdoption(ctx, operation, status, probe, u.Service)
 }

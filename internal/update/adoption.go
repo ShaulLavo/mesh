@@ -10,7 +10,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
+	"golang.org/x/sys/unix"
 )
 
 type AdoptionPhase string
@@ -50,6 +52,7 @@ type Adoption struct {
 type AdoptionHost struct {
 	Health    updateinstall.Health `json:"health"`
 	Preserved map[string]string    `json:"preserved"`
+	Service   string               `json:"service"`
 }
 
 type AdoptionNotice struct {
@@ -75,7 +78,7 @@ func (a Adoption) validate() error {
 	if err := validateHostPolicy(a.Policy); err != nil {
 		return err
 	}
-	if !validAdoptionPhase(a.Phase) || a.Settings.ClientOnly || a.Settings.StateDir == "" {
+	if !validAdoptionPhase(a.Phase) || a.Settings.ClientOnly || a.Settings.StateDir == "" || !hostDigest(a.Host.Service) {
 		return errors.New("update: invalid adoption phase or daemon installation")
 	}
 	if a.Request.ID != a.ID || a.Request.TargetID != a.Host.Health.HostID || a.Request.Generation == 0 || a.Request.Automatic != nil || !sameHostIdentity(a.Request.Current, a.Host.Health.Build) || a.Version != a.Request.Manifest.Version {
@@ -161,6 +164,30 @@ func (s *Store) AdoptionStatus(ctx context.Context) (HostAdoption, Adoption, err
 	return s.adoption()
 }
 
+func (s *Store) lockAdoptionPass(ctx context.Context) (func(), error) {
+	dir, err := s.authorityDirectory()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dir.Close() }()
+	fd, err := unix.Openat(int(dir.Fd()), "adoption.lock", unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("update: open adoption pass lock: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), "adoption.lock")
+	if err := privateAuthority(file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	bound, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	if err := waitAuthority(bound, file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() { _ = file.Close() }, nil
+}
+
 func encodeAdoption(envelope *HostAdoption, operation Adoption) error {
 	if err := operation.validate(); err != nil {
 		return err
@@ -184,9 +211,11 @@ func (s *Store) beginAdoption(ctx context.Context, operation Adoption, expectedP
 		if prior.ID == operation.ID && prior.Pin == operation.Pin {
 			return nil
 		}
-		return errors.New("update: another adoption already owns this installation")
+		if err := canReplaceAdoption(prior, operation.Version); err != nil {
+			return err
+		}
 	}
-	if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	policy, err := s.hostPolicy()
@@ -247,7 +276,32 @@ func (s *Store) saveAdoption(ctx context.Context, previous, operation Adoption) 
 	if err := encodeAdoption(&envelope, operation); err != nil {
 		return err
 	}
+	if operation.Phase == AdoptionRolledBack {
+		if err := s.failedAdoptionEdge(operation); err != nil {
+			return err
+		}
+	}
 	return s.writeAuthority("host-adoption.json", envelope)
+}
+
+func canReplaceAdoption(prior Adoption, version string) error {
+	if prior.Phase != AdoptionRolledBack && prior.Phase != AdoptionAttention {
+		return errors.New("update: another adoption already owns this installation")
+	}
+	order, err := release.CompareVersions(version, prior.Version)
+	if err != nil || order <= 0 {
+		return errors.New("update: restarting failed adoption requires a newer pinned release")
+	}
+	return nil
+}
+
+func (s *Store) failedAdoptionEdge(operation Adoption) error {
+	artifact, err := operation.Request.Manifest.Artifact(operation.Request.Current.Platform)
+	if err != nil {
+		return hostError(err)
+	}
+	failed := FailedEdge{Edge: Edge{operation.Request.Current.Digest, artifact.BinarySHA256, operation.Request.Current.Platform}, Version: operation.Version, Phase: updateinstall.RolledBack, Problem: operation.Problem, At: time.Now().UTC()}
+	return s.writeAuthority(failedEdgeName(failed.Edge), failed)
 }
 
 func AdoptionMilestones(envelope HostAdoption, operation, pin string) error {
