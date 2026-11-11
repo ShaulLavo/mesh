@@ -92,6 +92,7 @@ class CutoverEventsTest(unittest.TestCase):
         host.check_retained = lambda: None
         host.prove_loaded_image = lambda target: None
         host.check_io = lambda: None
+        host.await_helper = lambda target: None
         return host
 
     def close(self):
@@ -190,6 +191,14 @@ class CutoverEventsTest(unittest.TestCase):
         self.assertTrue(self.finished.is_set())
         rows = [json.loads(line) for line in (self.root / "events.jsonl").read_text().splitlines()]
         self.assertEqual(rows, self.scope["EVENTS"])
+
+    def test_cutover_waits_for_postcommit_helper_restart(self):
+        first, second = self.hosts
+        prior_pid = first.processes["mesh-update-helper.service"].pid
+        first.await_helper = lambda target: self.kickstart(first)
+        self.cutover(first)
+        self.assertNotEqual(first.processes["mesh-update-helper.service"].pid, prior_pid)
+        self.cutover(second)
 
     def test_true_unrelated_installation_change_is_rejected(self):
         target, unrelated = self.hosts
