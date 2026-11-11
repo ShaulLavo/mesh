@@ -31,7 +31,7 @@ func summarizeHostUpdate(status update.HostStatus, build release.Build, installa
 	if discovery := status.Discovery; discovery != nil {
 		summary.Head, summary.Target = summaryRelease(discovery.Head), summaryRelease(discovery.Target)
 		summary.LatestEpoch = discovery.LatestEpoch
-		summary.SourceVerified = discovery.Source.Digest == build.Digest && discovery.Source.Version == build.Version && discovery.Source.Commit == build.Commit && discovery.Source.Platform == build.Platform && !build.Modified
+		summary.SourceVerified = summarySourceMatches(status, build)
 		if discovery.Epoch == discovery.LatestEpoch {
 			summary.Latest = summaryRelease(discovery.Head)
 		}
@@ -47,6 +47,18 @@ func summarizeHostUpdate(status update.HostStatus, build release.Build, installa
 		summary.Last = &protocol.HostUpdateCommit{Version: last.Version, Metadata: last.Metadata, Binary: last.Binary, At: last.CommittedAt}
 	}
 	return summary
+}
+
+func summarySourceMatches(status update.HostStatus, build release.Build) bool {
+	if build.Modified || status.Discovery == nil {
+		return false
+	}
+	source := status.Discovery.Source
+	if source.Digest == build.Digest && source.Version == build.Version && source.Commit == build.Commit && source.Platform == build.Platform {
+		return true
+	}
+	last := status.Last
+	return last != nil && last.Metadata == status.Discovery.Head.Metadata && last.Binary == build.Digest && last.Version == build.Version
 }
 
 func summaryPeerProblem(summary *protocol.HostUpdateSummary, peers []update.HostPeer) {

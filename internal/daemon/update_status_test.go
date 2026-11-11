@@ -21,6 +21,14 @@ func TestHostSummaryCurrentFutureAndUnknown(t *testing.T) {
 	if summary.Latest == nil || summary.Lag == nil || *summary.Lag != 0 || summary.Last == nil || summary.Last.Metadata != observed.Metadata {
 		t.Fatalf("known status lost pins/currentness: %+v", summary)
 	}
+	status.Discovery.Source.Digest = strings.Repeat("c", 64)
+	if matched := summarizeHostUpdate(status, build, "managed"); !matched.SourceVerified || matched.Lag == nil {
+		t.Fatal("exact committed image and head pin were not recognized")
+	}
+	status.Last.Metadata = strings.Repeat("d", 64)
+	if mismatched := summarizeHostUpdate(status, build, "managed"); mismatched.SourceVerified || mismatched.Lag != nil {
+		t.Fatal("another metadata pin supplied currentness")
+	}
 	status.Discovery.LatestEpoch = 2
 	summary = summarizeHostUpdate(status, build, "managed")
 	if summary.Latest != nil || summary.Lag != nil || summary.Head == nil || summary.LatestEpoch != 2 {

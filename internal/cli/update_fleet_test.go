@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -112,6 +113,22 @@ func TestFleetUpdateOverdueOfflineAndRefusal(t *testing.T) {
 	}
 }
 
+func TestFleetUpdateUnknownPolicyAndStaleCheck(t *testing.T) {
+	now := time.Now().UTC()
+	summary := currentFleetSummary(now)
+	old := now.Add(-time.Hour)
+	summary.ObservedAt = &old
+	member := FleetUpdateMember{Build: &release.Build{Version: "v0.1.0", Digest: strings.Repeat("c", 64)}, Update: summary}
+	if classifyFleetUpdate(&member, now) != 1 || member.State != fleetUnknown {
+		t.Fatal("stale check counted current", member)
+	}
+	summary.Mode, summary.Phase, summary.Problem = "", "attention", "authority state unreadable"
+	member.State = ""
+	if classifyFleetUpdate(&member, now) != 1 || member.State != fleetFailed || member.Problem != summary.Problem {
+		t.Fatal("unknown policy was reported as off", member)
+	}
+}
+
 func TestFleetUpdatePlainOutputAndDashboardAttention(t *testing.T) {
 	now := time.Now().UTC()
 	summary := currentFleetSummary(now)
@@ -124,6 +141,10 @@ func TestFleetUpdatePlainOutputAndDashboardAttention(t *testing.T) {
 	}
 	if strings.Contains(out.String(), summary.Problem) || strings.Contains(out.String(), member.Host.ID) || !strings.Contains(out.String(), "needs attention") {
 		t.Fatal(out.String())
+	}
+	out.Reset()
+	if err := printFleetUpdates(&out, FleetUpdateStatus{Members: []FleetUpdateMember{member}}, true, presentationMask(nil)); err != nil || !strings.Contains(out.String(), summary.Problem) {
+		t.Fatal("details lost diagnostics", out.String(), err)
 	}
 	rows := DashboardHostUpdateRows([]DashboardHostView{{Host: DashboardHost{ID: "fixture"}, Build: *member.Build, HostUpdate: summary, Connection: StateReachable}}, now)
 	if len(rows) != 1 || !rows[0].Attention || strings.Contains(fmt.Sprint(rows), summary.Problem) {
@@ -152,6 +173,13 @@ func TestInstallationKindsUseActualPathAndBuild(t *testing.T) {
 	build := release.Build{Version: "v0.1.0"}
 	if updateinstall.InstallationKind("/usr/bin/mesh", build, true) != "package" || updateinstall.InstallationKind("", build, false) != "client" {
 		t.Fatal("package or client counted as managed")
+	}
+	path := filepath.Join(t.TempDir(), "mesh")
+	if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if updateinstall.InstallationKind(path, build, true) != "managed" {
+		t.Fatal("regular daemon installation not recognized")
 	}
 	build.Modified = true
 	if updateinstall.InstallationKind("/usr/bin/mesh", build, true) != "development" {

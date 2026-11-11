@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/shaul/mesh/internal/update"
@@ -110,7 +109,10 @@ func (a *application) runHostPolicy(cmd *cobra.Command, options *updateOptions, 
 	if options.json {
 		return writeAutomaticJSON(cmd.OutOrStdout(), policy)
 	}
-	return printHostPolicy(cmd.OutOrStdout(), policy, action, options.details)
+	if options.details {
+		return printUpdateDetails(cmd.OutOrStdout(), policy, a.privacy)
+	}
+	return printHostPolicy(cmd.OutOrStdout(), policy, action)
 }
 
 func (a *application) callHostPolicy(ctx context.Context, environment updateEnvironment, action string, selected hostPolicyOptions) (update.HostPolicy, error) {
@@ -171,16 +173,13 @@ func (a *application) verifyHostPolicyName(ctx context.Context, host HostRecord)
 	return verifyUpdateNameIntents(ctx, []HostRecord{host}, a.dependencies.DialControl)
 }
 
-func printHostPolicy(out io.Writer, policy update.HostPolicy, action string, details bool) error {
+func printHostPolicy(out io.Writer, policy update.HostPolicy, action string) error {
 	_, err := fmt.Fprintf(out, "Automatic updates: %s\nPolicy revision: %d\n", hostPolicyMode(policy.Mode), policy.Revision)
 	if err != nil {
 		return fmt.Errorf("print host policy: %w", err)
 	}
 	if len(policy.After) > 0 {
 		_, err = fmt.Fprintf(out, "Machines to wait for: %d\nWait after each update: %s\n", len(policy.After), policy.Soak)
-	}
-	if details && err == nil {
-		_, err = fmt.Fprintln(out, "Wait for identities: "+strings.Join(policy.After, ", "))
 	}
 	if action == hostPolicyOff && err == nil {
 		_, err = fmt.Fprintln(out, "No further automatic work will be granted. An update already granted may finish, including recovery.")
@@ -198,5 +197,5 @@ func hostPolicyMode(mode update.HostMode) string {
 	if mode == update.HostManual {
 		return hostPolicyOff
 	}
-	return strings.TrimSpace(string(mode))
+	return agentUnknown
 }

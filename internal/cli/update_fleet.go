@@ -196,6 +196,9 @@ func classifyFleetUpdate(member *FleetUpdateMember, now time.Time) int {
 		member.State, member.Problem = fleetUnknown, "Automatic update status is unknown. This machine may need adoption."
 		return 1
 	}
+	if code, handled := classifyFleetProblems(member); handled {
+		return code
+	}
 	if code, handled := classifyFleetEligibility(member); handled {
 		return code
 	}
@@ -235,8 +238,16 @@ func classifyFleetEligibility(member *FleetUpdateMember) (int, bool) {
 	}
 	if summary.Mode != string(update.HostAutomatic) {
 		member.State, member.Problem = string(update.HostManual), "Automatic updates are off on this machine."
+		if summary.Mode != string(update.HostManual) {
+			member.State, member.Problem = fleetUnknown, "The automatic update policy is unknown."
+		}
 		return 1, true
 	}
+	return 0, false
+}
+
+func classifyFleetProblems(member *FleetUpdateMember) (int, bool) {
+	summary := member.Update
 	if summary.Problem != "" || summary.Phase == string(update.HostAttention) {
 		member.State, member.Problem = fleetFailed, summary.Problem
 		if member.Problem == "" {
@@ -299,7 +310,7 @@ func printFleetUpdates(out io.Writer, status FleetUpdateStatus, details bool, ma
 		if _, err := fmt.Fprintf(writer, "%s\t%s\t%s\n", SafeTerminalText(label), fleetVersion(member), member.State); err != nil {
 			return fmt.Errorf("print fleet update: %w", err)
 		}
-		if err := printFleetUpdateDetail(writer, member, details); err != nil {
+		if err := printFleetUpdateDetail(writer, member, details, mask); err != nil {
 			return err
 		}
 	}
@@ -316,13 +327,13 @@ func fleetVersion(member FleetUpdateMember) string {
 	return SafeTerminalText(member.Build.Version)
 }
 
-func printFleetUpdateDetail(out io.Writer, member FleetUpdateMember, details bool) error {
+func printFleetUpdateDetail(out io.Writer, member FleetUpdateMember, details bool, mask *privacy.Mask) error {
 	text := fleetUpdateDescription(member)
 	if _, err := fmt.Fprintln(out, "  "+text); err != nil {
 		return fmt.Errorf("print fleet details: %w", err)
 	}
 	if details {
-		return writeAutomaticJSON(out, member)
+		return printUpdateDetails(out, member, mask)
 	}
 	return nil
 }
@@ -343,7 +354,7 @@ func fleetUpdateDescription(member FleetUpdateMember) string {
 	if summary.Lag != nil {
 		lag = fmt.Sprint(*summary.Lag)
 	}
-	text := fmt.Sprintf("%s; automatic updates %s; %s; target %s; latest %s; releases behind %s", SafeTerminalText(summary.Installation), hostPolicyMode(update.HostMode(summary.Mode)), SafeTerminalText(summary.Phase), target, latest, lag)
+	text := fmt.Sprintf("%s; automatic updates %s; %s; target %s; latest %s; releases behind %s", fleetInstallationText(summary.Installation), hostPolicyMode(update.HostMode(summary.Mode)), fleetPhaseText(summary.Phase), target, latest, lag)
 	if summary.Last != nil {
 		text += "; last update " + SafeTerminalText(summary.Last.Version) + " at " + summary.Last.At.UTC().Format(time.RFC3339)
 	} else {
@@ -353,6 +364,38 @@ func fleetUpdateDescription(member FleetUpdateMember) string {
 		text += ". " + fleetUpdateAttention(member)
 	}
 	return text
+}
+
+func fleetInstallationText(kind string) string {
+	switch kind {
+	case updateinstall.InstallationManaged:
+		return "Mesh manages this installation"
+	case updateinstall.InstallationPackage:
+		return "Package manager handles this installation"
+	case updateinstall.InstallationClient:
+		return "Command only"
+	case updateinstall.InstallationDevelopment:
+		return "Development build"
+	default:
+		return "Installation unknown"
+	}
+}
+
+func fleetPhaseText(phase string) string {
+	switch phase {
+	case string(update.HostIdle):
+		return "no update running"
+	case string(update.HostDiscovering):
+		return "checking for updates"
+	case string(update.HostWaiting):
+		return "waiting"
+	case string(update.HostInstalling):
+		return "updating"
+	case string(update.HostAttention):
+		return "needs attention"
+	default:
+		return "status unknown"
+	}
 }
 
 func fleetUpdateAttention(member FleetUpdateMember) string {
