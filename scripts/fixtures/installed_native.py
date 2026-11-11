@@ -216,7 +216,7 @@ class Installation:
         native_services.wait_for(marker.exists, "session listener did not start")
         self.listener = json.loads(marker.read_text())
         response = self.control("service.upsert", service={"name": "catchup", "kind": "proxy",
-            "target": "http://127.0.0.1:" + str(self.listener["port"])})
+            "target": str(self.listener["port"])})
         if response.get("type") != "service.upserted":
             raise RuntimeError(f"native service registration failed: {response!r}")
         self.open_stream()

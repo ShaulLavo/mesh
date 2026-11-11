@@ -14,9 +14,14 @@ and removed the service and process. The normal and exception-after-launch
 controls passed. No VM fallback, credential, OS configuration or live fleet
 change was needed.
 
-Later fixture code also checks the mapped executable's inode and digest with
-procfs or native `lsof`, then checks the manager PID again. That refinement
-requires its own hosted result. Linux ARM64 is a separate native matrix entry.
+The follow-up run at `0967b9da` passed mapped native executable controls on all
+three platforms, including Linux ARM64. The control execs `/bin/sleep`, checks
+its mapped inode and digest through procfs or native `lsof`, and checks the
+manager PID again. Native installed-pair startup and cleanup also ran on all
+three platforms. The first stream-registration attempt used a URL where the
+proxy control requires a port, so it failed before restart. The fixture now
+supplies the correct port. All task processes, units and scratch were confirmed
+removed in that failed run's artifacts.
 
 `installed_paths.py` resolves the physical root, checks the worst daemon,
 temporary-daemon and retained-worker socket paths for every case, and refuses
