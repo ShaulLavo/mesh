@@ -1,8 +1,9 @@
 # Mesh updates itself everywhere
 
 Status: Approved (owner, 2026-11-10). High priority. Design written 2026-11-11
-against main `514700f4` (v0.1.306). An independent review comes before
-implementation.
+against main `514700f4` (v0.1.306) and corrected after the independent review
+of `a47e958e`. The [review resolution](#review-resolution) maps each finding to
+its section.
 
 This is in-repository plan 17. It replaces the binary rollout steps of
 [14: keep the fleet current](14-fleet-auto-updates.md) (steps 1, 2, 3 and 6)
@@ -41,12 +42,15 @@ from v0.1.249 to v0.1.257 that way.
 
 ### Constraints
 
-- Update security stays at least as strong as it is now: the fixed HTTPS
-  release origin, verified artifact hashes, exact tested transitions, and
-  signed update controls from enrolled administrators.
+- Releases are signed, and every unattended installation verifies the
+  signature against a trust root pinned in the verifying executable. The fixed
+  HTTPS origin, artifact hashes, exact tested transitions and signed update
+  controls from enrolled administrators all stay.
 - New machines enter the same automatic policy.
 - No real fleet daemon changes before the rollout below. The PC hosts the model
-  proxy and the managing chat, so it goes last, after managing is told.
+  proxy and the managing chat. It is adopted last, automatically, after the
+  other three machines have updated unattended and managing has been notified.
+  Nobody runs an update command on any machine.
 - The owner allows compatibility code for the supported-older-release
   requirement. No new dependency is needed.
 
@@ -75,6 +79,17 @@ The single-host transaction is solid and stays.
   digest, the database version, and every retained worker's PID and shell PID
   (`verifyHealth`, `transaction.go:293`). A failed check restores the previous
   executable (`restore`, `transaction.go:223`). The journal survives reboot.
+- **The helper as supervisor.** The helper runs under its own service unit and
+  outlives the daemon. It already resumes durable work that the daemon cannot
+  own (`updateHelperStep`, `internal/cli/update_helper.go:134`;
+  `resumePendingCoordinatorSetup`, `update_coordinator_setup.go:150`), and a
+  helper newer than its daemon is an accepted state
+  (`reviewBridgeHelper`, `internal/updateinstall/bridge.go:69`).
+- **Local signed controls.** Software running in the daemon's account signs
+  `update.control` messages with the host identity key and sends them over the
+  Unix socket (`update.Client.Call`, `internal/update/client.go:37`;
+  `LocalHost`, `local.go:16`). The daemon stages and grants on them
+  (`updateController.install`, `internal/daemon/update.go:116`).
 - **Publication.** `.github/workflows/release.yml` reserves a version, builds,
   proves a forward upgrade on native linux/amd64, linux/arm64 and darwin/arm64
   runners (`scripts/prove-release-transition.sh`), assembles compatibility from
@@ -89,43 +104,50 @@ The single-host transaction is solid and stays.
 
 ## What is broken
 
-All findings were read from published manifests and from the PC on 2026-11-11.
-The scripts and raw output are in
+Findings were read from published manifests and from the PC on 2026-11-11. The
+scripts and raw output are in
 `/work/reports/mesh-auto-update/design-evidence/`.
 
-1. **Nothing is stranded, and nothing walks the path.** Every release with a
-   manifest (v0.1.41 onward, 250 releases) has a tested chain to v0.1.306 on
-   all three platforms. From v0.1.249 it is seven hops: 249, 257, 266, 274,
-   284, 293, 304, 306. From v0.1.255 it is six: 255, 264, 272, 281, 291, 302,
-   306. From v0.1.257 it is six: 257, 266, 274, 284, 293, 304, 306.
-2. **Each release proves eight predecessors.**
+1. **Manifests claim a chain, and nothing walks it.** Every release with a
+   manifest (v0.1.41 onward, 250 releases) lists transitions that form a chain
+   to v0.1.306 on all three platforms. From v0.1.249 it is seven hops: 249,
+   257, 266, 274, 284, 293, 304, 306. From v0.1.255 it is six: 255, 264, 272,
+   281, 291, 302, 306. From v0.1.257 it is six: 257, 266, 274, 284, 293, 304,
+   306. The evidence script read manifest claims and ranges. It did not fetch
+   or verify receipt bytes. Unit 3 rebuilds the graph from verified receipts
+   before any seed is committed.
+2. **Receipts follow two contracts.** Releases from v0.1.232 write
+   `candidateOpenedRetainedState`. Earlier ones write
+   `retainedOpenedCandidateState`. `VerifyTransitionReceipt`
+   (`internal/release/bridge.go:181`) decodes strictly and accepts only the
+   current contract, so receipts published before v0.1.232 do not verify with
+   today's code.
+3. **Each release proves eight predecessors.**
    `scripts/prepare-release-baselines.sh:59` requires only the previous release
    and adds the next seven when their archive downloads. 50 releases were
    published between v0.1.249 (October 17) and v0.1.306 (November 8), so a
    build leaves direct reach in about three and a half days.
-3. **The optional sources drop silently.** v0.1.272 has no linux/amd64
+4. **The optional sources drop silently.** v0.1.272 has no linux/amd64
    transition from v0.1.269. A failed download is a notice
    (`prepare-release-baselines.sh:47`), and publication continues.
-4. **The state range is a test record.** `assemble-release-compatibility.py:58`
+5. **The state range is a test record.** `assemble-release-compatibility.py:58`
    sets `stateReadMin` to the lowest state version among the tested sources.
    Every executable embeds all sixteen migrations (`db/migrations`,
    `internal/storage/store.go:407`) and applies whatever is pending. "State
    version 13 is outside 15..16" means nobody tested it.
-5. **The search stops at one intermediate.** `release.Client.Bridge`
-   (`internal/release/bridge.go:44`) looks for a single stepping stone among
-   the 32 newest releases within ten seconds and only suggests a command.
-   v0.1.249 needs six stepping stones.
-6. **The coordinator policy cannot meet the goal.** It fails a target whose
+6. **The search stops at one intermediate.** `release.Client.Bridge`
+   (`bridge.go:44`) looks for a single stepping stone among the 32 newest
+   releases within ten seconds and only suggests a command.
+7. **The coordinator policy cannot meet the goal.** It fails a target whose
    build the pinned release does not allow (`prepare`,
    `internal/update/coordinator.go:319`) and never looks for a chain. None of
    the fleet's builds contains it, and the fleet was never enrolled. A member
-   that stays offline keeps the run
-   unsettled, and `AcceptCheckedRelease` (`automatic_store.go:307`) starts no
-   newer release until the current run settles, so one sleeping laptop freezes
-   every other machine. `consentFor` (`automatic.go:172`) binds each recipient
-   to the exact membership digest and epoch, so adding a machine voids every
-   consent. A failure is a sticky stop that a person must retry or acknowledge.
-7. **The helper lags and nothing notices.** The PC's daemon is v0.1.249. Its
+   that stays offline keeps the run unsettled, and `AcceptCheckedRelease`
+   (`automatic_store.go:307`) starts no newer release until the current run
+   settles. `consentFor` (`automatic.go:172`) binds each recipient to the exact
+   membership digest and epoch, so adding a machine voids every consent. A
+   failure is a sticky stop that a person must retry or acknowledge.
+8. **The helper lags and nothing notices.** The PC's daemon is v0.1.249. Its
    helper receipt and `current` link name the v0.1.196 executable.
    `helperUpgradeAllowed` (`internal/updateinstall/helper.go:336`) refuses
    promotion when the running helper's own state version is outside the
@@ -134,21 +156,23 @@ The scripts and raw output are in
    5 diagnoses it. The PC's helper unit is enabled and has been inactive since
    the boot on 2026-11-11. The automatic path checks only the receipt file
    (`RequireAutomaticHelper`, `engine.go:390`).
-8. **Rollback after a migration is unproven.** Receipts certify that the
+9. **Rollback after a migration is unproven.** Receipts certify that the
    candidate opened retained state. `restore` restarts the previous executable
    against a database the candidate already migrated, and no test runs that.
-9. **Publication never exercises the installed path.**
-   `prove-release-transition.sh` starts daemons by hand. The helper, the
-   journal and the service manager are covered by Go tests with fake services
-   and by an operator-run VM script (`scripts/check-updates-vm.md`).
-10. **Upgrade breakage shows up after merge.** Transition proofs run only in the
-    publisher. A pull request that breaks an upgrade passes CI.
-11. **Installed readers are strict.** Every installed build decodes the
+10. **Publication never exercises the installed path.**
+    `prove-release-transition.sh` starts daemons by hand. The helper, the
+    journal and the service manager are covered by Go tests with fake services
+    and by an operator-run VM script (`scripts/check-updates-vm.md`).
+11. **Upgrade breakage shows up after merge.** Transition proofs run only in
+    the publisher. A pull request that breaks an upgrade passes CI.
+12. **Installed readers are strict.** Every installed build decodes the
     manifest with unknown fields disallowed and requires exactly three
-    artifacts (`client.go:253`, `release.go:205`). The helper decodes the
-    journal the same way (`internal/updateinstall/storage.go:161`). Adding a
-    field to either file locks every older build out of the release that
-    carries it.
+    artifacts (`client.go:253`, `release.go:205`). Receipts and the journal are
+    decoded the same way (`bridge.go:207`,
+    `internal/updateinstall/storage.go:161`). Adding a field to any of them
+    locks older builds out.
+13. **Releases are unsigned.** The approved constraint says signed releases.
+    What exists is a fixed HTTPS origin and hashes published at that origin.
 
 Outside the graph: v0.1.1 through v0.1.38 predate manifests, fourteen reserved
 drafts were never published, and four tags have no release. No fleet machine
@@ -157,259 +181,520 @@ runs any of them.
 ## Principal decisions
 
 1. **Each host updates itself.** A host updater inside the daemon plans and
-   installs releases for its own machine with its own authority. It needs the
-   internet and nothing else: no coordinator, no saved fleet, no enrollment.
-   This fits invariant 6, where each host is authoritative for its own state.
-2. **Direct reach is a release gate.** Each release proves direct transitions
-   from every release since the newest anchor and from every supported anchor.
-   Any supported release reaches the candidate in at most two hops. Publication
-   fails when any published release has no chain.
-3. **Anchors are the retained stepping stones.** Anchor releases are never
-   deleted, and each proves transitions from the anchors before it. A machine
-   that was off for a year still has a chain.
-4. **Rollback is proven before publication.** The transition proof gains a leg
-   where the previous executable reopens candidate-written state. The host
-   updater uses only transitions with that proof.
-5. **The manifest and journal formats are frozen.** New metadata ships as a
-   separate release asset, the upgrade map. New updater state lives in new
-   files.
-6. **Fleet order comes from gates.** A host may wait until named peers have run
-   a release for a soak period. The Pi and the VPS go first, then the Mac when
-   it is awake, then the PC.
-7. **One mechanism.** The consent-bound coordinator policy is removed after the
-   fleet runs on the host updater. Manual `mesh update` operations stay.
-8. **The existing fleet needs one approved hop per machine.** Installed code
-   cannot learn new behavior from a published release. The activation release
-   proves direct transitions from the three installed executables, so that one
-   hop needs no stepping stone.
+   installs releases for its own machine with its own authority. It needs no
+   coordinator, saved fleet or enrollment. This fits invariant 6.
+2. **Releases are signed by the release workflow.** GitHub's artifact
+   attestation signs one metadata file per release. Mesh verifies it against a
+   pinned certificate authority and the exact workflow identity. No owner
+   credential is involved.
+3. **Discovery is a stable, paged index.** A tiny root says which format epoch
+   is current. Signed, digest-linked pages list the anchors. A reader works
+   forward from its own position in bounded passes with a saved cursor, and it
+   never decodes a document from a format newer than its own.
+4. **Direct reach is a release gate.** Each release proves transitions from
+   every release since the newest anchor and from a window of anchors that
+   always covers at least sixteen anchors and at least thirty days. Publication
+   fails when any published release lacks a chain of verified receipts.
+5. **Rollback is proven at every migration boundary** before publication, and
+   stored as its own proof beside the unchanged forward receipt.
+6. **Fleet order comes from durable evidence.** A host records what its
+   predecessors actually committed and installs the newest release that all of
+   them have run or passed. An unavailable predecessor holds the host and is
+   reported. Nothing expires into permission.
+7. **Adoption is a product operation.** A verified executable of the new
+   release becomes the helper on each existing machine, seeds the host policy,
+   and drives the old daemon through its own signed local controls. The fleet
+   operation starts once, deploys over configured system SSH, orders the
+   machines by evidence, notifies managing, and adopts the PC last.
+8. **One mechanism.** The consent-bound coordinator policy is removed after
+   the fleet runs on the host updater. Manual `mesh update` operations stay.
 
 ## Design
 
+### Signed releases
+
+**What is signed.** Each release gains `mesh-update.json`, the update metadata.
+It carries the SHA-256 of the exact `mesh-release.json` bytes, the release's
+position in the anchor index, its direct sources, the rollback proof digests,
+the newest anchor page, and the trust version. `mesh-release.json` keeps its
+schema 1 layout byte for byte. The signature covers the metadata, and the
+metadata binds everything else by digest: the manifest, through it every
+archive, executable and forward receipt, and beside it every rollback proof and
+index page.
+
+```go
+// internal/release/metadata.go. Asset mesh-update.json, at most 64 KiB.
+type UpdateMetadata struct {
+	Schema      int            `json:"schema"`
+	Epoch       uint32         `json:"epoch"`
+	Trust       int            `json:"trust"`    // trust root version that verifies this release
+	Version     string         `json:"version"`
+	Manifest    string         `json:"manifest"` // SHA-256 of the mesh-release.json bytes
+	PublishedAt time.Time      `json:"publishedAt"`
+	Position    Position       `json:"position"`
+	Direct      DirectSources  `json:"direct"`
+	Rollback    []RollbackRef  `json:"rollback"`
+	Page        AssetRef       `json:"page"` // newest anchor page of this epoch
+}
+
+type Position struct {
+	Anchor  bool   `json:"anchor"`
+	Ordinal uint64 `json:"ordinal"` // newest anchor at or before this release
+}
+
+type DirectSources struct {
+	AnchorsFrom uint64   `json:"anchorsFrom"` // lowest anchor ordinal proved directly
+	Since       []string `json:"since"`       // every release after the newest anchor
+}
+
+type RollbackRef struct {
+	Forward  string `json:"forward"`  // SHA-256 of the schema 1 forward receipt
+	Rollback string `json:"rollback"` // SHA-256 of the rollback proof asset
+}
+
+type AssetRef struct {
+	Tag    string `json:"tag"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+```
+
+**How it is signed.** The publisher runs GitHub's `actions/attest@v4`, pinned
+by commit, with `mesh-update.json` and the three archives as subjects. It needs
+the workflow permissions `id-token: write`, `attestations: write` and
+`artifact-metadata: write`, and no secret. For a public repository the action
+signs through the Sigstore public good instance: a short-lived certificate
+from the Fulcio certificate authority that names the signing workflow, and an
+entry in the public transparency log. The publisher converts the action's bundle into
+Mesh's own envelope, `mesh-update.sig.json`, so installed readers never depend
+on the bundle layout:
+
+```go
+// internal/release/signature.go. Asset mesh-update.sig.json, at most 32 KiB.
+type SignatureEnvelope struct {
+	Schema     int         `json:"schema"`
+	Signatures []Signature `json:"signatures"`
+}
+
+type Signature struct {
+	Kind        string `json:"kind"`        // "github-attestation"
+	Certificate []byte `json:"certificate"` // leaf certificate, DER
+	PayloadType string `json:"payloadType"`
+	Payload     []byte `json:"payload"`   // in-toto statement naming the subject digests
+	Signature   []byte `json:"signature"` // over the DSSE encoding of type and payload
+}
+```
+
+**What Mesh verifies.** `release.VerifySignature(root TrustRoot, metadata,
+envelope []byte)` uses the standard library only. It requires one signature of
+a pinned kind for which all of this holds:
+
+- the leaf certificate chains to a certificate authority in the pinned trust
+  root, evaluated at the certificate's own start time;
+- the certificate's extensions equal the pinned identity: the GitHub Actions
+  token issuer, the signing workflow
+  `ShaulLavo/mesh/.github/workflows/release.yml@refs/heads/main`, the numeric
+  repository and owner identifiers, the source ref `refs/heads/main`, and a
+  GitHub-hosted runner;
+- the signature verifies over the payload with the certificate's key;
+- the payload lists a subject whose SHA-256 equals the metadata bytes.
+
+Entries of an unknown kind are skipped, so a later release can add a second
+signer without breaking older readers. An envelope with no valid pinned entry
+is refused. The verifier does not read the transparency log. The official
+verifier checks the log at publication and at adoption start.
+
+```go
+// internal/release/trust. Embedded data, versioned.
+type TrustRoot struct {
+	Version     int
+	Authorities [][]byte // Fulcio root and intermediate certificates, DER
+	Identity    SignerIdentity
+}
+```
+
+The pinned authority is the Fulcio chain that has been valid since 2022-04-13
+with no end date in Sigstore's published trusted root. The parts of that root
+that GitHub's documentation says rotate a few times a year are the logs and the
+timestamp authority, and the Mesh verifier does not depend on them.
+
+**Where verification happens.**
+
+- *Publication.* After signing, the publisher runs `gh attestation verify` for
+  the metadata and each archive with `--repo ShaulLavo/mesh`,
+  `--signer-workflow`, `--source-ref refs/heads/main` and
+  `--deny-self-hosted-runners`. It then runs the candidate's own
+  `VerifySignature`, and repeats it with the trust version of every direct
+  source. Any failure, including a failed signing step, leaves the draft
+  unpublished.
+- *Host updater.* Every hop verifies the metadata signature before any manifest
+  is trusted, then checks the manifest bytes against the metadata. The existing
+  transaction re-reads the manifest and compares digests (`accept`,
+  `engine.go:93`), so the helper installs exactly the signed manifest.
+- *Adoption.* The adoption supervisor verifies the pinned metadata, signature,
+  manifest and its own executable digest before it sends anything to the old
+  daemon. The old CLI's version-only selection is never used.
+
+**Rotation.** The trust root changes only at a waypoint. The waypoint release
+is signed under the old trust version and embeds the new one. Releases signed
+under the new version begin a new format epoch, so a reader pinned to the old
+version stops at the waypoint, installs it, and continues with the new root.
+If Sigstore announces a new Fulcio chain, the waypoint ships during the overlap
+while both chains issue. The envelope's second-signer slot is the contingency
+if no overlap exists; that case would need an owner-provisioned key and is the
+only one that would.
+
+**Limits.** A signature proves who published the content. It does not prove
+freshness: an attacker who controls the origin can still serve an old, validly
+signed release. `mesh update fleet` shows a host that stays behind its peers.
+
+### Stable discovery
+
+A host finds its next hop from three kinds of document. Only the first is
+fetched from `latest`, and it is small enough to stay the same forever.
+
+**The root.** Every release carries `mesh-update-root.json`, at most 2 KiB. Its
+shape never changes.
+
+```go
+// internal/release/discovery.go
+type DiscoveryRoot struct {
+	Format   int       `json:"format"` // always 1
+	Epoch    uint32    `json:"epoch"`  // format epoch of the release that carries it
+	Head     AssetRef  `json:"head"`   // newest mesh-update.json of that epoch
+	Previous *AssetRef `json:"previous,omitempty"` // root carried by the last release of the previous epoch
+}
+```
+
+The root is a location hint and grants nothing. Everything it leads to is
+verified by signature or by a digest chain that ends in one.
+
+**Epochs.** A format epoch covers one set of formats that a reader can decode
+and one trust version. An incompatible change to the manifest, the metadata,
+the pages, the journal, the platform set or the trust root starts a new epoch.
+The last release of an epoch is the waypoint: it is an anchor, it is written
+and signed in the old epoch's formats, and its executable reads the new ones.
+Its root is the final root of its epoch and never changes afterwards.
+
+A reader compares the root's epoch with its own. If they are equal it uses
+`Head`. If the root is newer it follows `Previous` until it finds its own
+epoch, whose head is the waypoint's metadata. It never decodes a manifest,
+metadata file or page from a newer epoch. After it installs the waypoint, the
+new executable repeats the process one epoch later.
+
+**Anchor pages.** Anchors are numbered from zero. A page holds at most 64
+entries, at most 16 KiB, and pages never span an epoch.
+
+```go
+type AnchorPage struct {
+	Schema  int           `json:"schema"`
+	Epoch   uint32        `json:"epoch"`
+	Page    uint64        `json:"page"`
+	Entries []AnchorEntry `json:"entries"` // ascending ordinals
+	Back    []PageRef     `json:"back"`    // pages 1, 2, 4, 8 ... before this one
+}
+
+type AnchorEntry struct {
+	Ordinal     uint64    `json:"ordinal"`
+	Version     string    `json:"version"`
+	Metadata    string    `json:"metadata"`           // SHA-256 of its mesh-update.json
+	Manifest    string    `json:"manifest,omitempty"` // seeds published before signing: manifest bytes
+	AnchorsFrom uint64    `json:"anchorsFrom"`
+	PublishedAt time.Time `json:"publishedAt"`
+}
+
+type PageRef struct {
+	Page uint64   `json:"page"`
+	Ref  AssetRef `json:"ref"`
+}
+```
+
+A full page is immutable. Each new anchor writes the current partial page again
+as an asset of its own release. The signed metadata names the newest page by
+digest, and each page names earlier pages by digest, so every page a reader
+uses is bound to a signature. The back references double in distance, so any
+page among P is reached in about log2(P) fetches. No single asset grows with
+history: 2,000 anchors are 32 pages.
+
+**Bounds.** A discovery pass reads at most eight discovery documents and four
+manifests or proofs, within 30 seconds. There is no limit on passes, hops or
+total fetches. The cursor is saved in `updates/host-discovery.json`:
+
+```go
+// internal/update/host_discovery.go
+type DiscoveryCursor struct {
+	Epoch  uint32             `json:"epoch"`
+	Head   AssetRef           `json:"head"`
+	Pages  map[uint64]AssetRef `json:"pages"`           // page locations learned so far, newest 256
+	Search *RouteSearch       `json:"search,omitempty"` // open binary search: from, low, high
+	Next   *PlannedRelease    `json:"next,omitempty"`   // verified next hop
+}
+```
+
+Verified pages are cached by digest. A cursor whose head changed keeps its
+learned page locations, because full pages never change.
+
+### Routes
+
+`internal/release/route.go` holds the search. It is a pure function over a
+document source and a cursor, and it returns either a verified next hop or an
+updated cursor.
+
+```go
+func NextHop(ctx context.Context, from Build, at Position, target UpdateMetadata, cursor RouteCursor, read DocumentSource, budget PassBudget) (RouteStep, error)
+```
+
+The anchor windows only move forward, so `AnchorsFrom` never decreases from
+one anchor to the next. That makes the search exact:
+
+1. If the target lists the build in `Since`, or the build is an anchor at or
+   above the target's `AnchorsFrom`, the target is the next hop.
+2. A release that is not an anchor goes to the first anchor after it. That
+   anchor proved every release since the anchor before it.
+3. From anchor m, the next hop is the farthest anchor n, no later than the
+   target's own anchor, whose `AnchorsFrom` is at most m. A binary search over
+   the ordinals finds it, reading entries through the page references.
+4. Repeat from the new position after the hop commits.
+
+The index only guides. Each hop is admitted by the verified signature, by
+`Manifest.Allows` on the exact executing digest, by the forward receipt, and
+for automatic hops by the rollback proof. A failed edge is excluded from step
+3, which then takes the next farthest anchor.
+
+Worked cases that become tests: with every anchor proving the 24 before it,
+anchor 0 reaches target 52 as 0, 24, 48, 52, although none of the newest
+sixteen anchors admits 0; a 300-anchor distance takes thirteen hops and
+completes; a 2,000-anchor index resolves any position in a few passes; and a
+reader from the activation release facing a newer epoch installs the waypoint
+without decoding anything newer.
+
+`mesh update --check` uses the same search and prints the hops it has verified
+so far. `Client.Bridge` and its 32-entry history page are deleted once the
+preview uses it.
+
+### Supported releases, anchors and the release gate
+
+`scripts/upgrade-policy.json` holds the numbers and the seed list.
+
+- **Anchor.** A candidate is an anchor when the previous anchor was published
+  in an earlier ISO week (UTC), or when sixteen releases have been published
+  since the previous anchor. A waypoint is always an anchor. The decision is
+  written into the release's metadata and never changes.
+- **Anchor window.** A candidate proves a direct transition from every anchor
+  in a window that ends at the newest anchor. The window is the smallest one
+  that holds at least sixteen anchors and reaches an anchor published at least
+  thirty days before the candidate. Both floors are computed, so a faster
+  release pace widens the window by itself and no publication fails for age.
+- **Direct sources.** The window's anchors, plus every release after the
+  newest anchor, on all three platforms.
+- **Supported.** Every release published after the window's oldest anchor. It
+  reaches the candidate directly, or through the first anchor after it.
+- **Reachable.** Every other published release keeps a longer chain through
+  older anchors.
+- **Seeds.** History before the policy becomes the first anchors. Unit 3's tool
+  walks back from the first policy release and picks a ladder of published
+  releases such that every release between two seeds has a verified receipt
+  edge to the later seed. It stops when the ladder has sixteen seeds and its
+  oldest was published thirty days before the candidate, then adds v0.1.249,
+  v0.1.255 and v0.1.257 if the ladder missed them. The unit runs the forward
+  proof from every seed on native runners and commits the list that passed. A
+  seed that fails is fixed in the candidate or the proof harness, where
+  compatibility code is allowed.
+
+**Edges are verified receipts.** `internal/release/cmd/routes` is the
+publisher's tool, written in Go so it runs the same verifier as a host. An
+edge from source to target on a platform exists only when all of this holds:
+the target's manifest bytes match their recorded digest; the manifest lists a
+transition from the source's executable digest to the target's; the receipt
+asset named by `proof` downloads and hashes to that name; the receipt passes
+`VerifyTransitionReceipt` for that transition and the target's compatibility;
+and the source's state and worker versions fall inside the receipt's tested
+range. Receipts published before v0.1.232 are checked by a second, named
+function for their own contract. An edge of either kind is forward only. An
+automatic hop also needs the rollback proof named by the signed metadata.
+
+The publisher refuses to publish when:
+
+1. a direct source lacks a verified forward receipt on any platform, or an
+   updater-capable or fleet-seed source lacks a rollback proof;
+2. a source could not be acquired, after bounded retries;
+3. any published release with a manifest has no chain of verified edges to the
+   candidate on any platform, or a supported release needs more than two hops;
+4. the signature does not verify under the candidate's trust root and the
+   trust root of every direct source;
+5. any retained asset is missing or changed;
+6. the manifest exceeds 512 KiB or does not decode with the frozen schema 1
+   reader.
+
+**Retention.** Every release named by an anchor entry or reached from one keeps
+its manifest, metadata, signature, receipts, rollback proofs, archives and
+pages. No release script deletes or replaces an asset of a published release.
+For rule 5 the tool lists every release through the paginated API and compares
+each retained asset's name and SHA-256 with the index. The release API reports
+a `digest` per asset (confirmed on v0.1.306), so the comparison downloads
+nothing. An asset the API reports no digest for is downloaded and hashed once.
+
+The job summary prints the window's oldest anchor, its date, the source count
+and the longest chain.
+
 ### Host updater
 
-New code in `internal/update`: `host_updater.go`, `host_policy.go` and
-`host_state.go`. `newUpdateController` (`internal/daemon/update.go:37`) builds
-it beside the coordinator, and `internal/daemon/app.go:584` runs it once the
+New files in `internal/update`: `host_updater.go` (the step), `host_policy.go`
+(policy and fence), `host_state.go` (state, failed edges, ledger),
+`host_discovery.go` (cursor) and `host_order.go` (predecessor evidence).
+`newUpdateController` (`internal/daemon/update.go:37`) builds the updater
+beside the coordinator, and `internal/daemon/app.go:584` runs it once the
 listeners are ready.
 
 ```go
 // updates/host-policy.json, private like automatic.json (readAuthority).
 type HostPolicy struct {
 	Schema   int      `json:"schema"`
-	Revision uint64   `json:"revision"`
-	Mode     HostMode `json:"mode"`            // automatic | manual
-	After    []string `json:"after,omitempty"` // host identities that run a release first
+	Revision uint64   `json:"revision"` // increases with every local change
+	Mode     HostMode `json:"mode"`     // automatic | manual
+	After    []string `json:"after,omitempty"` // predecessors by host identity
 	Soak     Duration `json:"soak,omitempty"`
-	GateWait Duration `json:"gateWait,omitempty"`
 }
 
 // updates/host-update.json
 type HostUpdate struct {
-	Schema      int               `json:"schema"`
-	Phase       HostPhase         `json:"phase"` // idle | waiting | installing | blocked | attention
-	Target      *PlannedRelease   `json:"target,omitempty"`
-	Hops        []PlannedRelease  `json:"hops,omitempty"`
-	Hop         int               `json:"hop,omitempty"`
-	Request     string            `json:"request,omitempty"` // updateinstall.Request.ID in flight
-	Problem     *HostProblem      `json:"problem,omitempty"`
-	Quarantined []PlannedRelease  `json:"quarantined,omitempty"` // newest 8
-	History     []CommittedUpdate `json:"history,omitempty"`     // newest 8
-	NextAttempt time.Time         `json:"nextAttempt,omitempty"`
+	Schema      int             `json:"schema"`
+	Phase       HostPhase       `json:"phase"` // idle | discovering | waiting | installing | attention
+	Target      *PlannedRelease `json:"target,omitempty"`
+	Next        *PlannedRelease `json:"next,omitempty"`
+	Owned       *OwnedRequest   `json:"owned,omitempty"`
+	Problem     *HostProblem    `json:"problem,omitempty"`
+	NextAttempt time.Time       `json:"nextAttempt,omitempty"`
 }
 
 type PlannedRelease struct {
 	Version  string `json:"version"`
-	Manifest string `json:"manifest"` // manifest digest
-	Binary   string `json:"binary"`   // executable digest for this platform
+	Metadata string `json:"metadata"`
+	Manifest string `json:"manifest"`
+	Binary   string `json:"binary"` // executable digest for this platform
+}
+
+// Binds one journal request to the policy revision that started it.
+type OwnedRequest struct {
+	Request        string `json:"request"` // updateinstall.Request.ID
+	Generation     uint64 `json:"generation"`
+	PolicyRevision uint64 `json:"policyRevision"`
+	Edge           Edge   `json:"edge"`
+}
+
+type Edge struct {
+	From     string           `json:"from"` // executable digests
+	To       string           `json:"to"`
+	Platform release.Platform `json:"platform"`
+}
+
+// updates/host-failed-edges.json. One entry per failed activation.
+type FailedEdge struct {
+	Edge    Edge                `json:"edge"`
+	Version string              `json:"version"`
+	Phase   updateinstall.Phase `json:"phase"`
+	Problem string              `json:"problem"`
+	At      time.Time           `json:"at"`
+}
+
+// updates/host-ledger.json. One entry per committed installation.
+type LedgerEntry struct {
+	Seq              uint64    `json:"seq"`
+	Version          string    `json:"version"`
+	Metadata         string    `json:"metadata,omitempty"`
+	Binary           string    `json:"binary"`
+	From             string    `json:"from"`
+	Origin           string    `json:"origin"` // host | manual | adoption
+	CommittedAt      time.Time `json:"committedAt"`
+	Workers          int       `json:"workers"`
+	WorkersPreserved int       `json:"workersPreserved"`
 }
 ```
 
-`Request` is set only while `Phase` is `installing`, and `Hop` always indexes
-`Hops`. The constructor enforces both.
+`HostUpdate` has one owned request at most and only in phase `installing`. It
+holds no lists. Failed edges and the ledger are their own files with their own
+retention rules.
 
-The updater is one idempotent step. It runs every 30 seconds on local reads,
-and touches the network only when a check is due.
+**The step.** It is idempotent, runs every 30 seconds on local reads, and
+touches the network only when a check is due or a catch-up is in progress.
 
-1. Read the policy. Manual mode is idle.
-2. Read the installation journal (`updateinstall.Read`). An unfinished journal
-   with another request ID means a manual or fleet operation owns the
-   installation, so wait. A journal with our request ID is the hop in flight:
-   committed advances the plan and appends to `History`; a rollback or failure
-   goes to failure handling below.
-3. Choose the target. With no gates it is the checked latest release. With
-   gates it is the newest release every reachable gate has verified.
-4. Stop when the executing digest equals the target's artifact or the
-   executing version is newer. Exclude quarantined transitions while planning.
-5. Check the installation: a Mesh-managed executable
-   (`ValidateInstallationPath`), service preflight, required mount, free space,
-   and a current, running helper.
-6. Plan the chain and check every live worker against every hop.
-7. Start the next hop: `Engine.Stage`, then `Engine.Grant`. The helper
-   activates. The daemon exits during activation, and the next daemon resumes
-   at step 2.
+1. Reconcile first, in any mode. If the journal's request is the owned one,
+   record its result: a commit appends a ledger entry, a verified rollback
+   adds a failed edge, a failed rollback sets `attention`. Then clear `Owned`.
+2. Read the policy. Manual mode stops here. A missing file means the default
+   below. A malformed or unreadable file sets `attention` and stops.
+3. Yield while another operation owns an unfinished journal, or while a
+   recipient consent of the coordinator policy is enabled.
+4. Run one discovery pass.
+5. Choose the target: the epoch head, limited by the fleet order below.
+6. Stop when the executing digest equals the target's artifact or the
+   executing version is newer.
+7. Check the installation: kind, service preflight, required mount, free
+   space, and a current, running helper.
+8. Take the next verified hop from the route search, excluding failed edges,
+   and check every live worker against it.
+9. Stage and grant under the fence.
 
-Before every hop the updater plans again from the executing build. The saved
-hop list is a record for status, never an instruction.
+The daemon exits during activation. The next daemon starts at step 1.
 
 **Authority.** The updater calls the engine in-process, as `mesh update --local`
-does through the daemon today (`updateController.install`,
-`internal/daemon/update.go:116`). A host's own identity is always an update
-administrator on itself. The request carries no coordinator `Automatic`
-reference. A separate local ownership record binds each host-updater request
-to its host policy revision. The engine checks that revision under the same
-lock used to commit stage, retry and activation grants. `policy off` takes
-that lock and returns only after preventing further grants. A policy change
-during a download prevents the later stage or grant. Missing, malformed or
-unreadable policy fails closed. Manual mode still reconciles already-granted
-work and reports its result, but starts no new hop. Remote update controls keep
-requiring an enrolled administrator. Only a local Unix-socket caller may change
-`HostPolicy`: `mesh update policy show`, `set` and `off`.
+does through the daemon today. A host's own identity is always an update
+administrator on itself, and remote update controls keep requiring an enrolled
+administrator.
+
+**The fence.** `Engine.authorize` (`engine.go:355`) commits a request with no
+coordinator reference at once, so the coordinator's consent check does not
+protect the updater's requests. The change: `authorize` always calls the
+configured acceptance when one is set. The daemon installs
+`Store.AuthorizeHostAcceptance` (`host_policy.go`), which wraps the existing
+`Store.AuthorizeAcceptance` (`automatic_consent.go:107`). For a request named
+by `Owned` it takes the authority lock (`lockContext`), reads the policy,
+requires automatic mode and the owned revision, and runs the journal commit
+inside the lock. `mesh update policy set` and `off` take the same lock and
+increase the revision. So `policy off` returns only after any commit in
+progress, and every later stage, retry or grant of that request is refused.
+Work already granted finishes in the helper, and step 1 records its result in
+manual mode too. The journal format does not change. Only a local Unix-socket
+caller may change the policy.
 
 **Default.** With no policy file the mode is automatic when the executable is a
 stable release build on a Mesh-managed path with a daemon service. Development
 and modified builds are always manual.
 
-**Schedule.** In automatic mode `updatenotice` checks every 30 minutes plus up
-to five minutes of jitter, down from six hours. The existing
-`conditionalTransport` keeps an unchanged answer cheap. The updater also checks
-at daemon start and when the step timer shows a clock jump, which is how a
-laptop notices a release on waking. Releases published between two checks
-collapse into one update.
-
-### Frozen formats and the upgrade map
-
-`mesh-release.json` stays at schema 1 with its current fields and exactly three
-artifacts. The journal stays at schema 1. This is what lets today's installed
-builds read the activation release. A packaging test fails when the manifest
-generator (`internal/release/cmd/manifest`) emits a field that the v0.1.249
-decoder rejects.
-
-A breaking change to either format, to the worker protocol, or to the platform
-set goes through a waypoint: one anchor that still writes the old format and
-reads the new one. Releases after it stop proving transitions from sources
-older than the waypoint, and the planner routes those sources through it.
-
-Each release gains one asset, `mesh-upgrade-map.json`, at most 256 KiB:
-
-```go
-// internal/release/upgrademap.go
-type UpgradeMap struct {
-	Schema    int          `json:"schema"`
-	Version   string       `json:"version"`
-	Manifest  string       `json:"manifest"`  // digest of this release's manifest
-	Anchors   []MapRelease `json:"anchors"`   // every anchor, ascending
-	Supported []MapRelease `json:"supported"` // every release since the oldest supported anchor
-}
-
-type MapRelease struct {
-	Version     string    `json:"version"`
-	Manifest    string    `json:"manifest"`
-	PublishedAt time.Time `json:"publishedAt"`
-}
-```
-
-The map tells a host which releases are stepping stones and lets status count
-how far behind a host is. It grants nothing. Every hop is still admitted by
-`Manifest.Allows` on the exact executing digest and by the content-addressed
-receipt (`VerifyTransitionReceipt`, `bridge.go:181`). A wrong map can make a
-plan fail. It cannot make an untested transition install.
-
-### Supported releases, anchors and the release gate
-
-`scripts/upgrade-policy.json` holds the numbers: sixteen releases at most
-between anchors, 24 supported anchors, a 30-day minimum horizon, and the seed
-anchors.
-
-- **Anchor.** A candidate is an anchor when the previous anchor was published
-  in an earlier ISO week (UTC), or when sixteen releases have been published
-  since the previous anchor. The decision is written into that release's map
-  and never changes.
-- **Direct sources.** A candidate proves a transition, on all three platforms,
-  from the newest anchor, from every release after it, and from each of the 24
-  newest anchors. That is at most 40 sources per platform against eight today.
-- **Supported.** A release is supported when it is one of the 24 newest anchors
-  or was published after the oldest of them. At the November 2026 pace that is
-  about three months. A supported release reaches the candidate directly, or
-  through the first anchor after it, which proved every release since the
-  anchor before it.
-- **Reachable.** Every other published release keeps a longer chain through
-  older anchors and through the eight-release windows published before this
-  plan.
-- **Seeds.** The first map lists v0.1.249, v0.1.255 and v0.1.257 as anchors,
-  plus the release eight before the first policy release, so the old windows
-  connect to the new scheme. The seeds age out with the other anchors.
-
-A new tool, `scripts/upgrade_graph.py`, plans the sources and checks the result.
-It grows from `design-evidence/analyze.py`. The publisher refuses to publish
-when:
-
-1. a direct source lacks a passing receipt on any platform, including a failed
-   download;
-2. any published release with a manifest has no chain to the candidate on any
-   platform;
-3. a supported release needs more than two hops;
-4. the oldest supported release was published less than 30 days ago;
-5. an anchor's manifest is missing or differs from its recorded digest;
-6. the manifest exceeds 512 KiB.
-
-Rule 4 exists because a count shrinks in calendar time when releases speed up.
-It forces a deliberate change to the policy file and stops the window from
-quietly closing again. The job summary prints the oldest supported release, its
-date and the longest chain.
-
-Anchor releases and their assets are never deleted. No release script removes
-one, and rule 5 catches a removal made by hand.
-
-### Chain planning
-
-`internal/release/plan.go` holds one pure function over a manifest fetcher:
-
-```go
-func PlanUpgrade(ctx context.Context, build Build, target Manifest, upgrades UpgradeMap, fetch ManifestSource) ([]Manifest, error)
-```
-
-It returns the target alone when the target allows the build. Otherwise it
-searches breadth-first over the map's anchors newer than the build, taking the
-newest anchor that allows the current position first. It fetches at most
-sixteen manifests in 30 seconds, plans at most twelve hops, and checks each
-fetched anchor against the digest in the map. Fetched manifests are cached by
-version and digest.
-
-For every hop the planner requires an exact transition from the previous hop's
-artifact digest and a verified receipt. The host updater also requires the
-receipt's rollback proof. `mesh update --check` uses the same planner, shows the
-whole chain, and marks a hop that lacks rollback proof as manual only.
-
-Walking anchors is complete for every host that has an updater. Such a host
-runs the activation release or a later one, the first anchor after any release
-proved a transition from it, each anchor proved transitions from the 24 anchors
-before it, and the target proves transitions from the 24 newest. The
-eight-release windows published before this plan matter only to the release
-gate's reachability check. `Bridge` and its 32-entry history page are deleted
-once the CLI preview uses the planner.
+**Schedule.** In automatic mode the updater fetches the root every 30 minutes
+plus up to five minutes of jitter, at daemon start, and when the step timer
+shows a clock jump, which is how a laptop notices a release on waking. The
+existing `conditionalTransport` keeps an unchanged answer cheap. Releases
+published between two checks collapse into one update. The reminder in the
+picker keeps its own six-hour check.
 
 ### One hop
 
-A hop is today's transaction, unchanged: `accept` re-reads the manifest from
-the origin and compares digests, `preflight` checks the executing digest
-against the installed file and every worker's protocol, and the helper
-activates and verifies.
+A hop is today's transaction: `accept` re-reads the manifest from the origin
+and compares digests, `preflight` checks the executing digest against the
+installed file and every worker's protocol, and the helper activates and
+verifies.
 
-One thing changes. The helper must be the same executable as the installed
-daemon and must be running before a hop starts.
+One thing changes. The helper must be at least as new as the installed daemon
+and must be running before a hop starts.
 
 - After a commit, promotion requires only that the new helper image answers
   `update-helper --check-journal`. The test on the old helper's state version
   in `helperUpgradeAllowed` goes away. The helper owns the journal and does not
   own the database.
+- `updateinstall.PromoteHelper(ctx, cfg, source, digest)` promotes a verified
+  executable to be the helper while the journal is in a finished phase. It is
+  the existing preparation, restart, process binding and restoration path
+  (`prepareHelper`, `helper.go:48`; `promoteRecoveryHelper`,
+  `helper_recovery.go:160`) opened to committed journals.
 - Before a hop, the updater compares the helper receipt and the running helper
   process (`updatebootstrap.HelperProcessProbe`) with the installed daemon. A
-  stale or stopped helper is promoted or started through the existing
-  preparation and restart path while the journal is in a finished phase. If
-  that fails, the host reports `attention: update helper` and starts no hop.
+  stale or stopped helper is promoted or started. If that fails, the host
+  reports `attention: update helper` and starts no hop.
 
-So the pair that runs a hop from release S is always S's daemon and S's helper,
-and that is the pair CI tests.
+So a hop from release S is run by S's daemon and S's helper, and an adoption
+hop is run by the old daemon and the pinned release's helper. CI tests both
+pairs.
 
 ### State migration and rollback
 
@@ -417,32 +702,55 @@ Rules for schema changes, enforced by the proofs:
 
 - A shipped migration is never edited, squashed or removed. A candidate must
   open the state of every direct source.
-- A migration must leave the database usable by every direct source. A change
-  that an older source cannot live with waits until that source is routed
-  through a waypoint.
+- Every state a failed upgrade can leave behind must remain usable by the
+  source executable. A change that an older source cannot live with waits
+  until that source is routed through a waypoint, or the migrations it spans
+  become one atomic batch.
 - Rollback restores the executable and never restores a database snapshot. T26
   decided that, and it holds.
 
-`prove-release-transition.sh` gains a rollback leg after the candidate's
-restart check: stop the candidate, start the retained source executable on the
-candidate-written state, require it to list the retained session, attach,
-exchange a token, and keep the recovery record byte-identical.
+**Forward receipts stay as they are.** Schema 1, the exact current fields, the
+manifest's `proof` naming them. The actual v0.1.249 receipt reader and the
+actual v0.1.196 journal reader run against generated release assets in unit 8.
 
-Forward transition receipts retain schema 1 and their exact existing fields.
-The manifest's `proof` continues to address that legacy-readable receipt.
-Rollback results live in a separate content-addressed asset, bound to the
-forward receipt digest, source and target executable digests, platform and
-tested state boundaries. Signed update metadata binds its digest. Automatic
-hops require both proofs. The actual v0.1.249 reader must accept generated
-forward receipts, and the v0.1.196 helper must accept the frozen journal.
+**Rollback proofs are separate assets**, named by their digest and listed in
+the signed metadata:
 
-Goose commits each migration separately. The proof injects failure or
-interruption before and after every committed migration and exercises
-representative writes and changed persistent configuration at every reachable
-state. From each state, the retained executable must start and preserve live
-session I/O and recovery records. Every intermediate state must remain
-compatible, or the migration batch must become atomic. A failing seed needs
-a compatible tested path before rollout. Database snapshots are not restored.
+```go
+// internal/release/rollback.go. Asset <sha256>.rollback.json.
+type RollbackProof struct {
+	Schema     int                `json:"schema"`
+	Platform   Platform           `json:"platform"`
+	FromDigest string             `json:"fromDigest"`
+	ToDigest   string             `json:"toDigest"`
+	Forward    string             `json:"forward"` // SHA-256 of the forward receipt
+	Boundaries []RollbackBoundary `json:"boundaries"`
+	Workers    []string           `json:"workers"` // executable digests of the worker fixtures kept alive
+}
+
+type RollbackBoundary struct {
+	State             int  `json:"state"` // database version the source was started on
+	CandidateWrote    bool `json:"candidateWrote"`
+	SourceStarted     bool `json:"sourceStarted"`
+	SessionIO         bool `json:"sessionIO"`
+	RecoveryPreserved bool `json:"recoveryPreserved"`
+}
+```
+
+Goose commits each migration separately, so a failed upgrade can stop at any
+version between the source's and the candidate's. The proof covers each one. A
+test program, `internal/storage/cmd/boundary`, applies the candidate's
+migration files one at a time to a copy of the source's state. At every
+version the retained source executable must start on that copy, list the
+retained session, attach, exchange a token, and keep the recovery record
+byte-identical. At the final version the candidate daemon runs first and makes
+representative writes: a service route, cached session facts, and any
+persistent configuration the release changes. `VerifyRollbackProof` requires
+one passing boundary for every version in the range and a matching forward
+receipt.
+
+A boundary that fails means the release cannot publish. A failing seed is fixed
+by a compatible migration, or by an atomic batch, before rollout.
 
 ### Sessions and services across hops
 
@@ -450,84 +758,140 @@ a compatible tested path before rollout. Database snapshots are not restored.
   fails a hop when any worker's PID or shell PID changed, and that failure
   rolls the hop back.
 - The hard link to each replaced executable stays while a live worker runs it
-  (`internal/updateinstall/prune.go:20`). A session started three hops ago
-  keeps its image.
-- Release compatibility includes all retained worker implementations that can
-  still run, independently of the direct daemon-source window. CI keeps an
-  oldest-worker fixture alive through several daemon and helper upgrades and
-  rollback at every hop. An incompatible candidate fails publication. A live
-  session must not prevent every later update or require termination to finish
-  this plan.
+  (`internal/updateinstall/prune.go:20`).
+- A worker can outlive many daemon releases. `scripts/upgrade-policy.json`
+  lists every worker implementation that can still be running, starting with
+  the seeds' builds. An entry is added whenever the worker protocol or the
+  worker's files change, and none is removed. Every release proves it serves
+  each listed implementation: unit 8 keeps one worker from each alive through
+  several real daemon and helper hops and a rollback at every hop. An
+  incompatible candidate fails publication. A live session never blocks an
+  update and is never ended to allow one.
 - New sessions stay gated during validation (`internal/updategate`).
 - The daemon's own listeners restart with it. A process inside a session, such
   as the PC's model proxy, keeps running and keeps its sockets. Mesh routes to
-  it return when the new daemon starts. Unit 8 measures that gap on every
-  platform.
+  it return when the new daemon starts. Unit 8 keeps a terminal attached and a
+  service stream open across activation, forced rollback and helper
+  replacement, and requires reconnection and a bounded route gap.
 
 ### Failure handling
 
 | What happened | What the updater does |
 | --- | --- |
 | Check, download, space, mount, lock or preflight failed before activation | Retry with backoff from 15 minutes to six hours. The daemon was never stopped. |
-| Activation failed and rollback verified | Persist the failed transition's source and target digests and platform. Exclude it from every later plan, including plans for newer final releases. Replan through a proven alternative or wait for one. |
+| Activation failed and rollback verified | Record a `FailedEdge` for the exact source and target executables. The route search excludes it for every later target and takes another verified hop, or waits for one. |
 | Rollback failed | `attention`. No further hops. The helper keeps both executables and the journal. Recovery follows `.internal/helper-recovery.md`. |
 | A manual operation owns the journal | Wait, and resume when it finishes. |
-| A reachable gate reports failure on the target | Hold that release. |
+| A predecessor is behind, unavailable or refusing | Hold at the release the fleet order allows, and report which peer and why. |
 
-An explicit local retry may clear a named failed transition. A newer final
-release does not clear it. Quarantine records survive restarts and remain
-until no retained route depends on them; they are not evicted by eight newer
-releases. Reports go out through status, below.
+A failed edge is kept while the host still runs its source executable. A newer
+final target does not clear it. It is dropped when the host commits any other
+release, because the host never returns to an older executable, or when a
+local `mesh update --local --yes` names that hop again. Failed edges survive
+restarts and are not limited in number.
 
 ### Fleet order
 
+Order is decided by what predecessors actually committed, recorded durably on
+both sides.
+
+**The record.** Each host keeps its ledger: one entry per committed
+installation. A predecessor answers a new read-only control, `update.evidence`
+(`internal/protocol/control.go`), over the ordinary authenticated transport. It
+needs device access and no update-administrator grant.
+
+```go
+type EvidenceRequest struct {
+	Settled  string `json:"settled,omitempty"` // the reader's own committed version
+	AfterSeq uint64 `json:"afterSeq"`
+	Limit    int    `json:"limit"` // at most 64
+}
+
+type EvidenceReply struct {
+	Mode      string        `json:"mode"`
+	Phase     string        `json:"phase"`
+	Entries   []LedgerEntry `json:"entries"`
+	More      bool          `json:"more"`
+	Failed    []FailedEdge  `json:"failed,omitempty"`
+	Attention string        `json:"attention,omitempty"`
+}
+```
+
+A reader that sends `Settled` is registered as a dependent with that version.
+The predecessor keeps every ledger entry newer than the lowest version among
+its dependents, and always its newest. There is no count limit, so a burst of
+releases cannot push an entry out before a slower dependent has read it. A
+dependent that stops reading is shown in the predecessor's status with the
+number of entries it holds back. It is released when its own policy drops the
+predecessor, or locally with `mesh update policy forget`.
+
+The dependent saves what it reads in `updates/host-peers.json`: per
+predecessor, the entries newer than its own version, the failed edges, and the
+state of the last read with its time.
+
+**The rule.** For each predecessor, take its newest ledger entry committed at
+least `Soak` ago. The host's limit is the lowest of those versions across all
+its predecessors. The host installs the limit when it is newer than its own
+release.
+
+- The limit was committed exactly by one predecessor, and every other
+  predecessor has committed and soaked on that release or a newer one. A
+  canary that is already on a newer release counts for the limit. It does not
+  let the host skip ahead to a release only that canary has run.
+- Predecessors do not need a release in common. One on A, C, E and another on
+  B, D, F give the limit D once both have soaked.
+- A predecessor whose hop failed stays on its old release, so the limit stays
+  at or below it. Its failed edge also holds the same hop on a dependent of
+  the same platform.
+- A predecessor in `attention` holds its dependents at their current release.
+
+**Unavailable predecessors.** The read distinguishes four results, and none of
+them expires into permission:
+
+| Result | Meaning | Effect |
+| --- | --- | --- |
+| offline | No connection | Keep the saved evidence. Advance only as far as it allows. |
+| refused | The peer denied this identity, or presented another identity | Hold. Report the peer and the approval it needs. |
+| unsupported | The peer answers but does not know the control | Hold. The peer is not adopted yet. |
+| invalid | The reply fails validation | Hold and report. |
+
+A host that wakes reads its predecessors before it chooses a target. If a
+predecessor committed a release ten minutes ago and the one before it three
+hours ago, a two-hour soak selects the earlier one now and the later one after
+it has soaked.
+
+**The owner's fleet.** The Pi and the VPS have no predecessors. They are always
+on, so they are the canaries. The Mac follows both with a 30-minute soak. The
+PC follows both with a two-hour soak. Removing a dead canary from a policy is
+a local, explicit change. A new machine has no predecessors.
+
+### Visibility for managing
+
 The host info reply gains an optional summary. `DecodeControl`
-(`internal/protocol/control.go:376`) tolerates unknown fields, so peers on
-older builds keep reading host info.
+(`control.go:376`) tolerates unknown fields, so peers on older builds keep
+reading host info.
 
 ```go
 // protocol.HostInfo.Update
 type HostUpdateSummary struct {
-	Mode    string            `json:"mode"`
-	Phase   string            `json:"phase"`
-	Target  string            `json:"target,omitempty"`
-	Problem *HostProblem      `json:"problem,omitempty"`
-	History []CommittedUpdate `json:"history,omitempty"` // newest 8: version, digest, committedAt
+	Mode         string       `json:"mode"`
+	Installation string       `json:"installation"` // managed | package | client | development
+	Phase        string       `json:"phase"`
+	Target       string       `json:"target,omitempty"`
+	Waiting      string       `json:"waiting,omitempty"` // peer and reason
+	Problem      *HostProblem `json:"problem,omitempty"`
+	Last         *LedgerEntry `json:"last,omitempty"`
 }
 ```
 
-A gated host reads its gate peers' host info with the daemon's own identity,
-through the ordinary authenticated control the dashboard uses. It needs device
-access to the peer and no update-administrator grant. For a release R:
-
-- a gate is **verified** when its history shows R committed at least `Soak`
-  ago;
-- a gate **holds** R when its current problem names R. A problem stays in the
-  summary until a later update commits;
-- a gate gives **no information** when it is unreachable or runs a build with
-  no summary. Once that has lasted `GateWait` without a break, the gate stops
-  counting until it answers again.
-
-The target is the newest release that every counting gate has verified and no
-gate holds. A gated host therefore installs exactly the releases its canaries
-ran, a soak period later. A canary that goes down delays the others by
-`GateWait` once and no longer.
-
-For the owner's fleet: the Pi and the VPS have no gates. They are always on, so
-they are the canaries. The Mac waits for both with a 30-minute soak. The PC
-waits for both with a two-hour soak, so an awake Mac updates before the PC and
-a sleeping Mac never delays it. Both use a 24-hour gate wait. A new machine has
-no gates.
-
-### Visibility for managing
-
 `mesh update fleet [--json]` reads the host info of every member of the local
-saved fleet and prints one row each: version, mode, phase, target, releases
-behind, last committed update and current problem. It exits 0 when every member
-is current, 2 when a member is pending inside its soak and grace, and 1 when a
-member has a problem, has been behind for more than six hours past its soak, or
-has been unreachable for a day. The managing chat's hourly check runs it on the
-PC. The exit status and the `problems` array are how managing is told.
+saved fleet and prints one row each: version, installation kind, mode, phase,
+target, releases behind, what it waits for, last committed update and current
+problem. It exits 0 when every member is current and automatic, 2 when a
+member is pending inside its soak, and 1 when a member has a problem, is not
+automatic, has been behind for more than six hours past its soak, or has been
+unreachable for a day. The managing chat's hourly check runs it on the PC. The
+exit status and the `problems` array are how managing is told.
 
 The dashboard's update attention area (plan 14 unit 5) reads the same summary
 in place of the coordinator policy record.
@@ -535,350 +899,566 @@ in place of the coordinator policy record.
 ### Offline, sleep and reboot
 
 - **Offline.** A failed check retries after 15 minutes. Nothing else changes.
-- **Back after weeks.** The first check plans the chain and runs it. Supported
-  releases need at most two hops.
+- **Back after any absence.** Discovery resumes from the saved cursor and runs
+  as many bounded passes as the distance needs. Supported releases need at
+  most two hops.
 - **Asleep during a hop.** The helper's journal carries the transaction. It
   continues on wake.
 - **Reboot during a hop.** The helper resumes its journal after boot, as today.
   The reboot interrupts sessions, and the result reports them as interrupted
-  (invariant 5). The updater state is on disk and reconciles with the journal
-  at daemon start.
+  (invariant 5). The updater state is on disk and reconciles at daemon start.
 - **Daemon crash between hops.** The next start runs the same step.
 
-### Package-managed and client-only installations
+### Installation kinds
 
-The updater never writes a package-owned executable. On a path that
-`ValidateInstallationPath` rejects (Homebrew, `/usr`, Nix, Snap) the mode is
-manual, status says "package-managed" with the package manager's command, and
-`mesh update fleet` counts the host as behind. A client-only installation has
-no daemon to run the updater and keeps its reminder. The fleet's four machines
-run the daemon from `~/.local/bin/mesh` or its equivalent; the rollout
-inventory confirms that for the Pi, the VPS and the Mac.
+`updatebootstrap.Inspect` and `ValidateInstallationPath`
+(`internal/updateinstall/ownership.go:13`) classify every installation, and
+the kind is reported in every status row.
+
+| Kind | What it is | Policy |
+| --- | --- | --- |
+| managed | Daemon service running a Mesh-managed executable | Automatic by default. |
+| package | Daemon service running an executable a package manager owns | Never counted as current or automatic. Adoption migrates it. |
+| client | No daemon; a command only | Reported as client-only with its version. The reminder stays. |
+| development | Modified or unversioned build | Manual. Reported as such. |
+
+The supported installers already produce a managed daemon. `mesh daemon
+install` and `mesh add` copy the executable to the managed path and write the
+service (`installLocalDaemon`, `internal/cli/install.go:54`), also when the
+command itself came from Homebrew. A Homebrew copy beside a managed daemon is
+a second command. It is listed with its own version and its package manager's
+command (`OtherCommands`, `internal/updateinstall/commands.go:30`) and never
+reported as updated by Mesh.
+
+A daemon that runs from a package-owned path is migrated by adoption: the
+supervisor places the verified executable of the same release at the managed
+path, rewrites only the executable path in the existing service definition,
+restarts the daemon through the helper transaction with rollback, and leaves
+the package's files alone. Until that succeeds the row says `package` and the
+fleet command exits 1.
 
 ### New installations
 
 `scripts/install.sh` and `mesh daemon install` install the update helper with
 the daemon, and `daemon installation-check` verifies that it runs. Today the
 helper appears only at the first update. A fresh machine has no policy file, so
-it is automatic with no gates from its first daemon start.
+it is automatic with no predecessors from its first daemon start.
 
 ### Downloads and cache
 
 - **Host.** One hop's archive at a time, at most 128 MiB (`maximumArchive`),
-  after the existing 128 MiB free-space and required-mount checks. Planning
-  reads at most sixteen manifests of 1 MiB and one map. `update.PruneCache`
-  keeps the installed release and the hop in flight and runs after every
-  commit. The planning cache keeps only manifests named by the current plan.
+  after the existing 128 MiB free-space and required-mount checks. Discovery
+  documents are bounded per pass as above. `update.PruneCache` keeps the
+  installed release and the hop in flight and runs after every commit. The
+  discovery cache keeps verified pages at or after the host's own position.
   `MESH_UPDATE_CACHE_DIR` and `MESH_UPDATE_REQUIRED_MOUNT` apply unchanged.
 - **Rollback images.** Unchanged: the latest previous executable, plus any
   image a live worker still runs.
-- **CI.** Source executables are immutable, so the proof jobs cache them by tag
-  and platform and download only new ones. Uncached, 40 sources are about 440
-  MB per platform. Published manifests are cached the same way.
+- **CI.** Source executables, manifests and receipts are immutable, so the
+  proof jobs cache them by tag and platform and download only new ones.
 
 ### The coordinator policy
 
 The consent-bound policy and the host updater would compete for the same
 journal. Until the policy is removed, the updater stays idle on a host with an
 enabled recipient consent (`automatic-consent.json`). No fleet machine has one.
-Unit 11 removes the policy, its CLI and its integration test after the fleet
-runs on the host updater. `mesh update` fleet operations, administrator trust
-and configuration delivery are untouched.
+Unit 13 removes the policy after the fleet runs on the host updater. `mesh
+update` fleet operations, administrator trust and configuration delivery are
+untouched.
 
-## The existing fleet's one-time transition
+## Adopting the existing fleet
 
 v0.1.249, v0.1.255 and v0.1.257 contain no code that installs a release
-without an approval. A published release changes what a machine does only
-after that machine runs it. Each of the four machines therefore needs exactly
-one approved installation that starts outside its daemon. After that hop it
-runs the host updater and needs nothing more.
+without an approval, and publishing a release cannot change that. Something
+that already has authority on each machine must start the new code there. That
+authority exists: software running in the daemon's own account can read the
+identity key and sign local update controls as the host itself. The PC's
+administrator policy holding only its own identity blocks other machines. It
+does not block the PC's own account.
 
-- **The hop is direct.** The activation release is the first release with
-  units 1 to 9. Its manifest lists transitions from the three seed executables,
-  with rollback proof. The installed CLI's existing command does the rest:
-  `mesh update --local --version ACTIVATION --yes --json`. No intermediate
-  version is searched for or installed.
-- **What old code does in that hop.** The old CLI previews with its own
-  `Allows`, submits a one-host plan to its own daemon over the Unix socket, and
-  the old daemon installs or starts its helper, re-reads the manifest with its
-  strict decoder, stages and grants. The old helper activates the new daemon
-  and judges its health. All of that is code we cannot change, which is why the
-  manifest format is frozen and why CI runs this exact path first.
-- **Exact pairs.** A hop is run by a daemon and a helper. The PC's pair is the
-  v0.1.249 daemon with the v0.1.196 helper, stopped. Unit 8 installs each
-  machine's real pair from published archives on its native platform, opens a
-  live session, runs the old CLI's command against the candidate, and requires
-  the session to survive. The Pi, VPS and Mac pairs come from the read-only
-  inventory. An installed executable that differs from its published artifact
-  uses the existing `baseline_OS_ARCH_SHA256.bin` path.
-- **If a pair fails in CI.** The fix goes into the candidate, where
-  compatibility code is allowed. If the v0.1.196 helper cannot judge the new
-  daemon at all, a conditional unit adds an `update-helper refresh` command
-  that the new executable runs from a side path to promote the helper while the
-  journal is committed. Build it only if unit 8 shows the need.
-- **The PC.** The PC's administrator policy holds one key, the PC's own
-  identity, so no other machine can start its hop. The one command runs on the PC, last, after the
-  other three machines have each taken a later release with no action, and
-  after managing has agreed to a time.
+Adoption uses that authority as a product operation. The same operation is the
+supported way to bring any existing installation into the automatic policy.
+
+### The operation on one host
+
+`mesh update adopt` runs from a verified executable of the pinned release that
+sits outside the installed path. The work is durable in
+`updates/adoption.json` and is carried by the helper service, which outlives
+the daemon.
+
+```go
+// internal/update/adoption.go
+type Adoption struct {
+	Schema     int             `json:"schema"`
+	ID         string          `json:"id"` // one identifier for the fleet operation
+	Pinned     PlannedRelease  `json:"pinned"`
+	Signature  string          `json:"signature"` // SHA-256 of mesh-update.sig.json
+	Host       AdoptionHost    `json:"host"`
+	Policy     HostPolicy      `json:"policy"`  // written before activation
+	Require    []AdoptionPeer  `json:"require"` // hosts that must finish first
+	Notice     *AdoptionNotice `json:"notice,omitempty"`
+	Remotes    []AdoptionRemote `json:"remotes,omitempty"` // on the starting host only
+	Phase      AdoptionPhase   `json:"phase"`
+	Request    string          `json:"request,omitempty"`
+	Generation uint64          `json:"generation,omitempty"`
+	Problem    string          `json:"problem,omitempty"`
+}
+
+type AdoptionHost struct {
+	ID           string              `json:"id"`
+	Build        release.Build       `json:"build"`
+	Installation string              `json:"installation"`
+	Service      updateinstall.ServiceSpec `json:"service"`
+	Helper       string              `json:"helper"`    // receipt digest before adoption
+	Preserved    map[string]string   `json:"preserved"` // file name to SHA-256
+}
+
+type AdoptionPeer struct {
+	ID        string `json:"id"`
+	Adopted   bool   `json:"adopted"`   // ledger entry with origin adoption
+	Unattended bool  `json:"unattended"` // a later ledger entry with origin host
+}
+
+type AdoptionNotice struct {
+	Command     []string  `json:"command"` // run without a shell
+	Lead        Duration  `json:"lead"`
+	DeliveredAt time.Time `json:"deliveredAt,omitempty"`
+}
+
+type AdoptionRemote struct {
+	ID      string `json:"id"`
+	SSH     string `json:"ssh"` // alias in the account's SSH configuration
+	State   string `json:"state"`
+	Problem string `json:"problem,omitempty"`
+}
+```
+
+The phases run in this order, and each is safe to repeat:
+
+1. **Inspect.** `updatebootstrap.Inspect` (`internal/updatebootstrap/probe.go:46`)
+   reads the running daemon's executable, identity, build, state version and
+   workers. The supervisor adds the installation kind, the service definition,
+   the journal and the helper receipt and process. The journal must be in a
+   finished phase.
+2. **Verify.** The pinned metadata, signature and manifest are verified with
+   the executable's own trust root. The manifest must allow the observed build
+   by exact digest, with a forward receipt and a rollback proof. Every live
+   worker must be compatible. The executable's own digest must equal the
+   manifest's artifact for this platform.
+3. **Record what must not change.** SHA-256 of the identity's public half,
+   `authorized_keys`, `updates/administrators.json`, the device grants, the
+   daemon's service definition, and the host book, fleet and domain files.
+   State paths, the cache directory and the required mount come from the
+   journal's settings and the service definition and are used as they are.
+4. **Seed the policy.** Write `updates/host-policy.json` with the mode,
+   predecessors and soak for this host. The old daemon ignores the file. The
+   new daemon reads it at its first start, so there is no window in which it
+   runs with a default.
+5. **Become the helper.** `PromoteHelper` makes the verified executable the
+   helper image and starts it under the existing helper unit. On the PC this
+   also ends the stopped v0.1.196 helper. From here the helper process carries
+   the adoption: `updateHelperStep` gains `resumeAdoption` beside
+   `resumePendingCoordinatorSetup`.
+6. **Wait.** The helper reads `update.evidence` from each required host until
+   every one shows an adoption commit followed by a later unattended commit
+   with all workers preserved. An unavailable, refusing or not-yet-adopted
+   peer keeps the host waiting and is reported. Nothing waives it.
+7. **Notify.** When a notice is configured, the helper runs its command. A
+   zero exit records the delivery time. A failure is retried with backoff and
+   blocks activation. After delivery the helper waits the lead time, then
+   checks step 6 once more.
+8. **Activate.** The helper signs `info`, `stage` and `grant` as the host's own
+   identity and sends them to the old daemon over the Unix socket. The old
+   daemon runs its own staging code: it finds the helper present, re-reads the
+   pinned manifest from the origin, compares digests, downloads the candidate
+   and writes the journal. The new helper then runs the activation with the
+   current transaction code, verifies the new daemon and every retained
+   worker, and commits or rolls back.
+9. **Confirm.** After the commit the helper checks that the files from step 3
+   are unchanged, that the daemon runs the pinned executable under the same
+   service with the same arguments and environment, and that the seeded policy
+   is in force. It writes a ledger entry with origin `adoption`.
+
+A rollback leaves the old daemon running with the new helper, which is an
+accepted pair. The record becomes `rolled-back`, the edge is recorded as
+failed, and the fleet operation stops at that host until a release that fixes
+the cause is pinned by a new start.
+
+What adoption never does: it sends no update control to another host, starts
+no Mesh session to run commands, and never calls the legacy session bootstrap
+(`Coordinator.bootstrap`, `internal/update/legacy.go`). A refused control or
+evidence read is a blocker with the peer named, and stays one.
+
+### The fleet operation
+
+It starts once, on the PC, in the owner's account, from the verified
+executable:
+
+```text
+SIDE/mesh update adopt start --release ACTIVATION --fleet ~/.config/mesh/fleet.json \
+  --ssh PI=pi --ssh VPS=vps --ssh MAC=shaul-mac \
+  --canary PI --canary VPS --last LOCAL \
+  --notice-lead 30m --notice -- t3 thread send MANAGING_THREAD "..."
+```
+
+That one start is the bootstrap. Nobody runs an update command on any machine
+afterwards, and nobody chooses or installs an intermediate release.
+
+- The command verifies and inspects locally, writes the PC's record with all
+  three other machines required and the notice attached, seeds the PC's
+  policy, and promotes the PC's helper. The PC's daemon is not touched.
+- The PC's helper then deploys to each remote host over the SSH alias given
+  for it, using the SSH client Mesh already has (`connectSSH`,
+  `internal/bootstrap/ssh.go:65`; `applySSHConfig`, `ssh_config.go:69`) with
+  the account's own configuration and known hosts, and no prompts. The remote
+  steps are fixed: download the platform archive from the release origin,
+  compare its SHA-256 and the executable's with the values from the signed
+  manifest, and run `mesh update adopt start --local` with the host's record
+  on standard input. The remote executable verifies the signature again
+  itself. A host that is asleep is retried with backoff. A host with no alias,
+  a failing login, or an SSH account that differs from the daemon's account is
+  `blocked` with that exact reason.
+- The Pi and the VPS require nobody, so they activate at once. The Mac
+  requires both of them. The PC requires all three.
+- Each requirement needs a release published after the adoption, so that the
+  host can update unattended. Mesh publishes on every merge to main, which is
+  several times a day.
+- When the PC's requirements hold, its helper notifies managing, waits the
+  lead time, and activates the PC. No go-ahead is awaited.
+
+`SIDE/mesh update adopt status --json` and `SIDE/mesh update fleet --json` are
+read-only and work before the PC is adopted, because the side executable is
+the new command.
+
+### What the operation needs
+
+These are the only things outside the product. Each is checked by the start
+command before anything is written, and a missing one is reported as the exact
+blocker.
+
+1. **One start in the PC's account.** The lane coordinator's shell in the
+   owner's account is the already-authorized execution. Before the start it
+   downloads the pinned archive and verifies it with the official verifier:
+   `gh attestation verify ARCHIVE --repo ShaulLavo/mesh --signer-workflow
+   ShaulLavo/mesh/.github/workflows/release.yml --source-ref refs/heads/main
+   --deny-self-hosted-runners`.
+2. **Non-interactive system SSH from the PC's account to each daemon's
+   account.** The aliases `pi`, `vps` (root) and `shaul-mac` exist in the PC's
+   SSH configuration. Key authentication without a prompt is confirmed at
+   start.
+3. **Device access for evidence reads.** The PC must be an approved device on
+   the Pi, the VPS and the Mac, and the Mac on the Pi and the VPS. The
+   dashboard already relies on the first.
+4. **A notice command.** `t3 thread send` exists on the PC. The managing
+   thread's identifier is supplied at start.
 
 ## Implementation units
 
 Each unit is one pull request with its own independent review. Hours are agent
-hours for implementation and one review round, from comparable Mesh work.
-Replace each with the measured time when it lands. Until unit 9, the default
-mode constant is manual, so intermediate releases change no behavior.
+hours for implementation and one review round. Replace each with the measured
+time when it lands. Until unit 11 the default mode constant is manual, so
+earlier releases change no behavior.
 
 | Unit | Outcome | Depends on | Hours |
 | --- | --- | --- | --- |
-| 1 | Graph tool, policy file, upgrade map type | none | 1.5 |
-| 2 | Publisher proves the supported set and refuses gaps | 1 | 3.5 |
-| 3 | Rollback boundaries and separate rollback proofs | 2 | 2.5 |
-| 4 | Chain planner | 1 | 2 |
-| 5 | Helper stays current and running | none | 2 |
-| 6 | Host updater | 4, 5 | 5 |
-| 7 | Status, policy and fleet commands | 6 | 3.5 |
-| 8 | Installed catch-up proofs in CI | 3, 6 | 5 |
-| 9 | Gates, installer default, automatic by default | 7, 8 | 4 |
-| 10 | Fleet activation | 9 | 3, over two days |
-| 11 | Remove the coordinator policy, write the ADR | 10 | 2.5 |
+| 1 | Signed metadata, verifier, signing in the publisher | none | 5 |
+| 2 | Discovery formats, pages and route search | none | 4.5 |
+| 3 | Publisher: sources, seeds, verified graph, retention | 1, 2, 4 | 5.5 |
+| 4 | Rollback proofs at every migration boundary | none | 4 |
+| 5 | Helper stays current; promotion from a verified executable | none | 2.5 |
+| 6 | Host updater: state, fence, failed edges, ledger | 1, 2, 5 | 6 |
+| 7 | Fleet order from evidence | 6 | 4 |
+| 8 | Installed proofs in CI | 3, 6, 7, 10 | 9 |
+| 9 | Status, policy and fleet commands, installation kinds | 6 | 4 |
+| 10 | Adoption operation | 1, 5, 6, 7 | 6.5 |
+| 11 | Installer and automatic default | 8, 9 | 2 |
+| 12 | Fleet adoption | 11 | 3, over several days |
+| 13 | Remove the coordinator policy, write the ADR | 12 | 2.5 |
 
-Units 1 and 5 start at once. Units 2 and 4 start when unit 1 merges. About 35
-agent hours in total.
+About 59 agent hours. Units 1, 2, 4 and 5 start at once and share no files.
+Unit 6 starts when 1, 2 and 5 merge, and unit 3 when 1, 2 and 4 merge. Units
+7 and 9 follow 6 in parallel, then unit 10, then unit 8.
 
-**Unit 1: graph tool and map type.** Files: `scripts/upgrade_graph.py`,
-`scripts/test-upgrade-graph.py`, `scripts/upgrade-policy.json`,
-`internal/release/upgrademap.go` and its test, fixtures under
-`internal/release/testdata/published/`. Tests: the tool reproduces the three
-published chains above from recorded real manifests; it reports the missing
-v0.1.269 source of v0.1.272; anchor selection is deterministic for a recorded
-release list; the map round-trips and rejects unknown fields and oversize
-input.
+**Unit 1: signed metadata.** Files: `internal/release/metadata.go`,
+`signature.go`, `internal/release/trust/` (embedded root version 1),
+`internal/release/cmd/sign` (bundle to envelope, and verify),
+`.github/workflows/release.yml`, `scripts/check-packaging.sh`. Tests on a
+recorded real bundle and generated certificates: a missing envelope, an
+invalid signature, a certificate from another authority, another workflow,
+another ref, another repository identifier and a self-hosted runner are each
+refused; an altered manifest, metadata file, archive or page is refused; an
+envelope with only unknown kinds is refused, and one with an unknown kind
+beside a valid one verifies; a failed signing step or a failed `gh attestation
+verify` leaves the draft unpublished; the candidate verifies under each prior
+trust version.
 
-**Unit 2: publisher.** Files: `scripts/prepare-release-baselines.sh` and its
-test, `.github/workflows/release.yml`, `scripts/check-packaging.sh`,
-`internal/release/cmd/manifest`. Every planned source is required. Source
-executables and manifests are cached. The six refusal rules run before
-`finalize-release.sh`, and the map is uploaded with the manifest. Tests: each
-refusal rule fails publication on a fixture; a failed source download fails the
-job; the generated manifest decodes with the v0.1.249 decoder (a frozen copy of
-its struct in testdata). `ci.yml` gains a path-filtered pull-request job on the
-three native runners that runs the forward proof from the previous release,
-the newest anchor and the seeds against a candidate built from the pull
-request. This unit's own pull request must pass it for every seed, so the
-first policy release cannot fail publication. Measure proof time per source.
-Shard the sources across matrix jobs if a platform passes ten minutes.
+**Unit 2: discovery and routes.** Files: `internal/release/discovery.go`,
+`route.go`, `internal/update/host_discovery.go` and tests. Tests: the 0, 24,
+48, 52 case with the newest sixteen anchors not admitting 0; a thirteen-hop
+route completes; 2,000 anchors resolve within the per-pass budget and no
+document exceeds its bound; a pass that hits its budget resumes from the saved
+cursor without repeating fetches; a page whose digest differs is refused; a
+reader of epoch 1 facing a root of epoch 3 follows `Previous` twice, installs
+the first waypoint, and never opens a newer document; a failed edge makes the
+search choose the next farthest anchor.
 
-**Unit 3: rollback leg.** Files: `scripts/prove-release-transition.sh`,
-`scripts/test-release-transition.py`, `scripts/assemble-release-compatibility.py`,
-`internal/release/bridge.go`, `integration/release_transition_checkpoint.sh`.
-The pull-request job from unit 2 runs the rollback leg too. Tests: a candidate
-with an unreadable intermediate migration state fails the proof; failure and
-interruption at every migration boundary preserve rollback and session I/O;
-the actual old receipt reader accepts the generated schema 1 forward proof;
-an automatic hop without the separate matching rollback proof is refused.
-The rollback leg becomes required for publication only after it passes for
-every seed on this unit's pull request. Worker fixtures created by the oldest
-retained implementation stay alive across several upgrades and rollbacks.
+**Unit 3: publisher.** Files: `internal/release/cmd/routes`,
+`scripts/upgrade-policy.json`, `scripts/prepare-release-baselines.sh` and its
+test, `scripts/assemble-release-compatibility.py`,
+`internal/release/cmd/manifest`, `.github/workflows/release.yml`, `ci.yml`.
+The tool selects anchors and the window, builds pages, metadata and the root,
+verifies edges from receipt bytes, and checks retention. Tests: a window at
+exactly thirty days and one day short; a pace of twenty releases a day widens
+the window without failing; a corrupt receipt, a receipt for another
+transition and a missing proof are each no edge; a source download that fails
+twice and then succeeds passes, and one that keeps failing blocks publication;
+a deleted or replaced retained asset blocks publication; the generated
+manifest and receipts decode with the published v0.1.249 executable. The unit
+also selects and commits the seed list after proving every seed. `ci.yml` gains
+a path-filtered pull-request job on the three native runners that runs the
+forward and rollback proofs from the previous release, the newest anchor and
+the fleet seeds against a candidate built from the pull request. Measure proof
+time per source and shard across matrix jobs if a platform passes ten minutes.
 
-**Unit 4: planner.** Files: `internal/release/plan.go` and its test,
-`internal/cli/update_bridge.go`, `internal/cli/update_readiness.go`; delete
-`Client.Bridge`. `mesh update --check` shows the whole chain. Tests on the
-recorded manifests: with a map that names v0.1.257, 266, 274, 284, 293 and 304
-as anchors and rollback proof not required, v0.1.249 to v0.1.306 plans the
-seven published hops; a direct transition plans one hop; a map whose anchor
-digest differs is refused; the manifest and time budgets hold; with rollback
-proof required, a hop that lacks it is never planned.
+**Unit 4: rollback proofs.** Files: `internal/release/rollback.go`,
+`internal/storage/cmd/boundary`, `scripts/prove-release-transition.sh`,
+`scripts/test-release-transition.py`,
+`integration/release_transition_checkpoint.sh`. Tests: a candidate whose
+intermediate state the source cannot start on fails; a failure injected at
+each boundary still yields a running source with session I/O and unchanged
+recovery records; a proof that skips a version, or names another forward
+receipt, is refused; the forward receipt stays byte-compatible with schema 1.
 
 **Unit 5: helper currency.** Files: `internal/updateinstall/helper.go`,
-`helper_probe.go`, `internal/cli/update_helper.go` and tests. Promotion after
-commit depends on the journal check. A new `EnsureCurrentHelper` promotes and
-starts a stale or stopped helper when the journal is finished. Tests: a helper
-three state versions behind is promoted after a commit; a stopped helper is
-started before a hop; a failed start restores the prior helper and reports;
+`helper_probe.go`, `helper_recovery.go`, `internal/cli/update_helper.go` and
+tests. Tests: a helper three state versions behind is promoted after a commit;
+`PromoteHelper` on a committed journal binds the new process to its image; a
+stopped helper is started before a hop; a failed start restores the prior
+helper and reports; an interrupted promotion recovers;
 `scripts/prove-helper-recovery.sh` still passes. Diagnose here why the PC's
 unit is inactive after boot.
 
 **Unit 6: host updater.** Files: `internal/update/host_updater.go`,
-`host_policy.go`, `host_state.go` and tests, `internal/daemon/update.go`,
-`internal/daemon/app.go`, `internal/updatenotice/notice.go`. Tests with the
-real engine and a fake service: a two-hop plan commits both hops with one
-worker identity throughout; a daemon restart between hops resumes; a
-rolled-back hop remains excluded when more than eight newer targets still
-require it, and a verified alternative proceeds; policy off and revision
-changes race download, stage, retry and grant without issuing later work;
-manual mode reconciles already-issued work; malformed policy fails closed; a failure
-before activation backs off without stopping the daemon; a manual operation in
-the journal makes the updater wait; a package-owned path and a development
-build stay manual; an enabled recipient consent keeps it idle.
+`host_policy.go`, `host_state.go` and tests, `internal/updateinstall/engine.go`
+(`authorize`), `internal/daemon/update.go`, `internal/daemon/app.go`. Tests
+with the real engine and a fake service: a two-hop route commits both hops
+with one worker identity throughout; a daemon restart between hops resumes; a
+hop that rolls back stays excluded across restarts and across more than eight
+newer targets that route through it, and a verified alternative proceeds;
+`policy off` and a revision change racing download, stage, retry and grant
+issue no later work; manual mode records the result of work already granted;
+a malformed policy sets `attention` and starts nothing; a failure before
+activation backs off without stopping the daemon; a manual operation in the
+journal makes the updater wait; a package-owned path and a development build
+stay manual; an enabled recipient consent keeps it idle; an unsigned or
+wrongly signed hop is never staged.
 
-**Unit 7: status and commands.** Files: `internal/protocol/control.go`,
+**Unit 7: fleet order.** Files: `internal/update/host_order.go` and its test,
+`internal/protocol/control.go`, `internal/daemon` control handling. Tests with
+three daemons: disjoint histories give the lower newest release; a burst of
+twenty commits inside one soak loses no entry a dependent still needs; a host
+that wakes during a soak takes the earlier soaked release, then the later one;
+a canary on a newer release does not let a dependent skip to it; a failed hop
+on a predecessor holds dependents below it and holds the same edge on the same
+platform; offline, refused, unsupported and invalid reads are reported apart
+and none releases the hold after any time; a dependent that settles lets the
+predecessor prune.
+
+**Unit 8: installed proofs.** Files: `scripts/prove-installed-catchup.sh` and
+`.py`, `scripts/fixtures/fleet-baselines.json`, `.github/workflows/ci.yml`,
+`release.yml`. It reuses `scripts/fixtures/published_releases.py` and `tls.py`
+for a loopback release origin. The service manager is real: a systemd user
+manager on Linux runners and the launchd `gui` domain on macOS runners,
+confirmed before the rest is built. A platform without a usable hosted manager
+runs in a disposable CI VM with the real manager. A command provider is a
+supplement and does not satisfy this gate. Every scenario keeps a terminal
+attached and a service stream open, and checks reconnection, unchanged worker,
+shell and listener identities, the route gap and the helper process.
+
+1. *Adoption pairs.* Install each fleet pair from published archives,
+   including the PC's v0.1.249 daemon with a stopped v0.1.196 helper. Run the
+   adoption operation to the candidate. Require the preserved files unchanged,
+   the seeded policy in force at the first start, and the sessions intact.
+   Force a failing candidate and require a verified rollback to the old
+   daemon. Run the published v0.1.249 receipt reader and the v0.1.196 journal
+   reader against the generated assets.
+2. *Published updater.* Install the first published release that contains the
+   host updater, in explicit automatic mode, and let it reach the candidate
+   through an actually installed intermediate daemon and helper. Variants
+   interrupt helper replacement, restart between hops, and fail the second hop
+   to check rollback and the persistent failed edge.
+3. *Oldest workers.* Keep one worker from each listed implementation alive
+   across several real hops, with a rollback at every hop.
+4. *First updater forever.* Retain that first updater release as an installed
+   baseline. Its original reader must reach every candidate through retained
+   releases, including a fixture epoch with an incompatible manifest that it
+   reaches through a waypoint.
+5. *Order.* Three installed hosts with predecessors run through a burst of
+   releases, one failing canary and one sleeping host.
+
+At publication the scenarios run against the draft's real assets and real
+signature. On pull requests the candidate is built with a test trust root
+under a build tag, and that build is never published. The job joins `Complete
+CI gate` for pull requests that touch update, storage, migration, worker,
+protocol, daemon or release-script paths.
+
+**Unit 9: status and commands.** Files: `internal/protocol/control.go`,
 `internal/daemon` host info, `internal/cli/update_policy.go`,
-`internal/cli/update_fleet.go`, `internal/tui/dashboard_*`,
-`docs/guides/updates.md`, `docs/reference/cli.md` (generated). On a host with
-the updater, `mesh update --local --yes` hands the target to the updater, which
-runs its plan now. Tests: policy changes are refused from a network peer; a
-local run clears a quarantine; `mesh update fleet --json` reports
-current, behind, failed and unreachable members with exit 0, 2 and 1; an older
-peer without the summary reads as no information.
+`internal/cli/update_fleet.go`, `internal/cli/update_bridge.go`,
+`update_readiness.go`, `internal/tui/dashboard_*`, `docs/guides/updates.md`,
+`docs/reference/cli.md` (generated). The policy commands are `show`, `set`,
+`off` and `forget`. `mesh update --local --yes` on a host with the updater
+hands the target to it. Tests: policy changes are refused
+from a network peer; `mesh update fleet --json` reports current, behind,
+waiting, failed, package, client and unreachable members with exit 0, 2 and 1;
+an older peer without the summary reads as not adopted.
 
-**Unit 8: installed catch-up proofs.** Files:
-`scripts/prove-installed-catchup.sh` and `.py`,
-`scripts/fixtures/fleet-baselines.json`, `.github/workflows/ci.yml`,
-`.github/workflows/release.yml`. It reuses `scripts/fixtures/published_releases.py`
-and `tls.py` for a loopback release origin, as the helper-recovery proof does.
-Three scenarios on each native platform:
+**Unit 10: adoption.** Files: `internal/update/adoption.go` and its test,
+`internal/cli/update_adopt.go`, `internal/cli/update_helper.go`,
+`internal/bootstrap` (an exported non-interactive runner over the existing SSH
+client). Tests with a real old daemon: the supervisor signs as the host and
+the old daemon stages the pinned manifest; a manifest or signature that
+differs from the pin stops before any control is sent; the policy file exists
+before the new daemon's first start; identity, administrators, device grants,
+service definition and state paths are unchanged; a required peer that is
+offline, refusing or not adopted keeps the host waiting with that reason and
+never falls back to a session; the notice command must succeed before
+activation, and its lead time is honored; the last host activates only after
+every required host shows an adoption commit and a later unattended one; a
+package-owned daemon is migrated to the managed path with its service
+arguments intact; a killed helper resumes at the same phase.
 
-1. *Legacy pair.* Install each fleet pair from published archives, open a
-   session running a small listener, run the old CLI's local update to the
-   candidate, and require the same worker PID, shell PID, listener PID and
-   terminal I/O afterwards. Then force a failed candidate and require a
-   verified rollback with the session intact.
-2. *Automatic chain.* Before automatic defaults are enabled, publish an
-   updater-capable release that remains manual by default. Install that exact
-   published build in explicit automatic mode and run through an actually
-   installed intermediate daemon and helper to the candidate. Require both
-   hops unattended with the oldest retained worker alive after each. Variants
-   interrupt helper replacement, restart between hops, and fail the second
-   hop to verify rollback and persistent failed-transition quarantine. Three
-   labelled builds of current source may supplement this test.
-3. *Activation release forever.* Retain the first published updater build as
-   an installed baseline. Its original updater must reach every candidate
-   through retained releases and discovery metadata. Include a deliberately
-   incompatible future format reached through a compatible waypoint.
+**Unit 11: defaults.** Files: `scripts/install.sh`, `scripts/install/linux.sh`,
+`darwin.sh`, `internal/cli/install.go`, the default mode constant. Tests: a
+fresh install runs a helper and is automatic at its first start. The release
+that contains this unit is the activation release.
 
-The service manager is real: a systemd user manager on Linux runners and the
-launchd `gui` domain on macOS runners. Confirm both work on hosted runners
-before building the rest. A platform without a usable hosted manager runs the
-installed proof in a disposable CI VM with the real native manager. A command
-provider is a supplemental test and does not satisfy this gate. Keep a terminal
-attached and a service request or stream active across activation, forced
-rollback and helper replacement. Verify reconnection, unchanged worker,
-shell and listener identities, the route gap, helper process identity,
-failed-start restoration and interruption recovery before rollout. The job
-joins `Complete CI gate` and runs on pull requests that touch
-update, storage, migration, worker, protocol, daemon or release-script paths,
-so upgrade breakage is caught before merge.
+**Unit 12: fleet adoption.** The rollout below. No code.
 
-**Unit 9: gates and defaults.** Files: `internal/update/host_gates.go` and its
-test, `scripts/install.sh`, `scripts/install/linux.sh`, `darwin.sh`,
-`internal/cli/install.go`, the default mode constant. Tests with three daemons:
-a gated host installs only after its gates have soaked; a gate failure holds
-the release; an unreachable gate stops counting after the wait; a fresh
-install runs a helper and is automatic. This is the pull request whose release
-becomes the activation release.
+**Unit 13: removal.** Delete only consent-policy-specific code in
+`internal/update/automatic*.go`, `internal/cli/update_automatic.go`,
+`integration/automatic_fleet_updates.sh` and its tests and docs sections.
+Retain `internal/update/joined.go` and the ordinary coordinator's
+installation-joining and cancellation tests: `coordinator.go:224`, `:266`,
+`:389` and `:394` use those functions for manual fleet operations. Add
+`docs/adr/009-each-host-updates-itself.md`. Mark plan 14's binary steps closed
+and turn `/work/reports/mesh-auto-update/PLAN.md` into a pointer to this file.
 
-**Unit 10: fleet activation.** The runbook below. No code.
-
-**Unit 11: removal.** Delete only consent-policy-specific code in
-`internal/update/automatic*.go`,
-`internal/cli/update_automatic.go`, `integration/automatic_fleet_updates.sh`
-and its tests and docs sections. Retain `internal/update/joined.go` and the
-ordinary coordinator's installation-joining and cancellation tests; those
-functions serve manual fleet operations. Add `docs/adr/009-each-host-updates-itself.md`.
-Mark plan 14's binary steps closed and turn
-`/work/reports/mesh-auto-update/PLAN.md` into a pointer to this file.
-
-## Rollout runbook
+## Rollout
 
 The lane coordinator runs this. Every step records its output under
 `/work/reports/mesh-auto-update/rollout/`.
 
-**0. Inventory, read-only, any time.** On each machine, through its usual
-access: `mesh version --json`; the phase, release and settings of
-`update/installation.json`; the helper receipt digest and the helper unit's
-state; the executable path; the count of update administrators; live sessions;
-free space. The PC is recorded in the design evidence. The result fills
-`fleet-baselines.json` for unit 8.
+**0. Inventory, read-only, any time.** For each machine: `mesh version
+--json`; the phase, release and settings of `update/installation.json`; the
+helper receipt digest and the helper unit's state; the executable path and
+installation kind; the daemon's account; live sessions; free space. The PC is
+recorded in the design evidence. The result fills `fleet-baselines.json` for
+unit 8.
 
-**1. Activation release.** It is published by normal CI. Unit 8 is green for
-all four fleet pairs. On each machine `mesh update --local --check --json
---version ACTIVATION` shows a direct tested transition and compatible workers.
-`--check` installs nothing.
+**1. Activation release.** It is published by normal CI, signed, with unit 8
+green for all four fleet pairs.
 
-**2. Pi.** Run the one command on the Pi. Check the daemon version, each
-session's PID, a running and current helper, `mesh update policy show`, and
-`mesh update fleet`. Then wait for the next published release and watch the Pi
-take it with no action. That second update is the proof of autonomy. Measure
-the route gap and what an attached remote client sees during the restart. Fix
-session or service reconnection failures before continuing rollout.
+**2. Start.** On the PC, download the activation archive, verify it with `gh
+attestation verify`, extract it to a side directory, and run the start command
+from the adoption section. Its preflight confirms the four needs. Record the
+operation identifier.
 
-**3. VPS.** The same, in the root account its daemon uses. The Pi and the VPS
-are the canaries from here on.
+**3. Watch.** `SIDE/mesh update adopt status --json` shows each host's phase
+and what it waits for. Expected order: the Pi and the VPS adopt; the next
+release reaches both unattended; the Mac adopts when it is awake; the next
+release reaches it; the PC's helper notifies managing, waits the lead time,
+and adopts the PC. The coordinator relays nothing by hand and runs nothing on
+any machine.
 
-**4. Mac.** Set its gates: `mesh update policy set --after PI --after VPS
---soak 30m`. Run the one command. Check launchd, the helper and the sessions.
-Close the lid across one release and confirm the Mac catches up after waking.
+**4. Check each adoption as it lands.** The daemon version, each session's
+PID, the helper, the policy, and the preserved files. On the PC also the model
+proxy session's PID and replies and the managing chat's sessions. A session or
+service that does not survive is a defect to fix in a release before the
+operation continues to the next host.
 
-**5. PC, last.** Preconditions: the Pi, the VPS and the Mac have each taken at
-least one later release unattended with sessions intact; the PC's check shows
-a direct transition and every live worker compatible, including the model
-proxy's session and the managing chat's sessions; `/work` is mounted with
-space. The coordinator tells managing what will happen (one daemon restart,
-its measured length, sessions keep running, attached clients reconnect), what
-rollback does, and how to recover if rollback fails (local terminal or system
-SSH, `.internal/helper-recovery.md`), then waits for managing's go-ahead and
-time. Run the one command on the PC. Set its gates: after the Pi and the VPS,
-a two-hour soak, a 24-hour gate wait. Check the daemon, the model
-proxy session's PID and replies, the managing chat's sessions, the helper, and
-`mesh update fleet` exit 0.
+**5. Finish line.** The next release reaches the Pi and the VPS, then the Mac,
+then the PC, with no action from anyone, and `mesh update fleet` exits 0. Add
+the fleet command to the managing chat's hourly check. Then run unit 13.
 
-**6. Finish line.** The next release reaches the Pi and the VPS, then the Mac,
-then the PC, with no action from anyone, and `mesh update fleet` reports it.
-Add the fleet command to the managing chat's hourly check. Then run unit 11.
+**Stop conditions.** A hop that rolled back stops the operation at that host,
+and the hosts that require it stay where they are. A failed rollback is
+reported to managing at once. Nothing is retried by raising a timeout, editing
+a journal or a record, or running an update command by hand.
 
-**Stop conditions.** A failed hop that rolled back stops the rollout at that
-machine. Nothing else is touched until the cause is fixed in a new release. A
-failed rollback is reported to managing at once. No step is retried by raising
-a timeout or editing the journal.
+## Out of scope
 
-## Non-goals
-
-- A Homebrew, apt or Nix adapter. Package-owned installations are reported and
-  left to their package manager.
-- Automatic updates for client-only installations.
 - A central fleet database or a permanent coordinator.
 - Downgrades. A host never installs an older release.
 - Pre-release or alternate channels.
-- Automatic repair after a failed rollback. That stays a person's decision.
+- Automatic repair after a failed rollback. The helper keeps both executables
+  and reports; a person decides.
 
-## Risks and decisions
+## Risks
 
-1. **The PC needs one command.** The brief for this design says no manual PC
-   update. The PC's installed code cannot start an update by itself, and the
-   PC trusts no other administrator, so one PC-local command is unavoidable.
-   The runbook makes it the last step, behind three unattended machines and
-   managing's go-ahead. The coordinator should confirm this reading with
-   managing before step 5.
-2. **Removing the coordinator policy** deletes recently merged work (#395 and
-   the binary half of #414). It was never enrolled on the fleet, and the goal
-   it served is now met differently. This is the largest judgment call here,
-   and the reviewer should test it.
-3. **Releases are not signed.** The owner's plan says "signed releases". What
-   exists is a fixed HTTPS origin plus hashes. With unattended installs, a
-   compromised GitHub release reaches the whole fleet without a person in
-   between. An Ed25519 signature over the manifest, checked against a key
-   compiled into Mesh, needs no dependency and about three agent hours. It
-   needs a signing secret, which is the owner's to add. Owner decision.
-4. **The seed rollback leg may fail.** Unit 3 proves every reachable migration
-   boundary before activation. A failure requires a compatible migration or
-   adoption path and prevents rollout until that path passes.
-5. **The old helper is the judge.** The v0.1.196 helper must accept the
-   activation daemon's health. Unit 8's legacy pair test answers this before
-   the rollout.
-6. **Hosted runners and real service managers.** Unit 8 starts by confirming a
-   systemd user manager and the launchd `gui` domain on hosted runners.
-7. **Proof time grows** from 8 to at most 40 sources per platform. Unit 2
-   measures it and shards if needed.
-8. **Restart frequency.** Releases publish two or three times a day. The
-   30-minute check and the PC's two-hour soak collapse bursts. CI and rollout
-   must prove client reconnection and service recovery before enabling defaults.
-9. **Workers outlive the daemon support window.** Retain their protocol
-   compatibility and exercise the oldest live-worker fixture through later
-   upgrades and rollback. Publication must fail if that guarantee regresses.
+1. **Removing the coordinator policy** deletes recently merged work (#395 and
+   the binary half of #414). It was never enrolled on the fleet. The reviewer
+   accepted host autonomy; unit 13 is cleanup after the fleet has moved.
+2. **Sigstore continuity.** Signing depends on the public good Fulcio
+   authority continuing to issue for GitHub Actions. A replacement chain needs
+   a waypoint during its overlap. With no overlap, the fallback is a second
+   signer, which needs an owner-provisioned key.
+3. **Old seeds may not pass today's harness.** The ladder reaches back to
+   about v0.1.185. Unit 3 proves each seed before committing the list, and
+   fixes the harness or the candidate where one fails.
+4. **A seed rollback boundary may fail.** Unit 4 runs every boundary from the
+   fleet seeds first. A failure needs a compatible migration before rollout.
+5. **Hosted runners and real service managers.** Unit 8 starts by confirming a
+   systemd user manager and the launchd `gui` domain. The Mac's launchd domain
+   must also accept the helper restart from an SSH login; the Mac pair in unit
+   8 covers it.
+6. **Proof time grows** from 8 sources per platform to the window plus the
+   releases since the newest anchor, each with boundary runs. Unit 3 measures
+   and shards.
+7. **Restart frequency.** Releases publish two or three times a day. The
+   30-minute check and the PC's two-hour soak collapse bursts. Unit 8 proves
+   reconnection before the default is enabled.
+8. **A release must follow each adoption.** The Mac and the PC wait for one.
+   At the current pace that is hours.
+9. **A dead canary holds its dependents.** That is deliberate and reported.
+   Removing it from a policy is the owner's local change.
+
+## Review resolution
+
+Findings from the review of `a47e958e`.
+
+| Finding | Resolved in |
+| --- | --- |
+| 1. Manual PC activation | Adopting the existing fleet; Rollout; unit 10 |
+| 2. Signing required | Signed releases; release gate rule 4; unit 1 |
+| 3. Discovery for arbitrarily old updaters | Stable discovery; Routes; unit 2; unit 8 scenario 4 |
+| 4. Legacy-readable forward receipts | State migration and rollback; unit 4; unit 8 scenario 1 |
+| 5. Rollback at every migration boundary | State migration and rollback; unit 4 |
+| 6. Old live workers | Sessions and services across hops; unit 8 scenario 3 |
+| 7. Fleet order | Fleet order; unit 7; unit 8 scenario 5 |
+| 8. Quarantine the failed hop | Failure handling; `FailedEdge`; Routes step 3; unit 6 |
+| 9. Usable publication policy and real edges | Supported releases, anchors and the release gate; unit 3 |
+| 10. Policy-off fence | Host updater, the fence; unit 6 |
+| 11. Installed service and connection survival in CI | Unit 8; Rollout step 4 |
+| 12. Keep manual joining | Unit 13 |
+
+The notes on package-owned and client-only installations are answered in
+Installation kinds.
 
 ## Evidence
 
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
-No product check ran for this prose-only design. Every path, function and line
-cited above was read on main `514700f4`.
+The graph analysis reads manifest claims and does not verify receipts.
+
+Checked for this revision: the receipt fields of v0.1.60, v0.1.257 and
+v0.1.306; the `digest` field of the release asset API; the PC's SSH aliases
+and the `t3 thread send` and `gh attestation verify` commands, by their help
+output only. From primary documentation: GitHub's artifact attestation pages
+and the `actions/attest` README for the action, its permissions and its use of
+the Sigstore public good instance for public repositories; Sigstore's Fulcio
+certificate extension list; and Sigstore's published trusted root for the
+authority's validity.
+
+No product check ran for this prose-only design, and no fleet machine was
+changed. Every path, function and line cited was read on main `514700f4`.
