@@ -1,14 +1,31 @@
 """Installed proof path boundaries and real native-service failure cleanup."""
 import json
+import ast
+import io
+import importlib.util
 import os
 import shutil
 import socket
 import tempfile
+import tarfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import installed_paths as paths, native_services
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases
+
+PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
+SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
+PROOF = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PROOF)
+
+
+def maximum_depth(node, depth):
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        depth = 1
+    elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.AsyncWith, ast.AsyncFor)):
+        depth += 1
+    return max((maximum_depth(child, depth) for child in ast.iter_child_nodes(node)), default=depth)
 
 
 class SocketPathsTest(unittest.TestCase):
@@ -49,6 +66,18 @@ class SocketPathsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "socket requires"):
             paths.validate(self.root / ("é" * 40))
 
+    def test_unmounted_work_drive_cannot_receive_fixture_data(self):
+        with (patch.dict(os.environ, {"MESH_SHORT_TMP": "/work/tmp"}), patch.object(Path, "is_mount", return_value=False)):
+            with self.assertRaisesRegex(RuntimeError, "not mounted"):
+                paths.create()
+
+    def test_python_fixture_blocks_remain_at_most_three_deep(self):
+        scripts = PROOF_PATH.parent
+        files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
+            ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py")))
+        for path in files:
+            self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
+
     def test_native_tmpdir_is_ignored(self):
         environment = dict(os.environ)
         environment.pop("MESH_SHORT_TMP", None)
@@ -58,13 +87,88 @@ class SocketPathsTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root)
         self.assertEqual(root.parent, Path("/tmp").resolve())
 
+    def test_cleanup_retains_root_when_native_stop_is_unconfirmed(self):
+        output = self.root / "output"
+        output.mkdir()
+        retained = self.root / "retained"
+        retained.mkdir()
+        (retained / "sentinel").write_text("test owner retains this until native cleanup is known")
+        (output / "native-manager.json").write_text(json.dumps({"cleanupError": "stop failed"}))
+        with self.assertRaisesRegex(RuntimeError, "cleanup unconfirmed"):
+            PROOF.clean_scratch(retained, output)
+        self.assertFalse((output / "scratch-cleanup.json").exists())
+        self.assertTrue((retained / "sentinel").exists())
+
+
+class FleetBaselinesTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="fb-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.platform = {"os": "linux", "arch": "amd64"}
+        # Checksum fixtures are deliberately not executable release history.
+        self.binary = b"checksum unit-test data; never executed"
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            member = tarfile.TarInfo("mesh")
+            member.size = len(self.binary)
+            archive.addfile(member, io.BytesIO(self.binary))
+        self.archive = buffer.getvalue()
+        self.artifact = {"platform": self.platform, "archive": "mesh_linux_amd64.tar.gz",
+                         "sha256": published_releases.digest(self.archive), "binarySha256": published_releases.digest(self.binary)}
+        self.manifest = {"schema": 1, "version": "v0.1.249", "artifacts": [self.artifact]}
+
+    def fetch(self, address, _maximum):
+        return json.dumps(self.manifest).encode() if address.endswith("mesh-release.json") else self.archive
+
+    def test_fixture_records_exact_observed_pairs_without_inventing_first_updater(self):
+        fixture = fleet_baselines.load()
+        observed = [(host["name"], host["daemon"], host["helper"], host["helperRunning"]) for host in fixture["hosts"]]
+        self.assertEqual(observed, [("pc", "v0.1.249", "v0.1.196", False), ("pi", "v0.1.255", "v0.1.230", True),
+                                    ("vps", "v0.1.255", "v0.1.196", True), ("mac", "v0.1.257", "v0.1.196", True)])
+        with self.assertRaisesRegex(RuntimeError, "PR-source label cannot replace"):
+            fleet_baselines.first_updater(fixture)
+
+    def test_acquisition_checks_both_hashes_and_inventory_binding(self):
+        result = fleet_baselines.acquire(self.root, "v0.1.249", self.platform, self.artifact["binarySha256"], self.fetch)
+        self.assertEqual(result["executable"].read_bytes(), self.binary)
+        with self.assertRaisesRegex(RuntimeError, "observed installed fleet"):
+            fleet_baselines.acquire(self.root, "v0.1.249", self.platform, "a" * 64, self.fetch)
+
+    def test_bad_binary_never_creates_an_executable(self):
+        self.artifact["binarySha256"] = "a" * 64
+        with self.assertRaisesRegex(RuntimeError, "executable digest mismatch"):
+            fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+        self.assertFalse((self.root / "v0.1.249" / "mesh").exists())
+
+    def test_cached_archive_is_rechecked(self):
+        fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+        (self.root / "v0.1.249" / self.artifact["archive"]).write_bytes(b"corrupted cache")
+        with self.assertRaisesRegex(RuntimeError, "archive digest mismatch"):
+            fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+
+    def test_wrong_native_platform_and_manifest_version_reject(self):
+        with self.assertRaisesRegex(RuntimeError, "one exact native archive"):
+            fleet_baselines.acquire(self.root, "v0.1.249", {"os": "darwin", "arch": "arm64"}, fetcher=self.fetch)
+        self.manifest["version"] = "v0.1.196"
+        with self.assertRaisesRegex(RuntimeError, "schema or version differs"):
+            fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+
 
 @unittest.skipUnless(os.environ.get("MESH_TEST_NATIVE_MANAGER") == "1", "native control explicitly selected")
 class NativeServiceTest(unittest.TestCase):
     def setUp(self):
         self.root = paths.create()
-        self.addCleanup(shutil.rmtree, self.root)
+        self.addCleanup(self.clean)
         self.report = self.root / "evidence.json"
+
+    def clean(self):
+        if not self.report.exists():
+            raise RuntimeError(f"native cleanup record missing; test owner retains {self.root}")
+        cleanup = json.loads(self.report.read_text()).get("cleanup", {})
+        if not cleanup.get("serviceAbsent") or not cleanup.get("processAbsent"):
+            raise RuntimeError(f"native cleanup unconfirmed; test owner retains {self.root}")
+        shutil.rmtree(self.root)
 
     def test_real_manager_pid_and_stop(self):
         evidence = native_services.positive_control(self.root, self.report)

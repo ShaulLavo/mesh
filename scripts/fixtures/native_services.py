@@ -1,5 +1,6 @@
 """Real systemd user and launchd GUI controls with owned-service teardown."""
 import json
+import hashlib
 import os
 import platform
 import plistlib
@@ -62,8 +63,9 @@ class Manager:
 
     def inventory(self):
         if self.system == "Linux":
-            result = self.systemctl("list-units", "--all", "--plain", "--no-legend", "--no-pager")
-            return {"manager": "systemd-user", "uid": os.getuid(), "units": result.stdout.splitlines()}
+            result = self.systemctl("list-units", "--type=service", "--all", "--plain", "--no-legend", "--no-pager")
+            return {"manager": "systemd-user", "uid": os.getuid(),
+                    "units": [line.split()[:4] for line in result.stdout.splitlines()]}
         self.launchctl("print", self.domain)
         result = self.launchctl("list")
         return {"manager": "launchd-gui", "domain": self.domain, "units": result.stdout.splitlines()}
@@ -115,6 +117,36 @@ class Manager:
         return {"serviceAbsent": True, "processAbsent": True, "pid": self.pid, "label": self.label}
 
 
+def mapped_image(pid, executable):
+    expected = Path(executable).resolve().stat()
+    image = Path(f"/proc/{pid}/exe")
+    if platform.system() == "Darwin":
+        image = darwin_image(pid, expected)
+    loaded = image.stat()
+    if (loaded.st_dev, loaded.st_ino) != (expected.st_dev, expected.st_ino):
+        raise RuntimeError("native service mapped another executable inode")
+    with image.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return {"pid": pid, "inode": loaded.st_ino, "device": loaded.st_dev, "sha256": digest}
+
+
+def darwin_image(pid, expected):
+    output = command(["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F", "finD"]).stdout
+    rows, row = [], {}
+    for line in output.splitlines():
+        if line.startswith("f"):
+            rows.append(row)
+            row = {}
+        if line[:1] in ("i", "D", "n"):
+            row[line[0]] = line[1:]
+    rows.append(row)
+    matches = [row for row in rows if row.get("i") == str(expected.st_ino)
+               and row.get("D") and int(row["D"], 0) == expected.st_dev and row.get("n")]
+    if len(matches) != 1:
+        raise RuntimeError("mapped native service image is not uniquely identified")
+    return Path(matches[0]["n"])
+
+
 def positive_control(root, evidence):
     manager = Manager(root)
     record = {"schema": 1, "passed": False, "created": {"label": manager.label, "root": str(root)}}
@@ -129,6 +161,9 @@ def positive_control(root, evidence):
         if child != {"pid": manager.pid, "token": manager.label} or not alive(manager.pid):
             raise RuntimeError("native manager PID does not match executing positive control")
         record["executed"] = child
+        record["mappedImage"] = mapped_image(manager.pid, sys.executable)
+        if manager.manager_pid() != manager.pid:
+            raise RuntimeError("native service PID changed during mapped-image verification")
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
