@@ -44,7 +44,7 @@ def write_go(root, content):
 
 
 def prove(root, evidence):
-    for directory in ("cmd/mesh", "internal", "scripts/install", "integration", ".gates", "third_party"):
+    for directory in ("cmd/mesh", "internal/storage/cmd/boundary", "scripts/install", "integration", ".gates", "third_party"):
         (root / directory).mkdir(parents=True, exist_ok=True)
     (root / "go.mod").write_text("module github.com/shaul/mesh\n\ngo 1.27.0\n")
     for name in ("check.go", "check_test.go"):
@@ -56,6 +56,8 @@ def prove(root, evidence):
     baseline = root / ".gates/baseline.json"
     baseline.write_text(json.dumps({"version": 2, "entries": []}))
     write_go(root, CLEAN)
+    (root / "internal/storage/cmd/boundary/main.go").write_text(
+        'package main\n\nfunc main() { println(boundaryValue()) }\n\nfunc boundaryValue() int { return 1 }\n')
     expect(run_gates(root, evidence, "clean"), 0, "golangci: PASS")
 
     # Goconst ignores call arguments by default; composite literals are analyzed.

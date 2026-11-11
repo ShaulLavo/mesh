@@ -573,6 +573,17 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		listener.serveSSH = opts.serveSSH
 	}
 	listenersReady := make(chan struct{})
+	hostUpdatesDone := make(chan struct{})
+	go func() {
+		defer close(hostUpdatesDone)
+		select {
+		case <-listenersReady:
+		case <-daemonCtx.Done():
+			return
+		}
+		updates.hostUpdater.Run(daemonCtx, reporter.report)
+	}()
+	defer func() { cancelDaemon(); <-hostUpdatesDone }()
 	updatesDone := make(chan struct{})
 	go func() {
 		defer close(updatesDone)
