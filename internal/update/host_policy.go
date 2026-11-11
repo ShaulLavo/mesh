@@ -116,8 +116,15 @@ func (s *Store) authorizeHost(request updateinstall.Request, commit func() error
 	if err != nil {
 		return err
 	}
-	if policy.Mode != HostAutomatic || state.Owned == nil || state.Owned.PolicyRevision != policy.Revision {
+	if state.Owned == nil || state.Owned.PolicyRevision != policy.Revision {
 		return errors.New("update: host authority withdrawn or missing")
+	}
+	if state.Owned.IntentRevision != 0 {
+		if err := s.authorizeLocalTarget(*state.Owned); err != nil {
+			return err
+		}
+	} else if policy.Mode != HostAutomatic {
+		return errors.New("update: automatic host authority withdrawn")
 	}
 	if err := state.Owned.matches(request); err != nil {
 		return err

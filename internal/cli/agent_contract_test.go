@@ -61,6 +61,7 @@ func checkAgentOperation(t *testing.T, command *Command, operation agentapi.Oper
 }
 
 func TestAgentDecodedServiceGoldens(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MachineName: "pc", NameRevision: 1, Endpoint: "ws://127.0.0.1:9999/control/ws"}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()

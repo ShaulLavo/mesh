@@ -125,6 +125,17 @@ printf '%s\n' '-- +goose Up' 'CREATE TABLE rollback_fixture(value TEXT);' >"$scr
 printf '%s\n' '-- +goose Up' 'INSERT INTO rollback_fixture VALUES ('"'candidate'"');' >"$scratch/migrations/$final_file"
 python3 "$repo_root/scripts/fixtures/release_transition.py" startup-overlay "$repo_root" "$scratch/startup-overlay" "$scratch/migrations"
 (cd "$repo_root" && go build -overlay "$scratch/startup-overlay/overlay.json" -o "$scratch/startup-candidate" ./cmd/mesh)
+if env -u MESH_STARTUP_FAULT_BINARY MESH_BOUNDARY_TOOL="$scratch/boundary-tool" "$repo_root/scripts/prove-release-transition.sh" \
+  "$MESH_PROOF_BINARY" "$scratch/migrating-candidate" "$platform" "$scratch/missing-input-proofs" \
+  >"$scratch/missing-input.log" 2>&1; then
+  echo 'FAIL: migrating full proof accepted missing startup-fault input' >&2
+  exit 1
+fi
+grep -Fq 'requires MESH_STARTUP_FAULT_BINARY' "$scratch/missing-input.log" || {
+  cat "$scratch/missing-input.log" >&2
+  exit 1
+}
+[[ ! -e $scratch/missing-input-proofs ]] || { echo 'FAIL: missing startup input emitted proof assets' >&2; exit 1; }
 MESH_STARTUP_FAULT_BINARY="$scratch/startup-candidate" MESH_BOUNDARY_TOOL="$scratch/boundary-tool" "$repo_root/scripts/prove-release-transition.sh" \
   "$MESH_PROOF_BINARY" "$scratch/migrating-candidate" "$platform" "$scratch/boundary-proofs" \
   >"$scratch/boundaries.log" 2>&1 || { cat "$scratch/boundaries.log" >&2; exit 1; }
@@ -148,7 +159,9 @@ grep -E 'mesh startup commit hook|rollback boundary startup-' "$scratch/boundari
 
 printf '%s\n' '-- +goose Up' 'ALTER TABLE sessions RENAME TO rollback_hidden_sessions;' >"$scratch/migrations/$intermediate_file"
 printf '%s\n' '-- +goose Up' 'ALTER TABLE rollback_hidden_sessions RENAME TO sessions;' >"$scratch/migrations/$final_file"
-if MESH_BOUNDARY_TOOL="$scratch/boundary-tool" "$repo_root/scripts/prove-release-transition.sh" \
+python3 "$repo_root/scripts/fixtures/release_transition.py" startup-overlay "$repo_root" "$scratch/incompatible-overlay" "$scratch/migrations"
+(cd "$repo_root" && go build -overlay "$scratch/incompatible-overlay/overlay.json" -o "$scratch/incompatible-startup" ./cmd/mesh)
+if MESH_STARTUP_FAULT_BINARY="$scratch/incompatible-startup" MESH_BOUNDARY_TOOL="$scratch/boundary-tool" "$repo_root/scripts/prove-release-transition.sh" \
   "$MESH_PROOF_BINARY" "$scratch/migrating-candidate" "$platform" "$scratch/incompatible-proofs" \
   >"$scratch/incompatible.log" 2>&1; then
   echo 'FAIL: release proof accepted an incompatible intermediate committed state' >&2
