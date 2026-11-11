@@ -152,13 +152,14 @@ check_source_contract() {
   contains .github/workflows/release.yml 'scripts/reserve-release.sh'
   contains .github/workflows/release.yml 'SOURCE_SHA: ${{ inputs.source_sha }}'
   does_not_contain .github/workflows/release.yml "run: scripts/reserve-release.sh '\${{ inputs.source_sha }}'"
-  contains .github/workflows/release.yml 'scripts/prove-release-transition.sh'
-  contains .github/workflows/release.yml 'MESH_LEGACY_BINARY="$retained" go test -count=1'
-  contains .github/workflows/release.yml "-run '^TestLegacyWorkerProcessProtocolAndVersion$'"
-  contains .github/workflows/release.yml "grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion'"
-  contains .github/workflows/release.yml "go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap"
-  contains .github/workflows/release.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
-  contains .github/workflows/release.yml 'scripts/prepare-release-baselines.sh'
+  contains .github/workflows/update-proofs.yml 'scripts/run-update-proofs.py'
+  contains scripts/run-update-proofs.py 'scripts/prove-release-transition.sh'
+  contains scripts/run-update-proofs.py 'environment["MESH_LEGACY_BINARY"]'
+  contains scripts/run-update-proofs.py '-test.run=^TestLegacyWorkerProcessProtocolAndVersion$'
+  contains scripts/run-update-proofs.py '--- PASS: TestLegacyWorkerProcessProtocolAndVersion'
+  contains .github/workflows/update-proofs.yml '-test.run=^TestDarwinMappedExecutableSurvivesAtomicReplacement$'
+  contains .github/workflows/update-proofs.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
+  contains .github/workflows/update-proofs.yml 'scripts/prepare-release-baselines.sh'
   contains .github/workflows/release.yml 'scripts/generate-release-manifest.sh'
   contains .github/workflows/release.yml 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4'
   contains .github/workflows/release.yml 'id-token: write'
@@ -170,7 +171,7 @@ check_source_contract() {
   contains .github/workflows/release.yml "\"\$signer\" refresh \"\$MESH_RELEASE_TRUST_CACHE\""
   contains .github/workflows/release.yml "\"\$signer\" wrap"
   contains .github/workflows/release.yml "\"\$signer\" verify"
-  contains .github/workflows/release.yml 'dist/mesh-release.json dist/mesh-update.sig.json'
+  contains .github/workflows/release.yml 'verify-metadata dist/mesh-update.json dist/mesh-update.sig.json dist/mesh-release.json'
   contains .github/workflows/release.yml 'scripts/finalize-release.sh'
   contains .github/workflows/release.yml 'Reconcile published Cask'
   contains scripts/finalize-release.sh 'gh release edit "$version" --draft=false --latest'
@@ -186,6 +187,7 @@ check_source_contract() {
   scripts/test-prepare-release-baselines.sh
   python3 scripts/test-release-transition.py
   python3 scripts/test-release-signing.py
+  python3 scripts/test-acquire-release-history.py
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
   contains scripts/verify.sh 'scripts/verify_runner.py'

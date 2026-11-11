@@ -1,0 +1,22 @@
+{
+  "source": "v0.1.52",
+  "target": "v0.1.60",
+  "transition": {
+    "fromDigest": "d1717f02445dea146710eb7690547204eae7d74190a143d8ce495c1ac8595ba6",
+    "toDigest": "e70f183900a2236f4bcc361b35606a0a84d0512efe22d06f4ca6cd1eebb8e652",
+    "platform": {
+      "os": "darwin",
+      "arch": "arm64"
+    },
+    "proof": "065ed55c8fa9f4c40325d8de90a54036d33c7f0f36336fc0b955c4a95c926b62"
+  },
+  "compatibility": {
+    "stateReadMin": 7,
+    "stateReadMax": 9,
+    "stateWrite": 9,
+    "workerMin": 1,
+    "workerMax": 1,
+    "workerWrite": 1,
+    "journalVersion": 1
+  }
+}

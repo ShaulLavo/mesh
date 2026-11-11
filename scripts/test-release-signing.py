@@ -37,7 +37,7 @@ class ReleaseSigningTests(unittest.TestCase):
             (root / "bin").mkdir()
             (root / "scripts").mkdir()
             (root / "dist").mkdir()
-            for name in ("mesh-release.json", "mesh_linux_amd64.tar.gz",
+            for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json", "mesh_linux_amd64.tar.gz",
                          "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz"):
                 (root / "dist" / name).write_text("fixture")
             fake = """#!/usr/bin/env bash
@@ -49,6 +49,7 @@ if [[ $1 == refresh && ${FAIL:-} == trust ]]; then exit 1; fi
 if [[ $1 == refresh && ${FAIL:-} == resume && ! -f $RESUMED ]]; then touch "$RESUMED"; exit 75; fi
 if [[ $1 == wrap && ${FAIL:-} == wrap ]]; then exit 1; fi
 if [[ $1 == verify && ${FAIL:-} == candidate ]]; then exit 1; fi
+if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
 """
             for name in ("gh", "go"):
                 path = root / "bin" / name
@@ -73,12 +74,12 @@ if [[ $1 == verify && ${FAIL:-} == candidate ]]; then exit 1; fi
         result, published, calls = self.run_publication("")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(published)
-        self.assertEqual(calls.count("gh attestation verify"), 4)
+        self.assertEqual(calls.count("gh attestation verify"), 6)
         self.assertLess(calls.index("mesh-release-sign verify"),
                         calls.index("gh release upload"))
 
     def test_official_or_candidate_failure_keeps_draft_unpublished(self):
-        for failure in ("official", "trust", "wrap", "candidate"):
+        for failure in ("official", "trust", "wrap", "candidate", "metadata"):
             with self.subTest(failure=failure):
                 result, published, calls = self.run_publication(failure)
                 self.assertNotEqual(result.returncode, 0)

@@ -40,10 +40,11 @@ func main() {
 
 func run(ctx context.Context, args []string, output io.Writer) error {
 	flags := flag.NewFlagSet("mesh-release-routes", flag.ContinueOnError)
-	operation := flags.String("operation", "plan", "plan, page, or root")
+	operation := flags.String("operation", "plan", "plan, page, root, seeds, select, audit, or publish")
 	input := flags.String("input", "", "explicit local JSON input")
 	documents := flags.String("documents", "", "local evidence directory containing TAG/ASSET files")
 	cursor := flags.String("cursor", "", "local pass cursor to save (plan only)")
+	destination := flags.String("output-dir", "", "generated publication assets (publish only)")
 	local := flags.Bool("local-evidence", false, "acknowledge local evidence is not a verified signature or installation permission")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("routes: arguments: %w", err)
@@ -51,11 +52,16 @@ func run(ctx context.Context, args []string, output io.Writer) error {
 	if *input == "" || flags.NArg() != 0 {
 		return errors.New("routes: supply -input JSON and no positional arguments")
 	}
-	data, err := readLocal(*input, 1<<20)
+	data, err := readLocal(*input, 16<<20)
 	if err != nil {
 		return err
 	}
 	switch *operation {
+	case "seeds", "select", "audit", "publish":
+		if *documents == "" {
+			return errors.New("routes: publication needs -documents")
+		}
+		return publishOperation(*operation, data, *documents, *destination, output)
 	case "page":
 		return producePage(data, output)
 	case "root":
