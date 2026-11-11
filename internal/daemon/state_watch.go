@@ -354,6 +354,7 @@ func cloneStateMetrics(value hostmetrics.Snapshot) hostmetrics.Snapshot {
 }
 
 func cloneStateHost(value protocol.HostInfo) protocol.HostInfo {
+	value.HostUpdate = cloneStatePointer(value.HostUpdate, nil)
 	value.Build = cloneStatePointer(value.Build, nil)
 	value.Wake = cloneStatePointer(value.Wake, func(grant wake.Grant) wake.Grant {
 		grant.NIC = cloneStatePointer(grant.NIC, nil)
