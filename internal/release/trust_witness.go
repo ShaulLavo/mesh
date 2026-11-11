@@ -56,7 +56,7 @@ type rootHistory struct {
 
 func (trust TrustRoot) authenticatedBaseline(cache string) (authenticatedMaterial, *rootHistory, error) {
 	var provenance embeddedProvenance
-	if len(trust.provenance) != 0 {
+	if trust.provenance != nil {
 		if err := json.Unmarshal(trust.provenance, &provenance); err != nil {
 			return authenticatedMaterial{}, nil, fmt.Errorf("release: decode embedded trust provenance: %w", err)
 		}
@@ -65,7 +65,7 @@ func (trust TrustRoot) authenticatedBaseline(cache string) (authenticatedMateria
 	if err != nil {
 		return authenticatedMaterial{}, nil, err
 	}
-	if len(trust.provenance) == 0 {
+	if trust.provenance == nil {
 		return authenticatedMaterial{contents: trust.Trusted}, roots, nil
 	}
 	baseline, err := authenticateMaterial(roots, cachedMaterial{Material: trust.Trusted, Witness: provenance.Witness})

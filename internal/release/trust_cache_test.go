@@ -64,6 +64,14 @@ func TestCacheRejectsSelfHashedForeignMaterialWithoutWitness(t *testing.T) {
 	}
 }
 
+func TestEmptyEmbeddedProvenanceFailsClosed(t *testing.T) {
+	trust := EmbeddedTrustRoot()
+	trust.provenance = []byte{}
+	if _, err := loadTrustRoot(trust, ""); err == nil {
+		t.Fatal("treated empty embedded provenance as an unordered explicit trust root")
+	}
+}
+
 func TestCacheRejectsSignedWitnessForAnotherDigestOrLength(t *testing.T) {
 	for _, change := range []string{"digest", "length"} {
 		t.Run(change, func(t *testing.T) { assertWitnessMismatch(t, change) })
@@ -148,6 +156,32 @@ func TestFreshRefreshIgnoresCallerSelectedSigstoreClientCache(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(fixture.requests, " "), "/timestamp.json /1.snapshot.json /1.targets.json") {
 		t.Fatalf("did not perform fresh authenticated metadata work: %v", fixture.requests)
+	}
+}
+
+func TestFreshRefreshDoesNotReadWorkingDirectoryMetadataAndRemovesPass(t *testing.T) {
+	trust, fixture := tufFixture(t, 2, recordedTrust().Trusted, time.Now().Add(time.Hour))
+	cwd := t.TempDir()
+	for _, name := range []string{"timestamp.json", "snapshot.json", "targets.json"} {
+		if err := writeTrustFile(filepath.Join(cwd, name), []byte("untrusted pre-existing metadata")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(cwd)
+	cache := t.TempDir()
+	refreshFixtureTrust(t, trust, fixture, cache)
+	passes, err := filepath.Glob(filepath.Join(cache, "tuf-pass-*"))
+	if err != nil || len(passes) != 0 {
+		t.Fatalf("retained pass scratch after success: %v %v", passes, err)
+	}
+	fixture.documents["/timestamp.json"] = []byte("invalid remote metadata")
+	_, err = refreshTrust(context.Background(), trust, cache, TrustRefreshBudget{Documents: 8, Duration: time.Second}, &http.Client{Transport: fixture})
+	if err == nil {
+		t.Fatal("accepted invalid fresh timestamp")
+	}
+	passes, err = filepath.Glob(filepath.Join(cache, "tuf-pass-*"))
+	if err != nil || len(passes) != 0 {
+		t.Fatalf("retained pass scratch after failure: %v %v", passes, err)
 	}
 }
 

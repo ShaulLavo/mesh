@@ -49,7 +49,10 @@ type TrustRoot struct {
 func EmbeddedTrustRoot() TrustRoot {
 	bootstrap, _ := embeddedTrust.ReadFile("trust/bootstrap-root.json")
 	trusted, _ := embeddedTrust.ReadFile("trust/trusted-root.json")
-	provenance, _ := embeddedTrust.ReadFile("trust/provenance.json")
+	provenance, provenanceErr := embeddedTrust.ReadFile("trust/provenance.json")
+	if provenanceErr != nil {
+		provenance = []byte{}
+	}
 	return TrustRoot{Version: 1, BootstrapRoot: bootstrap, Trusted: trusted, provenance: provenance, Identity: SignerIdentity{
 		Issuer:     "https://token.actions.githubusercontent.com",
 		Workflow:   "https://github.com/ShaulLavo/mesh/.github/workflows/release.yml@refs/heads/main",
@@ -117,7 +120,7 @@ func RefreshTrust(ctx context.Context, cache string, budget TrustRefreshBudget) 
 	return refreshTrust(ctx, EmbeddedTrustRoot(), cache, budget, http.DefaultClient)
 }
 
-func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget TrustRefreshBudget, client *http.Client) (TrustRoot, error) {
+func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget TrustRefreshBudget, client *http.Client) (result TrustRoot, refreshErr error) {
 	if budget.Documents < 8 || budget.Documents > 64 || budget.Duration <= 0 || budget.Duration > 30*time.Second {
 		return trust, errors.New("release: invalid trust refresh budget")
 	}
@@ -127,6 +130,18 @@ func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget Tru
 	if err != nil {
 		return trust, err
 	}
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		return trust, fmt.Errorf("release: create trust refresh home: %w", err)
+	}
+	pass, err := os.MkdirTemp(cache, "tuf-pass-*")
+	if err != nil {
+		return trust, fmt.Errorf("release: create isolated TUF pass: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(pass); err != nil {
+			refreshErr = errors.Join(refreshErr, fmt.Errorf("release: remove isolated TUF pass: %w", err))
+		}
+	}()
 	fetch := &trustFetcher{ctx: ctx, client: client, remaining: budget.Documents, chain: roots.chain, cache: cache, documents: make(map[string][]byte)}
 	// Sigstore's wrapper first attempts an unsafe local load even with caching disabled.
 	// Start its maintained underlying updater directly with only the authenticated root.
@@ -135,6 +150,9 @@ func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget Tru
 		return trust, fmt.Errorf("release: configure fresh TUF refresh: %w", err)
 	}
 	cfg.DisableLocalCache = true
+	// go-tuf still probes local metadata when writes are disabled; this directory is fresh and private.
+	cfg.LocalMetadataDir = pass
+	cfg.LocalTargetsDir = pass
 	cfg.Fetcher = fetch
 	clientUpdater, err := updater.New(cfg)
 	if err != nil {

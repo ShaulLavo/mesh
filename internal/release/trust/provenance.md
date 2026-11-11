@@ -15,7 +15,8 @@ delegation signatures and path scope, and checks material length and SHA-256.
 Historical signed metadata authorizes archived material after its expiry. This
 does not make it current. Online refresh always uses the maintained TUF client
 with current expiry checks, starting from the authenticated chain and ignoring
-the caller-selected Sigstore client's mutable cache.
+the caller-selected Sigstore client's mutable cache. Its local probes use a
+fresh pass-owned directory, removed on both success and failure.
 
 Material order uses the earliest root revision that authenticates both the
 snapshot and top-level targets, followed by the signed snapshot version. This
