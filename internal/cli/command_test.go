@@ -28,6 +28,12 @@ import (
 
 var commandTestTime = time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 
+// An inherited override is outside state, not a directory owned by a test.
+var inheritedCommandEnvironment = struct{ config, state string }{
+	config: os.Getenv("MESH_CONFIG_DIR"),
+	state:  os.Getenv("MESH_STATE_DIR"),
+}
+
 type commandTestHost struct {
 	host         HostRecord
 	sessionID    string
@@ -1241,10 +1247,10 @@ func setupCommandTestHost(t *testing.T) *commandTestHost {
 
 func prepareCommandEnvironment(t *testing.T) {
 	t.Helper()
-	if os.Getenv("MESH_CONFIG_DIR") == "" {
+	if directory := os.Getenv("MESH_CONFIG_DIR"); directory == "" || directory == inheritedCommandEnvironment.config {
 		t.Setenv("MESH_CONFIG_DIR", t.TempDir())
 	}
-	if os.Getenv("MESH_STATE_DIR") == "" {
+	if directory := os.Getenv("MESH_STATE_DIR"); directory == "" || directory == inheritedCommandEnvironment.state {
 		t.Setenv("MESH_STATE_DIR", compactSocketTempDir(t))
 	}
 }

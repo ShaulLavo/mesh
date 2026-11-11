@@ -147,8 +147,7 @@ class ServiceHandler(socketserver.StreamRequestHandler):
             require(args[0] == "--user", "fixture accepts only user services")
             action = args[1]
             if action == "show":
-                require(args[2:] == ["mesh.service", "--property=KillMode", "--value"], "unexpected service query")
-                output = "process\n"
+                output = host.systemctl_show(args[2:])
             elif action == "daemon-reload":
                 require(len(args) == 2, "unexpected daemon reload")
             else:
@@ -235,6 +234,17 @@ sys.exit(data["status"])
         self.id = None
         HOSTS[name] = self
 
+    def service_pid(self, unit):
+        with LOCK:
+            process = self.processes.get(unit)
+            return process.pid if process and process.poll() is None else 0
+
+    def systemctl_show(self, args):
+        if args == ["mesh.service", "--property=KillMode", "--value"]:
+            return "process\n"
+        require(args == ["mesh-update-helper.service", "--property=MainPID", "--value"], "unexpected service query")
+        return str(self.service_pid("mesh-update-helper.service")) + "\n"
+
     def launchctl(self, args):
         domain = "gui/" + str(os.getuid())
         labels = {"dev.shaulavo.mesh": "mesh.service", "dev.shaulavo.mesh-update-helper": "mesh-update-helper.service"}
@@ -266,10 +276,10 @@ sys.exit(data["status"])
         scope, separator, label = args[-1].rpartition("/")
         require(separator and scope == domain and label in labels, "unexpected launchd service target")
         unit = labels[label]
-        process = self.processes.get(unit)
         if action == "print":
-            if process and process.poll() is None:
-                return 0, "fixture service running\n"
+            pid = self.service_pid(unit)
+            if pid:
+                return 0, f"{domain}/{label} = {{\n\tstate = running\n\tpid = {pid}\n}}\n"
             return 113, f'Bad request.\nCould not find service "{label}" in domain for user gui: {os.getuid()}\n'
         if action == "bootout":
             self.stop(unit)
@@ -396,29 +406,64 @@ sys.exit(data["status"])
             pid = sock.getsockopt(0, 2) if native_platform["os"] == "darwin" else struct.unpack(
                 "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
         require(pid == self.processes["mesh.service"].pid, "daemon socket belongs to another process")
-        installed = self.binary.stat()
-        image = Path("/proc") / str(pid) / "exe"
-        if native_platform["os"] == "darwin":
-            output = subprocess.check_output(["lsof", "-a", "-p", str(pid), "-d", "txt", "-F", "finD"],
-                                             text=True, timeout=5)
-            records, record = [], {}
-            for line in output.splitlines():
-                if line.startswith("f"):
-                    records.append(record)
-                    record = {}
-                if line[:1] in ("i", "D", "n"):
-                    record[line[0]] = line[1:]
-            records.append(record)
-            matched = [row for row in records if row.get("i") == str(installed.st_ino)
-                and row.get("D") and int(row["D"], 0) == installed.st_dev and row.get("n")]
-            require(len(matched) == 1, "native lsof did not identify the exact daemon image inode")
-            image = Path(matched[0]["n"])
-        mapped = image.stat()
-        require((mapped.st_dev, mapped.st_ino) == (installed.st_dev, installed.st_ino),
-                "loaded daemon image differs from the installed inode")
+        image, mapped = self.mapped_image(pid, self.binary)
         require(digest(image.read_bytes()) == expected["digest"], "loaded daemon image bytes differ")
         event("loaded-image", host=self.name, pid=pid, version=expected["version"], digest=expected["digest"],
               device=mapped.st_dev, inode=mapped.st_ino, provider="native lsof" if native_platform["os"] == "darwin" else "native procfs")
+
+    def mapped_image(self, pid, executable):
+        installed = executable.stat()
+        image = Path("/proc") / str(pid) / "exe"
+        if native_platform["os"] == "darwin":
+            image = self.lsof_image(pid, installed)
+        mapped = image.stat()
+        require((mapped.st_dev, mapped.st_ino) == (installed.st_dev, installed.st_ino),
+                "loaded image differs from the installed inode")
+        return image, mapped
+
+    def lsof_image(self, pid, installed):
+        output = subprocess.check_output(["lsof", "-a", "-p", str(pid), "-d", "txt", "-F", "finD"],
+                                         text=True, timeout=5)
+        records = self.lsof_records(output)
+        matched = [row for row in records if row.get("i") == str(installed.st_ino)
+            and row.get("D") and int(row["D"], 0) == installed.st_dev and row.get("n")]
+        require(len(matched) == 1, "native lsof did not identify the exact executable inode")
+        return Path(matched[0]["n"])
+
+    @staticmethod
+    def lsof_records(output):
+        records, record = [], {}
+        for line in output.splitlines():
+            if line.startswith("f"):
+                records.append(record)
+                record = {}
+            if line[:1] in ("i", "D", "n"):
+                record[line[0]] = line[1:]
+        records.append(record)
+        return records
+
+    def helper_ready(self, expected):
+        try:
+            root = self.state / "update" / "helper"
+            if any((root / name).exists() for name in ("activation-pending", "promotion.json")):
+                return False
+            receipt = json.loads((root / "installed.json").read_text())
+            if receipt["digest"] != expected["digest"]:
+                return False
+            executable = Path(receipt["executable"])
+            if (root / "current").resolve() != executable.resolve():
+                return False
+            pid = self.service_pid("mesh-update-helper.service")
+            if not pid:
+                return False
+            image, _ = self.mapped_image(pid, executable)
+            return digest(image.read_bytes()) == expected["digest"]
+        except (KeyError, OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+            return False
+
+    def await_helper(self, expected):
+        eventually(lambda: self.helper_ready(expected), "updated helper did not settle", timeout=10)
+        event("helper-ready", host=self.name, pid=self.service_pid("mesh-update-helper.service"), version=expected["version"])
 
     def check_io(self):
         terminal = Terminal([str(self.binary), "local", "-r"], self.environment, self.root, timeout=8)
@@ -509,6 +554,7 @@ def local_cutover(host, target):
     host.check_retained()
     host.prove_loaded_image(target)
     host.check_io()
+    host.await_helper(target)
     wait_for_restarts()
     touched = {row["host"] for row in EVENTS[before:] if row["kind"] in ("start", "stop")}
     require(touched == {host.name}, "local update changed another installation: " + repr(touched))

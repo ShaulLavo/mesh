@@ -21,6 +21,7 @@ type HelperConfig struct {
 	ServiceDir      string
 	Kind            string
 	Domain          string
+	Probe           func(context.Context, HelperInstallation) (int, error)
 	beforePromotion func(context.Context) error
 }
 
@@ -135,11 +136,22 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 }
 
 func stageHelperImage(ctx context.Context, cfg HelperConfig, digest string) (HelperInstallation, error) {
-	dir := filepath.Join(transactionDir(cfg.StateDir), "helper", digest)
+	if !helperDigestPattern.MatchString(digest) {
+		return HelperInstallation{}, errors.New("invalid immutable helper digest")
+	}
+	dir := filepath.Join(transactionDir(cfg.StateDir), "helper")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return HelperInstallation{}, fmt.Errorf("create immutable helper directory: %w", err)
 	}
-	installed := HelperInstallation{Executable: filepath.Join(dir, "mesh"), Digest: digest}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return HelperInstallation{}, fmt.Errorf("open immutable helper directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	if err = root.MkdirAll(digest, 0700); err != nil {
+		return HelperInstallation{}, fmt.Errorf("create immutable helper image directory: %w", err)
+	}
+	installed := HelperInstallation{Executable: filepath.Join(dir, digest, "mesh"), Digest: digest}
 	info, err := os.Lstat(installed.Executable)
 	if err == nil {
 		if !info.Mode().IsRegular() {
@@ -202,7 +214,7 @@ func upgradeHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 	if err = readHelperInstallation(ctx, cfg.StateDir, &prior); err != nil {
 		return prior, err
 	}
-	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest, status.Request.Manifest)
+	interrupted, err := verifyHelperReceipt(ctx, cfg.StateDir, prior, digest)
 	if err != nil {
 		return prior, err
 	}
@@ -273,7 +285,7 @@ func committedHelperDigest(ctx context.Context, executable string, manifest rele
 	return artifact.BinarySHA256, nil
 }
 
-func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInstallation, committedDigest string, manifest release.Manifest) (bool, error) {
+func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInstallation, committedDigest string) (bool, error) {
 	if prior.Executable != filepath.Join(transactionDir(stateDir), "helper", prior.Digest, "mesh") {
 		return false, errors.New("helper receipt does not name its immutable executable copy")
 	}
@@ -294,10 +306,10 @@ func verifyHelperReceipt(ctx context.Context, stateDir string, prior HelperInsta
 	if err = release.VerifyExecutable(ctx, link, linkDigest); err != nil {
 		return false, fmt.Errorf("verify interrupted helper launcher: %w", err)
 	}
-	return helperReceiptAhead(ctx, prior, link, linkDigest, committedDigest, manifest)
+	return helperReceiptAhead(ctx, stateDir, prior, link, linkDigest, committedDigest)
 }
 
-func helperReceiptAhead(ctx context.Context, prior HelperInstallation, link, linkDigest, committedDigest string, manifest release.Manifest) (bool, error) {
+func helperReceiptAhead(ctx context.Context, stateDir string, prior HelperInstallation, link, linkDigest, committedDigest string) (bool, error) {
 	current, err := helperBuild(ctx, prior.Executable, prior.Digest)
 	if err != nil {
 		return false, err
@@ -311,10 +323,7 @@ func helperReceiptAhead(ctx context.Context, prior HelperInstallation, link, lin
 		return false, fmt.Errorf("compare interrupted helper releases: %w", err)
 	}
 	if order > 0 {
-		if err = helperCapabilities(current, manifest); err != nil {
-			return false, err
-		}
-		return true, nil
+		return true, checkHelperJournal(ctx, stateDir, prior.Executable)
 	}
 	// A legacy link-first promotion needs the still-current committed binding.
 	if order < 0 && linkDigest == committedDigest {
@@ -347,8 +356,6 @@ func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest releas
 	}
 	compatibility := manifest.Compatibility
 	if compatibility.JournalVersion != release.CurrentJournalVersion ||
-		current.StateVersion < compatibility.StateReadMin || current.StateVersion > compatibility.StateReadMax ||
-		current.WorkerProtocol < compatibility.WorkerMin || current.WorkerProtocol > compatibility.WorkerMax ||
 		candidate.StateVersion != compatibility.StateWrite || candidate.WorkerProtocol != compatibility.WorkerWrite {
 		return false, errors.New("helper builds have incompatible state, worker, or journal capabilities")
 	}
@@ -357,6 +364,9 @@ func helperUpgradeAllowed(ctx context.Context, cfg HelperConfig, manifest releas
 		return false, fmt.Errorf("compare helper releases: %w", err)
 	}
 	if order < 0 {
+		if err = checkHelperJournal(ctx, cfg.StateDir, prior.Executable); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	if order == 0 {
