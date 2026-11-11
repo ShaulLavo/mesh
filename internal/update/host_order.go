@@ -46,6 +46,14 @@ type HostOrder struct {
 }
 
 func (o *HostOrder) Refresh(ctx context.Context, policy HostPolicy, current release.Build, now time.Time) (*HostLimit, error) {
+	return o.refresh(ctx, policy, current, now, true)
+}
+
+func (o *HostOrder) preview(ctx context.Context, policy HostPolicy, current release.Build, now time.Time) (*HostLimit, error) {
+	return o.refresh(ctx, policy, current, now, false)
+}
+
+func (o *HostOrder) refresh(ctx context.Context, policy HostPolicy, current release.Build, now time.Time, acknowledge bool) (*HostLimit, error) {
 	if len(policy.After) == 0 {
 		return nil, nil
 	}
@@ -57,9 +65,13 @@ func (o *HostOrder) Refresh(ctx context.Context, policy HostPolicy, current rele
 		return nil, hostError(err)
 	}
 	var result *HostLimit
+	settled := ""
+	if acknowledge {
+		settled = current.Version
+	}
 	for _, id := range policy.After {
 		peer := findEvidenceHost(fleet, id)
-		if err := o.refreshPeer(ctx, id, peer, current.Version, now); err != nil {
+		if err := o.refreshPeer(ctx, id, peer, settled, now); err != nil {
 			return nil, err
 		}
 		limit, err := o.Store.peerLimit(ctx, id, current, policy.Soak, now)
