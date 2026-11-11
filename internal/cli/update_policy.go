@@ -63,17 +63,17 @@ func (a *application) runHostPolicy(cmd *cobra.Command, options *updateOptions, 
 	if a.dependencies.UpdateCaller != nil {
 		environment.client = a.dependencies.UpdateCaller
 	}
-	policy, err := callHostPolicy(cmd.Context(), environment, action, selected)
+	policy, err := a.callHostPolicy(cmd.Context(), environment, action, selected)
 	if err != nil {
 		return err
 	}
 	if options.json {
 		return writeAutomaticJSON(cmd.OutOrStdout(), policy)
 	}
-	return printHostPolicy(cmd.OutOrStdout(), policy, action)
+	return printHostPolicy(cmd.OutOrStdout(), policy, action, options.details)
 }
 
-func callHostPolicy(ctx context.Context, environment updateEnvironment, action string, selected hostPolicyOptions) (update.HostPolicy, error) {
+func (a *application) callHostPolicy(ctx context.Context, environment updateEnvironment, action string, selected hostPolicyOptions) (update.HostPolicy, error) {
 	var policy update.HostPolicy
 	if err := environment.client.Call(ctx, environment.local, "host-policy.show", nil, &policy); err != nil {
 		return policy, fmt.Errorf("read local update policy: %w", err)
@@ -83,7 +83,7 @@ func callHostPolicy(ctx context.Context, environment updateEnvironment, action s
 	}
 	policy.Mode = update.HostManual
 	if action == hostPolicySet {
-		after, err := hostPolicyPredecessors(environment, selected.after)
+		after, err := a.hostPolicyPredecessors(ctx, environment, selected.after)
 		if err != nil {
 			return policy, err
 		}
@@ -96,7 +96,7 @@ func callHostPolicy(ctx context.Context, environment updateEnvironment, action s
 	return policy, nil
 }
 
-func hostPolicyPredecessors(environment updateEnvironment, names []string) ([]string, error) {
+func (a *application) hostPolicyPredecessors(ctx context.Context, environment updateEnvironment, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return nil, nil
 	}
@@ -106,25 +106,41 @@ func hostPolicyPredecessors(environment updateEnvironment, names []string) ([]st
 	}
 	ids := make([]string, 0, len(names))
 	for _, name := range names {
-		host, err := selectedUpdateHost(name, hosts, environment.local)
+		target, err := resolveArgumentWithRefresh(ctx, name, hosts, a.dependencies.DialControl)
 		if err != nil {
 			return nil, err
 		}
-		if host.ID == environment.local.ID {
+		if target.Host == nil {
+			return nil, errors.New("--after requires a machine name or exact host identity")
+		}
+		if target.Host.ID == environment.local.ID {
 			return nil, errors.New("a machine cannot wait for itself before updating")
 		}
-		ids = append(ids, host.ID)
+		if err := a.verifyHostPolicyName(ctx, *target.Host); err != nil {
+			return nil, err
+		}
+		ids = append(ids, target.Host.MeshIdentity)
 	}
 	return ids, nil
 }
 
-func printHostPolicy(out io.Writer, policy update.HostPolicy, action string) error {
+func (a *application) verifyHostPolicyName(ctx context.Context, host HostRecord) error {
+	if host.targetName == "" {
+		return nil
+	}
+	return verifyUpdateNameIntents(ctx, []HostRecord{host}, a.dependencies.DialControl)
+}
+
+func printHostPolicy(out io.Writer, policy update.HostPolicy, action string, details bool) error {
 	_, err := fmt.Fprintf(out, "Automatic updates: %s\nPolicy revision: %d\n", hostPolicyMode(policy.Mode), policy.Revision)
 	if err != nil {
 		return fmt.Errorf("print host policy: %w", err)
 	}
 	if len(policy.After) > 0 {
-		_, err = fmt.Fprintf(out, "Wait for %d machine(s), then %s. Use --json to see their identities.\n", len(policy.After), policy.Soak)
+		_, err = fmt.Fprintf(out, "Machines to wait for: %d\nWait after each update: %s\n", len(policy.After), policy.Soak)
+	}
+	if details && err == nil {
+		_, err = fmt.Fprintln(out, "Wait for identities: "+strings.Join(policy.After, ", "))
 	}
 	if action == hostPolicyOff && err == nil {
 		_, err = fmt.Fprintln(out, "No further automatic work will be granted. An update already granted may finish, including recovery.")

@@ -65,3 +65,27 @@ func TestHostPolicyCLIRejectsMissingRevisionAndCoordinator(t *testing.T) {
 		}
 	}
 }
+
+func TestHostPolicyNamedPredecessorRequiresFreshDeclaration(t *testing.T) {
+	_, local := setupUpdateCLI(t)
+	peer := namedDestinationPeer(t)
+	peer.host.MachineName, peer.host.NameRevision = "destination", 1
+	if err := saveNamedTestHost(t, peer.host); err != nil {
+		t.Fatal(err)
+	}
+	a := application{dependencies: Dependencies{DialControl: dialControlHost}}
+	ids, err := a.hostPolicyPredecessors(t.Context(), updateEnvironment{local: local}, []string{"destination"})
+	if err != nil || len(ids) != 1 || ids[0] != peer.host.ID {
+		t.Fatalf("fresh named predecessor: %v, %v", ids, err)
+	}
+	if _, _, err := peer.names.Rename(t.Context(), peer.host.ID, "changed", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.hostPolicyPredecessors(t.Context(), updateEnvironment{local: local}, []string{"destination"}); err == nil {
+		t.Fatal("stale named predecessor accepted")
+	}
+	ids, err = a.hostPolicyPredecessors(t.Context(), updateEnvironment{local: local}, []string{peer.host.ID})
+	if err != nil || len(ids) != 1 || ids[0] != peer.host.ID {
+		t.Fatalf("exact predecessor identity after rename: %v, %v", ids, err)
+	}
+}

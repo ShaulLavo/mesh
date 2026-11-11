@@ -1972,6 +1972,7 @@ Available Commands:
   automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
   config      Deliver explicitly approved feed and domain settings
+  policy      Manage automatic updates on this machine
   retry       Retry unfinished targets at the originally approved release
   status      Show persisted fleet update progress
   trust       Authorize an update administrator on this machine
@@ -2318,6 +2319,93 @@ Usage:
 
 Flags:
   -h, --help   help for status
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update policy
+
+```text
+Manage automatic updates on this machine
+
+Usage:
+  mesh update policy [command]
+
+Available Commands:
+  off         Stop granting automatic updates on this machine
+  set         Enable automatic updates on this machine
+  show        Show this machine's update policy
+
+Flags:
+  -h, --help   help for policy
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh update policy [command] --help" for more information about a command.
+```
+
+## mesh update policy off
+
+```text
+Stop granting automatic updates on this machine
+
+Usage:
+  mesh update policy off [flags]
+
+Flags:
+      --expected-revision uint   policy revision reported by policy show
+  -h, --help                     help for off
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update policy set
+
+```text
+Enable automatic updates on this machine
+
+Usage:
+  mesh update policy set [flags]
+
+Flags:
+      --after stringArray        wait for a named machine before updating; may repeat
+      --expected-revision uint   policy revision reported by policy show
+  -h, --help                     help for set
+      --soak duration            time to wait after each predecessor updates
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update policy show
+
+```text
+Show this machine's update policy
+
+Usage:
+  mesh update policy show [flags]
+
+Flags:
+  -h, --help   help for show
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine

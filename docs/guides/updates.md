@@ -19,6 +19,41 @@ only. They never create a fleet from address-book entries or save one during
 approval. Use an explicit fleet file to choose a group, including offline members.
 An address book on one machine does not establish the membership of your mesh.
 
+## Set this machine's automatic update policy
+
+Automatic host updates currently default to off. Run these commands on the
+machine whose policy you want to change:
+
+```bash
+mesh update policy show
+mesh update policy show --json
+mesh update policy set --expected-revision 0
+```
+
+Use the revision from `policy show`. Each successful change increases it.
+If another command changes the policy first, read the policy again before
+retrying your change.
+
+To wait for other machines to update first, name each predecessor and the
+time to wait after its update:
+
+```bash
+mesh update policy set --expected-revision 1 --after canary --soak 30m
+```
+
+To stop granting automatic work, run:
+
+```bash
+mesh update policy off --expected-revision 2
+```
+
+An update that already has permission to install may finish, including recovery.
+Turning the policy off preserves its predecessor list and wait time.
+Policy changes require the machine's owner identity through its local Unix
+socket. A network connection cannot change the policy, including a connection
+from an enrolled update administrator. Run the command on the destination
+machine when changing a remote machine's policy.
+
 ## Choose the machines
 
 ```bash
