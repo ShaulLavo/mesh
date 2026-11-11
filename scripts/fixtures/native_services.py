@@ -4,7 +4,6 @@ import hashlib
 import os
 import platform
 import plistlib
-import signal
 import subprocess
 import sys
 import time
@@ -143,7 +142,7 @@ def darwin_image(pid, expected):
     matches = [row for row in rows if row.get("i") == str(expected.st_ino)
                and row.get("D") and int(row["D"], 0) == expected.st_dev and row.get("n")]
     if len(matches) != 1:
-        raise RuntimeError("mapped native service image is not uniquely identified")
+        raise RuntimeError(f"mapped native service image inode {expected.st_ino} device {expected.st_dev} has {len(matches)} lsof matches")
     return Path(matches[0]["n"])
 
 
@@ -153,6 +152,7 @@ def positive_control(root, evidence):
     # The caller's finally is installed before inventory, file creation or launch.
     try:
         record["before"] = manager.inventory()
+        Path(evidence).write_text(json.dumps(record, indent=2) + "\n")
         marker = Path(root) / "control.json"
         manager.start(marker)
         wait_for(marker.exists, "native manager did not execute positive control")
@@ -161,7 +161,7 @@ def positive_control(root, evidence):
         if child != {"pid": manager.pid, "token": manager.label} or not alive(manager.pid):
             raise RuntimeError("native manager PID does not match executing positive control")
         record["executed"] = child
-        record["mappedImage"] = mapped_image(manager.pid, sys.executable)
+        record["mappedImage"] = wait_for(lambda: control_image(manager.pid, record), "native control did not exec its expected /bin/sleep image")
         if manager.manager_pid() != manager.pid:
             raise RuntimeError("native service PID changed during mapped-image verification")
         record["passed"] = True
@@ -182,8 +182,17 @@ def positive_control(root, evidence):
 
 def child(marker, token):
     Path(marker).write_text(json.dumps({"pid": os.getpid(), "token": token}))
-    while True:
-        signal.pause()
+    # A fixed native executable supplies the image control on interpreter-based
+    # macOS installations whose Python launcher execs a different framework file.
+    os.execv("/bin/sleep", ["/bin/sleep", "60"])
+
+
+def control_image(pid, record):
+    try:
+        return mapped_image(pid, "/bin/sleep")
+    except RuntimeError as error:
+        record["lastMappingError"] = str(error)
+        return None
 
 
 if __name__ == "__main__":

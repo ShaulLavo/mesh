@@ -29,10 +29,10 @@ def validate(root, system=None):
 
 def create():
     # TMPDIR on hosted macOS is already too long before Mesh adds a worker path.
-    base = Path(os.environ.get("MESH_SHORT_TMP", "/tmp")).resolve(strict=True)
-    for drive in (Path("/work"), Path("/data")):
-        if base.is_relative_to(drive) and not drive.is_mount():
-            raise RuntimeError(f"fixture destination drive {drive} is not mounted")
+    selected = Path(os.environ.get("MESH_SHORT_TMP", "/tmp")).absolute()
+    require_mounted_drive(selected)
+    base = selected.resolve(strict=True)
+    require_mounted_drive(base)
     root = Path(tempfile.mkdtemp(prefix="mi-", dir=base)).resolve()
     try:
         validate(root)
@@ -40,3 +40,9 @@ def create():
         shutil.rmtree(root)
         raise
     return root
+
+
+def require_mounted_drive(base):
+    for drive in (Path("/work"), Path("/data")):
+        if base.is_relative_to(drive) and not drive.is_mount():
+            raise RuntimeError(f"fixture destination drive {drive} is not mounted")

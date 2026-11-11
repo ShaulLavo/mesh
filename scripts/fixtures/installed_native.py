@@ -242,6 +242,7 @@ class Installation:
         original = daemon.pid
         start = time.monotonic()
         self.units.stop("daemon")
+        self.require_stream_closed()
         self.units.start("daemon")
         native_services.wait_for(self.ready, "baseline did not reconnect after native restart")
         self.open_stream()
@@ -259,6 +260,16 @@ class Installation:
         return {"control": "actual published pair native restart; no update acceptance claimed", "host": self.host["name"],
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "attachedClient": self.terminal.pid,
             "originalDaemon": original, "daemon": daemon.pid, "routeGapUpperBoundSeconds": gap_bound, "helper": helper}
+
+    def require_stream_closed(self):
+        for _ in range(256):
+            try:
+                line = self.response.readline()
+            except ConnectionResetError:
+                return
+            if not line:
+                return
+        raise RuntimeError("old daemon's service stream remained open after native stop")
 
     def close(self):
         try:
