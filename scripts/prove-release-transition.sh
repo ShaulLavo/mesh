@@ -247,6 +247,7 @@ assert_saved_recovery() {
 
 rollback_source() {
   local label=$1 candidate_image=${2:-$candidate_binary}
+  local retained_worker_pid=$worker_pid retained_shell_pid=$shell_pid
   fixture prepare-rollback "$state" "$old_binary" "$candidate_image" "$label"
   env PATH="$test_root/service-tools:$PATH" MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" \
     "$candidate_binary" update-helper --state-dir "$state" >"$test_root/helper-$label.log" 2>&1 &
@@ -288,7 +289,7 @@ rollback_source() {
   stop_daemon "$old_daemon" "$old_binary"
   old_daemon=''
   rm -f -- "$test_root/managed-daemon.pid"
-  printf 'rollback boundary %s passed, worker %s, shell %s\n' "$label" "$worker_pid" "$shell_pid" >&2
+  printf 'rollback boundary %s passed, worker %s, shell %s\n' "$label" "$retained_worker_pid" "$retained_shell_pid" >&2
 }
 
 wait_for_helper_rollback() {
