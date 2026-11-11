@@ -21,10 +21,10 @@ type HostTargetRelease struct {
 
 // HostTargetPlan contains verified evidence only; it reserves no installation.
 type HostTargetPlan struct {
-	PolicyRevision uint64            `json:"policyRevision"`
-	CurrentDigest  string            `json:"currentDigest"`
-	Target         HostTargetRelease `json:"target"`
-	Next           HostTargetRelease `json:"next"`
+	PolicyRevision uint64             `json:"policyRevision"`
+	CurrentDigest  string             `json:"currentDigest"`
+	Target         HostTargetRelease  `json:"target"`
+	Next           *HostTargetRelease `json:"next,omitempty"`
 }
 
 type HostTargetPhase string

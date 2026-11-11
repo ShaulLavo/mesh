@@ -29,6 +29,13 @@ predecessor retention acknowledgement. It may refresh bounded authenticated
 peer/discovery caches. Its ordinary-device evidence request has empty `Settled`
 and `Drop=false`.
 
+Preview also accepts `Version="latest"`. It traverses stable discovery roots
+to the compatible executing reader epoch and authenticates that exact head;
+it never calls the manifest client's unqualified latest selector. A verified
+already-current version/artifact returns `Next=nil`, omitted from JSON.
+Submission still requires an exact newer version and never persists a latest
+alias or an already-current no-op as approved work.
+
 Submission verifies the source, exact target metadata and manifest, route,
 forward/full rollback proof and retained workers. It checks the current helper
 and records the private intent and exact owned request under authority before
