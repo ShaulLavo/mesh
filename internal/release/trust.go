@@ -236,6 +236,14 @@ func writeTrustFile(path string, contents []byte) error {
 	if err := os.Rename(file.Name(), path); err != nil {
 		return fmt.Errorf("release: publish trust material: %w", err)
 	}
+	parent, err := os.Open(filepath.Dir(path)) //nolint:gosec // The owner-selected trust cache contains this directory.
+	if err != nil {
+		return fmt.Errorf("release: open trust directory: %w", err)
+	}
+	err = errors.Join(parent.Sync(), parent.Close())
+	if err != nil {
+		return fmt.Errorf("release: sync trust directory: %w", err)
+	}
 	return nil
 }
 
