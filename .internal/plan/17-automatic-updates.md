@@ -52,7 +52,8 @@ from v0.1.249 to v0.1.257 that way.
   other three machines have updated unattended and managing has been notified.
   Nobody runs an update command on any machine.
 - The owner allows compatibility code for the supported-older-release
-  requirement. No new dependency is needed.
+  requirement. The maintained `github.com/sigstore/sigstore-go` verifier is
+  permitted for complete signature and trust-rotation verification.
 
 ## What exists
 
@@ -234,7 +235,7 @@ type UpdateMetadata struct {
 	Position    Position       `json:"position"`
 	Direct      DirectSources  `json:"direct"`
 	Rollback    []RollbackRef  `json:"rollback"`
-	Page        AssetRef       `json:"page"` // newest anchor page of this epoch
+	Page        AssetRef       `json:"page"` // prior published anchors; excludes this release
 }
 
 type Position struct {
@@ -265,32 +266,32 @@ the workflow permissions `id-token: write`, `attestations: write` and
 `artifact-metadata: write`, and no secret. For a public repository the action
 signs through the Sigstore public good instance: a short-lived certificate
 from the Fulcio certificate authority that names the signing workflow, and an
-entry in the public transparency log. The publisher converts the action's bundle into
-Mesh's own envelope, `mesh-update.sig.json`, so installed readers never depend
-on the bundle layout:
+entry in the public transparency log. The publisher preserves the action's
+complete original bundle in a versioned wrapper, `mesh-update.sig.json`:
 
 ```go
-// internal/release/signature.go. Asset mesh-update.sig.json, at most 32 KiB.
+// internal/release/signature.go. Asset mesh-update.sig.json, at most 256 KiB.
 type SignatureEnvelope struct {
 	Schema     int         `json:"schema"`
 	Signatures []Signature `json:"signatures"`
 }
 
 type Signature struct {
-	Kind        string `json:"kind"`        // "github-attestation"
-	Certificate []byte `json:"certificate"` // leaf certificate, DER
-	PayloadType string `json:"payloadType"`
-	Payload     []byte `json:"payload"`   // in-toto statement naming the subject digests
-	Signature   []byte `json:"signature"` // over the DSSE encoding of type and payload
+	Kind   string          `json:"kind"`   // "github-attestation"
+	Bundle json.RawMessage `json:"bundle"` // complete original bundle, at most 120 KiB
 }
 ```
 
 **What Mesh verifies.** `release.VerifySignature(root TrustRoot, metadata,
-envelope []byte)` uses the standard library only. It requires one signature of
-a pinned kind for which all of this holds:
+envelope []byte)` uses the maintained Sigstore Go verifier. Reject an envelope
+larger than 256 KiB, more than two entries or a raw bundle larger than 120 KiB
+before parsing bundle contents. Require one supported entry for which all of
+this holds:
 
 - the leaf certificate chains to a certificate authority in the pinned trust
-  root, evaluated at the certificate's own start time;
+  material, with a verified observer timestamp inside its validity window;
+- transparency-log evidence and signed certificate timestamps verify against
+  the authenticated trusted material;
 - the certificate's extensions equal the pinned identity: the GitHub Actions
   token issuer, the signing workflow
   `ShaulLavo/mesh/.github/workflows/release.yml@refs/heads/main`, the numeric
@@ -301,22 +302,27 @@ a pinned kind for which all of this holds:
 
 Entries of an unknown kind are skipped, so a later release can add a second
 signer without breaking older readers. An envelope with no valid pinned entry
-is refused. The verifier does not read the transparency log. The official
-verifier checks the log at publication and at adoption start.
+is refused. Keep complete evidence for offline verification after the
+short-lived certificate expires. The official CLI also verifies the bundle
+at publication and at adoption start.
 
 ```go
 // internal/release/trust. Embedded data, versioned.
 type TrustRoot struct {
-	Version     int
-	Authorities [][]byte // Fulcio root and intermediate certificates, DER
-	Identity    SignerIdentity
+	Version       int
+	BootstrapRoot []byte // pinned Sigstore TUF root metadata
+	Trusted       []byte // complete material, including log and timestamp keys
+	Identity      SignerIdentity
 }
 ```
 
-The pinned authority is the Fulcio chain that has been valid since 2022-04-13
-with no end date in Sigstore's published trusted root. The parts of that root
-that GitHub's documentation says rotate a few times a year are the logs and the
-timestamp authority, and the Mesh verifier does not depend on them.
+The embedded material includes certificate authorities, log keys and timestamp
+keys. The Sigstore library's TUF client starts from the pinned bootstrap root
+and authenticates successive root rotations. Persist those roots and refreshed
+trusted material, and retain historical material needed by archived waypoints.
+Trust refresh is bounded per pass and resumes durably. An expired bootstrap
+root must still authenticate its successive roots under TUF's root continuity
+rules; current timestamp and snapshot expiry checks remain enforced.
 
 **Where verification happens.**
 
@@ -324,9 +330,11 @@ timestamp authority, and the Mesh verifier does not depend on them.
   the metadata and each archive with `--repo ShaulLavo/mesh`,
   `--signer-workflow`, `--source-ref refs/heads/main` and
   `--deny-self-hosted-runners`. It then runs the candidate's own
-  `VerifySignature`, and repeats it with the trust version of every direct
-  source. Any failure, including a failed signing step, leaves the draft
-  unpublished.
+  `VerifySignature`, then uses each updater-capable source reader permitted
+  to take the direct unattended edge. Historical unsigned sources have no
+  signature verifier. Prove their forward and rollback paths and bind their
+  immutable manifest and archive digests through newly signed metadata. Any
+  required verification or signing failure leaves the draft unpublished.
 - *Host updater.* Every hop verifies the metadata signature before any manifest
   is trusted, then checks the manifest bytes against the metadata. The existing
   transaction re-reads the manifest and compares digests (`accept`,
@@ -335,14 +343,13 @@ timestamp authority, and the Mesh verifier does not depend on them.
   manifest and its own executable digest before it sends anything to the old
   daemon. The old CLI's version-only selection is never used.
 
-**Rotation.** The trust root changes only at a waypoint. The waypoint release
-is signed under the old trust version and embeds the new one. Releases signed
-under the new version begin a new format epoch, so a reader pinned to the old
-version stops at the waypoint, installs it, and continues with the new root.
-If Sigstore announces a new Fulcio chain, the waypoint ships during the overlap
-while both chains issue. The envelope's second-signer slot is the contingency
-if no overlap exists; that case would need an owner-provisioned key and is the
-only one that would.
+**Rotation.** TUF authenticates key and trusted-material rotation from the
+installed bootstrap root. A later arbitrary signing key does not replace that
+chain. Incompatible reader or bundle formats still use an epoch waypoint.
+Prove an old reader to its compatible authenticated waypoint, then the
+waypoint reader to the next target. Test the original installed reader after
+certificate expiry, key rotation and bootstrap-root expiry. No new owner
+signing credential is needed for the GitHub keyless workflow.
 
 **Limits.** A signature proves who published the content. It does not prove
 freshness: an attacker who controls the origin can still serve an old, validly
@@ -369,9 +376,10 @@ type DiscoveryRoot struct {
 The root is a location hint and grants nothing. Everything it leads to is
 verified by signature or by a digest chain that ends in one.
 
-**Epochs.** A format epoch covers one set of formats that a reader can decode
-and one trust version. An incompatible change to the manifest, the metadata,
-the pages, the journal, the platform set or the trust root starts a new epoch.
+**Epochs.** A format epoch covers one set of formats a reader can decode.
+An incompatible change to the manifest, metadata, pages, journal, platform set
+or trust-update reader starts a new epoch. Ordinary authenticated TUF key
+rotation stays within the same epoch.
 The last release of an epoch is the waypoint: it is an anchor, it is written
 and signed in the old epoch's formats, and its executable reads the new ones.
 Its root is the final root of its epoch and never changes afterwards.
@@ -383,7 +391,11 @@ metadata file or page from a newer epoch. After it installs the waypoint, the
 new executable repeats the process one epoch later.
 
 **Anchor pages.** Anchors are numbered from zero. A page holds at most 64
-entries, at most 16 KiB, and pages never span an epoch.
+entries, at most 64 KiB, and pages never span an epoch. Tags and versions are
+ASCII with at most 64 bytes, asset names at most 128 bytes, and digests exactly
+64 hexadecimal characters. A page has at most 64 back references. Producer and
+decoder enforce actual serialized byte bounds. These are per-document bounds
+with no total-history cap.
 
 ```go
 type AnchorPage struct {
@@ -409,10 +421,12 @@ type PageRef struct {
 }
 ```
 
-A full page is immutable. Each new anchor writes the current partial page again
-as an asset of its own release. The signed metadata names the newest page by
-digest, and each page names earlier pages by digest, so every page a reader
-uses is bound to a signature. The back references double in distance, so any
+A release's page contains only already-published anchors. Admit the current
+target anchor from its signed head metadata, then add it to the next release's
+page. This keeps the metadata/page digest graph acyclic. Full pages are
+immutable; new partial pages contain prior anchors. Signed metadata names
+each page by digest, and pages name earlier pages by digest. The back
+references double in distance, so any
 page among P is reached in about log2(P) fetches. No single asset grows with
 history: 2,000 anchors are 32 pages.
 
@@ -424,6 +438,7 @@ total fetches. The cursor is saved in `updates/host-discovery.json`:
 // internal/update/host_discovery.go
 type DiscoveryCursor struct {
 	Epoch  uint32             `json:"epoch"`
+	Root   *AssetRef          `json:"root,omitempty"` // next root during epoch traversal
 	Head   AssetRef           `json:"head"`
 	Pages  map[uint64]AssetRef `json:"pages"`           // page locations learned so far, newest 256
 	Search *RouteSearch       `json:"search,omitempty"` // open binary search: from, low, high
@@ -431,8 +446,10 @@ type DiscoveryCursor struct {
 }
 ```
 
-Verified pages are cached by digest. A cursor whose head changed keeps its
-learned page locations, because full pages never change.
+Verified pages are cached by digest. On a head change, retain only locations
+proven full, refresh the partial-page reference, and reset head-dependent
+searches. Persist epoch-root traversal too, so crossing more than eight epochs
+continues next pass without starting over.
 
 ### Routes
 
@@ -487,8 +504,12 @@ preview uses it.
   release pace widens the window by itself and no publication fails for age.
 - **Direct sources.** The window's anchors, plus every release after the
   newest anchor, on all three platforms.
-- **Supported.** Every release published after the window's oldest anchor. It
-  reaches the candidate directly, or through the first anchor after it.
+- **Supported.** Every updater-capable release retains an unattended path,
+  however old it becomes. Releases in the recent window need at most two
+  hops. Pre-updater historical receipts certify forward transitions only;
+  they do not certify rollback or authorize unattended adoption. The actual
+  fleet daemon builds v0.1.249, v0.1.255 and v0.1.257 are required adoption
+  sources with full rollback proof.
 - **Reachable.** Every other published release keeps a longer chain through
   older anchors.
 - **Seeds.** History before the policy becomes the first anchors. Unit 3's tool
@@ -513,6 +534,12 @@ range. Receipts published before v0.1.232 are checked by a second, named
 function for their own contract. An edge of either kind is forward only. An
 automatic hop also needs the rollback proof named by the signed metadata.
 
+The real v0.1.196 daemon cannot read state 13 after migration 13 removes
+`services.public_name`; it also cannot read final state 16. Retain that rejected
+edge as a negative proof fixture, never a direct unattended edge. The v0.1.196
+fleet helper is a separate pairing test because it does not own the daemon
+database. Atomic batching cannot repair unreadable final state.
+
 The publisher refuses to publish when:
 
 1. a direct source lacks a verified forward receipt on any platform, or an
@@ -520,8 +547,10 @@ The publisher refuses to publish when:
 2. a source could not be acquired, after bounded retries;
 3. any published release with a manifest has no chain of verified edges to the
    candidate on any platform, or a supported release needs more than two hops;
-4. the signature does not verify under the candidate's trust root and the
-   trust root of every direct source;
+4. the candidate or adopter cannot verify the signed target, or an
+   updater-capable reader cannot verify its permitted unattended edge;
+   historical unsigned seeds need forward/rollback proof and signed digest
+   binding, and epoch crossings use compatible authenticated waypoints;
 5. any retained asset is missing or changed;
 6. the manifest exceeds 512 KiB or does not decode with the frozen schema 1
    reader.
@@ -600,6 +629,8 @@ type FailedEdge struct {
 // updates/host-ledger.json. One entry per committed installation.
 type LedgerEntry struct {
 	Seq              uint64    `json:"seq"`
+	Request          string    `json:"request"`
+	Generation       uint64    `json:"generation"`
 	Version          string    `json:"version"`
 	Metadata         string    `json:"metadata,omitempty"`
 	Binary           string    `json:"binary"`
@@ -618,13 +649,19 @@ retention rules.
 **The step.** It is idempotent, runs every 30 seconds on local reads, and
 touches the network only when a check is due or a catch-up is in progress.
 
-1. Reconcile first, in any mode. If the journal's request is the owned one,
-   record its result: a commit appends a ledger entry, a verified rollback
-   adds a failed edge, a failed rollback sets `attention`. Then clear `Owned`.
+1. Reconcile first, in any mode. Match journal and ownership by request ID and
+   generation. Append a committed ledger entry idempotently by that pair
+   before clearing `Owned`; a verified rollback adds a failed edge, and a
+   failed rollback sets `attention`. A crash between append and ownership
+   clearing must not duplicate a commit. Ownership saved before any journal
+   exists is rechecked under the authority lock against policy and current
+   build, then resumes the identical request or is cleared without a grant.
 2. Read the policy. Manual mode stops here. A missing file means the default
    below. A malformed or unreadable file sets `attention` and stops.
-3. Yield while another operation owns an unfinished journal, or while a
-   recipient consent of the coordinator policy is enabled.
+3. Yield while another operation owns an unfinished journal, a recipient
+   consent of the coordinator policy is enabled, or durable adoption is
+   unfinished. Adoption includes the helper's confirmation phase. Its first
+   automatic hop cannot race that confirmation.
 4. Run one discovery pass.
 5. Choose the target: the epoch head, limited by the fleet order below.
 6. Stop when the executing digest equals the target's artifact or the
@@ -633,7 +670,8 @@ touches the network only when a check is due or a catch-up is in progress.
    space, and a current, running helper.
 8. Take the next verified hop from the route search, excluding failed edges,
    and check every live worker against it.
-9. Stage and grant under the fence.
+9. Persist `OwnedRequest` and its policy revision under the authority lock
+   before the first stage acceptance, then stage and grant under the fence.
 
 The daemon exits during activation. The next daemon starts at step 1.
 
@@ -647,10 +685,14 @@ coordinator reference at once, so the coordinator's consent check does not
 protect the updater's requests. The change: `authorize` always calls the
 configured acceptance when one is set. The daemon installs
 `Store.AuthorizeHostAcceptance` (`host_policy.go`), which wraps the existing
-`Store.AuthorizeAcceptance` (`automatic_consent.go:107`). For a request named
-by `Owned` it takes the authority lock (`lockContext`), reads the policy,
-requires automatic mode and the owned revision, and runs the journal commit
-inside the lock. `mesh update policy set` and `off` take the same lock and
+`Store.AuthorizeAcceptance` (`automatic_consent.go:107`). Host-generated
+stage, retry and grant calls carry an explicit in-process host origin,
+including requests with nil `Automatic`; origin is not inferred from whether
+an ownership file exists. A host call with missing or malformed ownership
+fails closed and cannot fall through to manual acceptance. The authorizer
+takes the authority lock (`lockContext`), matches the request ID, generation
+and policy revision, requires automatic mode, and commits inside that lock.
+No journal format change is needed. `mesh update policy set` and `off` take the same lock and
 increase the revision. So `policy off` returns only after any commit in
 progress, and every later stage, retry or grant of that request is refused.
 Work already granted finishes in the helper, and step 1 records its result in
@@ -691,6 +733,13 @@ and must be running before a hop starts.
   process (`updatebootstrap.HelperProcessProbe`) with the installed daemon. A
   stale or stopped helper is promoted or started. If that fails, the host
   reports `attention: update helper` and starts no hop.
+
+External promotion and readiness calls require an injected running-process
+probe, supplied by `updatebootstrap.HelperProcessProbe`. The current
+`update.EnsureHelper` caller uses the committed journal's exact manifest;
+it does not need another network lookup. First-install initialization retains
+its existing path, and unfinished transactions keep ownership. The helper's
+own `UpgradeHelper` path never waits for its own replacement.
 
 So a hop from release S is run by S's daemon and S's helper, and an adoption
 hop is run by the old daemon and the pinned release's helper. CI tests both
@@ -738,16 +787,19 @@ type RollbackBoundary struct {
 ```
 
 Goose commits each migration separately, so a failed upgrade can stop at any
-version between the source's and the candidate's. The proof covers each one. A
-test program, `internal/storage/cmd/boundary`, applies the candidate's
-migration files one at a time to a copy of the source's state. At every
-version the retained source executable must start on that copy, list the
-retained session, attach, exchange a token, and keep the recovery record
-byte-identical. At the final version the candidate daemon runs first and makes
-representative writes: a service route, cached session facts, and any
-persistent configuration the release changes. `VerifyRollbackProof` requires
-one passing boundary for every version in the range and a matching forward
-receipt.
+version between the source's and the candidate's. The proof covers each one.
+`internal/storage/cmd/boundary` supplies fast copied-state fixtures using the
+candidate's exact migrations. The required proof also interrupts or fails the
+actual candidate immediately before and after each migration commit, then
+runs real helper executable rollback and source startup on the resulting
+state. At every reachable boundary, require retained session I/O, unchanged
+worker and shell identity, and unchanged recovery records. Exercise candidate
+writes and persistent configuration changes wherever they can occur before a
+later failure, including service routes and machine naming. Advisory client
+storage writes are tested separately and identified as such.
+`VerifyRollbackProof` requires every boundary in the range, its actual
+candidate/helper evidence, and a matching forward receipt. A copied SQL
+fixture alone does not certify a failed candidate's resulting state.
 
 A boundary that fails means the release cannot publish. A failing seed is fixed
 by a compatible migration, or by an atomic batch, before rollout.
@@ -825,6 +877,12 @@ dependent that stops reading is shown in the predecessor's status with the
 number of entries it holds back. It is released when its own policy drops the
 predecessor, or locally with `mesh update policy forget`.
 
+Initial-adoption milestones have separate retention in the durable adoption
+record and are returned with evidence until that fleet operation settles.
+Bind adoption and later unattended success to the operation ID and exact
+pinned adoption digest. Ordinary ledger pruning cannot discard them before a
+dependent's first read.
+
 The dependent saves what it reads in `updates/host-peers.json`: per
 predecessor, the entries newer than its own version, the failed edges, and the
 state of the last read with its time.
@@ -839,7 +897,7 @@ release.
   canary that is already on a newer release counts for the limit. It does not
   let the host skip ahead to a release only that canary has run.
 - Predecessors do not need a release in common. One on A, C, E and another on
-  B, D, F give the limit D once both have soaked.
+  B, D, F give the limit E once their newest entries have soaked.
 - A predecessor whose hop failed stays on its old release, so the limit stays
   at or below it. Its failed edge also holds the same hop on a dependent of
   the same platform.
@@ -862,7 +920,9 @@ it has soaked.
 
 **The owner's fleet.** The Pi and the VPS have no predecessors. They are always
 on, so they are the canaries. The Mac follows both with a 30-minute soak. The
-PC follows both with a two-hour soak. Removing a dead canary from a policy is
+PC follows both with a two-hour soak. The Mac is required for initial PC
+adoption, but is not an ordinary PC-policy predecessor; an offline Mac does
+not block later PC updates. Removing a dead canary from a policy is
 a local, explicit change. A new machine has no predecessors.
 
 ### Visibility for managing
@@ -1060,8 +1120,10 @@ The phases run in this order, and each is safe to repeat:
    the adoption: `updateHelperStep` gains `resumeAdoption` beside
    `resumePendingCoordinatorSetup`.
 6. **Wait.** The helper reads `update.evidence` from each required host until
-   every one shows an adoption commit followed by a later unattended commit
-   with all workers preserved. An unavailable, refusing or not-yet-adopted
+   every one shows an adoption commit for this operation and exact pinned
+   digest, followed by a later unattended commit with all workers preserved.
+   These milestones remain durable until the fleet operation settles,
+   independently of normal ledger pruning. An unavailable, refusing or not-yet-adopted
    peer keeps the host waiting and is reported. Nothing waives it.
 7. **Notify.** When a notice is configured, the helper runs its command. A
    zero exit records the delivery time. A failure is retried with backoff and
@@ -1071,13 +1133,17 @@ The phases run in this order, and each is safe to repeat:
    identity and sends them to the old daemon over the Unix socket. The old
    daemon runs its own staging code: it finds the helper present, re-reads the
    pinned manifest from the origin, compares digests, downloads the candidate
-   and writes the journal. The new helper then runs the activation with the
+   and writes the journal. Assert that the promoted helper receipt, link and
+   actual running image remain unchanged across old staging, activation and
+   rollback. The new helper then runs the activation with the
    current transaction code, verifies the new daemon and every retained
    worker, and commits or rolls back.
 9. **Confirm.** After the commit the helper checks that the files from step 3
    are unchanged, that the daemon runs the pinned executable under the same
    service with the same arguments and environment, and that the seeded policy
-   is in force. It writes a ledger entry with origin `adoption`.
+   is in force. It idempotently writes a ledger entry with origin `adoption`
+   and the operation-specific milestone, then durably marks confirmation
+   finished. The host updater yields until this phase completes.
 
 A rollback leaves the old daemon running with the new helper, which is an
 accepted pair. The record becomes `rolled-back`, the edge is recorded as
@@ -1162,7 +1228,7 @@ earlier releases change no behavior.
 | Unit | Outcome | Depends on | Hours |
 | --- | --- | --- | --- |
 | 1 | Signed metadata, verifier, signing in the publisher | none | 5 |
-| 2 | Discovery formats, pages and route search | none | 4.5 |
+| 2 | Discovery formats, pages and route search | 1 shared metadata types | 4.5 |
 | 3 | Publisher: sources, seeds, verified graph, retention | 1, 2, 4 | 5.5 |
 | 4 | Rollback proofs at every migration boundary | none | 4 |
 | 5 | Helper stays current; promotion from a verified executable | none | 2.5 |
@@ -1175,13 +1241,15 @@ earlier releases change no behavior.
 | 12 | Fleet adoption | 11 | 3, over several days |
 | 13 | Remove the coordinator policy, write the ADR | 12 | 2.5 |
 
-About 59 agent hours. Units 1, 2, 4 and 5 start at once and share no files.
+About 59 agent hours. Units 1, 4 and 5 start at once and share no files.
+Unit 1 delivers its shared metadata contract first; unit 2 starts from that
+commit and owns only discovery and route files. It does not duplicate types.
 Unit 6 starts when 1, 2 and 5 merge, and unit 3 when 1, 2 and 4 merge. Units
 7 and 9 follow 6 in parallel, then unit 10, then unit 8.
 
 **Unit 1: signed metadata.** Files: `internal/release/metadata.go`,
 `signature.go`, `internal/release/trust/` (embedded root version 1),
-`internal/release/cmd/sign` (bundle to envelope, and verify),
+`internal/release/cmd/sign` (complete bundle wrapper and verify),
 `.github/workflows/release.yml`, `scripts/check-packaging.sh`. Tests on a
 recorded real bundle and generated certificates: a missing envelope, an
 invalid signature, a certificate from another authority, another workflow,
@@ -1189,16 +1257,30 @@ another ref, another repository identifier and a self-hosted runner are each
 refused; an altered manifest, metadata file, archive or page is refused; an
 envelope with only unknown kinds is refused, and one with an unknown kind
 beside a valid one verifies; a failed signing step or a failed `gh attestation
-verify` leaves the draft unpublished; the candidate verifies under each prior
-trust version.
+verify` leaves the draft unpublished; supported old readers verify through
+authenticated TUF rotation and format waypoints, including expired bootstrap
+roots; unsigned historical readers are not asked to verify signatures. Keep
+observer-time, log and SCT evidence, wrapper byte bounds and unknown-kind
+handling covered. The dependency buys maintained complete verification and
+authenticated trust updates.
+
+Deliver `metadata.go` and its tested shared types first: `UpdateMetadata`,
+`Position`, `DirectSources`, `RollbackRef` and `AssetRef`. Unit 2 consumes that
+exact commit. Before unit 3 generates route metadata, unit 1 signs the existing
+release manifest and archives through the same verifier and complete bundle
+wrapper. Unit 3 adds `mesh-update.json` as a signed subject. Do not publish
+fabricated or incomplete index metadata to connect these phases.
 
 **Unit 2: discovery and routes.** Files: `internal/release/discovery.go`,
 `route.go`, `internal/update/host_discovery.go` and tests. Tests: the 0, 24,
 48, 52 case with the newest sixteen anchors not admitting 0; a thirteen-hop
 route completes; 2,000 anchors resolve within the per-pass budget and no
 document exceeds its bound; a pass that hits its budget resumes from the saved
-cursor without repeating fetches; a page whose digest differs is refused; a
-reader of epoch 1 facing a root of epoch 3 follows `Previous` twice, installs
+cursor without repeating fetches; a page whose digest differs is refused;
+page construction contains no current-release hash cycle; a changed head
+refreshes a partial page and resets head-dependent search; maximum-field
+pages serialize below 64 KiB and reject invalid field bounds; a reader of
+epoch 1 crossing more than eight newer epochs persists traversal, installs
 the first waypoint, and never opens a newer document; a failed edge makes the
 search choose the next farthest anchor.
 
@@ -1225,12 +1307,15 @@ time per source and shard across matrix jobs if a platform passes ten minutes.
 `scripts/test-release-transition.py`,
 `integration/release_transition_checkpoint.sh`. Tests: a candidate whose
 intermediate state the source cannot start on fails; a failure injected at
-each boundary still yields a running source with session I/O and unchanged
-recovery records; a proof that skips a version, or names another forward
+each boundary in the actual candidate followed by real helper rollback still
+yields a running source with session I/O and unchanged recovery records;
+candidate writes before a later failure remain readable by the source; a proof
+that skips a version, or names another forward
 receipt, is refused; the forward receipt stays byte-compatible with schema 1.
 
 **Unit 5: helper currency.** Files: `internal/updateinstall/helper.go`,
-`helper_probe.go`, `helper_recovery.go`, `internal/cli/update_helper.go` and
+`helper_probe.go`, `helper_recovery.go`, `internal/cli/update_helper.go`,
+`internal/update/local.go` and
 tests. Tests: a helper three state versions behind is promoted after a commit;
 `PromoteHelper` on a committed journal binds the new process to its image; a
 stopped helper is started before a hop; a failed start restores the prior
@@ -1247,7 +1332,10 @@ hop that rolls back stays excluded across restarts and across more than eight
 newer targets that route through it, and a verified alternative proceeds;
 `policy off` and a revision change racing download, stage, retry and grant
 issue no later work; manual mode records the result of work already granted;
-a malformed policy sets `attention` and starts nothing; a failure before
+a malformed policy or missing host ownership sets `attention` and starts
+nothing; ownership saved before any journal and crashes after ledger append
+recover without duplicate commits; unfinished adoption confirmation blocks
+automatic hops; a failure before
 activation backs off without stopping the daemon; a manual operation in the
 journal makes the updater wait; a package-owned path and a development build
 stay manual; an enabled recipient consent keeps it idle; an unsigned or
@@ -1319,7 +1407,10 @@ an older peer without the summary reads as not adopted.
 client). Tests with a real old daemon: the supervisor signs as the host and
 the old daemon stages the pinned manifest; a manifest or signature that
 differs from the pin stops before any control is sent; the policy file exists
-before the new daemon's first start; identity, administrators, device grants,
+before the new daemon's first start; automatic hops wait for confirmation;
+operation-specific adoption and later-unattended milestones survive ledger
+pruning before a dependent's first read; the promoted helper receipt, link and
+running process survive old staging, activation and rollback; identity, administrators, device grants,
 service definition and state paths are unchanged; a required peer that is
 offline, refusing or not adopted keeps the host waiting with that reason and
 never falls back to a session; the notice command must succeed before
@@ -1377,8 +1468,10 @@ proxy session's PID and replies and the managing chat's sessions. A session or
 service that does not survive is a defect to fix in a release before the
 operation continues to the next host.
 
-**5. Finish line.** The next release reaches the Pi and the VPS, then the Mac,
-then the PC, with no action from anyone, and `mesh update fleet` exits 0. Add
+**5. Finish line.** The next release reaches every awake machine unattended
+and the Mac catches up on wake. Initial PC adoption is strictly last. Ordinary
+PC policy follows the Pi and VPS and does not wait for an offline Mac. Confirm
+every machine is on the latest release and `mesh update fleet` exits 0. Add
 the fleet command to the managing chat's hourly check. Then run unit 13.
 
 **Stop conditions.** A hop that rolled back stops the operation at that host,
@@ -1399,10 +1492,10 @@ a journal or a record, or running an update command by hand.
 1. **Removing the coordinator policy** deletes recently merged work (#395 and
    the binary half of #414). It was never enrolled on the fleet. The reviewer
    accepted host autonomy; unit 13 is cleanup after the fleet has moved.
-2. **Sigstore continuity.** Signing depends on the public good Fulcio
-   authority continuing to issue for GitHub Actions. A replacement chain needs
-   a waypoint during its overlap. With no overlap, the fallback is a second
-   signer, which needs an owner-provisioned key.
+2. **Sigstore continuity.** Keyless signing needs GitHub and Sigstore at
+   publication. Hosts verify archived bundles offline and authenticate trust
+   changes through TUF. Trust-refresh failure holds activation and is reported;
+   it never permits an unverified replacement key.
 3. **Old seeds may not pass today's harness.** The ladder reaches back to
    about v0.1.185. Unit 3 proves each seed before committing the list, and
    fixes the harness or the candidate where one fails.
@@ -1445,6 +1538,15 @@ Findings from the review of `a47e958e`.
 The notes on package-owned and client-only installations are answered in
 Installation kinds.
 
+The final review of `ae7fcee7` accepted this design after six bounded
+amendments, applied by the coordinator: complete Sigstore bundles and TUF
+continuity; acyclic bounded pages and resumable epoch traversal; historical
+unsigned-source exemptions; actual candidate/helper rollback boundaries;
+adoption confirmation and retained operation milestones; and durable ownership
+before acceptance with idempotent ledger reconciliation. No further
+architecture cycle is required. The implementation PRs still require their
+independent reviews and green CI.
+
 ## Evidence
 
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
@@ -1462,3 +1564,7 @@ authority's validity.
 
 No product check ran for this prose-only design, and no fleet machine was
 changed. Every path, function and line cited was read on main `514700f4`.
+
+The final signature contract follows [Sigstore's bundle requirements](https://docs.sigstore.dev/about/bundle/),
+the [maintained Go verifier](https://github.com/sigstore/sigstore-go/blob/main/docs/verification.md),
+and [TUF's root continuity rules](https://theupdateframework.github.io/specification/latest/).
