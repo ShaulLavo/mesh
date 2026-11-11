@@ -203,6 +203,9 @@ func (u *HostUpdater) SubmitLocalTarget(ctx context.Context, input HostTargetSub
 	if journalErr == nil && !hostFinished(journal.Phase) {
 		return HostTargetStatus{}, updateinstall.ErrConflict
 	}
+	if err := u.targetAuthority(ctx); err != nil {
+		return HostTargetStatus{}, err
+	}
 	prepared, err := u.planTarget(ctx, input, policy, nil, false)
 	if err != nil {
 		return HostTargetStatus{}, err
@@ -213,6 +216,17 @@ func (u *HostUpdater) SubmitLocalTarget(ctx context.Context, input HostTargetSub
 	intent := &hostTargetIntent{Schema: 1, Submission: input,
 		Status: HostTargetStatus{Schema: 1, Revision: input.ExpectedRevision + 1, PolicyRevision: policy.Revision, Phase: HostTargetReserved, CurrentDigest: input.CurrentDigest, RunningDigest: input.CurrentDigest, Target: prepared.plan.Target, Next: &prepared.plan.Next, PendingSince: u.now()}}
 	return u.reserveTarget(ctx, policy, prior, intent, prepared)
+}
+
+func (u *HostUpdater) targetAuthority(ctx context.Context) error {
+	reason, err := u.yield(ctx)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		return errors.New("update: local target waits for " + reason)
+	}
+	return nil
 }
 
 func (u *HostUpdater) PlanLocalTarget(ctx context.Context, input HostTargetSubmission) (HostTargetPlan, error) {

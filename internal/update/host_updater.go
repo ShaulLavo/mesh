@@ -400,6 +400,9 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	if u.now().Before(state.NextAttempt) {
 		return nil
 	}
+	if err := u.targetAuthority(ctx); err != nil {
+		return u.wait(ctx, state, err.Error())
+	}
 	limit, err := u.Order.Refresh(ctx, policy, owned.Installation.Current, u.now())
 	if err != nil {
 		return u.wait(ctx, state, err.Error())

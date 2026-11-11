@@ -70,6 +70,9 @@ func (u *HostUpdater) tickTarget(ctx context.Context, state HostUpdate, policy H
 	if exists && !hostFinished(journal.Phase) {
 		return u.wait(ctx, state, "another installation is unfinished")
 	}
+	if err := u.targetAuthority(ctx); err != nil {
+		return u.wait(ctx, state, err.Error())
+	}
 	if u.now().Before(state.NextAttempt) {
 		return nil
 	}
