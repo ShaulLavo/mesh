@@ -34,6 +34,7 @@ import (
 )
 
 type signingFixture struct {
+	provenance    []byte
 	trust         release.TrustRoot
 	issuer        *x509.Certificate
 	issuerKey     *ecdsa.PrivateKey
@@ -80,9 +81,11 @@ func newSigningFixture(t *testing.T) *signingFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trust := release.EmbeddedTrustRoot()
-	trust.Trusted = trusted
-	return &signingFixture{trust: trust, issuer: issuer, issuerKey: issuerKey, ctKey: ctKey, log: log, when: time.Now().Add(-45 * time.Minute).Truncate(time.Second)}
+	baseline := release.EmbeddedTrustRoot()
+	trust := release.TrustRoot{Version: baseline.Version, Identity: baseline.Identity, Trusted: trusted}
+	fixture := &signingFixture{trust: trust, issuer: issuer, issuerKey: issuerKey, ctKey: ctKey, log: log, when: time.Now().Add(-45 * time.Minute).Truncate(time.Second)}
+	fixture.provenance = fixtureTrustProvenance(t, fixture)
+	return fixture
 }
 
 func (fixture *signingFixture) envelope(t *testing.T, subjects ...[]byte) []byte {
