@@ -370,6 +370,10 @@ Approved follow-up: [14: keep the fleet current](14-fleet-auto-updates.md).
 The October 9 Pi incident was repaired live. Automatic enrollment, release
 tracking, verified catch-up and deployment configuration delivery remain open.
 
+Approved, high priority: [17: Mesh updates itself everywhere](17-automatic-updates.md).
+Design written 2026-11-11 and corrected after review; thirteen units. It replaces
+plan 14's binary rollout.
+
 Approved for later: [15: preview a worktree from a link](15-worktree-previews.md).
 It starts when the owner says Fregat has left its greenfield phase.
 
