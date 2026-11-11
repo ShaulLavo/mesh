@@ -1,0 +1,39 @@
+"""Resolved socket budgets for every installed-catchup case, before setup."""
+import os
+import platform
+import shutil
+import tempfile
+from pathlib import Path
+
+CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst")
+
+
+def socket_paths(root):
+    for case in CASES:
+        state = root / case / "state"
+        yield state / "daemon.sock"
+        yield state / ".d-4294967295"
+        yield state / "s" / ("0" * 26) / "sock"
+    yield root / "control.sock"
+
+
+def validate(root, system=None):
+    root = Path(root).resolve()
+    maximum = 103 if (system or platform.system()) == "Darwin" else 107
+    paths = [{"path": str(path), "bytes": len(os.fsencode(path))} for path in socket_paths(root)]
+    longest = max(row["bytes"] for row in paths)
+    if longest > maximum:
+        raise ValueError(f"installed fixture socket requires {longest} bytes; maximum is {maximum}")
+    return {"root": str(root), "maximumSocketBytes": maximum, "longestSocketBytes": longest, "paths": paths}
+
+
+def create():
+    # TMPDIR on hosted macOS is already too long before Mesh adds a worker path.
+    base = Path(os.environ.get("MESH_SHORT_TMP", "/tmp")).resolve(strict=True)
+    root = Path(tempfile.mkdtemp(prefix="mi-", dir=base)).resolve()
+    try:
+        validate(root)
+    except ValueError:
+        shutil.rmtree(root)
+        raise
+    return root

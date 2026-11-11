@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "inventoryDate": "2026-11-11",
+  "firstPublishedUpdater": null,
+  "hosts": [
+    {"name": "pc", "platform": "linux/amd64", "daemon": "v0.1.249", "helper": "v0.1.196", "helperRunning": false},
+    {"name": "pi", "platform": "linux/arm64", "daemon": "v0.1.255", "helper": "v0.1.230", "helperRunning": true},
+    {"name": "vps", "platform": "linux/amd64", "daemon": "v0.1.255", "helper": "v0.1.196", "helperRunning": true},
+    {"name": "mac", "platform": "darwin/arm64", "daemon": "v0.1.257", "helper": "v0.1.196", "helperRunning": true}
+  ]
+}

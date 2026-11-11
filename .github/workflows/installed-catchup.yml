@@ -1,0 +1,51 @@
+name: Installed catch-up
+
+on:
+  workflow_call:
+  pull_request:
+    paths:
+      - '.github/workflows/installed-catchup.yml'
+      - 'scripts/prove-installed-catchup.*'
+      - 'scripts/fixtures/installed_paths.py'
+      - 'scripts/fixtures/native_services.py'
+      - 'scripts/fixtures/fleet-baselines.json'
+      - 'scripts/test-installed-catchup.py'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  native-manager:
+    name: Installed native manager (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: darwin/arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prove native manager before builds or downloads
+        run: |
+          mkdir -p "$RUNNER_TEMP/installed-catchup"
+          git rev-parse HEAD > "$RUNNER_TEMP/installed-catchup/source-sha.txt"
+          bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/installed-catchup"
+      - name: Verify path bounds and actual failure cleanup
+        env:
+          MESH_TEST_NATIVE_MANAGER: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/test-installed-catchup.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-catchup-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/installed-catchup
+          retention-days: 7
