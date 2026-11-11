@@ -169,6 +169,13 @@ func buildOriginalHostReader(t *testing.T, signer *signingFixture, epoch uint32,
 		t.Fatal(err)
 	}
 	replace := map[string]string{filepath.Join(root, "internal/release/trust/trusted-root.json"): trust}
+	for name, data := range map[string][]byte{"bootstrap-root.json": signer.trust.BootstrapRoot, "provenance.json": signer.provenance} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		replace[filepath.Join(root, "internal/release/trust", name)] = path
+	}
 	if epoch != 1 {
 		overlayHostReaderEpoch(t, root, dir, replace)
 	}
