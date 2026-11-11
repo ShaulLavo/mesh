@@ -16,16 +16,23 @@ const (
 )
 
 type UpdateMetadata struct {
-	Schema      int           `json:"schema"`
-	Epoch       uint32        `json:"epoch"`
-	Trust       int           `json:"trust"`
-	Version     string        `json:"version"`
-	Manifest    string        `json:"manifest"`
-	PublishedAt time.Time     `json:"publishedAt"`
-	Position    Position      `json:"position"`
-	Direct      DirectSources `json:"direct"`
-	Rollback    []RollbackRef `json:"rollback"`
-	Page        AssetRef      `json:"page"`
+	Schema      int            `json:"schema"`
+	Epoch       uint32         `json:"epoch"`
+	Trust       int            `json:"trust"`
+	Version     string         `json:"version"`
+	Manifest    string         `json:"manifest"`
+	PublishedAt time.Time      `json:"publishedAt"`
+	Position    Position       `json:"position"`
+	Direct      DirectSources  `json:"direct"`
+	Rollback    []RollbackRef  `json:"rollback"`
+	Page        AssetRef       `json:"page"`
+	Updater     *UpdaterReader `json:"updater,omitempty"`
+}
+
+type UpdaterReader struct {
+	Schema   int      `json:"schema"`
+	Epoch    uint32   `json:"epoch"`
+	Position Position `json:"position"`
 }
 
 type Position struct {
@@ -97,6 +104,9 @@ func (metadata UpdateMetadata) Validate() error {
 	if err := validateRollbackRefs(metadata.Rollback); err != nil {
 		return err
 	}
+	if err := metadata.validateUpdater(); err != nil {
+		return err
+	}
 	if err := metadata.Page.Validate(); err != nil {
 		return err
 	}
@@ -111,6 +121,23 @@ func (metadata UpdateMetadata) Validate() error {
 		return errors.New("release: update metadata exceeds 64 KiB")
 	}
 	return nil
+}
+
+func (metadata UpdateMetadata) validateUpdater() error {
+	reader := metadata.Updater
+	if reader == nil {
+		return nil
+	}
+	if reader.Schema != 1 || reader.Epoch == 0 {
+		return errors.New("release: unsupported updater reader schema or epoch")
+	}
+	if reader.Epoch == metadata.Epoch && reader.Position == metadata.Position {
+		return nil
+	}
+	if reader.Epoch > metadata.Epoch && reader.Epoch-metadata.Epoch == 1 && metadata.Position.Anchor && reader.Position == (Position{Anchor: true, Ordinal: 0}) {
+		return nil
+	}
+	return errors.New("release: updater reader coordinates differ from publication or the next epoch waypoint")
 }
 
 func validateMetadataVersion(version string) error {
