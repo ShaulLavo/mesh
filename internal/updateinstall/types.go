@@ -133,7 +133,24 @@ type Status struct {
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
-type Engine struct{ cfg Config }
+type Engine struct {
+	cfg        Config
+	hostOrigin bool
+}
+
+type hostAcceptanceKey struct{}
+
+// WithHostOrigin marks only in-process updater calls, never decoded requests.
+func (e *Engine) WithHostOrigin() *Engine {
+	bound := *e
+	bound.hostOrigin = true
+	return &bound
+}
+
+func IsHostAcceptance(ctx context.Context) bool {
+	origin, _ := ctx.Value(hostAcceptanceKey{}).(bool)
+	return origin
+}
 
 // WithAcceptance returns an engine bound to this authenticated request boundary.
 func (e *Engine) WithAcceptance(acceptance Acceptance) *Engine {
