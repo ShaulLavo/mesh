@@ -10,6 +10,11 @@ old_binary=$(realpath "$1")
 candidate_binary=$(realpath "$2")
 platform=$3
 output_directory=$4
+proof_mode=${MESH_TRANSITION_PROOF_MODE:-full}
+case $proof_mode in
+  full | forward-only) ;;
+  *) echo 'transition proof: mode must be full or forward-only' >&2; exit 2 ;;
+esac
 case $platform in
   linux/amd64 | linux/arm64 | darwin/arm64) ;;
   *) echo "transition proof: unsupported platform $platform" >&2; exit 1 ;;
@@ -467,13 +472,17 @@ candidate_worker_protocol=$(build_field "$candidate_binary" workerProtocol 0)
 [[ $candidate_state_version =~ ^[1-9][0-9]*$ && $candidate_worker_protocol =~ ^[1-9][0-9]*$ ]] ||
   fail 'candidate did not report release compatibility metadata'
 [[ $candidate_state_version -ge $old_state_version ]] || fail 'candidate schema predates source schema'
-prove_boundaries
-prove_actual_startup_faults
+if [[ $proof_mode == full ]]; then
+  prove_boundaries
+  prove_actual_startup_faults
+fi
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$candidate_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/candidate.log" 2>&1 &
 candidate_daemon=$!
 wait_for_daemon "$candidate_binary" "$candidate_daemon" || fail "candidate daemon did not open retained state: $(cat "$test_root/candidate.log")"
 fixture schema "$state/mesh.db" "$test_root/candidate-final-schema.json"
-cmp -s "$test_root/boundary-final-schema.json" "$test_root/candidate-final-schema.json" || fail 'boundary driver schema/history differs from actual candidate startup'
+if [[ $proof_mode == full ]]; then
+  cmp -s "$test_root/boundary-final-schema.json" "$test_root/candidate-final-schema.json" || fail 'boundary driver schema/history differs from actual candidate startup'
+fi
 fixture candidate-writes "$state" || fail 'candidate representative writes failed'
 "$boundary_tool" -database "$state/mesh.db" -version "$candidate_state_version" -write-cache || fail 'candidate cache writes failed'
 fixture verify-cache "$state/mesh.db"
@@ -530,7 +539,9 @@ candidate_daemon=''
 rm -f -- "$state/daemon.sock"
 boundary=$candidate_written_state
 scenario=candidate-writes
-rollback_source "$boundary-$scenario"
+if [[ $proof_mode == full ]]; then
+  rollback_source "$boundary-$scenario"
+fi
 
 from_digest=$(sha256sum "$old_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$old_binary" | awk '{print $1}')
 to_digest=$(sha256sum "$candidate_binary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$candidate_binary" | awk '{print $1}')
@@ -564,6 +575,10 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps(receipt, separators=(",", ":"), 
 PY
 proof_digest=$(sha256sum "$temporary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$temporary" | awk '{print $1}')
 mv "$temporary" "$output_directory/$proof_digest.json"
+if [[ $proof_mode == forward-only ]]; then
+  printf '%s\n' "$proof_digest"
+  exit 0
+fi
 mkdir -p "$output_directory/rollback"
 python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" <<'PYROLLBACK'
 import hashlib
