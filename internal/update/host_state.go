@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -101,21 +102,60 @@ func ledgerIdentityName(entry LedgerEntry) string {
 // HostAdoption milestones live separately from the pageable ledger until the fleet
 // operation settles. Confirmation must be durable before unattended work starts.
 type HostAdoption struct {
-	Schema     int          `json:"schema"`
-	Operation  string       `json:"operation"`
-	Pin        string       `json:"pin"`
-	Confirmed  bool         `json:"confirmed"`
-	Settled    bool         `json:"settled"`
-	Adopted    *LedgerEntry `json:"adopted,omitempty"`
-	Unattended *LedgerEntry `json:"unattended,omitempty"`
+	Schema     int             `json:"schema"`
+	Operation  string          `json:"operation"`
+	Pin        string          `json:"pin"`
+	Confirmed  bool            `json:"confirmed"`
+	Settled    bool            `json:"settled"`
+	Adopted    *LedgerEntry    `json:"adopted,omitempty"`
+	Unattended *LedgerEntry    `json:"unattended,omitempty"`
+	Details    json.RawMessage `json:"details,omitempty"`
 }
 
 func (a HostAdoption) validate() error {
 	if a.Schema != 1 || !ValidRunID(a.Operation) || !hostDigest(a.Pin) {
 		return errors.New("update: invalid adoption identity")
 	}
-	if a.Confirmed && (a.Adopted == nil || a.Adopted.Binary != a.Pin || a.Adopted.Origin != "adoption") {
+	if len(a.Details) > 64<<10 || len(a.Details) > 0 && !json.Valid(a.Details) {
+		return errors.New("update: adoption details exceed their bound or contain invalid JSON")
+	}
+	if a.Confirmed && (a.Adopted == nil || a.Adopted.Metadata != a.Pin || a.Adopted.Origin != "adoption") {
 		return errors.New("update: adoption confirmation lacks pinned commit")
+	}
+	if a.Adopted != nil {
+		if err := validateAdoptionEntry(*a.Adopted, "adoption"); err != nil {
+			return err
+		}
+		if a.Adopted.Metadata != a.Pin {
+			return errors.New("update: adoption milestone differs from activation metadata pin")
+		}
+	}
+	if a.Unattended != nil {
+		return a.validateUnattended()
+	}
+	return nil
+}
+
+func validateAdoptionEntry(entry LedgerEntry, origin string) error {
+	if entry.Request == "" || len(entry.Request) > 96 || entry.Generation == 0 || entry.Origin != origin || !hostDigest(entry.Metadata) || !hostDigest(entry.Binary) || entry.CommittedAt.IsZero() || entry.Workers < 0 || entry.WorkersPreserved < 0 || entry.WorkersPreserved > entry.Workers {
+		return errors.New("update: adoption milestone lacks committed ledger identity")
+	}
+	if _, err := release.CompareVersions(entry.Version, entry.Version); err != nil {
+		return hostError(err)
+	}
+	return nil
+}
+
+func (a HostAdoption) validateUnattended() error {
+	if !a.Confirmed || a.Adopted == nil {
+		return errors.New("update: unattended milestone precedes adoption confirmation")
+	}
+	if err := validateAdoptionEntry(*a.Unattended, "host"); err != nil {
+		return err
+	}
+	order, err := release.CompareVersions(a.Unattended.Version, a.Adopted.Version)
+	if err != nil || order <= 0 || a.Unattended.Binary == a.Adopted.Binary || !a.Unattended.CommittedAt.After(a.Adopted.CommittedAt) {
+		return errors.New("update: unattended milestone does not follow the pinned adoption")
 	}
 	return nil
 }

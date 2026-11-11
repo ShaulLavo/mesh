@@ -327,10 +327,13 @@ func (s *Store) recordAdoptionMilestone(entry LedgerEntry) error {
 	if err := adoption.validate(); err != nil {
 		return err
 	}
-	if adoption.Settled || !adoption.Confirmed || adoption.Unattended != nil || entry.Origin != "host" || entry.Binary == adoption.Pin {
+	if adoption.Settled || !adoption.Confirmed || adoption.Unattended != nil || entry.Origin != "host" || entry.Binary == adoption.Adopted.Binary {
 		return nil
 	}
 	adoption.Unattended = &entry
+	if err := adoption.validate(); err != nil {
+		return err
+	}
 	return s.writeAuthority("host-adoption.json", adoption)
 }
 
@@ -690,6 +693,9 @@ func verifyHostHop(ctx context.Context, current release.Build, workers []updatei
 	if verified.Manifest != metadata.Manifest || verified.Version != next.Manifest.Version {
 		return hostHopProof{}, errors.New("update: authenticated hop changed")
 	}
+	if verified.Updater == nil {
+		return hostHopProof{}, errors.New("update: autonomous target lacks authenticated updater capability")
+	}
 	budget := release.NewPassBudget()
 	manifest, err := release.ReadDocument(ctx, documents, release.AssetRef{Tag: verified.Version, Name: release.ManifestAssetName, SHA256: verified.Manifest}, release.ManifestDocument, &budget)
 	if err != nil {
@@ -725,6 +731,9 @@ func verifyHostRollback(ctx context.Context, current release.Build, workers []up
 	if err != nil {
 		return hostHopProof{}, hostError(err)
 	}
+	if err := verifyHostForwardRanges(current, next, forward); err != nil {
+		return hostHopProof{}, err
+	}
 	rollback := ""
 	for _, proof := range metadata.Rollback {
 		if proof.Forward == transition.Proof {
@@ -748,6 +757,17 @@ func verifyHostRollback(ctx context.Context, current release.Build, workers []up
 		}
 	}
 	return hostHopProof{Metadata: metadataDigest, Workers: proof.Workers}, nil
+}
+
+func verifyHostForwardRanges(current release.Build, next release.PlannedRelease, forward []byte) error {
+	receipt, err := release.VerifyTransitionReceipt(forward, next.Transition, next.Manifest.Compatibility)
+	if err != nil {
+		return hostError(err)
+	}
+	if current.StateVersion < receipt.StateReadMin || current.StateVersion > receipt.StateReadMax || current.WorkerProtocol < receipt.WorkerMin || current.WorkerProtocol > receipt.WorkerMax {
+		return errors.New("update: executing source is outside its exact forward receipt's tested ranges")
+	}
+	return nil
 }
 
 func verifyHostWorker(worker updateinstall.Worker, compatibility release.Compatibility, proved []string) error {

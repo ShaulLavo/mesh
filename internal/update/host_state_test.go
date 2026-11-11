@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -166,7 +167,7 @@ func TestHostAdoptionConfirmationAndLegacyConsentYield(t *testing.T) {
 func testHostOtherAuthority(t *testing.T, kind string) {
 	f := newHostFixture(t)
 	if kind == "confirmation" {
-		adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: f.current.Digest}
+		adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: discoveryDigest(f.files[f.current.Version+"/"+release.UpdateMetadataAssetName])}
 		if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
 			t.Fatal(err)
 		}
@@ -187,8 +188,10 @@ func testHostOtherAuthority(t *testing.T, kind string) {
 
 func TestHostAdoptionMilestoneSurvivesOrdinaryLedger(t *testing.T) {
 	f := newHostFixture(t)
-	adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: f.current.Digest, Confirmed: true,
-		Adopted: &LedgerEntry{Origin: "adoption", Binary: f.current.Digest, Version: f.current.Version}}
+	pin := discoveryDigest(f.files[f.current.Version+"/"+release.UpdateMetadataAssetName])
+	adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: pin, Confirmed: true,
+		Adopted: &LedgerEntry{Request: strings.Repeat("b", 32), Generation: 1, Origin: "adoption", Metadata: pin, Binary: f.current.Digest, Version: f.current.Version, CommittedAt: f.now.Add(-time.Hour)},
+		Details: json.RawMessage(`{"futurePhase":{"retained":"opaque"}}`)}
 	if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +207,63 @@ func TestHostAdoptionMilestoneSurvivesOrdinaryLedger(t *testing.T) {
 	}
 	if retained.Operation != adoption.Operation || retained.Pin != adoption.Pin || retained.Unattended == nil || retained.Unattended.Binary != f.current.Digest {
 		t.Fatalf("milestone lost: %+v", retained)
+	}
+	if string(retained.Details) != string(adoption.Details) {
+		t.Fatal("unattended reconciliation changed Unit 10 operation details")
+	}
+}
+
+func TestHostAdoptionPinBindsMetadataAcrossPlatforms(t *testing.T) {
+	pin := strings.Repeat("a", 64)
+	adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: pin, Confirmed: true,
+		Adopted: &LedgerEntry{Request: "adoption", Generation: 1, Metadata: pin, Binary: strings.Repeat("b", 64), Origin: "adoption", Version: "v0.1.1", CommittedAt: time.Now().UTC()},
+		Details: json.RawMessage(`{"future":{"phase":"preserved"}}`)}
+	if err := adoption.validate(); err != nil {
+		t.Fatal(err)
+	}
+	adoption.Adopted.Binary = strings.Repeat("c", 64)
+	if err := adoption.validate(); err != nil {
+		t.Fatal("platform-specific binary changed the common activation pin", err)
+	}
+	adoption.Pin = adoption.Adopted.Binary
+	if err := adoption.validate(); err == nil {
+		t.Fatal("binary digest was accepted as an activation metadata pin")
+	}
+	adoption.Pin = pin
+	adoption.Details = json.RawMessage(`{"oversized":"` + strings.Repeat("x", 64<<10) + `"}`)
+	if err := adoption.validate(); err == nil {
+		t.Fatal("unbounded Unit 10 details accepted")
+	}
+}
+
+func TestHostAdoptionConfirmationFencesRealGrant(t *testing.T) {
+	f := newHostFixture(t)
+	owned := reserveHostWithoutStage(t, f)
+	pin := discoveryDigest(f.files[f.current.Version+"/"+release.UpdateMetadataAssetName])
+	adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: pin, Confirmed: true,
+		Adopted: &LedgerEntry{Request: "adoption", Generation: 1, Metadata: pin, Binary: f.current.Digest, Origin: "adoption", Version: f.current.Version, CommittedAt: f.now.Add(-time.Hour)}}
+	if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
+		t.Fatal(err)
+	}
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	if _, err := engine.Stage(t.Context(), owned.Installation); err != nil {
+		t.Fatal(err)
+	}
+	adoption.Confirmed = false
+	unlock, err := f.store.lockContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.store.writeAuthority("host-adoption.json", adoption)
+	unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.Grant(t.Context(), owned.Request, owned.Generation); err == nil {
+		t.Fatal("grant crossed unfinished adoption confirmation")
+	}
+	if got := f.installation(); got.Phase != updateinstall.Staged {
+		t.Fatalf("confirmation fence changed journal: %s", got.Phase)
 	}
 }
 

@@ -20,6 +20,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "update-reader" {
+		finishEnvelopeCommand(cli.RunUpdateReader(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+		return
+	}
+	clientMain()
+}
+
+func clientMain() {
 	if err := initializeDeployment(os.Args[1:]); err != nil {
 		if agentapi.Requested(os.Args[1:]) && agentapi.Classify(os.Args[1:]) != "" {
 			finishEnvelopeCommand(cli.WriteAgentFailure(os.Stdout, os.Args[1:], err))
@@ -87,7 +95,7 @@ func plainAgentCommand(arguments []string) bool {
 	switch arguments[0] {
 	// session-worker sets its own signal policy; Fang's NotifyContext would
 	// silently decide which signals end a session.
-	case "session-worker", "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status":
+	case "session-worker", "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "update-reader":
 		return true
 	default:
 		return false
