@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import uuid
+from xml.sax.saxutils import escape
 from pathlib import Path
 
 from fixtures import native_services
@@ -160,14 +161,7 @@ class Installation:
         directory.mkdir(parents=True)
         manager = self.units.managers["daemon"]
         daemon_path = directory / (manager.label + (".plist" if sys.platform == "darwin" else ".service"))
-        arguments = [str(self.binary), "daemon", "--tailnet-port", str(self.port), "--ssh-port", "0"]
-        if sys.platform == "darwin":
-            daemon_path.write_bytes(plistlib.dumps({"Label": manager.label, "ProgramArguments": arguments,
-                "AbandonProcessGroup": True, "RunAtLoad": True, "KeepAlive": True,
-                "StandardOutPath": str(self.root / "daemon.log"), "StandardErrorPath": str(self.root / "daemon.err")}))
-        else:
-            daemon_path.write_text("[Service]\nType=exec\nKillMode=process\nExecStart=" + shlex.join(arguments) + "\n"
-                + "StandardOutput=append:" + str(self.root / "daemon.log") + "\nStandardError=append:" + str(self.root / "daemon.err") + "\n")
+        self.render_daemon(daemon_path)
         kind, domain = ("launchd", manager.domain) if sys.platform == "darwin" else ("systemd", "")
         result = subprocess.run([str(self.preparer), str(self.state), str(self.pair["helper"]["executable"]),
             str(directory), kind, domain], capture_output=True, text=True, check=True, timeout=20)
@@ -177,11 +171,30 @@ class Installation:
         self.units.register("helper", Path(helper["servicePath"]))
         self.units.start("daemon")
         native_services.wait_for(self.ready, "actual baseline daemon did not become ready")
+        initial_helper = {"stopped": True, "digest": helper["digest"]}
         if self.host["helperRunning"]:
             self.units.start("helper")
-            self.check_helper()
+            initial_helper = self.check_helper()
         elif self.units.managers["helper"].manager_pid() != 0:
             raise RuntimeError("PC fixture helper must begin stopped")
+        daemon_image = native_services.mapped_image(manager.pid, self.binary)
+        if daemon_image["sha256"] != self.pair["daemon"]["artifact"]["binarySha256"]:
+            raise RuntimeError("running baseline daemon differs from its published image")
+        return {"daemon": daemon_image, "helper": initial_helper}
+
+    def render_daemon(self, path):
+        template = (REPO / "scripts" / "install" / "assets" / path.name).read_text()
+        replacements = {"@MESH_BINARY@": str(self.binary), "@MESH_BINARY_DIR@": str(self.binary.parent),
+            "@MESH_PORT@": str(self.port), "@MESH_SSH_PORT@": "0", "@MESH_WEBSOCKET_PATH@": "/mesh",
+            "@MESH_STDOUT@": str(self.root / "daemon.log"), "@MESH_STDERR@": str(self.root / "daemon.err")}
+        for token, value in replacements.items():
+            template = template.replace(token, escape(value) if sys.platform == "darwin" else value)
+        if "@MESH_" in template:
+            raise RuntimeError("unresolved production daemon service template")
+        if sys.platform != "darwin":
+            template += "\n[Service]\nStandardOutput=append:" + str(self.root / "daemon.log")
+            template += "\nStandardError=append:" + str(self.root / "daemon.err") + "\n"
+        path.write_text(template)
 
     def control(self, operation, **fields):
         return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields})
@@ -202,7 +215,7 @@ class Installation:
 
     def seed(self):
         client_environment = self.prepare_client()
-        self.terminal = terminal_module.Terminal([str(self.binary), "installed.fixture.test", "--", str(HELPERS / "window_shell.sh")],
+        self.terminal = terminal_module.Terminal([str(self.binary), self.remote_id, "--", str(HELPERS / "window_shell.sh")],
             client_environment, self.root, timeout=10)
         self.terminal.expect(terminal_module.PROMPT)
         sessions = self.control("session.list")["sessions"]
@@ -234,6 +247,7 @@ class Installation:
         subprocess.run([str(self.binary), "device", "approve", "--allow-root", "--", client_id],
             env=self.environment, capture_output=True, text=True, check=True, timeout=10)
         host = self.control("host.info")["host"]
+        self.remote_id = host["id"]
         path = config / "hosts.json"
         path.write_text(json.dumps({"version": 1, "hosts": [{"id": host["id"], "meshIdentity": host["meshIdentity"],
             "tailscaleName": "installed.fixture.test", "addresses": ["127.0.0.1"],
@@ -277,11 +291,13 @@ class Installation:
         if meta["pid"] != self.shell:
             raise RuntimeError("native service restart replaced the original shell")
         self.io()
-        native_services.mapped_image(daemon.pid, self.binary)
+        daemon_image = native_services.mapped_image(daemon.pid, self.binary)
+        worker_image = native_services.mapped_image(self.worker, self.binary)
         helper = self.check_helper() if self.host["helperRunning"] else {"stopped": True}
         return {"control": "actual published pair native restart; no update acceptance claimed", "host": self.host["name"],
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "attachedClient": self.terminal.pid,
-            "originalDaemon": original, "daemon": daemon.pid, "routeGapUpperBoundSeconds": gap_bound, "helper": helper}
+            "originalDaemon": original, "daemon": daemon.pid, "daemonImage": daemon_image, "workerImage": worker_image,
+            "routeGapUpperBoundSeconds": gap_bound, "helper": helper}
 
     def wait_attachment_resume(self):
         token = uuid.uuid4().hex
@@ -350,7 +366,7 @@ def prove(root, output, host, pair, preparer):
     installation = Installation(root, host, pair, preparer)
     record = {"host": host["name"], "passed": False}
     try:
-        installation.prepare()
+        record["initial"] = installation.prepare()
         installation.seed()
         record.update(installation.restart_control())
         record["passed"] = True

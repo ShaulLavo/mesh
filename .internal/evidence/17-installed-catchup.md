@@ -23,6 +23,16 @@ proxy control requires a port, so it failed before restart. The fixture now
 supplies the correct port. All task processes, units and scratch were confirmed
 removed in that failed run's artifacts.
 
+The next run reached restart and retained the worker, shell and listener, but a
+local Unix attachment ends on daemon disconnect by design. The fixture now
+uses the published CLI's real authenticated WebSocket transport, a separate
+test-owned client identity and a pinned daemon endpoint. A fresh nonce printed
+by the original session-owned listener proves that the same client reconnected
+before new input is sent. A local supplemental test with actual published
+v0.1.249 confirmed that path and unchanged identities. Hosted native acceptance
+still requires its own passing result. Teardown also handles an already exited
+client without writing to its closed PTY.
+
 `installed_paths.py` resolves the physical root, checks the worst daemon,
 temporary-daemon and retained-worker socket paths for every case, and refuses
 an unmounted `/work` or `/data` destination. Tests bind every generated address,
