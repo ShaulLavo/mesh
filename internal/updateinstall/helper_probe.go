@@ -37,7 +37,50 @@ func EnsureCurrentHelper(ctx context.Context, cfg HelperConfig, source release.M
 	if err != nil {
 		return HelperInstallation{}, fmt.Errorf("read current helper artifact: %w", err)
 	}
+	var installed HelperInstallation
+	if err = readHelperInstallation(ctx, cfg.StateDir, &installed); err != nil {
+		return installed, err
+	}
+	if installed.Digest == artifact.BinarySHA256 {
+		return PromoteHelper(ctx, cfg, source, artifact.BinarySHA256)
+	}
+	if _, err = verifyHelperReceipt(ctx, cfg.StateDir, installed, artifact.BinarySHA256); err != nil {
+		return installed, err
+	}
+	current, err := helperBuild(ctx, installed.Executable, installed.Digest)
+	if err != nil {
+		return installed, err
+	}
+	order, err := release.CompareVersions(source.Version, current.Version)
+	if err != nil {
+		return installed, fmt.Errorf("compare installed helper currency: %w", err)
+	}
+	if order >= 0 {
+		return PromoteHelper(ctx, cfg, source, artifact.BinarySHA256)
+	}
 	return ensureHelper(ctx, cfg, source, artifact.BinarySHA256, true)
+}
+
+// InspectHelper verifies the existing installation without starting, replacing,
+// or pruning an image that an unfinished transaction still owns.
+func InspectHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, error) {
+	if !filepath.IsAbs(cfg.StateDir) {
+		return HelperInstallation{}, errors.New("helper inspection requires an absolute state path")
+	}
+	if cfg.ServiceDir == "" {
+		var err error
+		cfg.ServiceDir, err = serviceDirectory(cfg.Kind)
+		if err != nil {
+			return HelperInstallation{}, err
+		}
+	}
+	lock, err := lockInstallation(ctx, cfg.StateDir)
+	if err != nil {
+		return HelperInstallation{}, err
+	}
+	defer unlock(lock)
+	snapshot, err := recoveryHelperSnapshot(ctx, cfg)
+	return snapshot.installation, err
 }
 
 type helperPromotion struct {
@@ -164,6 +207,16 @@ func checkHelperJournal(ctx context.Context, stateDir, executable string) error 
 func ensureRetainedHelper(ctx context.Context, cfg HelperConfig, installed HelperInstallation) (HelperInstallation, error) {
 	if err := checkHelperJournal(ctx, cfg.StateDir, installed.Executable); err != nil {
 		return installed, err
+	}
+	pending, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", "activation-pending"), true)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return installed, err
+	}
+	if err == nil {
+		if string(pending) != installed.Digest {
+			return installed, errors.New("pending activation differs from the retained helper")
+		}
+		return installed, startPromotedHelper(ctx, cfg, installed)
 	}
 	if err := stableHelperProcess(ctx, cfg, installed); err == nil {
 		return installed, nil

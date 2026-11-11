@@ -87,6 +87,20 @@ func TestEnsureCurrentHelperStartsStoppedService(t *testing.T) {
 	}
 }
 
+func TestEnsureCurrentHelperFinishesPendingSameImage(t *testing.T) {
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	if err := atomicWrite(helperActivationRecord(f.cfg.StateDir), []byte(f.prior.Digest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.cfg.Probe = fixtureHelperProbe
+	if _, err := EnsureCurrentHelper(t.Context(), f.cfg, currentHelperManifest(t, f)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(helperActivationRecord(f.cfg.StateDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("settled image still has pending activation = %v", err)
+	}
+}
+
 func TestPromoteHelperRestoresFailedStart(t *testing.T) {
 	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
 	f.commit(t, "v0.1.171", "")
