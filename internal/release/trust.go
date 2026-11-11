@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,10 +19,12 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
 	tufmetadata "github.com/theupdateframework/go-tuf/v2/metadata"
+	"github.com/theupdateframework/go-tuf/v2/metadata/config"
 	"github.com/theupdateframework/go-tuf/v2/metadata/trustedmetadata"
+	"github.com/theupdateframework/go-tuf/v2/metadata/updater"
 )
 
-//go:embed trust/bootstrap-root.json trust/trusted-root.json
+//go:embed trust/bootstrap-root.json trust/trusted-root.json trust/provenance.json
 var embeddedTrust embed.FS
 
 type SignerIdentity struct {
@@ -39,13 +42,18 @@ type TrustRoot struct {
 	BootstrapRoot []byte
 	Trusted       []byte
 	Identity      SignerIdentity
-	history       [][]byte
+	history       []authenticatedMaterial
+	provenance    []byte
 }
 
 func EmbeddedTrustRoot() TrustRoot {
 	bootstrap, _ := embeddedTrust.ReadFile("trust/bootstrap-root.json")
 	trusted, _ := embeddedTrust.ReadFile("trust/trusted-root.json")
-	return TrustRoot{Version: 1, BootstrapRoot: bootstrap, Trusted: trusted, Identity: SignerIdentity{
+	provenance, provenanceErr := embeddedTrust.ReadFile("trust/provenance.json")
+	if provenanceErr != nil {
+		provenance = []byte{}
+	}
+	return TrustRoot{Version: 1, BootstrapRoot: bootstrap, Trusted: trusted, provenance: provenance, Identity: SignerIdentity{
 		Issuer:     "https://token.actions.githubusercontent.com",
 		Workflow:   "https://github.com/ShaulLavo/mesh/.github/workflows/release.yml@refs/heads/main",
 		Repository: "https://github.com/ShaulLavo/mesh", RepositoryID: "1351591203", OwnerID: "68500209",
@@ -54,15 +62,11 @@ func EmbeddedTrustRoot() TrustRoot {
 }
 
 func (trust TrustRoot) material() (root.TrustedMaterial, error) {
-	all := root.TrustedMaterialCollection{}
-	for _, contents := range append([][]byte{trust.Trusted}, trust.history...) {
-		material, err := root.NewTrustedRootFromJSON(contents)
-		if err != nil {
-			return nil, fmt.Errorf("release: parse authenticated trust material: %w", err)
-		}
-		all = append(all, material)
+	baseline, _, err := trust.authenticatedBaseline("")
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	return effectiveTrust(append([]authenticatedMaterial{baseline}, trust.history...))
 }
 
 func LoadTrustRoot(cache string) (TrustRoot, error) {
@@ -70,6 +74,11 @@ func LoadTrustRoot(cache string) (TrustRoot, error) {
 }
 
 func loadTrustRoot(trust TrustRoot, cache string) (TrustRoot, error) {
+	trust.history = nil
+	_, roots, err := trust.authenticatedBaseline(cache)
+	if err != nil {
+		return trust, err
+	}
 	if cache == "" {
 		return trust, nil
 	}
@@ -82,10 +91,18 @@ func loadTrustRoot(trust TrustRoot, cache string) (TrustRoot, error) {
 		if err != nil {
 			return trust, err
 		}
-		if err := VerifyDigest(contents, strings.TrimSuffix(filepath.Base(path), ".json")); err != nil {
+		var saved cachedMaterial
+		if err := json.Unmarshal(contents, &saved); err != nil {
+			return trust, fmt.Errorf("release: decode cached material witness: %w", err)
+		}
+		if err := VerifyDigest(saved.Material, strings.TrimSuffix(filepath.Base(path), ".json")); err != nil {
 			return trust, err
 		}
-		trust.history = append(trust.history, contents)
+		verified, err := authenticateMaterial(roots, saved)
+		if err != nil {
+			return trust, err
+		}
+		trust.history = append(trust.history, verified)
 	}
 	_, err = trust.material()
 	return trust, err
@@ -103,55 +120,63 @@ func RefreshTrust(ctx context.Context, cache string, budget TrustRefreshBudget) 
 	return refreshTrust(ctx, EmbeddedTrustRoot(), cache, budget, http.DefaultClient)
 }
 
-func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget TrustRefreshBudget, client *http.Client) (TrustRoot, error) {
+func refreshTrust(ctx context.Context, trust TrustRoot, cache string, budget TrustRefreshBudget, client *http.Client) (result TrustRoot, refreshErr error) {
 	if budget.Documents < 8 || budget.Documents > 64 || budget.Duration <= 0 || budget.Duration > 30*time.Second {
 		return trust, errors.New("release: invalid trust refresh budget")
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget.Duration)
 	defer cancel()
-	chain, latest, err := loadRootChain(trust.BootstrapRoot, cache)
+	_, roots, err := trust.authenticatedBaseline(cache)
 	if err != nil {
 		return trust, err
 	}
-	fetch := &trustFetcher{ctx: ctx, client: client, remaining: budget.Documents, chain: chain, cache: cache}
-	opts := tuf.DefaultOptions().WithRoot(latest).WithCachePath(filepath.Join(cache, "tuf")).WithFetcher(fetch)
-	opts.Context = ctx
-	updater, err := tuf.New(opts)
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		return trust, fmt.Errorf("release: create trust refresh home: %w", err)
+	}
+	pass, err := os.MkdirTemp(cache, "tuf-pass-*")
+	if err != nil {
+		return trust, fmt.Errorf("release: create isolated TUF pass: %w", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(pass); err != nil {
+			refreshErr = errors.Join(refreshErr, fmt.Errorf("release: remove isolated TUF pass: %w", err))
+		}
+	}()
+	fetch := &trustFetcher{ctx: ctx, client: client, remaining: budget.Documents, chain: roots.chain, cache: cache, documents: make(map[string][]byte)}
+	// Sigstore's wrapper first attempts an unsafe local load even with caching disabled.
+	// Start its maintained underlying updater directly with only the authenticated root.
+	cfg, err := config.New(tuf.DefaultMirror, roots.latest)
+	if err != nil {
+		return trust, fmt.Errorf("release: configure fresh TUF refresh: %w", err)
+	}
+	cfg.DisableLocalCache = true
+	// go-tuf still probes local metadata when writes are disabled; this directory is fresh and private.
+	cfg.LocalMetadataDir = pass
+	cfg.LocalTargetsDir = pass
+	cfg.Fetcher = fetch
+	clientUpdater, err := updater.New(cfg)
 	if err != nil {
 		return trust, fmt.Errorf("release: refresh Sigstore trust: %w", err)
 	}
-	contents, err := updater.GetTarget("trusted_root.json")
+	target, err := clientUpdater.GetTargetInfo(trustedMaterialTarget)
+	if err != nil {
+		return trust, fmt.Errorf("release: authenticate current Sigstore target: %w", err)
+	}
+	_, contents, err := clientUpdater.DownloadTarget(target, "", "")
 	if err != nil {
 		return trust, fmt.Errorf("release: fetch authenticated Sigstore material: %w", err)
 	}
 	if _, err := root.NewTrustedRootFromJSON(contents); err != nil {
 		return trust, fmt.Errorf("release: validate new trust material: %w", err)
 	}
-	if err := persistTrustMaterial(cache, contents); err != nil {
+	witness, err := fetch.materialWitness()
+	if err != nil {
+		return trust, err
+	}
+	if err := persistTrustMaterial(cache, contents, witness); err != nil {
 		return trust, err
 	}
 	return loadTrustRoot(trust, cache)
-}
-
-func loadRootChain(bootstrap []byte, cache string) (*trustedmetadata.TrustedMetadata, []byte, error) {
-	chain, err := trustedmetadata.New(bootstrap)
-	if err != nil {
-		return nil, nil, fmt.Errorf("release: parse bootstrap root: %w", err)
-	}
-	latest := bootstrap
-	for version := chain.Root.Signed.Version + 1; ; version++ {
-		contents, err := readTrustFile(filepath.Join(cache, "roots", strconv.FormatInt(version, 10)+".root.json"))
-		if errors.Is(err, os.ErrNotExist) {
-			return chain, latest, nil
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		if _, err := chain.UpdateRoot(contents); err != nil {
-			return nil, nil, fmt.Errorf("release: authenticate saved root %d: %w", version, err)
-		}
-		latest = contents
-	}
 }
 
 type trustFetcher struct {
@@ -160,6 +185,7 @@ type trustFetcher struct {
 	remaining int
 	chain     *trustedmetadata.TrustedMetadata
 	cache     string
+	documents map[string][]byte
 }
 
 func (fetch *trustFetcher) DownloadFile(address string, maximum int64, _ time.Duration) ([]byte, error) {
@@ -195,6 +221,9 @@ func (fetch *trustFetcher) DownloadFile(address string, maximum int64, _ time.Du
 	if err := fetch.saveRoot(address, contents); err != nil {
 		return nil, err
 	}
+	if fetch.documents != nil {
+		fetch.documents[strings.TrimPrefix(address, tuf.DefaultMirror+"/")] = contents
+	}
 	return contents, nil
 }
 
@@ -213,9 +242,16 @@ func (fetch *trustFetcher) saveRoot(address string, contents []byte) error {
 	return writeTrustFile(filepath.Join(fetch.cache, "roots", want), contents)
 }
 
-func persistTrustMaterial(cache string, contents []byte) error {
+func persistTrustMaterial(cache string, contents []byte, witness materialWitness) error {
 	digest := sha256.Sum256(contents)
-	return writeTrustFile(filepath.Join(cache, "material", hex.EncodeToString(digest[:])+".json"), contents)
+	saved, err := json.Marshal(cachedMaterial{Material: contents, Witness: witness})
+	if err != nil {
+		return fmt.Errorf("release: encode material witness: %w", err)
+	}
+	if len(saved) > 1<<20 {
+		return errors.New("release: material witness exceeds 1 MiB")
+	}
+	return writeTrustFile(filepath.Join(cache, "material", hex.EncodeToString(digest[:])+".json"), saved)
 }
 
 func writeTrustFile(path string, contents []byte) error {

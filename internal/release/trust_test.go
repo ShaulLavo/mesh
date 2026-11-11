@@ -23,8 +23,10 @@ import (
 )
 
 type fixtureTransport struct {
-	documents map[string][]byte
-	requests  []string
+	documents   map[string][]byte
+	requests    []string
+	signer      signature.Signer
+	rootVersion int64
 }
 
 func (fixture *fixtureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -83,8 +85,11 @@ func tufFixture(t *testing.T, rotations int, material []byte, expiry time.Time) 
 		previous, signer = next, next
 	}
 	fixtureTargets(t, fixture, signer, material, expiry)
+	fixture.signer = signer
+	fixture.rootVersion = int64(rotations)
 	trust := recordedTrust()
 	trust.BootstrapRoot = bootstrap
+	trust.provenance = nil
 	return trust, fixture
 }
 
@@ -109,19 +114,26 @@ func fixtureRoot(t *testing.T, version int, previous signature.Signer, expiry ti
 }
 
 func fixtureTargets(t *testing.T, fixture *fixtureTransport, signer signature.Signer, material []byte, expiry time.Time) {
+	fixtureTargetsRevision(t, fixture, signer, material, expiry, 1)
+}
+
+func fixtureTargetsRevision(t *testing.T, fixture *fixtureTransport, signer signature.Signer, material []byte, expiry time.Time, version int64) {
 	t.Helper()
 	target, err := metadata.TargetFile().FromBytes("trusted_root.json", material, "sha256")
 	if err != nil {
 		t.Fatal(err)
 	}
 	targets := metadata.Targets(expiry)
+	targets.Signed.Version = version
 	targets.Signed.Targets["trusted_root.json"] = target
-	fixture.documents["/1.targets.json"] = signedTUF(t, targets, signer)
+	fixture.documents[fmt.Sprintf("/%d.targets.json", version)] = signedTUF(t, targets, signer)
 	snapshot := metadata.Snapshot(expiry)
-	snapshot.Signed.Meta["targets.json"] = metadata.MetaFile(1)
-	fixture.documents["/1.snapshot.json"] = signedTUF(t, snapshot, signer)
+	snapshot.Signed.Version = version
+	snapshot.Signed.Meta["targets.json"] = metadata.MetaFile(version)
+	fixture.documents[fmt.Sprintf("/%d.snapshot.json", version)] = signedTUF(t, snapshot, signer)
 	timestamp := metadata.Timestamp(expiry)
-	timestamp.Signed.Meta["snapshot.json"] = metadata.MetaFile(1)
+	timestamp.Signed.Version = version
+	timestamp.Signed.Meta["snapshot.json"] = metadata.MetaFile(version)
 	fixture.documents["/timestamp.json"] = signedTUF(t, timestamp, signer)
 	fixture.documents["/targets/"+fmt.Sprintf("%x", []byte(target.Hashes["sha256"]))+".trusted_root.json"] = material
 }
@@ -169,11 +181,9 @@ func TestTrustRefreshRejectsUnsignedRotationAndExpiry(t *testing.T) {
 }
 
 func TestHistoricalTrustMaterialSurvivesKeyRotation(t *testing.T) {
-	trust := recordedTrust()
+	trust, fixture := tufFixture(t, 2, recordedTrust().Trusted, time.Now().Add(time.Hour))
 	cache := t.TempDir()
-	if err := persistTrustMaterial(cache, trust.Trusted); err != nil {
-		t.Fatal(err)
-	}
+	refreshFixtureTrust(t, trust, fixture, cache)
 	var rotated map[string]any
 	if err := json.Unmarshal(trust.Trusted, &rotated); err != nil {
 		t.Fatal(err)
@@ -188,9 +198,8 @@ func TestHistoricalTrustMaterialSurvivesKeyRotation(t *testing.T) {
 	if err := VerifyArtifactSignature(trust, recordedSubject, recordedEnvelope(t)); err == nil {
 		t.Fatal("accepted bundle without historical log keys")
 	}
-	if err := persistTrustMaterial(cache, contents); err != nil {
-		t.Fatal(err)
-	}
+	fixtureTargetsRevision(t, fixture, fixture.signer, contents, time.Now().Add(time.Hour), 2)
+	refreshFixtureTrust(t, trust, fixture, cache)
 	loaded, err := loadTrustRoot(trust, cache)
 	if err != nil {
 		t.Fatal(err)
@@ -205,12 +214,12 @@ func TestHistoricalTrustMaterialSurvivesKeyRotation(t *testing.T) {
 
 func TestTrustFetcherBoundsAndOrigin(t *testing.T) {
 	trust := recordedTrust()
-	chain, _, err := loadRootChain(trust.BootstrapRoot, t.TempDir())
+	roots, err := loadTrustRoots(trust.BootstrapRoot, nil, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := &fixtureTransport{documents: map[string][]byte{"/oversized": bytes.Repeat([]byte("a"), 20)}}
-	fetch := &trustFetcher{ctx: context.Background(), client: &http.Client{Transport: fixture}, remaining: 2, chain: chain, cache: t.TempDir()}
+	fetch := &trustFetcher{ctx: context.Background(), client: &http.Client{Transport: fixture}, remaining: 2, chain: roots.chain, cache: t.TempDir()}
 	if _, err := fetch.DownloadFile("https://elsewhere.example/root.json", 100, 0); err == nil {
 		t.Fatal("accepted unexpected trust origin")
 	}
@@ -221,7 +230,7 @@ func TestTrustFetcherBoundsAndOrigin(t *testing.T) {
 
 func TestUnsetTrustCacheUsesOnlyEmbeddedMaterial(t *testing.T) {
 	cache := t.TempDir()
-	if err := persistTrustMaterial(cache, recordedTrust().Trusted); err != nil {
+	if err := persistTrustMaterial(cache, recordedTrust().Trusted, materialWitness{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(cache)
@@ -232,4 +241,13 @@ func TestUnsetTrustCacheUsesOnlyEmbeddedMaterial(t *testing.T) {
 	if len(trust.history) != 0 {
 		t.Fatal("loaded trust from the working directory")
 	}
+}
+
+func refreshFixtureTrust(t *testing.T, trust TrustRoot, fixture *fixtureTransport, cache string) TrustRoot {
+	t.Helper()
+	loaded, err := refreshTrust(context.Background(), trust, cache, TrustRefreshBudget{Documents: 8, Duration: time.Second}, &http.Client{Transport: fixture})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loaded
 }
