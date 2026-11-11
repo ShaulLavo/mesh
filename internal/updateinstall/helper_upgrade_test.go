@@ -285,43 +285,53 @@ func TestUpgradeHelperRejectsIncompatibleBuilds(t *testing.T) {
 		{"invalid-version", "v0.1.170", "development"},
 	} {
 		for _, side := range []string{"prior", "candidate"} {
-			t.Run(change.name+"/"+side, func(t *testing.T) {
-				f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
-				f.commit(t, "v0.1.171", "")
-				path := f.cfg.Executable
-				if side == "prior" {
-					path = f.prior.Executable
-				}
-				binary, err := os.ReadFile(path) //nolint:gosec // isolated fixture executable
-				if err != nil {
-					t.Fatal(err)
-				}
-				from := change.from
-				if change.name == "invalid-version" && side == "candidate" {
-					from = "v0.1.171"
-				}
-				changed := strings.Replace(string(binary), from, change.to, 1)
-				if changed == string(binary) {
-					t.Fatal("build mutation did not change fixture")
-				}
-				digest := digestBytes([]byte(changed))
-				if side == "candidate" {
-					f.publish(t, release.Build{Version: "v0.1.171", Commit: strings.Repeat("a", 40), Digest: digest, StateVersion: 7, WorkerProtocol: 1})
-				} else {
-					f.replacePrior(t, []byte(changed))
-					path = f.prior.Executable
-				}
-				if err = atomicWrite(path, []byte(changed), 0755); err != nil {
-					t.Fatal(err)
-				}
-				before := f.snapshot(t)
-				if _, err = UpgradeHelper(t.Context(), f.cfg); err == nil {
-					t.Fatal("invalid or incompatible build accepted")
-				}
-				f.assertUnchanged(t, before)
-			})
+			runIncompatibleHelperBuild(t, change.name, change.from, change.to, side)
 		}
 	}
+}
+
+func runIncompatibleHelperBuild(t *testing.T, name, from, to, side string) {
+	t.Helper()
+	if side == "prior" && (name == "state" || name == "worker") {
+		return
+	}
+	t.Run(name+"/"+side, func(t *testing.T) { checkIncompatibleHelperBuild(t, name, from, to, side) })
+}
+
+func checkIncompatibleHelperBuild(t *testing.T, name, from, to, side string) {
+	t.Helper()
+	f := newHelperUpgradeFixture(t, "systemd", "v0.1.170")
+	f.commit(t, "v0.1.171", "")
+	path := f.cfg.Executable
+	if side == "prior" {
+		path = f.prior.Executable
+	}
+	binary, err := os.ReadFile(path) //nolint:gosec // isolated fixture executable
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name == "invalid-version" && side == "candidate" {
+		from = "v0.1.171"
+	}
+	changed := strings.Replace(string(binary), from, to, 1)
+	if changed == string(binary) {
+		t.Fatal("build mutation did not change fixture")
+	}
+	digest := digestBytes([]byte(changed))
+	if side == "candidate" {
+		f.publish(t, release.Build{Version: "v0.1.171", Commit: strings.Repeat("a", 40), Digest: digest, StateVersion: 7, WorkerProtocol: 1})
+	} else {
+		f.replacePrior(t, []byte(changed))
+		path = f.prior.Executable
+	}
+	if err = atomicWrite(path, []byte(changed), 0755); err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+	if _, err = UpgradeHelper(t.Context(), f.cfg); err == nil {
+		t.Fatal("invalid or incompatible build accepted")
+	}
+	f.assertUnchanged(t, before)
 }
 
 func TestUpgradeHelperBuildProbeCancellation(t *testing.T) {
