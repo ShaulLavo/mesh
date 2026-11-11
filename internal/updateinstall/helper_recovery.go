@@ -375,9 +375,6 @@ func (e *Engine) verifyRecoveryCandidate(ctx context.Context, request HelperReco
 	if err != nil {
 		return err
 	}
-	if err = helperCapabilities(current, manifest); err != nil {
-		return err
-	}
 	order, err := release.CompareVersions(build.Version, current.Version)
 	if err != nil {
 		return fmt.Errorf("compare replacement helper release: %w", err)
