@@ -10,6 +10,8 @@ import (
 	"io"
 )
 
+const MaxTransitionProofBytes = 1 << 20
+
 // RollbackProof is separate from the schema 1 receipt read by shipped clients.
 // Its asset name is the SHA-256 of its bytes followed by .rollback.json.
 type RollbackProof struct {
@@ -32,6 +34,9 @@ type RollbackBoundary struct {
 
 // VerifyRollbackProof binds complete rollback evidence to a verified forward receipt.
 func VerifyRollbackProof(data []byte, digest string, forward []byte, transition Transition, compatibility Compatibility) (RollbackProof, error) {
+	if len(data) > MaxTransitionProofBytes || len(forward) > MaxTransitionProofBytes {
+		return RollbackProof{}, errors.New("release: transition evidence exceeds 1 MiB")
+	}
 	if !supportedPlatform(transition.Platform) || !validDigest(transition.FromDigest) || !validDigest(transition.ToDigest) {
 		return RollbackProof{}, errors.New("release: rollback transition has an invalid platform or executable digest")
 	}

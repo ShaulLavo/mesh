@@ -350,8 +350,15 @@ apply_boundary_fault() {
   apply_boundary "$target" "$fault" "$expected"
 }
 
+require_startup_fault_input() {
+  [[ $old_state_version != "$candidate_state_version" ]] || return 0
+  [[ -n ${MESH_STARTUP_FAULT_BINARY:-} ]] || fail 'full rollback proof with pending migrations requires MESH_STARTUP_FAULT_BINARY'
+  [[ -x $MESH_STARTUP_FAULT_BINARY ]] || fail 'startup-fault input must be an executable'
+}
+
 prove_actual_startup_faults() {
-  [[ -n ${MESH_STARTUP_FAULT_BINARY:-} ]] || return 0
+  require_startup_fault_input
+  [[ $old_state_version != "$candidate_state_version" ]] || return 0
   fixture startup-identity "$old_binary" "$candidate_binary" "$MESH_STARTUP_FAULT_BINARY"
   local version side
   for version in $(seq "$((old_state_version + 1))" "$candidate_state_version"); do
@@ -473,6 +480,7 @@ candidate_worker_protocol=$(build_field "$candidate_binary" workerProtocol 0)
   fail 'candidate did not report release compatibility metadata'
 [[ $candidate_state_version -ge $old_state_version ]] || fail 'candidate schema predates source schema'
 if [[ $proof_mode == full ]]; then
+  require_startup_fault_input
   prove_boundaries
   prove_actual_startup_faults
 fi

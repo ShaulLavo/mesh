@@ -102,3 +102,38 @@ func TestVerifyRollbackProofStrictJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestVerifyRollbackProofByteBounds(t *testing.T) {
+	for _, oversized := range []string{"", "rollback", "forward"} {
+		t.Run(oversized, func(t *testing.T) { checkRollbackByteBound(t, oversized) })
+	}
+}
+
+func checkRollbackByteBound(t *testing.T, oversized string) {
+	t.Helper()
+	const limit = 1 << 20
+	proof, forward, transition, compatibility := rollbackFixture(t)
+	forwardSize := limit
+	if oversized == "forward" {
+		forwardSize++
+	}
+	forward = append(forward, []byte(strings.Repeat(" ", forwardSize-len(forward)))...)
+	transition.Proof = rollbackDigest(forward)
+	proof.Forward = transition.Proof
+	data, err := json.Marshal(proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofSize := limit
+	if oversized == "rollback" {
+		proofSize++
+	}
+	data = append(data, []byte(strings.Repeat(" ", proofSize-len(data)))...)
+	_, err = VerifyRollbackProof(data, rollbackDigest(data), forward, transition, compatibility)
+	if oversized == "" && err != nil {
+		t.Fatalf("maximum-sized evidence rejected: %v", err)
+	}
+	if oversized != "" && (err == nil || !strings.Contains(err.Error(), "exceeds")) {
+		t.Fatalf("oversized %s evidence accepted or decoded: %v", oversized, err)
+	}
+}
