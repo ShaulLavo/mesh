@@ -41,6 +41,7 @@ func newAdoptionFixture(t *testing.T) *adoptionFixture {
 	}
 	f.id = host.ID
 	b.settings.Probe = f.probe
+	b.settings.Service = f
 	b.engine, err = updateinstall.New(b.settings)
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +93,22 @@ func (f *adoptionFixture) promote(ctx context.Context, operation Adoption, pinne
 }
 
 func (f *adoptionFixture) helper(context.Context, Adoption) (int, error) { return f.helperPID, nil }
+
+func (f *adoptionFixture) Stop(ctx context.Context) error { return f.base.Stop(ctx) }
+
+func (f *adoptionFixture) Start(ctx context.Context) error {
+	image, err := os.ReadFile(f.base.settings.Executable)
+	if err != nil {
+		return fmt.Errorf("read candidate at first service start: %w", err)
+	}
+	if discoveryDigest(image) == f.base.builds["v0.1.3"].Digest {
+		policy, err := f.base.store.HostPolicy(ctx)
+		if err != nil || policy.Mode != HostAutomatic {
+			return errors.New("candidate first service start preceded automatic policy seeding")
+		}
+	}
+	return f.base.Start(ctx)
+}
 
 func (f *adoptionFixture) Call(ctx context.Context, host Host, action string, input, output any) error {
 	if !IsLocal(host) || host.ID != f.id {
@@ -351,5 +368,130 @@ func TestAdoptionOrderRequiresAllOtherHostsOnlyForInitialLastHost(t *testing.T) 
 	}
 	if len(order[hosts[0].ID]) != 0 || len(order[hosts[1].ID]) != 0 || len(order[hosts[2].ID]) != 2 || len(order[hosts[3].ID]) != 3 {
 		t.Fatalf("wrong adoption order: %+v", order)
+	}
+}
+
+func TestAdoptionCrashBeforePolicyPublicationKeepsFence(t *testing.T) {
+	f := newAdoptionFixture(t)
+	pinned, err := ReadAdoptionRelease(t.Context(), f.base.documents, f.start.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, revision, err := f.supervisor.prepare(t.Context(), f.start, pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.base.store.beginAdoption(t.Context(), operation, revision); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := f.base.store.HostPolicy(t.Context())
+	if err != nil || policy.Mode != HostManual {
+		t.Fatal("policy was published before the durable adoption hold")
+	}
+	reason, err := f.base.store.hostYield()
+	if err != nil || reason != "adoption awaiting confirmation" {
+		t.Fatalf("recorded operation did not fence the host updater: %s %v", reason, err)
+	}
+	f.resume(t)
+	_, actual := f.state(t)
+	policy, err = f.base.store.HostPolicy(t.Context())
+	if err != nil || !reflect.DeepEqual(policy, actual.Policy) || actual.Phase != AdoptionWaiting {
+		t.Fatal("restarted helper did not publish the recorded policy before promotion")
+	}
+}
+
+func TestAdoptionResumesStagedAndGrantedTransactions(t *testing.T) {
+	for _, phase := range []updateinstall.Phase{updateinstall.Staged, updateinstall.Granted} {
+		t.Run(string(phase), func(t *testing.T) { testAdoptionTransactionResume(t, phase) })
+	}
+}
+
+func testAdoptionTransactionResume(t *testing.T, phase updateinstall.Phase) {
+	f := newAdoptionFixture(t)
+	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
+		t.Fatal(err)
+	}
+	f.resume(t)
+	_, operation := f.state(t)
+	if _, err := f.base.engine.Stage(t.Context(), operation.Request); err != nil {
+		t.Fatal(err)
+	}
+	if phase == updateinstall.Granted {
+		if _, err := f.base.engine.Grant(t.Context(), operation.ID, operation.Request.Generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.resume(t)
+	f.resume(t)
+	envelope, _ := f.state(t)
+	if !envelope.Confirmed {
+		t.Fatal("resumed transaction did not confirm")
+	}
+	if phase == updateinstall.Granted && len(f.controls) != 0 || phase == updateinstall.Staged && !reflect.DeepEqual(f.controls, []string{"grant"}) {
+		t.Fatalf("restart repeated accepted update controls: %v", f.controls)
+	}
+	f.base.roundTrip()
+}
+
+func TestAdoptionNoticeFailureDoesNotDeliverOrActivate(t *testing.T) {
+	f := newAdoptionFixture(t)
+	f.start.Notice = &AdoptionNotice{Command: []string{"false"}, Lead: time.Minute}
+	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.supervisor.Resume(t.Context()); err == nil {
+		t.Fatal("failed notice was accepted")
+	}
+	_, operation := f.state(t)
+	if operation.Phase != AdoptionWaiting || !operation.Notice.DeliveredAt.IsZero() || len(f.controls) != 0 {
+		t.Fatal("failed notice released activation")
+	}
+}
+
+func TestAdoptionRollbackStopsAndRecordsExactFailedEdge(t *testing.T) {
+	f := newAdoptionFixture(t)
+	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
+		t.Fatal(err)
+	}
+	f.resume(t)
+	f.base.fail = f.start.Version
+	if err := f.supervisor.Resume(t.Context()); err == nil {
+		t.Fatal("failed candidate was accepted")
+	}
+	envelope, operation := f.state(t)
+	if envelope.Confirmed || operation.Phase != AdoptionRolledBack {
+		t.Fatalf("rollback was not a terminal adoption hold: %+v", operation)
+	}
+	edge := Edge{operation.Request.Current.Digest, f.supervisor.Build.Digest, release.CurrentPlatform()}
+	failed, err := f.base.store.failedHostEdge(edge)
+	if err != nil || !failed {
+		t.Fatal("rollback did not quarantine the exact failed edge")
+	}
+	before := len(f.controls)
+	f.resume(t)
+	if len(f.controls) != before {
+		t.Fatal("rolled-back adoption retried its controls")
+	}
+	if err := canReplaceAdoption(operation, operation.Version); err == nil {
+		t.Fatal("failed adoption accepted its same pin again")
+	}
+	f.base.roundTrip()
+}
+
+func TestAdoptionMilestonesRequireExactOperationAndAllWorkers(t *testing.T) {
+	pin, operation := strings.Repeat("a", 64), strings.Repeat("b", 32)
+	evidence := completeAdoptionEvidence(operation, pin, time.Now().UTC())
+	if err := AdoptionMilestones(evidence, operation, pin); err != nil {
+		t.Fatal(err)
+	}
+	if err := AdoptionMilestones(evidence, strings.Repeat("c", 32), pin); err == nil {
+		t.Fatal("another operation's milestones were accepted")
+	}
+	if err := AdoptionMilestones(evidence, operation, strings.Repeat("d", 64)); err == nil {
+		t.Fatal("another pin's milestones were accepted")
+	}
+	evidence.Unattended.WorkersPreserved = 0
+	if err := AdoptionMilestones(evidence, operation, pin); err == nil {
+		t.Fatal("lost worker released a descendant")
 	}
 }

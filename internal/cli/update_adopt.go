@@ -81,7 +81,7 @@ func adoptionStartInput(cmd *cobra.Command, stateDir string, options adoptOption
 	if options.local {
 		return localAdoptionInput(cmd.InOrStdin(), options, args)
 	}
-	if !options.notice || len(args) == 0 || cmd.ArgsLenAtDash() < 0 {
+	if !options.notice || len(args) == 0 || cmd.ArgsLenAtDash() != 0 {
 		return update.AdoptionStart{}, errors.New("fleet adoption requires --notice -- COMMAND ARG...")
 	}
 	if _, err := exec.LookPath(args[0]); err != nil {

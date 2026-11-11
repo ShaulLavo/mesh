@@ -93,7 +93,10 @@ test -d "$cache" || { printf '%s\n' 'existing daemon update cache is unavailable
 root="$cache/adoption"
 mkdir -p "$root"
 work=$(mktemp -d "$root/side.XXXXXXXX")
-trap 'rm -f "$work/archive" "$work/mesh"; rmdir "$work"' EXIT HUP INT TERM
+cleanup() { rm -f "$work/archive" "$work/mesh"; rmdir "$work"; }
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --max-filesize 134217728 --output "$work/archive" ` + adoptionShellQuote(address) + `
 if command -v sha256sum >/dev/null 2>&1; then
   archive=$(sha256sum "$work/archive"); archive=${archive%% *}
