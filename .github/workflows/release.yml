@@ -251,6 +251,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
         shell: bash
         run: |
           set -euo pipefail
@@ -260,9 +261,17 @@ jobs:
               --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
               --source-ref refs/heads/main --deny-self-hosted-runners
           done
-          go run ./cmd/mesh-release-sign wrap "$BUNDLE" dist/mesh-update.sig.json \
+          signer="$RUNNER_TEMP/mesh-release-sign"
+          go build -o "$signer" ./cmd/mesh-release-sign
+          status=75
+          while (( status == 75 )); do
+            status=0
+            "$signer" refresh "$MESH_RELEASE_TRUST_CACHE" || status=$?
+          done
+          (( status == 0 )) || exit "$status"
+          "$signer" wrap "$BUNDLE" dist/mesh-update.sig.json \
             dist/mesh-release.json dist/mesh_*.tar.gz
-          go run ./cmd/mesh-release-sign verify dist/mesh-update.sig.json \
+          "$signer" verify dist/mesh-update.sig.json \
             dist/mesh-release.json dist/mesh_*.tar.gz
       - name: Upload and publish after ancestry recheck
         env:

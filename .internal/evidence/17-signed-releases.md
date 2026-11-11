@@ -25,6 +25,11 @@ calling release finalization. No routing metadata is fabricated. Historical
 unsigned sources have no signature reader; later route publication adds
 verification by the updater-capable readers actually allowed on each edge.
 
+The publisher compiles the candidate CLI and refreshes its authenticated trust
+cache before wrapping. Exit status 75 means that a pass saved authenticated
+roots and exhausted its document budget. Publication resumes that status only;
+network, expiry and verification failures stop publication immediately.
+
 Signing permissions are confined to the release publication job and the
 push-to-main reusable caller. Pull request jobs receive no signing grants.
 The leaf policy pins the GitHub issuer, exact main workflow, repository ID

@@ -166,8 +166,10 @@ check_source_contract() {
   contains .github/workflows/release.yml 'artifact-metadata: write'
   contains .github/workflows/release.yml 'gh attestation verify'
   contains .github/workflows/release.yml '--source-ref refs/heads/main --deny-self-hosted-runners'
-  contains .github/workflows/release.yml 'go run ./cmd/mesh-release-sign wrap'
-  contains .github/workflows/release.yml 'go run ./cmd/mesh-release-sign verify'
+  contains .github/workflows/release.yml "go build -o \"\$signer\" ./cmd/mesh-release-sign"
+  contains .github/workflows/release.yml "\"\$signer\" refresh \"\$MESH_RELEASE_TRUST_CACHE\""
+  contains .github/workflows/release.yml "\"\$signer\" wrap"
+  contains .github/workflows/release.yml "\"\$signer\" verify"
   contains .github/workflows/release.yml 'dist/mesh-release.json dist/mesh-update.sig.json'
   contains .github/workflows/release.yml 'scripts/finalize-release.sh'
   contains .github/workflows/release.yml 'Reconcile published Cask'

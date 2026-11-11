@@ -16,6 +16,9 @@ import (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if errors.Is(err, release.ErrTrustRefreshBudget) {
+			os.Exit(75)
+		}
 		os.Exit(1)
 	}
 }
