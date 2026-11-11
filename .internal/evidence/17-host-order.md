@@ -33,6 +33,17 @@ pins and page progress. Only a connection failure is offline. Refusal,
 unsupported controls and invalid replies persist as holds. An offline read
 never clears an earlier hold, and no read result expires into permission.
 
+Before saving any page records or cursors, the store durably marks that peer
+held and reading. Only completion of both entry and failure streams clears the
+hold. An interrupted pass stays held after restart, including when the peer is
+then offline.
+
+Removing a predecessor takes effect in the new policy immediately. Its saved
+peer record remains as pending retention cleanup until an authenticated drop
+acknowledgement succeeds. Missing endpoints and offline peers are reported in
+that record without holding the replacement policy. Cleanup reads share a
+one-second pass budget; local storage failures still stop the pass.
+
 ## Store and CLI integration
 
 `Store.HostEvidence(ctx, dependentID, request)` serves evidence under the
