@@ -13,6 +13,8 @@ import (
 
 type DocumentKind string
 
+const LatestDiscoveryTag = "latest"
+
 const (
 	RootDocument     DocumentKind = "root"
 	MetadataDocument DocumentKind = "metadata"
@@ -57,36 +59,29 @@ func (budget PassBudget) bounded() PassBudget {
 // as the number and size of documents. Only the unpinned latest root is a hint.
 func ReadDocument(ctx context.Context, source DocumentSource, ref AssetRef, kind DocumentKind, budget *PassBudget) ([]byte, error) {
 	*budget = budget.bounded()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	if !time.Now().Before(budget.Deadline) {
 		return nil, ErrPassExhausted
 	}
-	remaining := &budget.Discovery
-	if kind == ManifestDocument || kind == ReceiptDocument {
-		remaining = &budget.Evidence
-	}
-	if *remaining == 0 {
-		return nil, ErrPassExhausted
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("release: discovery context: %w", err)
 	}
 	if source.Read == nil {
 		return nil, errors.New("release: missing document reader")
 	}
-	if !(kind == RootDocument && ref.Tag == "latest" && ref.SHA256 == "") {
-		if err := ref.Validate(); err != nil {
-			return nil, err
-		}
+	if err := validateDocumentReference(ref, kind); err != nil {
+		return nil, err
 	}
-	*remaining--
+	if err := consumeDocumentBudget(kind, budget); err != nil {
+		return nil, err
+	}
 	readCtx, cancel := context.WithDeadline(ctx, budget.Deadline)
 	defer cancel()
 	data, err := source.Read(readCtx, ref, kind)
-	if err != nil {
-		return nil, fmt.Errorf("release: read %s %s/%s: %w", kind, ref.Tag, ref.Name, err)
-	}
 	if !time.Now().Before(budget.Deadline) {
 		return nil, ErrPassExhausted
+	}
+	if err != nil {
+		return nil, fmt.Errorf("release: read %s %s/%s: %w", kind, ref.Tag, ref.Name, err)
 	}
 	if len(data) > DocumentLimit(kind) {
 		return nil, errors.New("release: document exceeds its byte bound")
@@ -97,6 +92,25 @@ func ReadDocument(ctx context.Context, source DocumentSource, ref AssetRef, kind
 	return data, nil
 }
 
+func validateDocumentReference(ref AssetRef, kind DocumentKind) error {
+	if kind == RootDocument && ref.Tag == LatestDiscoveryTag && ref.Name == DiscoveryRootAssetName && ref.SHA256 == "" {
+		return nil
+	}
+	return ref.Validate()
+}
+
+func consumeDocumentBudget(kind DocumentKind, budget *PassBudget) error {
+	remaining := &budget.Discovery
+	if kind == ManifestDocument || kind == ReceiptDocument {
+		remaining = &budget.Evidence
+	}
+	if *remaining == 0 {
+		return ErrPassExhausted
+	}
+	*remaining--
+	return nil
+}
+
 func DocumentLimit(kind DocumentKind) int {
 	switch kind {
 	case RootDocument:
@@ -105,8 +119,10 @@ func DocumentLimit(kind DocumentKind) int {
 		return MaxMetadataBytes
 	case PageDocument:
 		return MaxAnchorPageBytes
-	default:
+	case ManifestDocument, ReceiptDocument:
 		return maximumManifest
+	default:
+		return 0
 	}
 }
 
@@ -154,13 +170,21 @@ type RouteSearch struct {
 	Best        *AnchorEntry  `json:"best,omitempty"`
 	Pending     *RoutePending `json:"pending,omitempty"`
 	DirectTried bool          `json:"directTried"`
+	Walk        *PageWalk     `json:"walk,omitempty"`
+}
+
+// PageWalk keeps the authenticated active position even when older locations
+// fall out of the bounded resident map.
+type PageWalk struct {
+	Wanted uint64  `json:"wanted"`
+	Next   PageRef `json:"next"`
 }
 
 type RoutePending struct {
-	Entry    AnchorEntry     `json:"entry"`
-	Direct   bool            `json:"direct"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
-	Manifest json.RawMessage `json:"manifest,omitempty"`
+	Entry    AnchorEntry `json:"entry"`
+	Direct   bool        `json:"direct"`
+	Metadata []byte      `json:"metadata,omitempty"`
+	Manifest []byte      `json:"manifest,omitempty"`
 }
 
 type RouteCursor struct {
@@ -240,6 +264,10 @@ func cloneRouteCursor(cursor RouteCursor) RouteCursor {
 		pending := *cursor.Search.Pending
 		cursor.Search.Pending = &pending
 	}
+	if cursor.Search != nil && cursor.Search.Walk != nil {
+		walk := *cursor.Search.Walk
+		cursor.Search.Walk = &walk
+	}
 	return cursor
 }
 
@@ -289,28 +317,29 @@ func runRoute(ctx context.Context, from Build, at Position, target UpdateMetadat
 		search.Pending = &RoutePending{Direct: true}
 	}
 	search.DirectTried = true
-	for {
-		if search.Pending != nil {
-			if err := finishRouteCandidate(ctx, from, target, step, read); err != nil {
-				return err
-			}
-			if step.Next != nil {
-				return nil
-			}
+	for !step.Waiting && step.Next == nil {
+		if err := advanceRoute(ctx, from, at, target, step, read); err != nil {
+			return err
 		}
-		if !search.Done {
-			if err := searchRouteEntry(ctx, at, target, step, read); err != nil {
-				return err
-			}
-			continue
-		}
-		if search.Best == nil {
-			step.Waiting = true
-			return nil
-		}
-		search.Pending = &RoutePending{Entry: *search.Best}
-		search.Best = nil
 	}
+	return nil
+}
+
+func advanceRoute(ctx context.Context, from Build, at Position, target UpdateMetadata, step *RouteStep, read DocumentSource) error {
+	search := step.Cursor.Search
+	if search.Pending != nil {
+		return finishRouteCandidate(ctx, from, target, step, read)
+	}
+	if !search.Done {
+		return searchRouteEntry(ctx, at, target, step, read)
+	}
+	if search.Best == nil {
+		step.Waiting = true
+		return nil
+	}
+	search.Pending = &RoutePending{Entry: *search.Best}
+	search.Best = nil
+	return nil
 }
 
 func directSource(from Build, at Position, target UpdateMetadata) bool {
@@ -337,32 +366,81 @@ func searchRouteEntry(ctx context.Context, at Position, target UpdateMetadata, s
 
 func routeEntry(ctx context.Context, ordinal uint64, target UpdateMetadata, step *RouteStep, read DocumentSource) (AnchorEntry, error) {
 	wanted := ordinal / AnchorsPerPage
+	if err := startPageWalk(step, wanted); err != nil {
+		return AnchorEntry{}, err
+	}
 	for {
-		number, location, ok := nearestPage(step.Cursor.Pages, wanted)
-		if !ok {
-			return AnchorEntry{}, errors.New("release: no authenticated page path")
-		}
-		data, err := ReadDocument(ctx, read, location.Ref, PageDocument, &step.Budget)
+		page, err := readRoutePage(ctx, target, step, read)
 		if err != nil {
 			return AnchorEntry{}, err
 		}
-		page, err := DecodeAnchorPage(data, location.Ref)
-		if err != nil {
+		if page.Page == wanted {
+			return selectRouteEntry(ordinal, page, step.Cursor.Search)
+		}
+		if err := advancePageWalk(step.Cursor.Search.Walk, page); err != nil {
 			return AnchorEntry{}, err
 		}
-		if page.Page != number || page.Epoch != target.Epoch {
-			return AnchorEntry{}, errors.New("release: anchor page identity differs from its reference")
-		}
-		learnPages(&step.Cursor, page, location.Ref)
-		if number != wanted {
+	}
+}
+
+func readRoutePage(ctx context.Context, target UpdateMetadata, step *RouteStep, read DocumentSource) (AnchorPage, error) {
+	position := step.Cursor.Search.Walk.Next
+	data, err := ReadDocument(ctx, read, position.Ref, PageDocument, &step.Budget)
+	if err != nil {
+		return AnchorPage{}, err
+	}
+	page, err := DecodeAnchorPage(data, position.Ref)
+	if err != nil {
+		return AnchorPage{}, err
+	}
+	if page.Page != position.Page || page.Epoch != target.Epoch {
+		return AnchorPage{}, errors.New("release: anchor page identity differs from its reference")
+	}
+	if position.Page < latestPageNumber(target) && len(page.Entries) != AnchorsPerPage {
+		return AnchorPage{}, errors.New("release: retained page is not full")
+	}
+	learnPages(&step.Cursor, page, position.Ref)
+	return page, nil
+}
+
+func selectRouteEntry(ordinal uint64, page AnchorPage, search *RouteSearch) (AnchorEntry, error) {
+	index := ordinal % AnchorsPerPage
+	if index >= uint64(len(page.Entries)) {
+		return AnchorEntry{}, errors.New("release: anchor ordinal absent from page")
+	}
+	search.Walk = nil
+	return page.Entries[index], nil
+}
+
+func latestPageNumber(target UpdateMetadata) uint64 {
+	ordinal := target.Position.Ordinal
+	if target.Position.Anchor && ordinal > 0 {
+		ordinal--
+	}
+	return ordinal / AnchorsPerPage
+}
+
+func startPageWalk(step *RouteStep, wanted uint64) error {
+	if step.Cursor.Search.Walk != nil && step.Cursor.Search.Walk.Wanted == wanted {
+		return nil
+	}
+	number, location, ok := nearestPage(step.Cursor.Pages, wanted)
+	if !ok {
+		return errors.New("release: no authenticated page path")
+	}
+	step.Cursor.Search.Walk = &PageWalk{Wanted: wanted, Next: PageRef{Page: number, Ref: location.Ref}}
+	return nil
+}
+
+func advancePageWalk(walk *PageWalk, page AnchorPage) error {
+	for index := len(page.Back) - 1; index >= 0; index-- {
+		if page.Back[index].Page < walk.Wanted {
 			continue
 		}
-		index := ordinal % AnchorsPerPage
-		if index >= uint64(len(page.Entries)) {
-			return AnchorEntry{}, errors.New("release: anchor ordinal absent from page")
-		}
-		return page.Entries[index], nil
+		walk.Next = page.Back[index]
+		return nil
 	}
+	return errors.New("release: anchor page has no back reference toward requested ordinal")
 }
 
 func nearestPage(pages map[uint64]PageLocation, wanted uint64) (uint64, PageLocation, bool) {

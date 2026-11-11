@@ -132,11 +132,11 @@ func produceRoot(data []byte, output io.Writer) error {
 }
 
 func readLocal(path string, limit int) ([]byte, error) {
-	file, err := os.Open(path)
+	file, err := os.OpenInRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return nil, fmt.Errorf("routes: open local evidence: %w", err)
 	}
-	defer file.Close() //nolint:errcheck // read result is authoritative
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("routes: read local evidence: %w", err)

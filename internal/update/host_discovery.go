@@ -14,17 +14,16 @@ import (
 	"github.com/shaul/mesh/internal/release"
 )
 
-const maxDiscoveryCursorBytes = 512 << 10
-
 // DiscoveryCursor is independent of installation journals and updater policy.
 // Root and TraversalEpoch retain progress across arbitrarily many newer epochs.
 type DiscoveryCursor struct {
 	Epoch          uint32              `json:"epoch"`
 	Latest         string              `json:"latest"`
+	LatestEpoch    uint32              `json:"latestEpoch"`
 	Root           *release.AssetRef   `json:"root,omitempty"`
 	TraversalEpoch uint32              `json:"traversalEpoch"`
 	Head           release.AssetRef    `json:"head"`
-	Metadata       json.RawMessage     `json:"metadata,omitempty"`
+	Metadata       []byte              `json:"metadata,omitempty"`
 	Route          release.RouteCursor `json:"route"`
 }
 
@@ -70,27 +69,42 @@ func DiscoverNextHop(ctx context.Context, from release.Build, at release.Positio
 }
 
 func discoverHead(ctx context.Context, epoch uint32, step *DiscoveryStep, source release.DocumentSource) error {
-	ref := release.AssetRef{Tag: "latest", Name: release.DiscoveryRootAssetName}
+	ref := release.AssetRef{Tag: release.LatestDiscoveryTag, Name: release.DiscoveryRootAssetName}
 	data, err := release.ReadDocument(ctx, source, ref, release.RootDocument, &step.Budget)
 	if err != nil {
-		return err
+		return fmt.Errorf("update: read latest discovery root: %w", err)
 	}
 	root, err := release.DecodeDiscoveryRoot(data)
 	if err != nil {
 		return fmt.Errorf("update: latest discovery root: %w", err)
 	}
+	if root.Epoch < epoch {
+		return errors.New("update: discovery origin is older than the reader epoch")
+	}
 	token := discoveryDigest(data)
 	if step.Cursor.Latest != token || step.Cursor.Epoch != epoch {
-		step.Cursor.Latest, step.Cursor.Epoch = token, epoch
-		step.Cursor.Root, step.Cursor.TraversalEpoch = nil, 0
-		if err := advanceRoot(epoch, root, step); err != nil {
-			return err
-		}
+		refreshDiscoveryRoot(epoch, root, token, step)
 	}
+	return traverseEpochRoots(ctx, epoch, step, source)
+}
+
+func refreshDiscoveryRoot(epoch uint32, root release.DiscoveryRoot, token string, step *DiscoveryStep) {
+	// Once traversing newer epochs, their changing heads cannot invalidate the
+	// immutable previous-epoch roots already learned from them.
+	retain := step.Cursor.Epoch == epoch && step.Cursor.LatestEpoch > epoch && root.Epoch > epoch
+	step.Cursor.Latest, step.Cursor.Epoch, step.Cursor.LatestEpoch = token, epoch, root.Epoch
+	if retain {
+		return
+	}
+	step.Cursor.Root, step.Cursor.TraversalEpoch = nil, 0
+	advanceRoot(epoch, root, step)
+}
+
+func traverseEpochRoots(ctx context.Context, epoch uint32, step *DiscoveryStep, source release.DocumentSource) error {
 	for step.Cursor.Root != nil {
 		data, err := release.ReadDocument(ctx, source, *step.Cursor.Root, release.RootDocument, &step.Budget)
 		if err != nil {
-			return err
+			return fmt.Errorf("update: read previous discovery root: %w", err)
 		}
 		root, err := release.DecodeDiscoveryRoot(data)
 		if err != nil {
@@ -99,26 +113,23 @@ func discoverHead(ctx context.Context, epoch uint32, step *DiscoveryStep, source
 		if root.Epoch != step.Cursor.TraversalEpoch-1 {
 			return errors.New("update: previous discovery root has the wrong epoch")
 		}
-		if err := advanceRoot(epoch, root, step); err != nil {
-			return err
+		if root.Head.Tag != step.Cursor.Root.Tag {
+			return errors.New("update: previous root identity differs from its reference")
 		}
+		advanceRoot(epoch, root, step)
 	}
 	return nil
 }
 
-func advanceRoot(epoch uint32, root release.DiscoveryRoot, step *DiscoveryStep) error {
-	if root.Epoch < epoch {
-		return errors.New("update: discovery origin is older than the reader epoch")
-	}
+func advanceRoot(epoch uint32, root release.DiscoveryRoot, step *DiscoveryStep) {
 	if root.Epoch > epoch {
 		step.Cursor.Root, step.Cursor.TraversalEpoch = root.Previous, root.Epoch
-		return nil
+		return
 	}
 	step.Cursor.Root, step.Cursor.TraversalEpoch = nil, epoch
 	if step.Cursor.Head != root.Head {
 		step.Cursor.Head, step.Cursor.Metadata = root.Head, nil
 	}
-	return nil
 }
 
 func discoveryMetadata(ctx context.Context, epoch uint32, step *DiscoveryStep, source release.DocumentSource) (release.UpdateMetadata, error) {
@@ -127,9 +138,11 @@ func discoveryMetadata(ctx context.Context, epoch uint32, step *DiscoveryStep, s
 		step.Cursor.Metadata, err = release.ReadDocument(ctx, source, step.Cursor.Head, release.MetadataDocument, &step.Budget)
 	}
 	if err != nil {
-		return release.UpdateMetadata{}, err
+		return release.UpdateMetadata{}, fmt.Errorf("update: read discovery metadata: %w", err)
 	}
-	metadata, err := release.AuthenticateMetadata(ctx, source, step.Cursor.Head, step.Cursor.Metadata, epoch)
+	verifyCtx, cancel := context.WithDeadline(ctx, step.Budget.Deadline)
+	defer cancel()
+	metadata, err := release.AuthenticateMetadata(verifyCtx, source, step.Cursor.Head, step.Cursor.Metadata, epoch)
 	if err != nil {
 		return metadata, fmt.Errorf("update: authenticate discovery head: %w", err)
 	}
@@ -138,7 +151,7 @@ func discoveryMetadata(ctx context.Context, epoch uint32, step *DiscoveryStep, s
 
 func LoadDiscoveryCursor(path string) (DiscoveryCursor, error) {
 	var cursor DiscoveryCursor
-	data, err := readDiscoveryFile(path, maxDiscoveryCursorBytes)
+	data, err := readDiscoveryFile(path, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return cursor, nil
 	}
@@ -156,9 +169,6 @@ func SaveDiscoveryCursor(path string, cursor DiscoveryCursor) error {
 	if err != nil {
 		return fmt.Errorf("update: encode discovery cursor: %w", err)
 	}
-	if len(data) > maxDiscoveryCursorBytes {
-		return errors.New("update: discovery cursor exceeds 512 KiB")
-	}
 	return writeDiscoveryFile(path, data)
 }
 
@@ -172,7 +182,11 @@ func CacheDiscoveryDocuments(directory string, upstream release.DocumentSource) 
 
 func cachedDiscoveryDocument(ctx context.Context, directory string, upstream release.DocumentSource, ref release.AssetRef, kind release.DocumentKind) ([]byte, error) {
 	if ref.SHA256 == "" {
-		return upstream.Read(ctx, ref, kind)
+		data, err := upstream.Read(ctx, ref, kind)
+		if err != nil {
+			return nil, fmt.Errorf("update: read root hint: %w", err)
+		}
+		return data, nil
 	}
 	if err := ref.Validate(); err != nil {
 		return nil, fmt.Errorf("update: cache reference: %w", err)
@@ -196,16 +210,20 @@ func cachedDiscoveryDocument(ctx context.Context, directory string, upstream rel
 }
 
 func readDiscoveryFile(path string, limit int) ([]byte, error) {
-	file, err := os.Open(path)
+	file, err := os.OpenInRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return nil, fmt.Errorf("update: open discovery file: %w", err)
 	}
-	defer file.Close() //nolint:errcheck // read result is authoritative
-	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	defer func() { _ = file.Close() }()
+	var reader io.Reader = file
+	if limit > 0 {
+		reader = io.LimitReader(file, int64(limit)+1)
+	}
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("update: read discovery file: %w", err)
 	}
-	if len(data) > limit {
+	if limit > 0 && len(data) > limit {
 		return nil, errors.New("update: discovery file exceeds its byte bound")
 	}
 	return data, nil
@@ -219,7 +237,7 @@ func writeDiscoveryFile(path string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("update: create discovery file: %w", err)
 	}
-	defer os.Remove(file.Name()) //nolint:errcheck // temporary publication cleanup
+	defer func() { _ = os.Remove(file.Name()) }()
 	if _, err := file.Write(data); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("update: write discovery file: %w", err)
@@ -238,11 +256,16 @@ func writeDiscoveryFile(path string, data []byte) error {
 }
 
 func syncDiscoveryDirectory(path string) error {
-	directory, err := os.Open(path)
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return fmt.Errorf("update: open discovery directory root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	directory, err := root.Open(".")
 	if err != nil {
 		return fmt.Errorf("update: open discovery directory: %w", err)
 	}
-	defer directory.Close() //nolint:errcheck // sync result is authoritative
+	defer func() { _ = directory.Close() }()
 	if err := directory.Sync(); err != nil {
 		return fmt.Errorf("update: sync discovery directory: %w", err)
 	}
