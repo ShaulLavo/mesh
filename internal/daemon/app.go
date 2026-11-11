@@ -429,15 +429,20 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
+	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
+	if err != nil {
+		return err
+	}
 	lifecycle, err := newLifecycle(lifecycleConfig{
-		Names:       names,
-		NameChanged: state.hostChanged,
-		Context:     daemonCtx,
-		Catalog:     catalog,
-		Connector:   connector,
-		Host:        host,
-		PrivateName: certificateRuntime.PrivateName,
-		SessionsDir: sessionsDir,
+		UpdateSummary: updates.hostSummary,
+		Names:         names,
+		NameChanged:   state.hostChanged,
+		Context:       daemonCtx,
+		Catalog:       catalog,
+		Connector:     connector,
+		Host:          host,
+		PrivateName:   certificateRuntime.PrivateName,
+		SessionsDir:   sessionsDir,
 	})
 	if err != nil {
 		return err
@@ -501,10 +506,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		appControl.registry = appRegistry
 	}
 	server.apps = appControl
-	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
-	if err != nil {
-		return err
-	}
 	membershipPath := cfg.FleetMembershipPath
 	if membershipPath == "" {
 		membershipPath = fleetMembershipPath(cfg.ConfigDir)
@@ -512,6 +513,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	updates.configurationWriter = cfg.ConfigurationWriter
 	updates.domainWriter = cfg.DomainWriter
 	updates.coordinator.SavedFleet = func() (update.Fleet, error) { return update.ReadFleet(membershipPath) }
+	updates.hostUpdater.Order.SavedFleet = updates.coordinator.SavedFleet
 	fleetProfile := newFleetProfileController(stateDir, membershipPath, meshHost.ID, update.Client{ID: meshHost.ID, Key: meshPrivateKey}, updates.authority.IsAdministrator, reporter.report)
 	updates.fleetProfile = fleetProfile
 	server.fleetProfile = fleetProfile

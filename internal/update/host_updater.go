@@ -38,6 +38,8 @@ func hostError(err error) error {
 }
 
 type HostUpdater struct {
+	Order    *HostOrder
+	limit    *HostLimit
 	Store    *Store
 	ID       string
 	Current  func() release.Build
@@ -79,6 +81,7 @@ func (u *HostUpdater) Tick(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	u.observed = release.Build{}
+	u.limit = nil
 	if u.Store == nil || u.Current == nil {
 		return errors.New("update: host updater configuration incomplete")
 	}
@@ -118,6 +121,9 @@ func (u *HostUpdater) tickAvailable(ctx context.Context, state HostUpdate, journ
 	if err != nil {
 		return u.attention(ctx, state, "policy", err)
 	}
+	if err := u.Order.ReleaseDropped(ctx, policy); err != nil {
+		return u.wait(ctx, state, err.Error())
+	}
 	if state.Owned != nil {
 		return u.resume(ctx, state, policy, journal, exists, nil)
 	}
@@ -132,9 +138,6 @@ func (u *HostUpdater) tickAvailable(ctx context.Context, state HostUpdate, journ
 			return u.attention(ctx, state, "authority", err)
 		}
 		return u.wait(ctx, state, reason)
-	}
-	if len(policy.After) > 0 {
-		return u.wait(ctx, state, "predecessor evidence required")
 	}
 	if u.now().Before(state.NextAttempt) {
 		return nil
@@ -271,9 +274,9 @@ func (u *HostUpdater) recordCommit(owned *OwnedRequest, status updateinstall.Sta
 		return errors.New("update: committed journal lacks verified installed identity")
 	}
 	entry := LedgerEntry{Request: status.Request.ID, Generation: status.Request.Generation, Version: status.Request.Manifest.Version, Binary: artifact.BinarySHA256,
-		From: status.Request.Current.Digest, Origin: "manual", CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: preservedHostWorkers(status)}
+		From: status.Request.Current.Digest, Origin: string(HostManual), CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: preservedHostWorkers(status)}
 	if owned != nil {
-		entry.Origin, entry.Metadata = "host", owned.Metadata
+		entry.Origin, entry.Metadata = hostOrigin, owned.Metadata
 	}
 	if entry.WorkersPreserved != entry.Workers && !hostRebooted(status) {
 		return errors.New("update: committed journal did not preserve every worker")
@@ -327,7 +330,7 @@ func (s *Store) recordAdoptionMilestone(entry LedgerEntry) error {
 	if err := adoption.validate(); err != nil {
 		return err
 	}
-	if adoption.Settled || !adoption.Confirmed || adoption.Unattended != nil || entry.Origin != "host" || entry.Binary == adoption.Adopted.Binary {
+	if adoption.Settled || !adoption.Confirmed || adoption.Unattended != nil || entry.Origin != hostOrigin || entry.Binary == adoption.Adopted.Binary {
 		return nil
 	}
 	adoption.Unattended = &entry
@@ -347,6 +350,14 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	}
 	if u.now().Before(state.NextAttempt) {
 		return nil
+	}
+	limit, err := u.Order.Refresh(ctx, policy, owned.Installation.Current, u.now())
+	if err != nil {
+		return u.wait(ctx, state, err.Error())
+	}
+	u.limit = limit
+	if !limit.allows(owned.Installation.Manifest.Version) || limit.failed(owned.Edge) {
+		return u.wait(ctx, state, "predecessor evidence holds the owned hop")
 	}
 	if u.Engine == nil {
 		return u.attention(ctx, state, "engine", errors.New("host installation engine unavailable"))
@@ -442,7 +453,9 @@ func (u *HostUpdater) acceptWorkers(proof hostHopProof) updateinstall.Acceptance
 		if err := u.checkAcceptanceWorkers(ctx, request, proof.Workers); err != nil {
 			return err
 		}
-		return authorize(ctx, request, kind, commit)
+		return authorize(ctx, request, kind, func() error {
+			return u.Store.commitHostOrder(request, u.now(), commit)
+		})
 	}
 }
 
@@ -510,7 +523,23 @@ func (u *HostUpdater) discoverObserved(ctx context.Context, state HostUpdate, po
 	if err := u.Store.readAuthority("host-discovery.json", &cursor); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return u.attention(ctx, state, "discovery", err)
 	}
-	step, err := hostDiscoveryPass(ctx, current, source, cursor, documents)
+	return u.discoverOrdered(ctx, state, policy, current, source, documents, cursor, journal, exists)
+}
+
+func (u *HostUpdater) discoverOrdered(ctx context.Context, state HostUpdate, policy HostPolicy, current release.Build, source HostSource, documents release.DocumentSource, cursor DiscoveryCursor, journal updateinstall.Status, exists bool) error {
+	limit, err := u.Order.Refresh(ctx, policy, current, u.now())
+	if err != nil {
+		return u.wait(ctx, state, err.Error())
+	}
+	u.limit = limit
+	cursor.Route.Failed, err = u.Store.retainHostRouteFailures(cursor.Route.Failed, limit)
+	if err != nil {
+		return u.attention(ctx, state, "failed edge", err)
+	}
+	if limit != nil && !newerHostVersion(limit.Version, current.Version) {
+		return u.wait(ctx, state, "predecessors have no newer soaked release")
+	}
+	step, selected, err := hostLimitedDiscoveryPass(ctx, current, source, cursor, documents, limit)
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
@@ -524,7 +553,7 @@ func (u *HostUpdater) discoverObserved(ctx context.Context, state HostUpdate, po
 		}
 		return u.save(ctx, state)
 	}
-	return u.prepare(ctx, state, policy, source, documents, step, journal, exists)
+	return u.prepare(ctx, state, policy, source, documents, step, selected, journal, exists)
 }
 
 func hostCheckDelay() time.Duration {
@@ -535,31 +564,35 @@ func hostCheckDelay() time.Duration {
 	return 30*time.Minute + time.Duration(jitter.Int64())
 }
 
-func hostDiscoveryPass(ctx context.Context, current release.Build, source HostSource, cursor DiscoveryCursor, documents release.DocumentSource) (DiscoveryStep, error) {
+func hostLimitedDiscoveryPass(ctx context.Context, current release.Build, source HostSource, cursor DiscoveryCursor, documents release.DocumentSource, limit *HostLimit) (DiscoveryStep, []byte, error) {
 	step := DiscoveryStep{Cursor: cursor, Budget: release.NewPassBudget()}
 	if err := discoverHead(ctx, source.Epoch, &step, documents); err != nil {
 		if errors.Is(err, release.ErrPassExhausted) {
 			step.Exhausted = true
-			return step, nil
+			return step, nil, nil
 		}
-		return step, err
+		return step, nil, err
 	}
 	metadata, err := discoveryMetadata(ctx, source.Epoch, &step, documents)
 	if err != nil {
 		if errors.Is(err, release.ErrPassExhausted) {
 			step.Exhausted = true
-			return step, nil
+			return step, nil, nil
 		}
-		return step, err
+		return step, nil, err
+	}
+	metadata, selected, err := hostLimitMetadata(ctx, source.Epoch, metadata, step.Cursor.Metadata, documents, &step.Budget, limit)
+	if err != nil {
+		return step, nil, err
 	}
 	order, err := release.CompareVersions(metadata.Version, current.Version)
 	if err != nil || order <= 0 {
-		return step, hostError(err)
+		return step, selected, hostError(err)
 	}
 	route, err := release.NextHop(ctx, current, source.Position, metadata, step.Cursor.Route, documents, step.Budget)
 	step.Cursor.Route, step.Next, step.Budget = route.Cursor, route.Next, route.Budget
 	step.Exhausted, step.Waiting = route.Exhausted, route.Waiting
-	return step, hostError(err)
+	return step, selected, hostError(err)
 }
 
 func verifyHostSource(current release.Build, source HostSource) error {
@@ -588,7 +621,7 @@ func (u *HostUpdater) saveCursor(ctx context.Context, cursor DiscoveryCursor) er
 	return u.Store.writeAuthority("host-discovery.json", cursor)
 }
 
-func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, documents release.DocumentSource, step DiscoveryStep, journal updateinstall.Status, exists bool) error {
+func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, documents release.DocumentSource, step DiscoveryStep, selected []byte, journal updateinstall.Status, exists bool) error {
 	next := *step.Next
 	artifact, err := next.Manifest.Artifact(u.currentBuild().Platform)
 	if err != nil {
@@ -596,6 +629,7 @@ func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy Host
 	}
 	edge := Edge{u.currentBuild().Digest, artifact.BinarySHA256, u.currentBuild().Platform}
 	failed, err := u.Store.failedHostEdge(edge)
+	failed = failed || u.limit.failed(edge)
 	if err != nil {
 		return u.attention(ctx, state, "failed edge", err)
 	}
@@ -613,7 +647,7 @@ func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy Host
 	if health.HostID != u.ID || health.Build != u.currentBuild() {
 		return u.attention(ctx, state, "installation", errors.New("running host differs from updater source"))
 	}
-	metadataBytes := step.Cursor.Metadata
+	metadataBytes := selected
 	if pending := step.Cursor.Route.Search; pending != nil && pending.Pending != nil && len(pending.Pending.Metadata) > 0 {
 		metadataBytes = pending.Pending.Metadata
 	}

@@ -150,7 +150,7 @@ func (a HostAdoption) validateUnattended() error {
 	if !a.Confirmed || a.Adopted == nil {
 		return errors.New("update: unattended milestone precedes adoption confirmation")
 	}
-	if err := validateAdoptionEntry(*a.Unattended, "host"); err != nil {
+	if err := validateAdoptionEntry(*a.Unattended, hostOrigin); err != nil {
 		return err
 	}
 	order, err := release.CompareVersions(a.Unattended.Version, a.Adopted.Version)
@@ -299,7 +299,10 @@ func (s *Store) existingLedgerIdentity(head hostLedger, entry LedgerEntry) (bool
 	if err != nil {
 		return false, err
 	}
-	if identity.Seq < head.First || identity.Seq > head.Last {
+	if identity.Seq < head.First {
+		return true, nil
+	}
+	if identity.Seq > head.Last {
 		return false, errors.New("update: ledger request identity outside retained history")
 	}
 	var existing LedgerEntry
@@ -321,6 +324,10 @@ func (s *Store) HostLedger(ctx context.Context, after uint64, limit int) ([]Ledg
 		return nil, false, err
 	}
 	defer unlock()
+	return s.hostLedgerPage(after, limit)
+}
+
+func (s *Store) hostLedgerPage(after uint64, limit int) ([]LedgerEntry, bool, error) {
 	head, err := s.ledgerHead()
 	if err != nil {
 		return nil, false, err
