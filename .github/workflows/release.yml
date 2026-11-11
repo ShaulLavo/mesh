@@ -199,6 +199,9 @@ jobs:
       statuses: write
       contents: write
       pull-requests: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     needs: [reserve, build, prove-transition]
     if: needs.reserve.outputs.action == 'publish'
     runs-on: ubuntu-24.04
@@ -237,6 +240,30 @@ jobs:
             -dist dist -version "$VERSION" -commit "$SOURCE" \
             -compatibility "$RUNNER_TEMP/compatibility.json" -proofs proofs \
             -output dist/mesh-release.json
+      - name: Attest final manifest and archives
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            dist/mesh-release.json
+            dist/mesh_*.tar.gz
+      - name: Verify original bundle and candidate verifier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for subject in dist/mesh-release.json dist/mesh_*.tar.gz; do
+            gh attestation verify "$subject" --bundle "$BUNDLE" \
+              --repo ShaulLavo/mesh \
+              --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+          done
+          go run ./cmd/mesh-release-sign wrap "$BUNDLE" dist/mesh-update.sig.json \
+            dist/mesh-release.json dist/mesh_*.tar.gz
+          go run ./cmd/mesh-release-sign verify dist/mesh-update.sig.json \
+            dist/mesh-release.json dist/mesh_*.tar.gz
       - name: Upload and publish after ancestry recheck
         env:
           GH_TOKEN: ${{ github.token }}
@@ -244,5 +271,5 @@ jobs:
           SOURCE: ${{ needs.reserve.outputs.source }}
           PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
         run: |
-          gh release upload "$VERSION" --clobber dist/mesh-release.json
+          gh release upload "$VERSION" --clobber dist/mesh-release.json dist/mesh-update.sig.json
           scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" dist/homebrew/Casks/mesh.rb
