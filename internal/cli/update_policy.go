@@ -29,7 +29,47 @@ func (a *application) updatePolicyCommand(options *updateOptions) *cobra.Command
 	for _, action := range []string{hostPolicyShow, hostPolicySet, hostPolicyOff} {
 		command.AddCommand(a.hostPolicyCommand(options, action))
 	}
+	command.AddCommand(a.hostPolicyForgetCommand(options))
 	return command
+}
+
+func (a *application) hostPolicyForgetCommand(options *updateOptions) *cobra.Command {
+	return &cobra.Command{Use: "forget DEPENDENT_ID", Short: "Release update history retained for one machine", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.forgetHostDependent(cmd, options, args[0])
+		}}
+}
+
+func (a *application) forgetHostDependent(cmd *cobra.Command, options *updateOptions, id string) error {
+	if options.coordinator != "" {
+		return errors.New("update policy is local; omit --coordinator and run this command on the machine to change")
+	}
+	if _, err := update.PublicKey(id); err != nil {
+		return fmt.Errorf("dependent needs an exact public identity: %w", err)
+	}
+	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	if err != nil {
+		return err
+	}
+	if a.dependencies.UpdateCaller != nil {
+		environment.client = a.dependencies.UpdateCaller
+	}
+	dependent := update.HostDependentForget{ID: id}
+	if err := environment.client.Call(cmd.Context(), environment.local, "host-policy.forget", dependent, nil); err != nil {
+		return fmt.Errorf("release dependent history: %w", err)
+	}
+	if options.json {
+		return writeAutomaticJSON(cmd.OutOrStdout(), dependent)
+	}
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), "Released the update history retained for this machine. It may register again when it reads update evidence.")
+	return hostPolicyPrintError(err)
+}
+
+func hostPolicyPrintError(err error) error {
+	if err != nil {
+		return fmt.Errorf("print host policy: %w", err)
+	}
+	return nil
 }
 
 func (a *application) hostPolicyCommand(options *updateOptions, action string) *cobra.Command {

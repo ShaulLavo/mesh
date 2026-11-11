@@ -30,7 +30,8 @@ func (m dashboardModel) updateLines() []string {
 	if m.updateFrame != nil {
 		return m.updateFrame
 	}
-	rows := cli.DashboardUpdateRows(m.updates, m.now)
+	rows := cli.DashboardHostUpdateRows(m.hosts, m.now)
+	rows = append(rows, cli.DashboardUpdateRows(m.updates, m.now)...)
 	if len(rows) == 0 {
 		return nil
 	}

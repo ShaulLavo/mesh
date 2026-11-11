@@ -54,6 +54,50 @@ socket. A network connection cannot change the policy, including a connection
 from an enrolled update administrator. Run the command on the destination
 machine when changing a remote machine's policy.
 
+To release update history retained for a machine that no longer needs it, run
+this command on the machine keeping that history:
+
+```bash
+mesh update policy forget DEPENDENT_ID
+```
+
+Use the dependent's exact public Mesh identity. The command releases that
+machine's retention record. A later evidence read can register it again.
+The command leaves the update policy unchanged.
+
+## Check automatic updates across the fleet
+
+```bash
+mesh update fleet
+mesh update fleet --json
+mesh update fleet --details
+```
+
+The command reads every member of your saved `fleet.json`, including offline
+members. Each responding machine supplies its own version, installation kind,
+policy, update phase, verified target, waiting reason, and last pinned commit.
+This read requires ordinary device access. Update-administrator enrollment alone
+does not grant it.
+
+The exit status describes the whole fleet:
+
+- `0`: Every machine has a managed installation, automatic updates enabled,
+  and a recent verified check showing it is current.
+- `2`: An update or waiting period is pending, or a machine with a verified
+  reply within the last day is temporarily unreachable.
+- `1`: A machine needs attention, has updates off, lacks a managed installation,
+  has waited more than six hours beyond its configured wait, or has been
+  unreachable for a day. Unknown status also returns `1`.
+
+Package-owned, client-only, and development installations do not count as current.
+A peer without an update summary reports unknown and may need adoption.
+Missing latest releases, waiting times, commit pins, or release counts stay
+unknown. Mesh does not infer a release count from version numbers.
+
+The JSON result keeps diagnostic identifiers and has a `problems` array for
+machines requiring attention. The dashboard uses the same host summaries for
+update attention. Its configuration-delivery status remains separate.
+
 ## Choose the machines
 
 ```bash

@@ -6,6 +6,7 @@ import (
 
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/privacy"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/usagefeed"
@@ -84,6 +85,7 @@ func (c DashboardCatalog[T]) Stale(now, lastReply time.Time) bool {
 type DashboardHostView struct {
 	Notice             string
 	Build              release.Build
+	HostUpdate         *protocol.HostUpdateSummary
 	Host               DashboardHost
 	Connection         StateConnection
 	Problem            string
@@ -162,7 +164,6 @@ type DashboardStatus[T any] struct {
 }
 type DashboardUpdateSource struct {
 	Coordinator   update.Host                                  `json:"coordinator"`
-	Automatic     *DashboardStatus[update.AutomaticStatus]     `json:"automatic,omitempty"`
 	Configuration *DashboardStatus[update.ConfigurationStatus] `json:"configuration,omitempty"`
 }
 type DashboardUpdates struct {

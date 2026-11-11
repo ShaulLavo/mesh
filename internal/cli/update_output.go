@@ -327,13 +327,15 @@ func printUpdateStarted(output updateOutput, run update.Run) {
 }
 
 func printAutomaticStatusOutput(out io.Writer, status update.AutomaticStatus, structured, details bool, mask *privacy.Mask) error {
-	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: time.Now()}
-	source := DashboardUpdateSource{Automatic: &DashboardStatus[update.AutomaticStatus]{Observation: observation, Value: &status}}
-	if status.Record != nil {
-		source.Coordinator.ID = status.Record.Policy.CoordinatorID
+	if structured {
+		return writeAutomaticJSON(out, status)
 	}
-	return printUpdateStatusPresentation(out, status, source, structured, details, mask)
+	if details {
+		return printUpdateDetails(out, status, mask)
+	}
+	return printStatusRows(out, automaticStatusRows(status), mask)
 }
+
 func printConfigurationStatusOutput(out io.Writer, status update.ConfigurationStatus, structured, details bool, mask *privacy.Mask) error {
 	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: time.Now()}
 	source := DashboardUpdateSource{Configuration: &DashboardStatus[update.ConfigurationStatus]{Observation: observation, Value: &status}}
@@ -343,6 +345,10 @@ func printConfigurationStatusOutput(out io.Writer, status update.ConfigurationSt
 	return printUpdateStatusPresentation(out, status, source, structured, details, mask)
 }
 func printDashboardUpdateRows(out io.Writer, view DashboardUpdates, mask *privacy.Mask) error {
+	return printStatusRows(out, DashboardUpdateRows(view, time.Now()), mask)
+}
+
+func printStatusRows(out io.Writer, rows []DashboardUpdateRow, mask *privacy.Mask) error {
 	labels := map[string]string{}
 	hosts, _ := LoadHosts()
 	for _, host := range hosts {
@@ -350,7 +356,7 @@ func printDashboardUpdateRows(out io.Writer, view DashboardUpdates, mask *privac
 			labels[host.ID] = host.MachineName
 		}
 	}
-	for _, row := range DashboardUpdateRows(view, time.Now()) {
+	for _, row := range rows {
 		label := ""
 		if row.HostID != "" {
 			label = "Selected machine: "

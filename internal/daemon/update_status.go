@@ -1,0 +1,101 @@
+package daemon
+
+import (
+	"context"
+	"os"
+
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updateinstall"
+)
+
+func (u *updateController) hostSummary() *protocol.HostUpdateSummary {
+	ctx, cancel := context.WithTimeout(context.Background(), updateSummaryTimeout)
+	defer cancel()
+	status, err := u.coordinator.Store.HostStatus(ctx)
+	build := release.Current()
+	executable, _ := os.Executable()
+	summary := summarizeHostUpdate(status, build, updateinstall.InstallationKind(executable, build, true))
+	if err != nil {
+		summary.Phase, summary.Problem = string(update.HostAttention), err.Error()
+	}
+	return summary
+}
+
+func summarizeHostUpdate(status update.HostStatus, build release.Build, installation string) *protocol.HostUpdateSummary {
+	summary := &protocol.HostUpdateSummary{Mode: string(status.Policy.Mode), Revision: status.Policy.Revision,
+		Phase: string(status.State.Phase), Installation: installation, Soak: status.Policy.Soak}
+	summaryProblem(summary, status.State)
+	summaryPeerProblem(summary, status.Peers)
+	if discovery := status.Discovery; discovery != nil {
+		summary.Head, summary.Target = summaryRelease(discovery.Head), summaryRelease(discovery.Target)
+		summary.LatestEpoch = discovery.LatestEpoch
+		summary.SourceVerified = discovery.Source.Digest == build.Digest && discovery.Source.Version == build.Version && discovery.Source.Commit == build.Commit && discovery.Source.Platform == build.Platform && !build.Modified
+		if discovery.Epoch == discovery.LatestEpoch {
+			summary.Latest = summaryRelease(discovery.Head)
+		}
+		at := discovery.ObservedAt
+		summary.ObservedAt = &at
+		summaryLag(summary, build)
+		summaryPending(summary, discovery)
+	}
+	if owned := status.State.Owned; owned != nil && summary.Target == nil {
+		summary.Target = &protocol.HostUpdateRelease{Version: owned.Installation.Manifest.Version, Metadata: owned.Metadata}
+	}
+	if last := status.Last; last != nil {
+		summary.Last = &protocol.HostUpdateCommit{Version: last.Version, Metadata: last.Metadata, Binary: last.Binary, At: last.CommittedAt}
+	}
+	return summary
+}
+
+func summaryPeerProblem(summary *protocol.HostUpdateSummary, peers []update.HostPeer) {
+	for _, peer := range peers {
+		if peer.Held {
+			summary.WaitingState, summary.WaitingPeer = string(peer.State), peer.ID
+			return
+		}
+	}
+}
+
+func summaryProblem(summary *protocol.HostUpdateSummary, state update.HostUpdate) {
+	if state.Problem == nil {
+		return
+	}
+	summary.Problem = state.Problem.Detail
+	if state.Problem.Kind != "waiting" {
+		return
+	}
+	summary.Pending, summary.Problem = state.Problem.Detail, ""
+	if !state.ProblemSince.IsZero() {
+		at := state.ProblemSince
+		summary.PendingSince = &at
+	}
+}
+
+func summaryLag(summary *protocol.HostUpdateSummary, build release.Build) {
+	if summary.Latest == nil || !summary.SourceVerified {
+		return
+	}
+	if comparison, err := release.CompareVersions(build.Version, summary.Latest.Version); err == nil && comparison >= 0 {
+		lag := uint64(0)
+		summary.Lag = &lag
+	}
+}
+
+func summaryRelease(value update.HostObservedRelease) *protocol.HostUpdateRelease {
+	return &protocol.HostUpdateRelease{Version: value.Version, Metadata: value.Metadata, PublishedAt: value.PublishedAt}
+}
+
+func summaryPending(summary *protocol.HostUpdateSummary, discovery *update.HostDiscoveryObservation) {
+	if summary.Lag != nil && *summary.Lag == 0 {
+		return
+	}
+	if !discovery.PendingSince.IsZero() && (summary.PendingSince == nil || discovery.PendingSince.After(*summary.PendingSince)) {
+		at := discovery.PendingSince
+		summary.PendingSince = &at
+	}
+	if summary.Pending == "" {
+		summary.Pending = "A newer release is waiting to install."
+	}
+}

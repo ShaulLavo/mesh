@@ -1972,6 +1972,7 @@ Available Commands:
   automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
   config      Deliver explicitly approved feed and domain settings
+  fleet       Read update status from every machine in your saved fleet
   policy      Manage automatic updates on this machine
   retry       Retry unfinished targets at the originally approved release
   status      Show persisted fleet update progress
@@ -2328,6 +2329,25 @@ Global Flags:
       --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
+## mesh update fleet
+
+```text
+Read update status from every machine in your saved fleet
+
+Usage:
+  mesh update fleet [flags]
+
+Flags:
+  -h, --help   help for fleet
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
 ## mesh update policy
 
 ```text
@@ -2337,6 +2357,7 @@ Usage:
   mesh update policy [command]
 
 Available Commands:
+  forget      Release update history retained for one machine
   off         Stop granting automatic updates on this machine
   set         Enable automatic updates on this machine
   show        Show this machine's update policy
@@ -2352,6 +2373,25 @@ Global Flags:
       --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 
 Use "mesh update policy [command] --help" for more information about a command.
+```
+
+## mesh update policy forget
+
+```text
+Release update history retained for one machine
+
+Usage:
+  mesh update policy forget DEPENDENT_ID [flags]
+
+Flags:
+  -h, --help   help for forget
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh update policy off

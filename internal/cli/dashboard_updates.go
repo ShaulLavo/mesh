@@ -19,8 +19,7 @@ const dashboardUpdateInterval = 30 * time.Second
 const dashboardUpdateDeadline = 5 * time.Second
 
 type dashboardUpdateBinding struct {
-	Host                     update.Host
-	Automatic, Configuration bool
+	Host update.Host
 }
 type dashboardUpdateSelection struct {
 	Bindings    []dashboardUpdateBinding
@@ -81,12 +80,7 @@ func (w *dashboardUpdateWatcher) observe(ctx context.Context, selection dashboar
 			break
 		}
 		source := DashboardUpdateSource{Coordinator: binding.Host}
-		if binding.Automatic {
-			source.Automatic = readDashboardStatus[update.AutomaticStatus](ctx, w.caller, binding.Host, "automatic.status", nil)
-		}
-		if binding.Configuration && ctx.Err() == nil {
-			source.Configuration = readDashboardStatus[update.ConfigurationStatus](ctx, w.caller, binding.Host, "configuration.status", update.Operation{})
-		}
+		source.Configuration = readDashboardStatus[update.ConfigurationStatus](ctx, w.caller, binding.Host, "configuration.status", update.Operation{})
 		result = append(result, source)
 	}
 	return result
@@ -136,76 +130,51 @@ func readDashboardUpdateSelection(ctx context.Context, stateDir, localID string)
 		return selection, fmt.Errorf("open saved updates: %w", err)
 	}
 	local := update.LocalHost(stateDir, localID)
-	automatic, err := store.ReadAutomatic(ctx)
-	if selection.unavailable(local, true, err) {
-		automatic = update.AutomaticStatus{}
-	}
-	consent, err := store.RecipientConsent(ctx)
-	if selection.unavailable(update.Host{}, true, err) {
-		consent = update.RecipientConsent{}
-	}
 	grant, err := store.ConfigurationGrant(ctx)
-	if selection.unavailable(update.Host{}, false, err) {
+	if selection.unavailable(update.Host{}, err) {
 		grant = update.ConfigurationGrant{}
 	}
 	configuration, err := store.ConfigurationStatus(ctx, "")
-	if selection.unavailable(local, false, err) {
+	if selection.unavailable(local, err) {
 		configuration = update.ConfigurationStatus{}
 	}
-	selection.addLocal(local, automatic, configuration)
-	if consent.Enabled || grant.UsageFeed || grant.DomainPolicy {
-		selection.addRecipientBindings(localID, consent, grant)
+	selection.addLocal(local, configuration)
+	if grant.UsageFeed || grant.DomainPolicy {
+		selection.addRecipientBindings(localID, grant)
 	}
 	data, err := json.Marshal(struct {
-		Policy                 *update.AutomaticPolicy
-		Consent                update.RecipientConsent
 		Grant                  update.ConfigurationGrant
 		ChangeID, ChangeDigest string
 		ConfigurationRevision  uint64
 		Bindings               []dashboardUpdateBinding
 		Problems               []DashboardUpdateSource
-	}{dashboardAutomaticPolicy(automatic), consent, grant, dashboardConfigurationIdentity(configuration), dashboardConfigurationDigest(configuration), configuration.Revision, selection.Bindings, selection.Problems})
+	}{grant, dashboardConfigurationIdentity(configuration), dashboardConfigurationDigest(configuration), configuration.Revision, selection.Bindings, selection.Problems})
 	if err != nil {
 		return selection, fmt.Errorf("identify dashboard enrollment: %w", err)
 	}
 	selection.Fingerprint = sha256.Sum256(data)
 	return selection, nil
 }
-func (s *dashboardUpdateSelection) unavailable(host update.Host, automatic bool, err error) bool {
+func (s *dashboardUpdateSelection) unavailable(host update.Host, err error) bool {
 	if err == nil {
 		return false
 	}
 	source := DashboardUpdateSource{Coordinator: host}
 	observation := DashboardStatusObservation{State: DashboardStatusUnavailable, Problem: err.Error()}
-	if automatic {
-		source.Automatic = &DashboardStatus[update.AutomaticStatus]{Observation: observation}
-	} else {
-		source.Configuration = &DashboardStatus[update.ConfigurationStatus]{Observation: observation}
-	}
+	source.Configuration = &DashboardStatus[update.ConfigurationStatus]{Observation: observation}
 	s.Problems = append(s.Problems, source)
 	return true
 }
-func (s *dashboardUpdateSelection) addRecipientBindings(localID string, consent update.RecipientConsent, grant update.ConfigurationGrant) {
+func (s *dashboardUpdateSelection) addRecipientBindings(localID string, grant update.ConfigurationGrant) {
 	path, err := ConfigPath()
 	var fleet update.Fleet
 	if err == nil {
 		fleet, err = update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
 	}
-	if consent.Enabled {
-		s.unavailable(update.Host{}, true, s.addBinaryRecipient(localID, consent, fleet, err))
-	}
+
 	if grant.UsageFeed || grant.DomainPolicy {
-		s.unavailable(update.Host{}, false, s.addConfigurationRecipient(localID, grant, fleet, err))
+		s.unavailable(update.Host{}, s.addConfigurationRecipient(localID, grant, fleet, err))
 	}
-}
-func (s *dashboardUpdateSelection) addBinaryRecipient(localID string, consent update.RecipientConsent, fleet update.Fleet, fleetErr error) error {
-	if fleetErr != nil {
-		return fmt.Errorf("read pinned binary coordinator fleet: %w", fleetErr)
-	}
-	if consent.LocalHostID != localID || consent.Membership != fleet.Digest() {
-		return errors.New("saved binary enrollment differs from local identity or pinned fleet")
-	}
-	return s.addPinned(fleet, consent.CoordinatorID, true)
 }
 func (s *dashboardUpdateSelection) addConfigurationRecipient(localID string, grant update.ConfigurationGrant, fleet update.Fleet, fleetErr error) error {
 	if fleetErr != nil {
@@ -214,26 +183,24 @@ func (s *dashboardUpdateSelection) addConfigurationRecipient(localID string, gra
 	if grant.LocalHostID != localID {
 		return errors.New("configuration grant belongs to another local identity")
 	}
-	return s.addPinned(fleet, grant.CoordinatorID, false)
+	return s.addPinned(fleet, grant.CoordinatorID)
 }
-func (s *dashboardUpdateSelection) addPinned(fleet update.Fleet, id string, automatic bool) error {
+func (s *dashboardUpdateSelection) addPinned(fleet update.Fleet, id string) error {
 	index := slices.IndexFunc(fleet.Members, func(host update.Host) bool { return host.ID == id })
 	if index < 0 {
 		return errors.New("saved coordinator has no exact pinned fleet endpoint")
 	}
-	s.add(fleet.Members[index], automatic, !automatic)
+	s.add(fleet.Members[index])
 	return nil
 }
-func (s *dashboardUpdateSelection) add(host update.Host, automatic, configuration bool) {
+func (s *dashboardUpdateSelection) add(host update.Host) {
 	index := slices.IndexFunc(s.Bindings, func(binding dashboardUpdateBinding) bool {
 		return binding.Host.ID == host.ID && binding.Host.Endpoint == host.Endpoint
 	})
 	if index < 0 {
-		s.Bindings = append(s.Bindings, dashboardUpdateBinding{host, automatic, configuration})
+		s.Bindings = append(s.Bindings, dashboardUpdateBinding{host})
 		return
 	}
-	s.Bindings[index].Automatic = s.Bindings[index].Automatic || automatic
-	s.Bindings[index].Configuration = s.Bindings[index].Configuration || configuration
 }
 func existingDashboardUpdateCaller(stateDir, localID string) update.Caller {
 	host, key, err := identity.LoadPrivate(stateDir)
@@ -243,12 +210,6 @@ func existingDashboardUpdateCaller(stateDir, localID string) update.Caller {
 	return update.Client{ID: host.ID, Key: key}
 }
 
-func dashboardAutomaticPolicy(status update.AutomaticStatus) *update.AutomaticPolicy {
-	if status.Record == nil {
-		return nil
-	}
-	return &status.Record.Policy
-}
 func dashboardConfigurationIdentity(status update.ConfigurationStatus) string {
 	if status.Change == nil {
 		return ""
@@ -262,18 +223,15 @@ func dashboardConfigurationDigest(status update.ConfigurationStatus) string {
 	return status.Change.Proposal.Digest
 }
 
-func (s *dashboardUpdateSelection) addLocal(local update.Host, automatic update.AutomaticStatus, configuration update.ConfigurationStatus) {
-	if automatic.Record != nil {
-		s.unavailable(local, true, s.addLocalCoordinator(local, automatic.Record.Policy.CoordinatorID, true))
-	}
+func (s *dashboardUpdateSelection) addLocal(local update.Host, configuration update.ConfigurationStatus) {
 	if configuration.Change != nil {
-		s.unavailable(local, false, s.addLocalCoordinator(local, configuration.Change.Proposal.CoordinatorID, false))
+		s.unavailable(local, s.addLocalCoordinator(local, configuration.Change.Proposal.CoordinatorID))
 	}
 }
-func (s *dashboardUpdateSelection) addLocalCoordinator(local update.Host, coordinatorID string, automatic bool) error {
+func (s *dashboardUpdateSelection) addLocalCoordinator(local update.Host, coordinatorID string) error {
 	if coordinatorID != local.ID {
 		return errors.New("saved status belongs to another coordinator")
 	}
-	s.add(local, automatic, !automatic)
+	s.add(local)
 	return nil
 }

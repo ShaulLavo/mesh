@@ -89,3 +89,19 @@ func TestHostPolicyNamedPredecessorRequiresFreshDeclaration(t *testing.T) {
 		t.Fatalf("exact predecessor identity after rename: %v, %v", ids, err)
 	}
 }
+
+func TestHostPolicyForgetCLIUsesLocalOwnerControl(t *testing.T) {
+	_, local := setupUpdateCLI(t)
+	var received update.HostDependentForget
+	caller := updateCallFunc(func(_ context.Context, host update.Host, action string, input, _ any) error {
+		if host.ID != local.ID || !update.IsLocal(host) || action != "host-policy.forget" {
+			t.Fatal("forget did not use the local owner control")
+		}
+		received = input.(update.HostDependentForget)
+		return nil
+	})
+	stdout, _, err := executeCommand(t, Dependencies{UpdateCaller: caller}, "update", "policy", "forget", local.ID, "--json")
+	if err != nil || received.ID != local.ID || !strings.Contains(stdout, local.ID) {
+		t.Fatalf("forget command: %+v %s %v", received, stdout, err)
+	}
+}

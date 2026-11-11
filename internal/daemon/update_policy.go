@@ -19,6 +19,14 @@ func (u *updateController) hostPolicy(ctx context.Context, actor update.Verified
 	if ctx.Value(localClientKey{}) != true || remote || actor.ID() != u.id {
 		return nil, errors.New("update policy changes require this machine's owner through its local Unix socket")
 	}
+	if action == "host-policy.forget" {
+		var dependent update.HostDependentForget
+		if err := update.DecodeAutomatic(data, &dependent); err != nil {
+			return nil, fmt.Errorf("read dependent to forget: %w", err)
+		}
+		err := u.coordinator.Store.ForgetHostDependent(ctx, dependent.ID)
+		return dependent, hostControllerError(err)
+	}
 	var change update.HostPolicyChange
 	if err := update.DecodeAutomatic(data, &change); err != nil {
 		return nil, fmt.Errorf("read host policy change: %w", err)

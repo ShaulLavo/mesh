@@ -148,10 +148,37 @@ type HostRename struct {
 }
 
 type HostUpdateSummary struct {
-	Mode     string `json:"mode"`
-	Phase    string `json:"phase"`
-	Revision uint64 `json:"revision"`
-	Problem  string `json:"problem,omitempty"`
+	Mode           string             `json:"mode"`
+	Phase          string             `json:"phase"`
+	Revision       uint64             `json:"revision"`
+	Installation   string             `json:"installation"`
+	Target         *HostUpdateRelease `json:"target"`
+	Head           *HostUpdateRelease `json:"head"`
+	Latest         *HostUpdateRelease `json:"latest"`
+	LatestEpoch    uint32             `json:"latestEpoch"`
+	SourceVerified bool               `json:"sourceVerified"`
+	Lag            *uint64            `json:"lag"`
+	Pending        string             `json:"pending"`
+	WaitingState   string             `json:"waitingState"`
+	WaitingPeer    string             `json:"waitingPeer,omitempty"`
+	PendingSince   *time.Time         `json:"pendingSince"`
+	Soak           time.Duration      `json:"soak"`
+	ObservedAt     *time.Time         `json:"observedAt"`
+	Last           *HostUpdateCommit  `json:"last"`
+	Problem        string             `json:"problem,omitempty"`
+}
+
+type HostUpdateRelease struct {
+	Version     string    `json:"version"`
+	Metadata    string    `json:"metadata"`
+	PublishedAt time.Time `json:"publishedAt"`
+}
+
+type HostUpdateCommit struct {
+	Version  string    `json:"version"`
+	Metadata string    `json:"metadata"`
+	Binary   string    `json:"binary"`
+	At       time.Time `json:"at"`
 }
 
 // HostInfo is the transport representation of one daemon's identity.
