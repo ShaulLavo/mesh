@@ -27,6 +27,7 @@ type HostSource struct {
 type hostHopProof struct {
 	Metadata string
 	Workers  []string
+	Source   release.Manifest
 }
 
 func hostError(err error) error {
@@ -118,7 +119,7 @@ func (u *HostUpdater) tickAvailable(ctx context.Context, state HostUpdate, journ
 		return u.attention(ctx, state, "policy", err)
 	}
 	if state.Owned != nil {
-		return u.resume(ctx, state, policy, journal, exists)
+		return u.resume(ctx, state, policy, journal, exists, nil)
 	}
 	if policy.Mode != HostAutomatic || state.Phase == HostAttention {
 		return nil
@@ -333,7 +334,7 @@ func (s *Store) recordAdoptionMilestone(entry LedgerEntry) error {
 	return s.writeAuthority("host-adoption.json", adoption)
 }
 
-func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostPolicy, journal updateinstall.Status, exists bool) error {
+func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostPolicy, journal updateinstall.Status, exists bool, verified *hostHopProof) error {
 	owned := state.Owned
 	if exists && journal.Request.ID == owned.Request && journal.Request.Generation == owned.Generation && journal.Phase != updateinstall.Accepted && journal.Phase != updateinstall.Staged && journal.Phase != updateinstall.Failed {
 		return nil
@@ -354,11 +355,20 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	if engine.Settings() != owned.Settings {
 		return u.attention(ctx, state, "settings", errors.New("host installation settings changed before acceptance"))
 	}
-	proof, err := u.verifyOwned(ctx, *owned)
-	if err != nil {
-		return u.backoff(ctx, state, err)
+	if verified == nil {
+		proof, err := u.verifyOwned(ctx, *owned)
+		if err != nil {
+			return u.backoff(ctx, state, err)
+		}
+		verified = &proof
 	}
-	engine = engine.WithHostOrigin().WithAcceptance(u.acceptWorkers(proof))
+	return u.stageAndGrant(ctx, state, engine, *verified, journal, exists)
+}
+
+func (u *HostUpdater) stageAndGrant(ctx context.Context, state HostUpdate, engine *updateinstall.Engine, verified hostHopProof, journal updateinstall.Status, exists bool) error {
+	owned := state.Owned
+	engine = engine.WithHostOrigin().WithAcceptance(u.acceptWorkers(verified))
+	var err error
 	if exists && journal.Request.ID == owned.Request && journal.Phase == updateinstall.Failed {
 		_, err = engine.Retry(ctx, owned.Request, owned.Generation)
 	} else {
@@ -366,6 +376,9 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	}
 	if err != nil {
 		return u.backoff(ctx, state, err)
+	}
+	if err := u.Helper(ctx, verified.Source); err != nil {
+		return u.backoff(ctx, state, fmt.Errorf("verify helper before grant: %w", err))
 	}
 	_, err = engine.Grant(ctx, owned.Request, owned.Generation)
 	if err != nil {
@@ -416,6 +429,7 @@ func (u *HostUpdater) verifyOwned(ctx context.Context, owned OwnedRequest) (host
 	if err := u.Helper(ctx, source.Manifest); err != nil {
 		return hostHopProof{}, err
 	}
+	proof.Source = source.Manifest
 	return proof, nil
 }
 
@@ -607,10 +621,11 @@ func (u *HostUpdater) prepare(ctx context.Context, state HostUpdate, policy Host
 	if err := u.Helper(ctx, source.Manifest); err != nil {
 		return u.backoff(ctx, state, fmt.Errorf("verify current running helper: %w", err))
 	}
-	return u.issue(ctx, state, policy, source, next, edge, proof.Metadata, journal, exists)
+	proof.Source = source.Manifest
+	return u.issue(ctx, state, policy, source, next, edge, proof, journal, exists)
 }
 
-func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, next release.PlannedRelease, edge Edge, metadataDigest string, journal updateinstall.Status, exists bool) error {
+func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPolicy, source HostSource, next release.PlannedRelease, edge Edge, proof hostHopProof, journal updateinstall.Status, exists bool) error {
 	engine, err := u.Engine(ctx)
 	if err != nil {
 		return u.backoff(ctx, state, err)
@@ -631,12 +646,12 @@ func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPo
 		generation = journal.Request.Generation + 1
 	}
 	request := updateinstall.Request{ID: id, TargetID: u.ID, Generation: generation, Manifest: next.Manifest, Current: u.currentBuild()}
-	state.Owned = &OwnedRequest{Request: id, Generation: generation, PolicyRevision: policy.Revision, Edge: edge, Installation: request, Metadata: metadataDigest, Position: next.Position, Epoch: source.Epoch, Settings: settings}
+	state.Owned = &OwnedRequest{Request: id, Generation: generation, PolicyRevision: policy.Revision, Edge: edge, Installation: request, Metadata: proof.Metadata, Position: next.Position, Epoch: source.Epoch, Settings: settings}
 	state.Phase, state.Problem, state.NextAttempt = HostInstalling, nil, time.Time{}
 	if err := u.reserve(ctx, policy, state); err != nil {
 		return err
 	}
-	return u.resume(ctx, state, policy, journal, exists)
+	return u.resume(ctx, state, policy, journal, exists, &proof)
 }
 
 func (u *HostUpdater) reserve(ctx context.Context, policy HostPolicy, state HostUpdate) error {
