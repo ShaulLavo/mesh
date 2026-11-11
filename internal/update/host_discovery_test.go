@@ -194,6 +194,9 @@ func assertNoRepeatedEpochReads(t *testing.T, f *discoveryFixture) {
 
 func TestDiscoveryRequiresSignatureAdapterAndExactRootIdentity(t *testing.T) {
 	f := recordedDiscovery(t)
+	if _, err := DiscoverNextHop(t.Context(), f.from, f.at, 1, DiscoveryCursor{}, CacheDiscoveryDocuments(t.TempDir(), release.DocumentSource{}), release.NewPassBudget()); err == nil {
+		t.Fatal("host discovery accepted no document reader")
+	}
 	source := f.source()
 	source.VerifyMetadata = nil
 	if _, err := DiscoverNextHop(t.Context(), f.from, f.at, 1, DiscoveryCursor{}, source, release.NewPassBudget()); err == nil {

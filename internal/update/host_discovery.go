@@ -175,6 +175,9 @@ func SaveDiscoveryCursor(path string, cursor DiscoveryCursor) error {
 // CacheDiscoveryDocuments stores exact digest-addressed bytes. Metadata is still
 // authenticated by VerifyMetadata on every use, including after a restart.
 func CacheDiscoveryDocuments(directory string, upstream release.DocumentSource) release.DocumentSource {
+	if upstream.Read == nil {
+		return upstream
+	}
 	return release.DocumentSource{Read: func(ctx context.Context, ref release.AssetRef, kind release.DocumentKind) ([]byte, error) {
 		return cachedDiscoveryDocument(ctx, directory, upstream, ref, kind)
 	}, VerifyMetadata: upstream.VerifyMetadata}
