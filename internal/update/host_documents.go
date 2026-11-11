@@ -15,7 +15,7 @@ import (
 	"github.com/shaul/mesh/internal/release"
 )
 
-const hostReaderEpoch uint32 = 1
+const hostReaderEpoch = HostReaderEpoch
 const hostHTTPS = "https"
 
 // HostDocuments binds discovery to the same immutable origin as installation.
@@ -23,27 +23,6 @@ const hostHTTPS = "https"
 type HostDocuments struct {
 	Client release.Client
 	Trust  release.TrustRoot
-}
-
-// The signed marker binds this reader's source coordinates independently of
-// the epoch in which a waypoint was originally published.
-type hostSourceReader struct {
-	Schema   int              `json:"schema"`
-	Epoch    uint32           `json:"epoch"`
-	Position release.Position `json:"position"`
-}
-
-func authenticatedSourceReader(data []byte, epoch uint32) (hostSourceReader, error) {
-	var marked struct {
-		Updater *hostSourceReader `json:"updater"`
-	}
-	if err := json.Unmarshal(data, &marked); err != nil {
-		return hostSourceReader{}, fmt.Errorf("update: decode signed source reader: %w", err)
-	}
-	if marked.Updater == nil || marked.Updater.Schema != 1 || marked.Updater.Epoch != epoch {
-		return hostSourceReader{}, errors.New("update: authenticated updater-capable source marker unavailable for this reader epoch")
-	}
-	return *marked.Updater, nil
 }
 
 func (d HostDocuments) Source() release.DocumentSource {
@@ -91,9 +70,9 @@ func (d HostDocuments) current(ctx context.Context, current release.Build, epoch
 	if err != nil {
 		return HostSource{}, hostError(err)
 	}
-	reader, err := authenticatedSourceReader(data, epoch)
-	if err != nil {
-		return HostSource{}, err
+	reader := metadata.Updater
+	if reader == nil || reader.Epoch != epoch {
+		return HostSource{}, errors.New("update: authenticated updater-capable source marker unavailable for this reader epoch")
 	}
 	manifest, err := d.read(ctx, current.Version, release.ManifestAssetName, release.DocumentLimit(release.ManifestDocument))
 	if err != nil {

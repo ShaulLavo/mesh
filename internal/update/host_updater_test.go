@@ -313,10 +313,8 @@ func (f *hostFixture) anchor(number uint64) release.AnchorEntry {
 
 func (f *hostFixture) signMetadata(version string) {
 	metadata := f.metadata[version]
-	data := mustHostJSON(struct {
-		release.UpdateMetadata
-		Updater hostSourceReader `json:"updater"`
-	}{metadata, hostSourceReader{Schema: 1, Epoch: 1, Position: metadata.Position}})
+	metadata.Updater = &release.UpdaterReader{Schema: 1, Epoch: 1, Position: metadata.Position}
+	data := mustHostJSON(metadata)
 	f.files[version+"/"+release.UpdateMetadataAssetName] = data
 	f.files[version+"/mesh-update.sig.json"] = f.signer.envelope(f.t, data)
 }

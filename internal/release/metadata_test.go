@@ -121,3 +121,84 @@ func TestAssetRefBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUpdaterReaderCoordinates(t *testing.T) {
+	for _, kind := range []string{"normal", "waypoint", "absent", "schema", "skipped epoch", "old epoch", "normal ordinal", "normal anchor", "waypoint ordinal", "waypoint anchor", "publication anchor", "overflow"} {
+		t.Run(kind, func(t *testing.T) { testUpdaterCoordinates(t, kind) })
+	}
+}
+
+func testUpdaterCoordinates(t *testing.T, kind string) {
+	m := testUpdateMetadata()
+	m.Updater = &UpdaterReader{Schema: 1, Epoch: m.Epoch, Position: m.Position}
+	switch kind {
+	case "absent":
+		m.Updater = nil
+	case "schema":
+		m.Updater.Schema = 2
+	case "skipped epoch":
+		m.Updater.Epoch = m.Epoch + 2
+	case "old epoch":
+		m.Epoch = 2
+		m.Updater.Epoch = 1
+	case "normal ordinal":
+		m.Updater.Position.Ordinal++
+	case "normal anchor":
+		m.Updater.Position.Anchor = false
+	case "waypoint", "waypoint ordinal", "waypoint anchor", "publication anchor", "overflow":
+		prepareWaypointMetadata(&m, kind)
+	}
+	err := m.Validate()
+	valid := kind == "normal" || kind == "waypoint" || kind == "absent"
+	if valid && err != nil {
+		t.Fatal(err)
+	}
+	if !valid && err == nil {
+		t.Fatal("accepted inconsistent updater source coordinates")
+	}
+}
+
+func prepareWaypointMetadata(m *UpdateMetadata, kind string) {
+	m.Updater.Epoch = m.Epoch + 1
+	m.Updater.Position = Position{Anchor: true, Ordinal: 0}
+	switch kind {
+	case "waypoint ordinal":
+		m.Updater.Position.Ordinal = 1
+	case "waypoint anchor":
+		m.Updater.Position.Anchor = false
+	case "publication anchor":
+		m.Position.Anchor = false
+	case "overflow":
+		m.Epoch = ^uint32(0)
+		m.Updater.Epoch = 0
+	}
+}
+
+func TestUpdateMetadataIgnoresCompatibleUnknownFields(t *testing.T) {
+	m := testUpdateMetadata()
+	m.Updater = &UpdaterReader{Schema: 1, Epoch: m.Epoch, Position: m.Position}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	object["future"] = json.RawMessage(`{"notRequiredByThisReader":true}`)
+	object["updater"] = json.RawMessage(`{"schema":1,"epoch":1,"position":{"anchor":true,"ordinal":2},"future":"compatible"}`)
+	data, err = json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeUpdateMetadata(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Updater == nil || *decoded.Updater != *m.Updater || decoded.Manifest != m.Manifest {
+		t.Fatal("compatible future metadata changed known coordinates")
+	}
+	if _, err := DecodeUpdateMetadata(append(data, []byte(` {}`)...)); err == nil {
+		t.Fatal("trailing document was treated as an unknown field")
+	}
+}

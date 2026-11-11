@@ -18,10 +18,9 @@ func testHostSourceMarker(t *testing.T, kind string) {
 	version := f.current.Version
 	data := mustHostJSON(f.metadata[version])
 	if kind != "missing" {
-		data = mustHostJSON(struct {
-			release.UpdateMetadata
-			Updater hostSourceReader `json:"updater"`
-		}{f.metadata[version], hostSourceReader{Schema: 1, Epoch: 2, Position: release.Position{Anchor: true, Ordinal: 0}}})
+		metadata := f.metadata[version]
+		metadata.Updater = &release.UpdaterReader{Schema: 1, Epoch: 2, Position: release.Position{Anchor: true, Ordinal: 0}}
+		data = mustHostJSON(metadata)
 	}
 	f.files[version+"/"+release.UpdateMetadataAssetName] = data
 	if kind != "altered marker" {
@@ -36,17 +35,16 @@ func TestHostWaypointUsesSignedNewEpochPosition(t *testing.T) {
 	f := newHostFixture(t)
 	version := f.current.Version
 	metadata := f.metadata[version]
-	data := mustHostJSON(struct {
-		release.UpdateMetadata
-		Updater hostSourceReader `json:"updater"`
-	}{metadata, hostSourceReader{Schema: 1, Epoch: 2, Position: release.Position{Anchor: true, Ordinal: 7}}})
+	metadata.Position.Ordinal = 7
+	metadata.Updater = &release.UpdaterReader{Schema: 1, Epoch: 2, Position: release.Position{Anchor: true, Ordinal: 0}}
+	data := mustHostJSON(metadata)
 	f.files[version+"/"+release.UpdateMetadataAssetName] = data
 	f.files[version+"/mesh-update.sig.json"] = f.signer.envelope(t, data)
 	source, err := f.documents.current(t.Context(), f.current, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.Epoch != 2 || source.Position.Ordinal != 7 || source.Position == metadata.Position {
+	if source.Epoch != 2 || source.Position != (release.Position{Anchor: true, Ordinal: 0}) || source.Position == metadata.Position {
 		t.Fatalf("waypoint position inferred from publication: %+v", source)
 	}
 	var publication release.UpdateMetadata
