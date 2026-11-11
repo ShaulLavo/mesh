@@ -238,8 +238,8 @@ and touches the network only when a check is due.
    goes to failure handling below.
 3. Choose the target. With no gates it is the checked latest release. With
    gates it is the newest release every reachable gate has verified.
-4. Stop when the executing digest equals the target's artifact, when the
-   executing version is newer, or when the target is quarantined.
+4. Stop when the executing digest equals the target's artifact or the
+   executing version is newer. Exclude quarantined transitions while planning.
 5. Check the installation: a Mesh-managed executable
    (`ValidateInstallationPath`), service preflight, required mount, free space,
    and a current, running helper.
@@ -254,8 +254,14 @@ hop list is a record for status, never an instruction.
 **Authority.** The updater calls the engine in-process, as `mesh update --local`
 does through the daemon today (`updateController.install`,
 `internal/daemon/update.go:116`). A host's own identity is always an update
-administrator on itself. The request carries no `Automatic` reference, so
-nothing depends on a coordinator's consent. Remote update controls keep
+administrator on itself. The request carries no coordinator `Automatic`
+reference. A separate local ownership record binds each host-updater request
+to its host policy revision. The engine checks that revision under the same
+lock used to commit stage, retry and activation grants. `policy off` takes
+that lock and returns only after preventing further grants. A policy change
+during a download prevents the later stage or grant. Missing, malformed or
+unreadable policy fails closed. Manual mode still reconciles already-granted
+work and reports its result, but starts no new hop. Remote update controls keep
 requiring an enrolled administrator. Only a local Unix-socket caller may change
 `HostPolicy`: `mesh update policy show`, `set` and `off`.
 
@@ -420,13 +426,23 @@ Rules for schema changes, enforced by the proofs:
 `prove-release-transition.sh` gains a rollback leg after the candidate's
 restart check: stop the candidate, start the retained source executable on the
 candidate-written state, require it to list the retained session, attach,
-exchange a token, and keep the recovery record byte-identical. Receipt schema 2
-adds `retainedReopenedCandidateState`. `VerifyTransitionReceipt` accepts schema
-1 for history and schema 2 for automatic hops.
+exchange a token, and keep the recovery record byte-identical.
 
-A migration that fails halfway leaves the database at an intermediate version
-that no proof ran. Goose commits each migration with its version, so the
-exposure is one migration.
+Forward transition receipts retain schema 1 and their exact existing fields.
+The manifest's `proof` continues to address that legacy-readable receipt.
+Rollback results live in a separate content-addressed asset, bound to the
+forward receipt digest, source and target executable digests, platform and
+tested state boundaries. Signed update metadata binds its digest. Automatic
+hops require both proofs. The actual v0.1.249 reader must accept generated
+forward receipts, and the v0.1.196 helper must accept the frozen journal.
+
+Goose commits each migration separately. The proof injects failure or
+interruption before and after every committed migration and exercises
+representative writes and changed persistent configuration at every reachable
+state. From each state, the retained executable must start and preserve live
+session I/O and recovery records. Every intermediate state must remain
+compatible, or the migration batch must become atomic. A failing seed needs
+a compatible tested path before rollout. Database snapshots are not restored.
 
 ### Sessions and services across hops
 
@@ -436,9 +452,12 @@ exposure is one migration.
 - The hard link to each replaced executable stays while a live worker runs it
   (`internal/updateinstall/prune.go:20`). A session started three hops ago
   keeps its image.
-- The planner refuses a chain when a live worker's protocol is outside any
-  hop's worker range, and names the session. The host is then `blocked` until
-  that session ends. Dropping a worker protocol needs an owner decision.
+- Release compatibility includes all retained worker implementations that can
+  still run, independently of the direct daemon-source window. CI keeps an
+  oldest-worker fixture alive through several daemon and helper upgrades and
+  rollback at every hop. An incompatible candidate fails publication. A live
+  session must not prevent every later update or require termination to finish
+  this plan.
 - New sessions stay gated during validation (`internal/updategate`).
 - The daemon's own listeners restart with it. A process inside a session, such
   as the PC's model proxy, keeps running and keeps its sockets. Mesh routes to
@@ -450,14 +469,15 @@ exposure is one migration.
 | What happened | What the updater does |
 | --- | --- |
 | Check, download, space, mount, lock or preflight failed before activation | Retry with backoff from 15 minutes to six hours. The daemon was never stopped. |
-| Activation failed and rollback verified | Quarantine that target on this host, report it, and wait for a newer release. A deterministic failure must not restart the daemon in a loop. |
+| Activation failed and rollback verified | Persist the failed transition's source and target digests and platform. Exclude it from every later plan, including plans for newer final releases. Replan through a proven alternative or wait for one. |
 | Rollback failed | `attention`. No further hops. The helper keeps both executables and the journal. Recovery follows `.internal/helper-recovery.md`. |
 | A manual operation owns the journal | Wait, and resume when it finishes. |
 | A reachable gate reports failure on the target | Hold that release. |
 
-`mesh update --local --yes` clears a quarantine by hand and runs the plan now.
-A newer release is a new attempt with no action from anyone. Reports go out
-through status, below.
+An explicit local retry may clear a named failed transition. A newer final
+release does not clear it. Quarantine records survive restarts and remain
+until no retained route depends on them; they are not evicted by eight newer
+releases. Reports go out through status, below.
 
 ### Fleet order
 
@@ -612,7 +632,7 @@ mode constant is manual, so intermediate releases change no behavior.
 | --- | --- | --- | --- |
 | 1 | Graph tool, policy file, upgrade map type | none | 1.5 |
 | 2 | Publisher proves the supported set and refuses gaps | 1 | 3.5 |
-| 3 | Rollback leg and receipt schema 2 | 2 | 2.5 |
+| 3 | Rollback boundaries and separate rollback proofs | 2 | 2.5 |
 | 4 | Chain planner | 1 | 2 |
 | 5 | Helper stays current and running | none | 2 |
 | 6 | Host updater | 4, 5 | 5 |
@@ -652,10 +672,13 @@ Shard the sources across matrix jobs if a platform passes ten minutes.
 `scripts/test-release-transition.py`, `scripts/assemble-release-compatibility.py`,
 `internal/release/bridge.go`, `integration/release_transition_checkpoint.sh`.
 The pull-request job from unit 2 runs the rollback leg too. Tests: a candidate
-with a migration the source cannot read fails the proof; schema 1 receipts
-still verify; a schema 2 receipt without the rollback fact is refused for
-automatic hops. The rollback leg becomes required for publication only after
-it passes for every seed on this unit's pull request.
+with an unreadable intermediate migration state fails the proof; failure and
+interruption at every migration boundary preserve rollback and session I/O;
+the actual old receipt reader accepts the generated schema 1 forward proof;
+an automatic hop without the separate matching rollback proof is refused.
+The rollback leg becomes required for publication only after it passes for
+every seed on this unit's pull request. Worker fixtures created by the oldest
+retained implementation stay alive across several upgrades and rollbacks.
 
 **Unit 4: planner.** Files: `internal/release/plan.go` and its test,
 `internal/cli/update_bridge.go`, `internal/cli/update_readiness.go`; delete
@@ -680,7 +703,10 @@ unit is inactive after boot.
 `internal/daemon/app.go`, `internal/updatenotice/notice.go`. Tests with the
 real engine and a fake service: a two-hop plan commits both hops with one
 worker identity throughout; a daemon restart between hops resumes; a
-rolled-back hop quarantines the target and a newer release proceeds; a failure
+rolled-back hop remains excluded when more than eight newer targets still
+require it, and a verified alternative proceeds; policy off and revision
+changes race download, stage, retry and grant without issuing later work;
+manual mode reconciles already-issued work; malformed policy fails closed; a failure
 before activation backs off without stopping the daemon; a manual operation in
 the journal makes the updater wait; a package-owned path and a development
 build stay manual; an enabled recipient consent keeps it idle.
@@ -707,21 +733,29 @@ Three scenarios on each native platform:
    candidate, and require the same worker PID, shell PID, listener PID and
    terminal I/O afterwards. Then force a failed candidate and require a
    verified rollback with the session intact.
-2. *Automatic chain.* Build three labelled releases from the source under
-   test, serve manifests that allow only first to second and second to third,
-   and require the host updater to plan and run both hops unattended with the
-   session alive after each. Variants: a reboot-equivalent helper restart
-   between hops, and a failing second hop that rolls back and quarantines.
-3. *Activation release forever.* Once the activation release exists, install
-   its published artifact and let its own updater reach the candidate through
-   published manifests and the map. As it ages, this becomes a real multi-hop
-   catch-up through retained anchors.
+2. *Automatic chain.* Before automatic defaults are enabled, publish an
+   updater-capable release that remains manual by default. Install that exact
+   published build in explicit automatic mode and run through an actually
+   installed intermediate daemon and helper to the candidate. Require both
+   hops unattended with the oldest retained worker alive after each. Variants
+   interrupt helper replacement, restart between hops, and fail the second
+   hop to verify rollback and persistent failed-transition quarantine. Three
+   labelled builds of current source may supplement this test.
+3. *Activation release forever.* Retain the first published updater build as
+   an installed baseline. Its original updater must reach every candidate
+   through retained releases and discovery metadata. Include a deliberately
+   incompatible future format reached through a compatible waypoint.
 
 The service manager is real: a systemd user manager on Linux runners and the
 launchd `gui` domain on macOS runners. Confirm both work on hosted runners
-before building the rest. Where one does not, that platform keeps the existing
-external service-command provider and the real manager is covered in the
-rollout. The job joins `Complete CI gate` and runs on pull requests that touch
+before building the rest. A platform without a usable hosted manager runs the
+installed proof in a disposable CI VM with the real native manager. A command
+provider is a supplemental test and does not satisfy this gate. Keep a terminal
+attached and a service request or stream active across activation, forced
+rollback and helper replacement. Verify reconnection, unchanged worker,
+shell and listener identities, the route gap, helper process identity,
+failed-start restoration and interruption recovery before rollout. The job
+joins `Complete CI gate` and runs on pull requests that touch
 update, storage, migration, worker, protocol, daemon or release-script paths,
 so upgrade breakage is caught before merge.
 
@@ -735,9 +769,12 @@ becomes the activation release.
 
 **Unit 10: fleet activation.** The runbook below. No code.
 
-**Unit 11: removal.** Delete `internal/update/automatic*.go`, `joined.go`,
+**Unit 11: removal.** Delete only consent-policy-specific code in
+`internal/update/automatic*.go`,
 `internal/cli/update_automatic.go`, `integration/automatic_fleet_updates.sh`
-and their tests and docs sections. Add `docs/adr/009-each-host-updates-itself.md`.
+and its tests and docs sections. Retain `internal/update/joined.go` and the
+ordinary coordinator's installation-joining and cancellation tests; those
+functions serve manual fleet operations. Add `docs/adr/009-each-host-updates-itself.md`.
 Mark plan 14's binary steps closed and turn
 `/work/reports/mesh-auto-update/PLAN.md` into a pointer to this file.
 
@@ -762,9 +799,8 @@ all four fleet pairs. On each machine `mesh update --local --check --json
 session's PID, a running and current helper, `mesh update policy show`, and
 `mesh update fleet`. Then wait for the next published release and watch the Pi
 take it with no action. That second update is the proof of autonomy. Measure
-the route gap and what an attached remote client sees during the restart. If
-an attached client is disrupted, bring that back as an owner decision before
-continuing.
+the route gap and what an attached remote client sees during the restart. Fix
+session or service reconnection failures before continuing rollout.
 
 **3. VPS.** The same, in the root account its daemon uses. The Pi and the VPS
 are the canaries from here on.
@@ -804,8 +840,6 @@ a timeout or editing the journal.
 - Downgrades. A host never installs an older release.
 - Pre-release or alternate channels.
 - Automatic repair after a failed rollback. That stays a person's decision.
-- Product code for the one-time transition, unless unit 8 proves the
-  conditional helper refresh is needed.
 
 ## Risks and decisions
 
@@ -825,10 +859,9 @@ a timeout or editing the journal.
    between. An Ed25519 signature over the manifest, checked against a key
    compiled into Mesh, needs no dependency and about three agent hours. It
    needs a signing secret, which is the owner's to add. Owner decision.
-4. **The seed rollback leg may fail.** If v0.1.249 cannot run on the candidate's
-   schema, the PC's hop has no proven rollback. Unit 3's pull request finds
-   out. A failing seed comes back to the design owner before the leg becomes
-   required and before any PC step.
+4. **The seed rollback leg may fail.** Unit 3 proves every reachable migration
+   boundary before activation. A failure requires a compatible migration or
+   adoption path and prevents rollout until that path passes.
 5. **The old helper is the judge.** The v0.1.196 helper must accept the
    activation daemon's health. Unit 8's legacy pair test answers this before
    the rollout.
@@ -837,11 +870,11 @@ a timeout or editing the journal.
 7. **Proof time grows** from 8 to at most 40 sources per platform. Unit 2
    measures it and shards if needed.
 8. **Restart frequency.** Releases publish two or three times a day. The
-   30-minute check and the PC's two-hour soak collapse bursts. If daemon
-   restarts disturb attached clients, a quiet-while-attached rule is a small
-   follow-up decision after rollout step 2.
-9. **A long-lived session can block a host** when a future release drops its
-   worker protocol. The host reports the session and waits.
+   30-minute check and the PC's two-hour soak collapse bursts. CI and rollout
+   must prove client reconnection and service recovery before enabling defaults.
+9. **Workers outlive the daemon support window.** Retain their protocol
+   compatibility and exercise the oldest live-worker fixture through later
+   upgrades and rollback. Publication must fail if that guarantee regresses.
 
 ## Evidence
 
