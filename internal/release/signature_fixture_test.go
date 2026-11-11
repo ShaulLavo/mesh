@@ -81,6 +81,7 @@ func newSigningFixture(t *testing.T) *signingFixture {
 		t.Fatal(err)
 	}
 	trust := EmbeddedTrustRoot()
+	trust.provenance = nil
 	trust.Trusted = trusted
 	return &signingFixture{trust: trust, issuer: issuer, issuerKey: issuerKey, ctKey: ctKey, log: log, when: time.Now().Add(-45 * time.Minute).Truncate(time.Second)}
 }
