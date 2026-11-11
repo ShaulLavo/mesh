@@ -45,7 +45,7 @@ func (input HostReaderInput) validate() error {
 	if err := input.Target.validate(); err != nil {
 		return err
 	}
-	if len(input.Forward) == 0 || len(input.Forward) > release.DocumentLimit(release.ReceiptDocument) || len(input.Rollback) == 0 || len(input.Rollback) > release.DocumentLimit(release.ReceiptDocument) {
+	if len(input.Forward) == 0 || len(input.Forward) > release.MaxTransitionProofBytes || len(input.Rollback) == 0 || len(input.Rollback) > release.MaxTransitionProofBytes {
 		return errors.New("update: host reader forward or rollback proof exceeds its bound or is missing")
 	}
 	for _, worker := range input.Workers {

@@ -45,14 +45,14 @@ refresh. Metadata binds exact manifest bytes. Each hop rechecks its exact
 forward receipt, complete rollback proof and retained worker implementations.
 Worker checks run again at stage, retry and grant acceptance.
 
-The source adapter currently implements the proposed signed field
-`updater: {schema: 1, epoch, position}`. Its coordinates are separate from the
-publication epoch and position, so a waypoint can publish under the old epoch
-and explicitly identify its source position for the new reader. Missing,
-altered or unsupported markers fail closed. This parser needs the parent to
-reconcile the shared metadata/publisher contract. The original source binary's
-verification command is still a cross-unit dependency; no public CLI or fake
-reader command has been added here.
+The source adapter uses shared `release.UpdateMetadata.Updater` and
+`release.UpdaterReader`. Normal reader coordinates equal publication
+coordinates. A waypoint is an old-epoch anchor whose marker names the next
+epoch's anchor 0. Missing, altered, skipped-epoch or inconsistent markers fail
+closed. The compiled reader epoch must equal its authenticated source marker.
+The hidden, read-only `mesh update-reader` command verifies byte-preserving
+offline packets using the actual executing source identity. Its exact contract
+and executable test evidence are in [the reader evidence](17-host-reader.md).
 
 ## Verification
 
@@ -99,11 +99,12 @@ baseline entries were removed after fixing them in touched daemon code.
 
 ## Remaining gates
 
-The parent must deliver and integrate the corrected signing-cache and rollback
-source, settle the shared marker and original-source command, arrange the
-independent review and require green CI before merge. The PR remains a draft
-until these cross-unit gates are complete. No installed-platform or fleet
-activation claim is made by these fixture tests.
+The corrected rollback source at `512fb62b` is integrated. The parent must
+deliver corrected signing-cache source, arrange independent review and require
+green CI before merge. The shared marker and original-source command contracts
+are implemented. The PR remains a draft until the remaining cross-unit gates
+are complete. No installed-platform or fleet activation claim is made by these
+fixture tests.
 
 The prepared tree remains for that review and belongs to the parent for final
 retirement. Temporary binaries, test state and workers are removed after their
