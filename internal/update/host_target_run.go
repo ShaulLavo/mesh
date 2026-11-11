@@ -105,7 +105,7 @@ func (u *HostUpdater) tickTarget(ctx context.Context, state HostUpdate, policy H
 		return u.backoff(ctx, state, err)
 	}
 	nextIntent := *intent
-	nextIntent.Status.Phase, nextIntent.Status.Next = HostTargetReserved, &prepared.plan.Next
+	nextIntent.Status.Phase, nextIntent.Status.Next = HostTargetReserved, prepared.plan.Next
 	if _, err := u.reserveTarget(ctx, policy, intent, &nextIntent, prepared); err != nil {
 		return err
 	}

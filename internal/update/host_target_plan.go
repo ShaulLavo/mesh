@@ -47,9 +47,16 @@ func (u *HostUpdater) planTarget(ctx context.Context, input HostTargetSubmission
 	if err := verifyHostSource(current, source); err != nil {
 		return preparedTarget{}, err
 	}
-	metadata, data, target, err := readLocalTarget(ctx, input.Version, current, source.Epoch, pin, documents)
+	return u.planKnownTarget(ctx, input, policy, pin, preview, current, source, documents, health.Workers)
+}
+
+func (u *HostUpdater) planKnownTarget(ctx context.Context, input HostTargetSubmission, policy HostPolicy, pin *HostTargetRelease, preview bool, current release.Build, source HostSource, documents release.DocumentSource, workers []updateinstall.Worker) (preparedTarget, error) {
+	metadata, data, target, err := u.readTargetSelection(ctx, input.Version, current, source.Epoch, pin, documents, preview)
 	if err != nil {
 		return preparedTarget{}, err
+	}
+	if preview && target.Binary == current.Digest && target.Version == current.Version {
+		return preparedTarget{plan: HostTargetPlan{PolicyRevision: policy.Revision, CurrentDigest: current.Digest, Target: target}, current: current, source: source}, nil
 	}
 	limit, err := u.targetOrder(ctx, policy, current, preview)
 	if err != nil {
@@ -64,7 +71,7 @@ func (u *HostUpdater) planTarget(ctx context.Context, input HostTargetSubmission
 	if !newerHostVersion(selected.Version, current.Version) {
 		return preparedTarget{}, errors.New("update: predecessors hold the selected target at the current release")
 	}
-	prepared, err := u.planTargetRoute(ctx, input, current, source, selected, selectedData, documents, limit, health.Workers)
+	prepared, err := u.planTargetRoute(ctx, input, current, source, selected, selectedData, documents, limit, workers)
 	if err != nil {
 		return preparedTarget{}, err
 	}
@@ -79,27 +86,33 @@ func (u *HostUpdater) targetOrder(ctx context.Context, policy HostPolicy, curren
 	return u.Order.Refresh(ctx, policy, current, u.now())
 }
 
-func readLocalTarget(ctx context.Context, version string, current release.Build, epoch uint32, pin *HostTargetRelease, documents release.DocumentSource) (release.UpdateMetadata, []byte, HostTargetRelease, error) {
+func readLocalTarget(ctx context.Context, version string, current release.Build, epoch uint32, pin *HostTargetRelease, documents release.DocumentSource, preview bool) (release.UpdateMetadata, []byte, HostTargetRelease, error) {
 	metadata, data, err := readTargetMetadata(ctx, version, epoch, pin, documents)
 	if err != nil {
 		return metadata, nil, HostTargetRelease{}, err
 	}
+	target, err := targetReleaseEvidence(ctx, metadata, data, current, pin, documents, preview)
+	return metadata, data, target, err
+}
+
+func targetReleaseEvidence(ctx context.Context, metadata release.UpdateMetadata, data []byte, current release.Build, pin *HostTargetRelease, documents release.DocumentSource, preview bool) (HostTargetRelease, error) {
 	manifest, err := readTargetManifest(ctx, metadata, documents)
 	if err != nil {
-		return metadata, nil, HostTargetRelease{}, err
+		return HostTargetRelease{}, err
 	}
 	artifact, err := manifest.Artifact(current.Platform)
 	if err != nil {
-		return metadata, nil, HostTargetRelease{}, hostError(err)
+		return HostTargetRelease{}, hostError(err)
 	}
-	target := HostTargetRelease{Version: version, Metadata: discoveryDigest(data), Manifest: metadata.Manifest, Binary: artifact.BinarySHA256}
-	if manifest.Version != version || !newerHostVersion(version, current.Version) || artifact.BinarySHA256 == current.Digest {
-		return metadata, nil, target, errors.New("update: local target must advance the executing release")
+	target := HostTargetRelease{Version: metadata.Version, Metadata: discoveryDigest(data), Manifest: metadata.Manifest, Binary: artifact.BinarySHA256}
+	currentTarget := preview && manifest.Version == current.Version && artifact.BinarySHA256 == current.Digest && manifest.Commit == current.Commit
+	if manifest.Version != metadata.Version || !currentTarget && (!newerHostVersion(metadata.Version, current.Version) || artifact.BinarySHA256 == current.Digest) {
+		return target, errors.New("update: local target must advance the executing release")
 	}
 	if pin != nil && *pin != target {
-		return metadata, nil, target, errors.New("update: explicitly approved target evidence changed")
+		return target, errors.New("update: explicitly approved target evidence changed")
 	}
-	return metadata, data, target, nil
+	return target, nil
 }
 
 func readTargetMetadata(ctx context.Context, version string, epoch uint32, pin *HostTargetRelease, documents release.DocumentSource) (release.UpdateMetadata, []byte, error) {
@@ -217,7 +230,7 @@ func (u *HostUpdater) checkTargetHop(ctx context.Context, input HostTargetSubmis
 	if err != nil {
 		return preparedTarget{}, false, err
 	}
-	result := preparedTarget{current: current, source: source, next: next, plan: HostTargetPlan{Next: HostTargetRelease{Version: next.Manifest.Version, Binary: artifact.BinarySHA256}}}
+	result := preparedTarget{current: current, source: source, next: next, plan: HostTargetPlan{Next: &HostTargetRelease{Version: next.Manifest.Version, Binary: artifact.BinarySHA256}}}
 	retrying := input.RetryEdge != nil && *input.RetryEdge == edge
 	if failed && !retrying || limit.failed(edge) {
 		return result, true, nil

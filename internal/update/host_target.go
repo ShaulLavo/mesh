@@ -62,10 +62,14 @@ func (i hostTargetIntent) validate() error {
 }
 
 func validateTargetSubmission(input HostTargetSubmission) error {
+	return validateTargetInput(input, false)
+}
+
+func validateTargetInput(input HostTargetSubmission, preview bool) error {
 	if !hostDigest(input.CurrentDigest) || input.ExpectedRevision == math.MaxUint64 {
 		return errors.New("update: local target requires current executable digest and available revision")
 	}
-	if _, err := release.CompareVersions(input.Version, input.Version); err != nil {
+	if _, err := release.CompareVersions(input.Version, input.Version); err != nil && !(preview && input.Version == "latest") {
 		return hostError(err)
 	}
 	if input.RetryEdge != nil && (input.RetryEdge.From != input.CurrentDigest || !hostDigest(input.RetryEdge.To) || input.RetryEdge.Platform != release.CurrentPlatform()) {
@@ -140,8 +144,8 @@ func (u *HostUpdater) loadTarget(ctx context.Context) (*hostTargetIntent, error)
 	return u.Store.hostTarget()
 }
 
-func (u *HostUpdater) validateTargetSnapshot(ctx context.Context, input HostTargetSubmission) (HostPolicy, *hostTargetIntent, error) {
-	if err := validateTargetSubmission(input); err != nil {
+func (u *HostUpdater) validateTargetSnapshot(ctx context.Context, input HostTargetSubmission, preview bool) (HostPolicy, *hostTargetIntent, error) {
+	if err := validateTargetInput(input, preview); err != nil {
 		return HostPolicy{}, nil, err
 	}
 	unlock, err := u.Store.lockContext(ctx)
@@ -187,7 +191,7 @@ func (u *HostUpdater) SubmitLocalTarget(ctx context.Context, input HostTargetSub
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	u.observed, u.limit = release.Build{}, nil
-	policy, prior, err := u.validateTargetSnapshot(ctx, input)
+	policy, prior, err := u.validateTargetSnapshot(ctx, input, false)
 	if err != nil {
 		return HostTargetStatus{}, err
 	}
@@ -218,7 +222,7 @@ func (u *HostUpdater) SubmitLocalTarget(ctx context.Context, input HostTargetSub
 		return HostTargetStatus{}, hostError(err)
 	}
 	intent := &hostTargetIntent{Schema: 1, Submission: input,
-		Status: HostTargetStatus{Schema: 1, Revision: input.ExpectedRevision + 1, PolicyRevision: policy.Revision, Phase: HostTargetReserved, CurrentDigest: input.CurrentDigest, RunningDigest: input.CurrentDigest, Target: prepared.plan.Target, Next: &prepared.plan.Next, PendingSince: u.now()}}
+		Status: HostTargetStatus{Schema: 1, Revision: input.ExpectedRevision + 1, PolicyRevision: policy.Revision, Phase: HostTargetReserved, CurrentDigest: input.CurrentDigest, RunningDigest: input.CurrentDigest, Target: prepared.plan.Target, Next: prepared.plan.Next, PendingSince: u.now()}}
 	return u.reserveTarget(ctx, policy, prior, intent, prepared)
 }
 
@@ -239,12 +243,12 @@ func (u *HostUpdater) PlanLocalTarget(ctx context.Context, input HostTargetSubmi
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	u.observed, u.limit = release.Build{}, nil
-	policy, prior, err := u.validateTargetSnapshot(ctx, input)
+	policy, prior, err := u.validateTargetSnapshot(ctx, input, true)
 	if err != nil {
 		return HostTargetPlan{}, err
 	}
 	if !targetSubmissionSame(prior, input) {
-		if err := targetSubmissionCAS(prior, input); err != nil {
+		if err := targetPreviewCAS(prior, input); err != nil {
 			return HostTargetPlan{}, err
 		}
 	}
@@ -253,6 +257,17 @@ func (u *HostUpdater) PlanLocalTarget(ctx context.Context, input HostTargetSubmi
 		return HostTargetPlan{}, err
 	}
 	return prepared.plan, nil
+}
+
+func targetPreviewCAS(prior *hostTargetIntent, input HostTargetSubmission) error {
+	revision := uint64(0)
+	if prior != nil {
+		revision = prior.Status.Revision
+	}
+	if revision != input.ExpectedRevision {
+		return errors.New("update: local target revision changed")
+	}
+	return nil
 }
 
 func (u *HostUpdater) reserveTarget(ctx context.Context, policy HostPolicy, prior, intent *hostTargetIntent, prepared preparedTarget) (HostTargetStatus, error) {
