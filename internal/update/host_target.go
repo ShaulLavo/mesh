@@ -13,10 +13,11 @@ import (
 )
 
 type hostTargetIntent struct {
-	Schema     int                  `json:"schema"`
-	Submission HostTargetSubmission `json:"submission"`
-	Status     HostTargetStatus     `json:"status"`
-	Work       *OwnedRequest        `json:"work,omitempty"`
+	Schema      int                  `json:"schema"`
+	Submission  HostTargetSubmission `json:"submission"`
+	Status      HostTargetStatus     `json:"status"`
+	Work        *OwnedRequest        `json:"work,omitempty"`
+	SettledWork string               `json:"settledWork,omitempty"`
 }
 
 func targetActive(phase HostTargetPhase) bool {
@@ -47,6 +48,9 @@ func (i hostTargetIntent) validate() error {
 	}
 	if err := validateTargetRelease(i.Status.Target); err != nil {
 		return err
+	}
+	if i.SettledWork != "" && !hostDigest(i.SettledWork) {
+		return errors.New("update: invalid local target settlement")
 	}
 	if !targetActive(i.Status.Phase) && i.Status.Phase != HostTargetCommitted && i.Status.Phase != HostTargetCancelled && i.Status.Phase != HostTargetAttention {
 		return errors.New("update: invalid local target phase")

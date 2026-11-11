@@ -2,6 +2,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"time"
@@ -25,16 +26,30 @@ func (s *Store) localTargetWork(owned OwnedRequest) (*hostTargetIntent, error) {
 	if err != nil {
 		return nil, err
 	}
-	if intent == nil || intent.Work == nil || !reflect.DeepEqual(*intent.Work, owned) {
+	if intent == nil {
+		return nil, errors.New("update: issued local work lost its durable intent binding")
+	}
+	if intent.Work == nil && intent.SettledWork == targetWorkDigest(owned) {
+		return intent, nil
+	}
+	if intent.Work == nil || !reflect.DeepEqual(*intent.Work, owned) {
 		return nil, errors.New("update: issued local work lost its durable intent binding")
 	}
 	return intent, nil
+}
+
+func targetWorkDigest(owned OwnedRequest) string {
+	data, _ := json.Marshal(owned)
+	return discoveryDigest(data)
 }
 
 func (s *Store) finishLocalTarget(owned OwnedRequest, journal updateinstall.Status) error {
 	intent, err := s.localTargetWork(owned)
 	if err != nil {
 		return err
+	}
+	if intent.Work == nil {
+		return nil
 	}
 	if journal.Phase == updateinstall.Committed {
 		intent.Status.RunningDigest = owned.Edge.To
@@ -45,6 +60,7 @@ func (s *Store) finishLocalTarget(owned OwnedRequest, journal updateinstall.Stat
 			intent.Status.Phase = HostTargetCommitted
 		}
 	}
+	intent.SettledWork = targetWorkDigest(owned)
 	intent.Work, intent.Status.Next, intent.Status.Problem = nil, nil, nil
 	if journal.Phase == updateinstall.RolledBack {
 		intent.Status.Problem = &HostProblem{Kind: "quarantined", Detail: "Failed activation is quarantined; waiting for a verified alternative"}
@@ -148,6 +164,7 @@ func (u *HostUpdater) retireLocalTarget(ctx context.Context, state HostUpdate, o
 		intent.Status.Revision++
 		intent.Status.Phase = HostTargetCancelled
 	}
+	intent.SettledWork = targetWorkDigest(owned)
 	intent.Work, intent.Status.Next = nil, nil
 	if err := u.Store.writeAuthority("host-target.json", intent); err != nil {
 		return err

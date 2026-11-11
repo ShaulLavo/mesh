@@ -303,6 +303,40 @@ func TestHostTargetWorksWithMissingDefaultManualPolicy(t *testing.T) {
 	}
 }
 
+func TestHostTargetCrashAfterIntentSettlementBeforeOwnershipClear(t *testing.T) {
+	f := newHostFixture(t)
+	if _, err := f.updater.SubmitLocalTarget(t.Context(), localTargetInput(t, f, "v0.1.2")); err != nil {
+		t.Fatal(err)
+	}
+	f.tick()
+	f.finish()
+	state, err := f.store.HostState(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := f.installation()
+	unlock, err := f.store.lockContext(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = f.updater.recordFinalEvidence(state.Owned, journal)
+	unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.updater = f.newUpdater()
+	f.tick()
+	f.tick()
+	status, err := f.store.HostTarget(t.Context())
+	if err != nil || status.Phase != HostTargetCommitted {
+		t.Fatalf("settled intent did not recover: %+v %v", status, err)
+	}
+	entries, _, err := f.store.HostLedger(t.Context(), 0, 64)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("settled intent duplicated or lost commit: %+v %v", entries, err)
+	}
+}
+
 func TestHostTargetPreviewDoesNotAcknowledgeAndOrderFencesManualStage(t *testing.T) {
 	f := newHostFixture(t)
 	order, peer, _, _, now := orderFixture(t)
