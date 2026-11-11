@@ -38,19 +38,20 @@ func hostError(err error) error {
 }
 
 type HostUpdater struct {
-	Order    *HostOrder
-	limit    *HostLimit
-	Store    *Store
-	ID       string
-	Current  func() release.Build
-	Engine   func(context.Context) (*updateinstall.Engine, error)
-	Source   func(context.Context, release.Build) (HostSource, release.DocumentSource, error)
-	Helper   func(context.Context, release.Manifest) error
-	Probe    updateinstall.Probe
-	Now      func() time.Time
-	mu       sync.Mutex
-	lastTick time.Time
-	observed release.Build
+	Order       *HostOrder
+	limit       *HostLimit
+	localTarget *hostTargetIntent
+	Store       *Store
+	ID          string
+	Current     func() release.Build
+	Engine      func(context.Context) (*updateinstall.Engine, error)
+	Source      func(context.Context, release.Build) (HostSource, release.DocumentSource, error)
+	Helper      func(context.Context, release.Manifest) error
+	Probe       updateinstall.Probe
+	Now         func() time.Time
+	mu          sync.Mutex
+	lastTick    time.Time
+	observed    release.Build
 }
 
 func (u *HostUpdater) now() time.Time {
@@ -82,6 +83,7 @@ func (u *HostUpdater) Tick(ctx context.Context) error {
 	defer cancel()
 	u.observed = release.Build{}
 	u.limit = nil
+	u.localTarget = nil
 	if u.Store == nil || u.Current == nil {
 		return errors.New("update: host updater configuration incomplete")
 	}
@@ -124,8 +126,16 @@ func (u *HostUpdater) tickAvailable(ctx context.Context, state HostUpdate, journ
 	if err := u.Order.ReleaseDropped(ctx, policy); err != nil {
 		return u.wait(ctx, state, err.Error())
 	}
+	intent, err := u.loadTarget(ctx)
+	if err != nil {
+		return u.attention(ctx, state, "local target", err)
+	}
+	u.localTarget = intent
 	if state.Owned != nil {
 		return u.resume(ctx, state, policy, journal, exists, nil)
+	}
+	if intent != nil && targetActive(intent.Status.Phase) {
+		return u.tickTarget(ctx, state, policy, intent, journal, exists)
 	}
 	if policy.Mode != HostAutomatic || state.Phase == HostAttention {
 		return nil
@@ -216,9 +226,6 @@ func (u *HostUpdater) reconcile(ctx context.Context, state HostUpdate, journal u
 	if !hostFinished(journal.Phase) {
 		return state, false, nil
 	}
-	if state.LastRequest == journal.Request.ID && state.LastGeneration == journal.Request.Generation && state.LastPhase == journal.Phase && owned == nil {
-		return state, false, nil
-	}
 	if journal.Phase == updateinstall.RollbackFailed {
 		return state, true, u.attention(ctx, state, "rollback", errors.New(journal.Error))
 	}
@@ -245,18 +252,19 @@ func (u *HostUpdater) recordFinal(ctx context.Context, state HostUpdate, journal
 	}
 	defer unlock()
 	if journal.Phase == updateinstall.Committed {
-		if err := u.recordCommit(state.Owned, journal); err != nil {
+		held, err := u.Store.adoptionOwnsCommit(journal)
+		if err != nil {
 			return state, true, err
+		}
+		if held {
+			return u.waitAdoptionCommit(state)
 		}
 	}
-	if journal.Phase == updateinstall.RolledBack && state.Owned != nil {
-		if journal.Verified == nil || journal.Verified.Build.Digest != state.Owned.Edge.From || journal.Verified.HostID != u.ID {
-			return state, true, errors.New("update: rollback journal lacks verified source identity")
-		}
-		failed := FailedEdge{Edge: state.Owned.Edge, Version: journal.Request.Manifest.Version, Phase: journal.Phase, Problem: boundedProblem(journal.Error), At: u.now()}
-		if err := u.Store.writeAuthority(failedEdgeName(failed.Edge), failed); err != nil {
-			return state, true, err
-		}
+	if state.LastRequest == journal.Request.ID && state.LastGeneration == journal.Request.Generation && state.LastPhase == journal.Phase && state.Owned == nil {
+		return state, false, nil
+	}
+	if err := u.recordFinalEvidence(state.Owned, journal); err != nil {
+		return state, true, err
 	}
 	state.Owned, state.Phase, state.Problem = nil, HostIdle, nil
 	state.LastRequest, state.LastGeneration = journal.Request.ID, journal.Request.Generation
@@ -265,7 +273,45 @@ func (u *HostUpdater) recordFinal(ctx context.Context, state HostUpdate, journal
 	return state, false, u.Store.writeAuthority("host-update.json", state)
 }
 
+func (u *HostUpdater) recordFinalEvidence(owned *OwnedRequest, journal updateinstall.Status) error {
+	if journal.Phase == updateinstall.Committed {
+		if err := u.recordCommit(owned, journal); err != nil {
+			return err
+		}
+	}
+	if journal.Phase == updateinstall.RolledBack && owned != nil {
+		if err := u.recordFailedTarget(*owned, journal); err != nil {
+			return err
+		}
+	}
+	if owned != nil && owned.IntentRevision != 0 {
+		return u.Store.finishLocalTarget(*owned, journal)
+	}
+	return nil
+}
+
+func (u *HostUpdater) recordFailedTarget(owned OwnedRequest, journal updateinstall.Status) error {
+	if journal.Verified == nil || journal.Verified.Build.Digest != owned.Edge.From || journal.Verified.HostID != u.ID {
+		return errors.New("update: rollback journal lacks verified source identity")
+	}
+	failed := FailedEdge{Edge: owned.Edge, Version: journal.Request.Manifest.Version, Phase: journal.Phase, Problem: boundedProblem(journal.Error), At: u.now()}
+	return u.Store.writeAuthority(failedEdgeName(failed.Edge), failed)
+}
+
+func (u *HostUpdater) waitAdoptionCommit(state HostUpdate) (HostUpdate, bool, error) {
+	if state.Owned == nil {
+		state.Phase = HostWaiting
+	}
+	state.Problem = &HostProblem{Kind: "waiting", Detail: "adoption awaits local confirmation of pinned image, policy and preserved state"}
+	return state, true, u.Store.writeAuthority("host-update.json", state)
+}
+
 func (u *HostUpdater) recordCommit(owned *OwnedRequest, status updateinstall.Status) error {
+	if owned != nil && owned.IntentRevision != 0 {
+		if _, err := u.Store.localTargetWork(*owned); err != nil {
+			return err
+		}
+	}
 	artifact, err := status.Request.Manifest.Artifact(status.Request.Current.Platform)
 	if err != nil {
 		return hostError(err)
@@ -276,7 +322,10 @@ func (u *HostUpdater) recordCommit(owned *OwnedRequest, status updateinstall.Sta
 	entry := LedgerEntry{Request: status.Request.ID, Generation: status.Request.Generation, Version: status.Request.Manifest.Version, Binary: artifact.BinarySHA256,
 		From: status.Request.Current.Digest, Origin: string(HostManual), CommittedAt: status.UpdatedAt, Workers: len(status.Original.Workers), WorkersPreserved: preservedHostWorkers(status)}
 	if owned != nil {
-		entry.Origin, entry.Metadata = hostOrigin, owned.Metadata
+		entry.Metadata = owned.Metadata
+		if owned.IntentRevision == 0 {
+			entry.Origin = hostOrigin
+		}
 	}
 	if entry.WorkersPreserved != entry.Workers && !hostRebooted(status) {
 		return errors.New("update: committed journal did not preserve every worker")
@@ -345,7 +394,7 @@ func (u *HostUpdater) resume(ctx context.Context, state HostUpdate, policy HostP
 	if exists && journal.Request.ID == owned.Request && journal.Request.Generation == owned.Generation && journal.Phase != updateinstall.Accepted && journal.Phase != updateinstall.Staged && journal.Phase != updateinstall.Failed {
 		return nil
 	}
-	if policy.Mode != HostAutomatic || policy.Revision != owned.PolicyRevision || !sameHostIdentity(u.Current(), owned.Installation.Current) {
+	if !u.targetResumeAllowed(policy, *owned) || policy.Revision != owned.PolicyRevision || !sameHostIdentity(u.Current(), owned.Installation.Current) {
 		return u.retireUngrantable(ctx, state, journal, exists)
 	}
 	if u.now().Before(state.NextAttempt) {
@@ -476,6 +525,7 @@ func (u *HostUpdater) checkAcceptanceWorkers(ctx context.Context, request update
 }
 
 func (u *HostUpdater) retireUngrantable(ctx context.Context, state HostUpdate, journal updateinstall.Status, exists bool) error {
+	owned := *state.Owned
 	if exists && journal.Request.ID == state.Owned.Request && (journal.Phase == updateinstall.Accepted || journal.Phase == updateinstall.Staged) {
 		engine, err := u.Engine(ctx)
 		if err != nil {
@@ -486,7 +536,7 @@ func (u *HostUpdater) retireUngrantable(ctx context.Context, state HostUpdate, j
 		}
 	}
 	state.Owned, state.Phase, state.Problem = nil, HostIdle, nil
-	return u.save(ctx, state)
+	return u.retireLocalTarget(ctx, state, owned)
 }
 
 func (u *HostUpdater) discover(ctx context.Context, state HostUpdate, policy HostPolicy, journal updateinstall.Status, exists bool) error {

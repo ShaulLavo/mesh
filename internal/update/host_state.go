@@ -38,6 +38,7 @@ type OwnedRequest struct {
 	Request        string                 `json:"request"`
 	Generation     uint64                 `json:"generation"`
 	PolicyRevision uint64                 `json:"policyRevision"`
+	IntentRevision uint64                 `json:"intentRevision,omitempty"`
 	Edge           Edge                   `json:"edge"`
 	Installation   updateinstall.Request  `json:"installation"`
 	Metadata       string                 `json:"metadata"`
@@ -195,7 +196,7 @@ func (o OwnedRequest) matches(request updateinstall.Request) error {
 	if err != nil {
 		return hostError(err)
 	}
-	if !ValidRunID(o.Request) || o.Generation == 0 || o.PolicyRevision == 0 || o.Epoch == 0 || !hostDigest(o.Metadata) || request.Automatic != nil {
+	if !ValidRunID(o.Request) || o.Generation == 0 || o.PolicyRevision == 0 && o.IntentRevision == 0 || o.Epoch == 0 || !hostDigest(o.Metadata) || request.Automatic != nil {
 		return errors.New("update: invalid host ownership")
 	}
 	if o.Request != request.ID || o.Generation != request.Generation || o.Edge != (Edge{request.Current.Digest, artifact.BinarySHA256, request.Current.Platform}) || !reflect.DeepEqual(o.Installation, request) {
