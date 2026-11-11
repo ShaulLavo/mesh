@@ -211,6 +211,8 @@ class Installation:
         image = native_services.mapped_image(manager.pid, self.helper["executable"])
         if image["sha256"] != self.pair["helper"]["artifact"]["binarySha256"]:
             raise RuntimeError("running baseline helper differs from its published image")
+        if manager.manager_pid() != manager.pid or not native_services.alive(manager.pid):
+            raise RuntimeError("helper process changed during mapped-image verification")
         return image
 
     def seed(self):
