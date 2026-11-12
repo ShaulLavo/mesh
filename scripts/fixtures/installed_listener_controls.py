@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -56,14 +57,20 @@ class ListenerEvidenceTest(unittest.TestCase):
         self.assertEqual(self.marker.read_text(), "original readiness marker")
 
     def test_pid_capture_works_in_an_interactive_history_enabled_shell(self):
-        command = "set -H\n" + evidence.launch_command("sleep 0.01", self.marker) + "wait\n"
+        captured = Path(str(self.marker) + ".pid")
+        captured.unlink()
+        actual = self.root / "actual-child-pid"
+        child = "printf '%s\\n' \"$$\" > " + shlex.quote(str(actual)) + "; sleep 0.01"
+        background = shlex.join(["/bin/sh", "-c", child])
+        command = "set -H\n" + evidence.launch_command(background, self.marker) + "wait\n"
         environment = {"PATH": os.defpath, "HOME": str(self.root), "HISTFILE": os.devnull,
                        "PS1": "", "PS2": "", "TERM": "dumb"}
         result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-is"], input=command,
                                 env=environment, capture_output=True, text=True, timeout=2, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("event not found", result.stderr)
-        self.assertRegex(Path(str(self.marker) + ".pid").read_text(), r"^[1-9][0-9]*\n$")
+        self.assertRegex(captured.read_text(), r"^[1-9][0-9]*\n$")
+        self.assertEqual(captured.read_text(), actual.read_text())
         self.assertFalse(self.marker.exists())
 
     def test_original_timeout_survives_diagnostic_failure(self):
