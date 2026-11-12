@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,17 +263,20 @@ func TestRunLosingDaemonCannotMutateCatalog(t *testing.T) {
 
 func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 	reportStarted := make(chan struct{})
+	startReport := sync.OnceFunc(func() { close(reportStarted) })
 	releaseReport := make(chan struct{})
-	defer close(releaseReport)
+	release := sync.OnceFunc(func() { close(releaseReport) })
+	defer release()
+	reportError := func(error) {
+		startReport()
+		<-releaseReport
+	}
 	fixture := newDaemonRunFixture(t)
 	stateDir := fixture.stateDir
 	fixture.start(t, func(ctx context.Context) error {
 		return run(ctx, Config{
 			StateDir: stateDir, TailnetPort: 7337,
-			ReportError: func(error) {
-				close(reportStarted)
-				<-releaseReport
-			},
+			ReportError: reportError,
 		}, runOptions{
 			now: func() time.Time { return catalogTestTime }, bootID: func() string { return "boot" },
 			discoverSelf: func(context.Context) (tailnet.Peer, error) {
@@ -289,4 +293,8 @@ func TestRunShutdownDoesNotWaitForBlockedErrorSink(t *testing.T) {
 		t.Fatal("error callback did not start")
 	}
 	fixture.stop(t)
+
+	// Queued notifications can reach the sink after shutdown releases it.
+	release()
+	reportError(errors.New("additional notification"))
 }
