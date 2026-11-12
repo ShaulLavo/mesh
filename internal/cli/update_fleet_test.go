@@ -135,7 +135,7 @@ func TestFleetUpdateLastReplyReadsExistingCacheWithoutCreatingOne(t *testing.T) 
 	state, local := setupUpdateCLI(t)
 	members := []update.Host{local}
 	path := filepath.Join(state, catalogDatabaseName)
-	if replies := fleetLastReplies(t.Context(), members); len(replies) != 0 {
+	if replies := fleetLastReplies(members); len(replies) != 0 {
 		t.Fatal("missing cache supplied a verified reply")
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
@@ -147,13 +147,14 @@ func TestFleetUpdateLastReplyReadsExistingCacheWithoutCreatingOne(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
-	if _, err := store.UpsertHost(t.Context(), storage.Host{ID: storage.HostID(local.ID), MeshIdentity: local.ID, LastSeenAt: at}); err != nil {
+	cache := &SQLiteCatalogCache{store: store, now: func() time.Time { return at }, stateDir: state}
+	if saved, err := cache.Save(t.Context(), HostRecord{ID: local.ID, MeshIdentity: local.ID}, nil); err != nil || !saved {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if replies := fleetLastReplies(t.Context(), members); !replies[local.ID].Equal(at) {
+	if replies := fleetLastReplies(members); !replies[local.ID].Equal(at) {
 		t.Fatal("fleet read lost the exact verified reply", replies)
 	}
 }

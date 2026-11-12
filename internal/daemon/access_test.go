@@ -265,7 +265,7 @@ var deniedScopedActions = map[string][]string{
 	"copy.request":   {"upload.begin", "upload.chunk", "upload.commit", "download.begin", "download.chunk", "close", "release"},
 	"app.request":    {"upload.begin", "upload.chunk", "create", "update", "download", "list", "renew", "browser.inspect", "browser.list", "browser.approve", "browser.revoke", "inspect", "delete"},
 	"app.registry":   {"allocate", "list", "sync", "inspect", "activate", "suspend", "renew", "delete", "cleanup", "browser.inspect", "browser.list", "browser.approve", "browser.revoke"},
-	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "automatic.status", "automatic.consent", "automatic.change", "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe", "unknown"},
+	"update.control": {"challenge", "info", "runs", "status", "plan", "retry", "cancel", "stage", "grant", "install-status", "install-cancel", "install-retry", "fleet-profile.put", "automatic.status", "automatic.consent", "automatic.change", "configuration.preview", "configuration.approve", "configuration.status", "configuration.retry", "configuration.cancel", "configuration.snapshot", "configuration.put", "configuration.observe", "host-policy.show", "host-policy.set", "host-policy.forget", "host-target.plan", "host-target.submit", "host-target.status", "host-target.cancel", "unknown"},
 }
 
 func TestScopedFramedDenialMatrixStopsBeforeAllOwners(t *testing.T) {

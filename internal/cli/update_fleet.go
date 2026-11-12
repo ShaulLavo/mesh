@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"text/tabwriter"
@@ -16,7 +15,6 @@ import (
 	"github.com/shaul/mesh/internal/privacy"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
-	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updateinstall"
@@ -99,7 +97,7 @@ func savedUpdateFleet() (update.Fleet, error) {
 
 func readFleetUpdates(ctx context.Context, members []update.Host, localID string, dial HostDialer, now time.Time) FleetUpdateStatus {
 	status := FleetUpdateStatus{Members: make([]FleetUpdateMember, len(members)), Problems: []FleetUpdateProblem{}}
-	last := fleetLastReplies(ctx, members)
+	last := fleetLastReplies(members)
 	limit := make(chan struct{}, 8)
 	var readers sync.WaitGroup
 	for index, host := range members {
@@ -173,28 +171,15 @@ func fleetObservationError(err error) string {
 	return fleetFailed
 }
 
-func fleetLastReplies(ctx context.Context, members []update.Host) map[string]time.Time {
+func fleetLastReplies(members []update.Host) map[string]time.Time {
 	result := make(map[string]time.Time)
 	state, err := paths.StateDirPath()
 	if err != nil {
 		return result
 	}
-	path := filepath.Join(state, catalogDatabaseName)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return result
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	store, err := storage.OpenReadOnly(ctx, path)
-	if err != nil {
-		return result
-	}
-	defer func() { _ = store.Close() }()
 	for _, host := range members {
-		stored, err := store.GetHost(ctx, storage.HostID(host.ID))
-		if err == nil && stored.MeshIdentity == host.ID {
-			result[host.ID] = stored.LastSeenAt
+		if at, ok := readReplyRecord(state, host.ID); ok {
+			result[host.ID] = at
 		}
 	}
 	return result

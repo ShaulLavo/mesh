@@ -239,5 +239,5 @@ func openAgentCatalogCache(ctx context.Context) (*SQLiteCatalogCache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open existing catalog cache: %w", err)
 	}
-	return &SQLiteCatalogCache{store: store, now: time.Now}, nil
+	return &SQLiteCatalogCache{store: store, now: time.Now, stateDir: state}, nil
 }
