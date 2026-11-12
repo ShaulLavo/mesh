@@ -305,7 +305,7 @@ class Installation:
         self.challenge = marker.with_suffix(".challenge")
         token = uuid.uuid4().hex
         command = shlex.join([sys.executable, str(Path(__file__).with_name("installed_listener.py")), str(marker), token])
-        self.terminal.send(command + " &\nprintf '%s\\n' \"$!\" > " + shlex.quote(str(marker) + ".pid") + "\n")
+        self.terminal.send(installed_listener_evidence.launch_command(command, marker))
         installed_listener_evidence.wait(self, marker, token, native_services.wait_for)
         self.listener = json.loads(marker.read_text())
         self.process_stamps[self.listener["pid"]] = process_stamp(self.listener["pid"])

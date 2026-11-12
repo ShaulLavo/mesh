@@ -3,6 +3,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import shlex
 import socket
 import stat
 import subprocess
@@ -13,6 +14,11 @@ import time
 FAILURE = "listener-failure.json"
 MAXIMUM = 65536
 SECONDS = 2
+
+
+def launch_command(command, marker):
+    # A closing quote after $! triggers history expansion in the fixture's Bash.
+    return command + " &\nprintf '%s\\n' $! > " + shlex.quote(str(marker) + ".pid") + "\n"
 
 
 def read_private(path, maximum=16384):
