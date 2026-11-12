@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import native_socket_runner as runner
 
@@ -68,6 +68,46 @@ class PartitionTest(unittest.TestCase):
 
 
 class ProcessTest(unittest.IsolatedAsyncioTestCase):
+    async def test_term_denial_accepts_only_a_disappeared_group(self):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[denied, ProcessLookupError()]) as killpg, \
+                patch.object(runner.asyncio, "sleep", AsyncMock()) as sleep:
+            await runner.stop_group(process)
+        self.assertEqual(killpg.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, 0)])
+        sleep.assert_awaited_once_with(0.1)
+        process.wait.assert_awaited_once()
+
+    async def test_term_denial_keeps_existing_and_inaccessible_groups_blocking(self):
+        for probe in (None, PermissionError(1, "Group remains inaccessible")):
+            await self.check_term_denial(probe)
+
+    async def check_term_denial(self, probe):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[denied, probe]) as killpg, \
+                patch.object(runner.asyncio, "sleep", AsyncMock()) as sleep, \
+                self.assertRaises(PermissionError):
+            await runner.stop_group(process)
+        self.assertEqual(killpg.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, 0)])
+        sleep.assert_awaited_once_with(0.1)
+        process.wait.assert_not_awaited()
+
+    async def test_protocol_failure_propagates_after_denied_group_disappears(self):
+        with patch.object(runner.os, "killpg", side_effect=[PermissionError(), ProcessLookupError()]), \
+                self.assertRaises(json.JSONDecodeError):
+            await runner.command((sys.executable, "-c", "print('bad JSON')"), Path.cwd(), os.environ,
+                                 json.loads)
+
+    async def test_kill_denial_remains_blocking(self):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[None, denied]), \
+                patch.object(runner.asyncio, "sleep", AsyncMock()), self.assertRaises(PermissionError) as caught:
+            await runner.stop_group(process)
+        self.assertIs(caught.exception, denied)
+        process.wait.assert_not_awaited()
+
     async def test_setup_and_path_control_failures_remove_scratch(self):
         with tempfile.TemporaryDirectory(prefix="native-cleanup-") as directory:
             await self.check_failure_cleanup(Path(directory))
