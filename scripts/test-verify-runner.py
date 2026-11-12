@@ -434,6 +434,44 @@ class RunnerCase(unittest.TestCase):
 
 
 class ResultTests(RunnerCase):
+    def test_failed_benchmark_build_declines_all_entries(self):
+        build = self.scene.root / "scripts/bench/build.sh"
+        build.parent.mkdir()
+        build.write_text("#!/bin/bash\nexit 7\n")
+        self.scene.start([("bench_harness", "pass"), ("one", "pass")])
+        _, stderr = self.finish(1)
+        self.assertIn("FAIL: benchmark build", stderr)
+        self.assertFalse(list(self.scene.root.glob("*.ready")))
+        self.assert_builds()
+        self.assert_clean()
+
+    def test_benchmark_build_precedes_concurrent_entries(self):
+        build = self.scene.root / "scripts/bench/build.sh"
+        build.parent.mkdir()
+        build.write_text('''#!/bin/bash
+set -eu
+test "$3" = smoke
+test ! -e "$PWD/one.fixture.ready"
+mkdir -p "$1"
+touch "$1/mesh" "$1/receipt.json"
+printf '%s\\n' "$1" > "$PWD/benchmark-build"
+''')
+        self.scene.entries([("one", "pass")])
+        entry = self.scene.root / "integration/bench_harness.sh"
+        entry.write_text(f'''#!/bin/bash
+{PRELUDE}
+set -eu
+test -f "$1/mesh"
+test -f "$1/receipt.json"
+test "$1" = "$(cat "$PWD/benchmark-build")"
+''')
+        self.scene.start([])
+        (self.scene.root / "release").touch()
+        stdout, _ = self.finish(0)
+        self.assertIn("PASS: bench_harness.sh", stdout)
+        self.assert_builds()
+        self.assert_clean()
+
     def test_success(self):
         self.scene.start([("one", "pass"), ("two", "pass")])
         (self.scene.root / "release").touch()
