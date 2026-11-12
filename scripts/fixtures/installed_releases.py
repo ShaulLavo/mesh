@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -31,7 +32,7 @@ class Releases:
         self.directory.mkdir()
         self.signer = None
         self.signer_log = None
-        self.builds, self.manifests, self.metadata = {}, {}, {}
+        self.builds, self.manifests, self.metadata, self.startup = {}, {}, {}, {}
 
     def environment(self):
         return os.environ | {"TMPDIR": str(self.root), "TMP": str(self.root), "TEMP": str(self.root), "MESH_SHORT_TMP": str(self.root),
@@ -70,7 +71,26 @@ class Releases:
             "compatibility": {"stateReadMin": build["stateVersion"], "stateReadMax": build["stateVersion"],
                 "stateWrite": build["stateVersion"], "workerMin": 1, "workerMax": build["workerProtocol"],
                 "workerWrite": build["workerProtocol"], "journalVersion": 1, "transitions": []}}
+        self.build_startup(version, overlay)
         return binary
+
+    def build_startup(self, version, overlay):
+        directory = self.root / "startup" / version
+        directory.mkdir(parents=True)
+        subprocess.run([sys.executable, str(REPO / "scripts/fixtures/release_transition.py"), "startup-overlay", str(REPO), str(directory)],
+            cwd=REPO, env=self.environment(), check=True, timeout=10)
+        combined = json.loads(overlay.read_text())["Replace"]
+        combined.update(json.loads((directory / "overlay.json").read_text())["Replace"])
+        write_json(directory / "combined.json", {"Replace": combined})
+        image = directory / "mesh"
+        with (directory / "build.log").open("wb") as output:
+            subprocess.run(["go", "build", "-trimpath", "-tags", "mesh_installed_fixture", "-overlay", str(directory / "combined.json"),
+                "-ldflags=-X github.com/shaul/mesh/internal/release.Version=" + version, "-o", str(image), "./cmd/mesh"],
+                cwd=REPO, env=self.environment() | {"CGO_ENABLED": "0"}, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
+        self.startup[version] = image
+        if not (self.root / "boundary").exists():
+            subprocess.run(["go", "build", "-trimpath", "-o", str(self.root / "boundary"), "./internal/storage/cmd/boundary"],
+                cwd=REPO, env=self.environment(), capture_output=True, check=True, timeout=120)
 
     def overlay(self, epoch):
         replacements = {str(REPO / "internal/release/trust" / name): str(self.root / name)
@@ -110,8 +130,9 @@ class Releases:
         directory = self.root / "proofs" / (Path(source).parent.name + "-" + target + "-" + digest(Path(source).read_bytes())[:8])
         directory.mkdir(parents=True)
         with (directory / "proof.log").open("wb") as output:
+            environment = self.environment() | {"MESH_STARTUP_FAULT_BINARY": str(self.startup[target]), "MESH_BOUNDARY_TOOL": str(self.root / "boundary")}
             subprocess.run(["bash", str(REPO / "scripts/prove-release-transition.sh"), str(source), self.builds[target]["path"],
-                self.native, str(directory)], cwd=REPO, env=self.environment(), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
+                self.native, str(directory)], cwd=REPO, env=environment, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
         receipts = list(directory.glob("*.json"))
         rollbacks = list((directory / "rollback").glob("*.rollback.json"))
         if len(receipts) != 1 or len(rollbacks) != 1:
