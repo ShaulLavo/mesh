@@ -26,13 +26,16 @@ verify their continued operation. The first candidate start sees the explicit
 automatic policy. Identity, grants, daemon definition, configuration and prior
 installation settings remain unchanged.
 
-On AMD64 that run passed PC adoption and daemon rollback, then found that failed
-helper promotion restored the old image but started a previously stopped helper.
-The fixture retained its strict stopped-disposition assertion. Product correction
-`1ce24815941e12c56c9dcb5565f20616abeceeb5` is now integrated. Native run
-43148506260 is queued at `9c000273e4a91e1d8c9850a8d089a10affb11973`; its result
-is pending. Independent profiles now continue only after confirmed cleanup of a
-failed case, and any required failure still fails the job.
+On AMD64 that run found that failed helper promotion restored the old image but
+started a previously stopped helper. The fixture retained its strict assertion.
+After integrating product correction `1ce24815941e12c56c9dcb5565f20616abeceeb5`,
+[run 43148506260](https://github.com/ShaulLavo/mesh/actions/runs/43148506260)
+passed all 16 cases at `9c000273e4a91e1d8c9850a8d089a10affb11973`: four each for
+PC, VPS, Pi and Mac. The PC helper remains stopped after failure; running helper
+cases restore their exact prior mapped images. All process, service and scratch
+cleanup records pass. Artifacts are `13913980475`, `13912238833`, `13913790417`.
+Independent profiles continue only after confirmed cleanup of a failed case, and
+any required failure still fails the job.
 
 The fixture uses the delivered adoption supervisor, real CLI, canonical adoption
 envelope, initial-helper boundary and package migration. It does not implement a
@@ -67,6 +70,14 @@ or rollback. The failed case also restarts the real daemon and checks durable
 failed-edge retention and unchanged installation request/generation. This native
 chain has not yet run with the current complete producer inputs.
 
+The ordered-host fixture uses three disposable Linux accounts and real systemd
+user managers. It approves their actual device identities, saves the real peer
+fleet, and seeds predecessor policies through the delivered adoption CLI. It
+checks a failed canary, a sleeping intermediate, a later release burst, actual
+five-second configured soaks, common metadata pins and ordered commits. Its
+separate real-manager account positive control and native acceptance remain
+pending. No command provider stands in for a manager or peer.
+
 ## Reusable job contract
 
 The caller uses `.github/workflows/installed-catchup.yml` with `contents: read`
@@ -95,14 +106,13 @@ symlink-expanded roots and an unmounted requested data drive. Per-operation
 timeouts remain bounded. Teardown is installed before process/service creation.
 Unconfirmed service or process cleanup retains scratch and fails the proof.
 
-The 21 focused controls pass, including real-manager normal and exception cleanup,
+The 23 focused controls pass, including real-manager normal and exception cleanup,
 socket bounds, verified acquisition, exact cohort inputs and complete pinned
 artifact intake. The tagged exporter compiles. The full push quality gates pass
 with no new or stale baseline findings.
 
 Still required before this is the complete Unit 8 gate: current native cohort
-chain/waypoint results, three genuinely installed ordered hosts with a failed
-canary, sleeping host and release burst, durable helper interruption controls,
+chain/waypoint and ordered-host results, durable helper interruption controls,
 and publication execution against the draft's real artifacts/signatures. A reboot
 must report interrupted RAM sessions honestly. An actual first-published updater
 baseline can only be added after publication.

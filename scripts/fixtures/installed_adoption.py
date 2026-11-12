@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import sys
@@ -86,6 +87,8 @@ class AdoptionCase(installed_native.Installation):
             self.fault.write_text(json.dumps({"daemon": [version]}))
         if self.scenario == "helper":
             self.fault.write_text(json.dumps({"helper": [version]}))
+        if self.scenario == "interrupt":
+            self.write_fault({"holdHelper": [version]})
         result = subprocess.run([side, "update", "adopt", "start", "--local", "--release", version, "--json"],
             input=json.dumps(input_data), env=self.environment, capture_output=True, text=True, timeout=90, check=False)
         (self.root / "adopt-cli.log").write_text(result.stdout + result.stderr)
@@ -96,6 +99,25 @@ class AdoptionCase(installed_native.Installation):
         # The product may return a durable attention state after a failed native
         # promotion. Only the actual journal/envelope and retained processes decide.
         return {"pin": pin, "exit": result.returncode}
+
+    def write_fault(self, value):
+        temporary = self.fault.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value))
+        temporary.replace(self.fault)
+
+    def interrupt_helper(self, version):
+        marker = self.root / ("start.helper." + version + ".json")
+        installed_native.native_services.wait_for(marker.exists, "replacement helper did not reach its actual startup boundary")
+        started = json.loads(marker.read_text())
+        pid = self.units.managers["helper"].manager_pid()
+        receipt = json.loads((self.state / "update/helper/installed.json").read_text())
+        image = installed_native.native_services.mapped_image(pid, receipt["executable"])
+        expected = self.releases.builds[version]["digest"]
+        if pid != started["pid"] or image["sha256"] != expected or receipt["digest"] != expected:
+            raise RuntimeError("replacement helper boundary belongs to another native process or image")
+        os.kill(pid, signal.SIGKILL)
+        self.write_fault({})
+        return {"killedNativePID": pid, "mappedImage": image, "boundary": "real helper launched after durable receipt/launcher replacement"}
 
     def check_manager_context(self):
         if sys.platform != "linux":
@@ -197,7 +219,11 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         target = installed_releases.VERSIONS[0]
         started = case.start_adoption(target)
         record["start"] = started
+        if scenario == "interrupt":
+            record["interruption"] = case.interrupt_helper(target)
         record["result"] = case.validate_result(case.await_result(target), target, started["pin"])
+        if scenario == "interrupt" and record["result"]["helper"]["pid"] == record["interruption"]["killedNativePID"]:
+            raise RuntimeError("native manager did not replace the interrupted helper process")
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
@@ -297,7 +323,7 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
 
 def run_host_cases(root, output, host, pair, previous, preparer, origin, releases):
     failures = []
-    scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial")
+    scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial", "interrupt")
     for scenario in scenarios:
         try:
             prior = None if scenario == "initial" else previous
