@@ -434,6 +434,17 @@ class RunnerCase(unittest.TestCase):
 
 
 class ResultTests(RunnerCase):
+    def test_failed_benchmark_build_declines_all_entries(self):
+        build = self.scene.root / "scripts/bench/build.sh"
+        build.parent.mkdir()
+        build.write_text("#!/bin/bash\nexit 7\n")
+        self.scene.start([("bench_harness", "pass"), ("one", "pass")])
+        _, stderr = self.finish(1)
+        self.assertIn("FAIL: benchmark build", stderr)
+        self.assertFalse(list(self.scene.root.glob("*.ready")))
+        self.assert_builds()
+        self.assert_clean()
+
     def test_benchmark_build_precedes_concurrent_entries(self):
         build = self.scene.root / "scripts/bench/build.sh"
         build.parent.mkdir()
