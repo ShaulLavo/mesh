@@ -22,7 +22,14 @@ type HelperConfig struct {
 	Kind            string
 	Domain          string
 	Probe           func(context.Context, HelperInstallation) (int, error)
+	State           func(context.Context) (HelperProcessState, error)
 	beforePromotion func(context.Context) error
+	adoptionInitial bool
+}
+
+type HelperProcessState struct {
+	Loaded bool
+	PID    int
 }
 
 type HelperInstallation struct {
@@ -101,7 +108,7 @@ func prepareHelper(ctx context.Context, cfg HelperConfig, upgrade bool, approved
 			return installed, readErr
 		}
 	}
-	if upgrade {
+	if upgrade && !cfg.adoptionInitial {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		if _, err = helperCommandOutput(ctx, installed.Executable, "update-helper", "--state-dir", cfg.StateDir, "--check-journal"); err != nil {

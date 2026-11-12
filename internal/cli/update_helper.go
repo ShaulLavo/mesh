@@ -132,6 +132,9 @@ func runUpdateHelper(ctx context.Context, stateDir string, diagnostic io.Writer)
 }
 
 func updateHelperStep(ctx context.Context, stateDir string) error {
+	if handled, err := resumeAdoption(ctx, stateDir); handled || err != nil {
+		return err
+	}
 	if handled, err := resumePendingCoordinatorSetup(ctx, stateDir); handled || err != nil {
 		return err
 	}
