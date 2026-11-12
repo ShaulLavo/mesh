@@ -11,9 +11,10 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fixtures import installed_listener_evidence as evidence
+from fixtures import installed_listener
 from fixtures import installed_native, installed_order, installed_order_host
 
 
@@ -71,6 +72,21 @@ class ListenerEvidenceTest(unittest.TestCase):
         self.assertNotIn("event not found", result.stderr)
         self.assertRegex(captured.read_text(), r"^[1-9][0-9]*\n$")
         self.assertEqual(captured.read_text(), actual.read_text())
+        self.assertFalse(self.marker.exists())
+
+    def test_listener_bind_does_not_wait_for_reverse_dns(self):
+        address = ("127.0.0.1", 43210)
+        connection = SimpleNamespace(bind=Mock(), listen=Mock(), close=Mock(), setsockopt=Mock(),
+                                     getsockname=Mock(return_value=address))
+        network = installed_listener.socketserver.socket
+        with patch.object(network, "socket", return_value=connection), patch.object(network, "getfqdn", side_effect=RuntimeError("reverse DNS must not gate loopback startup")) as lookup:
+            with installed_listener.ListenerServer(("127.0.0.1", 0), installed_listener.Handler) as server:
+                self.assertIsInstance(server, installed_listener.http_server.ThreadingHTTPServer)
+                self.assertEqual((server.server_name, server.server_port), address)
+                connection.bind.assert_called_once_with(("127.0.0.1", 0))
+                connection.listen.assert_called_once()
+        lookup.assert_not_called()
+        connection.close.assert_called_once()
         self.assertFalse(self.marker.exists())
 
     def test_original_timeout_survives_diagnostic_failure(self):

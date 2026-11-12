@@ -27,14 +27,23 @@ def dependencies():
     import http.server
     import json
     import signal
+    import socketserver
     import threading
     from pathlib import Path
-    return http.server, json, signal, threading, Path
+    return http.server, json, signal, socketserver, threading, Path
 
 
-http_server, json, signal, threading, Path = dependencies()
+http_server, json, signal, socketserver, threading, Path = dependencies()
 
 stage("imports-complete")
+
+
+class ListenerServer(http_server.ThreadingHTTPServer):
+    """Keep numeric loopback startup independent of reverse DNS."""
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class Handler(http_server.BaseHTTPRequestHandler):
@@ -79,7 +88,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     stage("listener-create-bind")
-    with http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+    with ListenerServer(("127.0.0.1", 0), Handler) as server:
         stage("listener-bound")
         server.timeout = 0.1
         marker = Path(sys.argv[1])
