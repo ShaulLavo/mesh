@@ -53,6 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 scripts/test-record-update-preparation.py
           root="$RUNNER_TEMP/mesh-policy"
           mkdir -p "$root/documents"
           python3 scripts/acquire-release-history.py "$root/documents" "$HOME/.cache/mesh-release-evidence" "$root/history.json"

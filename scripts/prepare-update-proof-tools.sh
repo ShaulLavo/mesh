@@ -9,6 +9,11 @@ version=$2
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 mkdir -p "$output"
 cd "$repo_root"
+source_commit=$(git rev-parse HEAD)
+if [[ -n $(git status --porcelain) ]]; then
+  echo 'native proof preparation requires a clean checkout' >&2
+  exit 1
+fi
 if [[ $# == 3 ]]; then
   tar -xzf "$3" -C "$output" mesh
   mv "$output/mesh" "$output/candidate"
@@ -23,3 +28,4 @@ CGO_ENABLED=0 go build -trimpath -overlay "$output/startup-overlay/overlay.json"
 go build -trimpath -o "$output/boundary" ./internal/storage/cmd/boundary
 go test -c -o "$output/worker-probe" ./internal/updatebootstrap
 python3 scripts/fixtures/release_transition.py startup-identity "$output/candidate" "$output/candidate" "$output/startup-fault-candidate"
+python3 scripts/record-update-preparation.py "$output" "$source_commit"
