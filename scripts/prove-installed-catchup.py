@@ -56,9 +56,9 @@ def main():
 
 
 def run_requested(arguments, root, output, native):
-    if arguments.publication_version:
-        if not arguments.publication_source or not arguments.native_helper:
-            raise RuntimeError("real draft mode needs its exact release source and production helper preparer")
+    if arguments.publication_version is not None or arguments.publication_source is not None:
+        if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
+            raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
         from fixtures import installed_publication
         installed_publication.prove(root, output, native, arguments.publication_version, arguments.publication_source,
             arguments.native_helper.resolve(strict=True), arguments.worker_registry, arguments.worker_probe)

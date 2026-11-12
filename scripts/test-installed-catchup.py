@@ -542,6 +542,69 @@ class ArtifactPinTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 
+    def test_missing_archive_digest_is_rejected_during_intake(self):
+        values = self.inputs()
+        values[2]["artifacts"][0]["digest"] = None
+        with patch.object(installed_artifacts, "api", side_effect=values):
+            with self.assertRaisesRegex(RuntimeError, "pinned archive SHA-256"):
+                installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+
+    def archive(self, value, name="tools/control"):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as package:
+            package.writestr(name, value)
+        return buffer.getvalue()
+
+    def download_control(self, root, expected, received):
+        destination = root / "input"
+        destination.mkdir()
+        artifact = {"id": 41, "name": "same-mutable-name", "size": len(expected),
+                    "digest": "sha256:" + published_releases.digest(expected)}
+        pin = root / "pin.json"
+        pin.write_text(json.dumps({"artifacts": {"linux-amd64": artifact}}))
+        with patch.object(installed_storage, "archive_url", return_value="https://artifact.invalid/pinned-41") as url, patch.object(installed_artifacts.urllib.request, "urlopen", return_value=io.BytesIO(received)):
+            try:
+                installed_artifacts.download("ShaulLavo/mesh", pin, "linux-amd64", destination, root / "download.json")
+            finally:
+                url.assert_called_once_with("ShaulLavo/mesh", 41)
+
+    def test_pinned_id_archive_is_verified_before_extraction(self):
+        data = self.archive(b"actual pinned bytes")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.download_control(root, data, data)
+            self.assertEqual((root / "input/tools/control").read_bytes(), b"actual pinned bytes")
+            receipt = json.loads((root / "download.json").read_text())
+            self.assertEqual(receipt, {"id": 41, "size": len(data), "digest": "sha256:" + published_releases.digest(data)})
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["download.json", "input", "pin.json"])
+
+    def test_replacement_after_intake_fails_before_extraction(self):
+        original, replacement = self.archive(b"artifact A"), self.archive(b"artifact B")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "pinned size or SHA-256"):
+                self.download_control(root, original, replacement)
+            self.assertEqual(list((root / "input").iterdir()), [])
+            self.assertEqual(sorted(path.name for path in root.iterdir()), ["input", "pin.json"])
+
+    def test_pinned_archive_rejects_nonlocal_members(self):
+        data = self.archive(b"not extracted", "../outside")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "nonlocal path"):
+                self.download_control(root, data, data)
+            self.assertEqual(list((root / "input").iterdir()), [])
+            self.assertFalse((root / "outside").exists())
+
+    def test_truncated_archive_fails_before_extraction(self):
+        data = self.archive(b"original pinned archive")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "pinned size or SHA-256"):
+                self.download_control(root, data, data[:-4])
+            self.assertEqual(list((root / "input").iterdir()), [])
+            self.assertFalse((root / "download.json").exists())
+
     def test_tool_source_and_actual_bytes_must_agree(self):
         with tempfile.TemporaryDirectory() as temporary:
             self.check_tool_provenance(Path(temporary))
@@ -563,6 +626,39 @@ class ArtifactPinTest(unittest.TestCase):
         (tools / "worker-probe").write_bytes(b"another observer")
         with self.assertRaisesRegex(RuntimeError, "worker-probe"):
             installed_artifacts.verify_tools(root, "a" * 40, platform)
+
+
+class PublicationModeTest(unittest.TestCase):
+    def arguments(self, version, source):
+        return SimpleNamespace(publication_version=version, publication_source=source, native_helper=None,
+                               fresh_managed=False, installed_adoption=False, acquire_baselines=False,
+                               worker_registry=None, worker_probe=None)
+
+    def test_explicit_empty_publication_inputs_fail_without_consumption(self):
+        for version, source in (("", ""), ("v0.1.1", ""), ("", "a" * 40), (None, "a" * 40)):
+            self.reject_publication(version, source)
+
+    def reject_publication(self, version, source):
+        with patch.object(installed_publication, "prove") as consume:
+            with self.assertRaisesRegex(RuntimeError, "exact release version, source"):
+                PROOF.run_requested(self.arguments(version, source), Path("/unused"), Path("/unused"), "linux/amd64")
+        consume.assert_not_called()
+
+    def test_omitted_publication_mode_remains_only_a_manager_preflight(self):
+        with patch.object(installed_publication, "prove") as consume:
+            PROOF.run_requested(self.arguments(None, None), Path("/unused"), Path("/unused"), "linux/amd64")
+        consume.assert_not_called()
+
+    def test_valid_publication_inputs_call_the_actual_draft_consumer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            helper = Path(temporary) / "helper"
+            helper.touch()
+            arguments = self.arguments("v0.1.1", "a" * 40)
+            arguments.native_helper = helper
+            with patch.object(installed_publication, "prove") as consume:
+                PROOF.run_requested(arguments, Path("/unused"), Path("/output"), "linux/amd64")
+            consume.assert_called_once_with(Path("/unused"), Path("/output"), "linux/amd64", "v0.1.1", "a" * 40,
+                                            helper.resolve(), None, None)
 
 
 def load_tests(loader, tests, _pattern):

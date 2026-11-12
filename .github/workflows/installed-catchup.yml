@@ -133,7 +133,11 @@ jobs:
       - name: Require the main-only publication caller and real native manager
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_SOURCE: ${{ inputs.release_source }}
         run: |
+          test -n "$RELEASE_VERSION"
+          test -n "$RELEASE_SOURCE"
           test "$GITHUB_REF" = refs/heads/main
           bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/publication-control"
       - name: Determine actual published updater availability
@@ -162,13 +166,15 @@ jobs:
         run: |
           python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/publication-control/producer-pin.json"
           PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/publication-control/worker-storage.json"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - name: Download the exact pinned native worker archive
         if: steps.baseline.outputs.needed == 'true'
-        with:
-          name: ${{ inputs.worker_artifact_prefix }}-${{ matrix.key }}
-          run-id: ${{ inputs.worker_artifact_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/native-worker-input
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_KEY: ${{ matrix.key }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/publication-control/worker-download.json"
       - name: Exercise the actual signed draft through native services
         env:
           GH_TOKEN: ${{ github.token }}
@@ -370,12 +376,14 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py \
             "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
             "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/cohort-control/storage-preflight.json"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: ${{ inputs.worker_artifact_prefix }}-${{ matrix.key }}
-          run-id: ${{ inputs.worker_artifact_run }}
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/native-worker-input
+      - name: Download the exact pinned native worker archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_KEY: ${{ matrix.key }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/cohort-control/worker-download.json"
       - name: Consume exact native registry and once-built observer
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
