@@ -356,7 +356,8 @@ class PublicationConsumerTest(unittest.TestCase):
         self.addCleanup(stop_trust_server, server, thread)
         thread.start()
         connect = socket.create_connection
-        redirected = lambda address, *args, **kwargs: connect(server.server_address if address == ("tuf-repo-cdn.sigstore.dev", 443) else address, *args, **kwargs)
+        def redirected(address, *args, **kwargs):
+            return connect(server.server_address if address == ("tuf-repo-cdn.sigstore.dev", 443) else address, *args, **kwargs)
         with patch.object(publication_origin.socket, "create_connection", side_effect=redirected):
             data = trust_tunnel_request(origin, ssl.create_default_context(cafile=str(upstream / "cert.pem")))
         self.assertEqual(data, b"public TLS remained end to end")
