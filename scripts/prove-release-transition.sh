@@ -37,8 +37,11 @@ session=''
 shell_pid=''
 worker_pid=''
 helper_pid=''
+cohort=$test_root/cohort.json
+cohort_tool=$repo_root/scripts/fixtures/release_workers.py
 
 cleanup() {
+  [[ ! -f $cohort ]] || python3 "$cohort_tool" stop "$cohort" || true
   discover_owned_session_processes
   [[ ! -f $test_root/managed-daemon.pid ]] || old_daemon=$(cat "$test_root/managed-daemon.pid")
   [[ -z $helper_pid ]] || kill -9 "$helper_pid" 2>/dev/null || true
@@ -240,6 +243,10 @@ fixture() {
   python3 "$fixture" "$@"
 }
 
+verify_worker_cohort() {
+  [[ ! -f $cohort ]] || python3 "$cohort_tool" verify "$state" "$cohort" "$1" >/dev/null || fail 'retained worker cohort changed or lost daemon I/O'
+}
+
 restore_test_database() {
   rm -f -- "$state/mesh.db" "$state/mesh.db-wal" "$state/mesh.db-shm"
   fixture snapshot "$test_root/source.db" "$state/mesh.db"
@@ -277,6 +284,7 @@ rollback_source() {
   assert_session_processes
   assert_live_recovery || fail "source did not accept retained checkpoint at $label"
   assert_saved_recovery
+  verify_worker_cohort "rollback-$label"
   if [[ -f $test_root/$label.persist.json ]]; then
     fixture verify-persistent "$state" "$test_root/$label.persist.json" || fail "source rollback lost candidate writes at $label"
   fi
@@ -432,6 +440,10 @@ stop_daemon "$old_daemon" "$old_binary"
 old_daemon=''
 old_state_version=$(read_state_version)
 old_worker_protocol=$(build_field "$old_binary" workerProtocol 1)
+if [[ -n ${MESH_WORKER_REGISTRY:-} ]]; then
+  source_version=$(build_field "$old_binary" version '')
+  python3 "$cohort_tool" start "$state" "$config" "$MESH_WORKER_REGISTRY" "$source_version" "$old_binary" "$cohort"
+fi
 
 # Live checkpoints belong to the worker and must remain free to change.
 saved_session=$(python3 - "$state" "$session" <<'PY'
@@ -509,6 +521,7 @@ send_token 4 "CANDIDATE_REATTACH_$session"
 wait_for_token "$test_root/candidate.out" "CANDIDATE_REATTACH_$session" || fail 'candidate could not exchange data with retained worker'
 assert_session_processes
 assert_live_recovery || fail 'candidate did not accept retained worker checkpoint'
+verify_worker_cohort candidate
 printf '\035' >&4
 wait_for_exit "$client" || fail 'candidate client did not detach'
 wait "$client" 2>/dev/null || true
@@ -534,6 +547,7 @@ send_token 5 "CANDIDATE_RESTART_$session"
 wait_for_token "$test_root/restart.out" "CANDIDATE_RESTART_$session" || fail 'candidate restart could not exchange data after restart'
 assert_session_processes
 assert_live_recovery || fail 'candidate restart did not accept worker checkpoint after restart'
+verify_worker_cohort restart
 recovery_after=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
 [[ $recovery_after == "$recovery_before" ]] || fail 'recovery record changed across candidate upgrade and restart'
 printf '\035' >&5
@@ -583,23 +597,32 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps(receipt, separators=(",", ":"), 
 PY
 proof_digest=$(sha256sum "$temporary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$temporary" | awk '{print $1}')
 mv "$temporary" "$output_directory/$proof_digest.json"
+if [[ -f $cohort ]]; then
+  mkdir -p "$output_directory/observations"
+  cp "$cohort" "$output_directory/observations/$proof_digest.cohort.json"
+fi
 if [[ $proof_mode == forward-only ]]; then
   printf '%s\n' "$proof_digest"
   exit 0
 fi
 mkdir -p "$output_directory/rollback"
-python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" <<'PYROLLBACK'
+python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" "$cohort" <<'PYROLLBACK'
 import hashlib
 import json
 from pathlib import Path
 import sys
 
-output, forward, platform, source, target, first, last = sys.argv[1:]
+output, forward, platform, source, target, first, last, cohort = sys.argv[1:]
+workers = [source]
+if Path(cohort).is_file():
+    observed = json.loads(Path(cohort).read_bytes())
+    assert len(observed["observations"]) >= 3, "missing cohort observations across full proof"
+    workers = sorted(set(workers + [row["digest"] for row in observed["workers"]]))
 os_name, arch = platform.split("/")
 proof = {
     "schema": 1, "platform": {"os": os_name, "arch": arch},
     "fromDigest": source, "toDigest": target, "forward": forward,
-    "workers": [source],
+    "workers": workers,
     "boundaries": [{"state": state, "candidateWrote": True, "sourceStarted": True,
                     "sessionIO": True, "recoveryPreserved": True}
                    for state in range(int(first), int(last) + 1)],

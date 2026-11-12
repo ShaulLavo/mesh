@@ -10,13 +10,15 @@ import (
 )
 
 type upgradePolicy struct {
-	Schema           int       `json:"schema"`
-	AnchorReleases   int       `json:"anchorReleases"`
-	WindowAnchors    int       `json:"windowAnchors"`
-	WindowDays       int       `json:"windowDays"`
-	RequiredRollback []string  `json:"requiredRollback"`
-	Seeds            []string  `json:"seeds"`
-	SeedAgeFloor     time.Time `json:"seedAgeFloor"`
+	Schema            int       `json:"schema"`
+	AnchorReleases    int       `json:"anchorReleases"`
+	WindowAnchors     int       `json:"windowAnchors"`
+	WindowDays        int       `json:"windowDays"`
+	RequiredRollback  []string  `json:"requiredRollback"`
+	Seeds             []string  `json:"seeds"`
+	SeedAgeFloor      time.Time `json:"seedAgeFloor"`
+	WorkerHistoryFrom string    `json:"workerHistoryFrom"`
+	Workers           []string  `json:"workers"`
 }
 
 type sourceSelection struct {
@@ -26,6 +28,7 @@ type sourceSelection struct {
 	Direct    release.DirectSources `json:"direct"`
 	Oldest    time.Time             `json:"oldest"`
 	Baselines []baselineArtifact    `json:"baselines"`
+	Workers   []workerArtifact      `json:"workers"`
 }
 
 type baselineArtifact struct {
@@ -45,7 +48,9 @@ func selectBaselines(selection *sourceSelection, history []publishedEvidence, po
 			selection.Baselines = append(selection.Baselines, baselineArtifact{Version: version, Artifact: artifact, Rollback: updaterSource(item) || slices.Contains(policy.RequiredRollback, version)})
 		}
 	}
-	return nil
+	workers, err := selectWorkerRegistry(policy, history)
+	selection.Workers = workers
+	return err
 }
 
 func (policy upgradePolicy) validate() error {

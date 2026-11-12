@@ -55,7 +55,11 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.tools / "candidate-reader.json", args.output / "candidate-reader.json")
     environment = dict(os.environ, MESH_BOUNDARY_TOOL=str(args.tools / "boundary"),
-                       MESH_STARTUP_FAULT_BINARY=str(args.tools / "startup-fault-candidate"))
+                       MESH_STARTUP_FAULT_BINARY=str(args.tools / "startup-fault-candidate"),
+                       MESH_WORKER_PROBE=str(args.tools / "worker-probe"),
+                       MESH_WORKER_REGISTRY=str(args.baselines.parent / "retained" / "workers.json"))
+    if not Path(environment["MESH_WORKER_REGISTRY"]).is_file():
+        raise ValueError("native proof requires the complete exact worker registry")
     results = []
     for index, line in enumerate(args.baselines.read_text().splitlines()):
         if index % args.shards != args.shard:

@@ -62,6 +62,30 @@ def write_executable(stream, output):
             destination.write(block)
 
 
+def prepare_item(item, output, cache):
+    artifact = item["artifact"]
+    release = output / ("release-" + item["version"])
+    release.mkdir(exist_ok=True)
+    binary = release / "mesh"
+    if not binary.is_file() or sha256(binary) != artifact["binarySha256"]:
+        archive = acquire(item["version"], artifact["archive"], artifact["sha256"], release, cache)
+        unpack(archive, artifact["binarySha256"], binary)
+    binary.chmod(0o755)
+    return binary
+
+
+def prepare_workers(selection, platform, output, cache):
+    workers = []
+    for item in selection["workers"]:
+        if item["artifact"]["platform"] != platform:
+            continue
+        binary = prepare_item(item, output, cache)
+        workers.append(dict(item, binary=str(binary.relative_to(output))))
+    if not workers:
+        raise ValueError("native worker registry is empty")
+    (output / "workers.json").write_text(json.dumps({"schema": 1, "platform": platform, "workers": workers}, sort_keys=True) + "\n")
+
+
 def main(args):
     candidate, previous, platform, frozen, directory, output_list = args
     selection = json.loads(Path(os.environ["MESH_RELEASE_SELECTION"]).read_bytes())
@@ -75,14 +99,10 @@ def main(args):
         raise ValueError("the previous published release must be a required baseline")
     paths = []
     for item in baselines:
-        artifact = item["artifact"]
-        release = output / ("release-" + item["version"])
-        release.mkdir(exist_ok=True)
-        archive = acquire(item["version"], artifact["archive"], artifact["sha256"], release, cache)
-        binary = release / "mesh"
-        unpack(archive, artifact["binarySha256"], binary)
+        binary = prepare_item(item, output, cache)
         paths.append(str(binary))
-        (release / "source.json").write_text(json.dumps(item, sort_keys=True) + "\n")
+        (binary.parent / "source.json").write_text(json.dumps(item, sort_keys=True) + "\n")
+    prepare_workers(selection, dict(zip(("os", "arch"), platform.split("/"), strict=True)), output, cache)
     key = platform.replace("/", "_")
     for name in filter(None, frozen.split(",")):
         match = re.fullmatch(r"baseline_" + re.escape(key) + r"_([0-9a-f]{64})\.bin", name)

@@ -173,7 +173,7 @@ func verifyDirectSources(directory string, policy upgradePolicy, selection sourc
 		if !updaterSource(source) && !slices.Contains(policy.RequiredRollback, version) {
 			continue
 		}
-		verified, err := verifyRollbackAssets(directory, source, candidate, graph)
+		verified, err := verifyRollbackAssets(directory, source, candidate, graph, selection.Workers)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func verifyDirectSources(directory string, policy upgradePolicy, selection sourc
 	return refs, nil
 }
 
-func verifyRollbackAssets(directory string, source, candidate publishedEvidence, graph verifiedGraph) ([]release.RollbackRef, error) {
+func verifyRollbackAssets(directory string, source, candidate publishedEvidence, graph verifiedGraph, workers []workerArtifact) ([]release.RollbackRef, error) {
 	refs := make([]release.RollbackRef, 0, len(proofPlatforms))
 	for _, platform := range proofPlatforms {
 		transition := graph[edgeKey{From: source.Tag, To: candidate.Tag, Platform: platform}]
@@ -192,6 +192,17 @@ func verifyRollbackAssets(directory string, source, candidate publishedEvidence,
 		}
 		ref, err := findRollback(directory, candidate.Tag, transition, forward, candidate.Manifest.Compatibility)
 		if err != nil {
+			return nil, err
+		}
+		data, err := readAsset(directory, release.AssetRef{Tag: candidate.Tag, Name: ref.Rollback + ".rollback.json", SHA256: ref.Rollback}, release.MaxTransitionProofBytes)
+		if err != nil {
+			return nil, err
+		}
+		var proof release.RollbackProof
+		if err := json.Unmarshal(data, &proof); err != nil {
+			return nil, fmt.Errorf("publisher: verified rollback worker list: %w", err)
+		}
+		if err := requireWorkerCoverage(proof, source, platform, workers); err != nil {
 			return nil, err
 		}
 		refs = append(refs, ref)
