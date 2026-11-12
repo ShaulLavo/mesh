@@ -113,10 +113,12 @@ func InspectHelper(ctx context.Context, cfg HelperConfig) (HelperInstallation, e
 }
 
 type helperPromotion struct {
-	Prior   HelperInstallation
-	Receipt []byte
-	Service []byte
-	Target  string
+	Prior       HelperInstallation
+	Receipt     []byte
+	Service     []byte
+	Target      string
+	Disposition helperDisposition
+	Restoring   bool
 }
 
 func helperPromotionPath(stateDir string) string {
@@ -281,7 +283,11 @@ func awaitStableHelper(ctx context.Context, cfg HelperConfig, installed HelperIn
 }
 
 func promoteVerifiedHelper(ctx context.Context, cfg HelperConfig, prior helperRecoverySnapshot, digest string) (HelperInstallation, error) {
-	promotion := helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: digest}
+	disposition, err := captureHelperDisposition(ctx, cfg, prior.installation)
+	if err != nil {
+		return prior.installation, err
+	}
+	promotion := helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: digest, Disposition: disposition}
 	data, err := json.Marshal(promotion)
 	if err != nil {
 		return prior.installation, fmt.Errorf("encode helper promotion: %w", err)
@@ -334,6 +340,9 @@ func resumeHelperPromotion(ctx context.Context, cfg HelperConfig) error {
 	if err = validateHelperPromotion(ctx, cfg, promotion); err != nil {
 		return err
 	}
+	if promotion.Restoring {
+		return restorePromotedHelper(ctx, cfg, promotion)
+	}
 	var installed HelperInstallation
 	if err = readHelperInstallation(ctx, cfg.StateDir, &installed); err != nil {
 		return err
@@ -361,6 +370,9 @@ func resumeHelperPromotion(ctx context.Context, cfg HelperConfig) error {
 
 func validateHelperPromotion(ctx context.Context, cfg HelperConfig, promotion helperPromotion) error {
 	prior := promotion.Prior
+	if promotion.Disposition != helperRunning && promotion.Disposition != helperStopped {
+		return errors.New("retained helper promotion has no verified prior disposition")
+	}
 	if !helperDigestPattern.MatchString(promotion.Target) || !helperDigestPattern.MatchString(prior.Digest) ||
 		prior.Executable != filepath.Join(transactionDir(cfg.StateDir), "helper", prior.Digest, "mesh") {
 		return errors.New("invalid retained helper promotion image")
@@ -383,9 +395,19 @@ func validateHelperPromotion(ctx context.Context, cfg HelperConfig, promotion he
 }
 
 func restorePromotedHelper(ctx context.Context, cfg HelperConfig, promotion helperPromotion) error {
+	if !promotion.Restoring {
+		promotion.Restoring = true
+		data, err := json.Marshal(promotion)
+		if err != nil {
+			return fmt.Errorf("encode helper restoration intent: %w", err)
+		}
+		if err := atomicWrite(helperPromotionPath(cfg.StateDir), data, 0600); err != nil {
+			return err
+		}
+	}
 	engine := Engine{cfg: Config{StateDir: cfg.StateDir, HealthTimeout: helperReadinessTimeout}}
-	request := HelperRecovery{Helper: cfg, Probe: cfg.Probe}
-	prior := helperRecoverySnapshot{installation: promotion.Prior, receipt: promotion.Receipt, service: promotion.Service}
+	request := HelperRecovery{Helper: cfg, Probe: cfg.Probe, Digest: promotion.Target}
+	prior := helperRecoverySnapshot{installation: promotion.Prior, receipt: promotion.Receipt, service: promotion.Service, disposition: promotion.Disposition}
 	if err := engine.restoreRecoveryHelper(ctx, request, prior); err != nil {
 		return fmt.Errorf("restore prior helper after promotion: %w", err)
 	}

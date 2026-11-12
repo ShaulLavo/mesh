@@ -17,6 +17,7 @@ import (
 	"github.com/shaul/mesh/internal/domainpolicy"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/update"
 )
 
 func main() {
@@ -170,6 +171,16 @@ func initializeDeployment(args []string) error {
 		return nil
 	}
 	requested := deploymentRequested(args)
+	pendingAdoption, err := update.AdoptionPending(context.Background(), state)
+	if err != nil {
+		return fmt.Errorf("read deployment adoption fence: %w", err)
+	}
+	if pendingAdoption {
+		if err := domainpolicy.InitializeReadOnlyDeployment(path, state); err != nil {
+			return fmt.Errorf("initialize adoption-preserved deployment policy: %w", err)
+		}
+		return nil
+	}
 	if entryCommand(args) == "daemon" || requested {
 		policyErr = domainpolicy.InitializeDeployment(path, state, requested)
 	} else {
