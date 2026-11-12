@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest import mock
 
@@ -10,6 +11,16 @@ from fixtures import release_workers
 
 
 class ExactWorkerSelectionTests(unittest.TestCase):
+    def test_image_observer_failure_keeps_bounded_real_output_and_rejects(self):
+        result = subprocess.CompletedProcess([], 1, b"x" * 9000 + b"mapped image mismatch", b"actual stderr control")
+        with mock.patch.dict(release_workers.os.environ, MESH_WORKER_PROBE="observer"), mock.patch.object(release_workers.subprocess, "run", return_value=result) as command:
+            with self.assertRaisesRegex(RuntimeError, "mapped image mismatch") as error:
+                release_workers.verify_images(Path("state"), Path("cohort.json"))
+            self.assertIn("actual stderr control", str(error.exception))
+            self.assertIn("exited 1", str(error.exception))
+            self.assertLess(len(str(error.exception)), 8300)
+            self.assertEqual(command.call_args.kwargs["timeout"], 30)
+
     def test_modern_worker_requires_the_maintained_exporter(self):
         with mock.patch.object(release_workers.subprocess, "check_output", return_value=b"--instance"):
             with self.assertRaisesRegex(ValueError, "maintained reservation exporter"):
