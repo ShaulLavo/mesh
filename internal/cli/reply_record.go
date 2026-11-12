@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"io/fs"
 	"log"
 	"os"
-	"syscall"
 	"time"
 )
 
@@ -60,17 +60,19 @@ func readReplyRecord(state, identity string) (time.Time, bool) {
 	}
 	defer func() { _ = root.Close() }()
 	name := replyRecordName(identity)
-	before, err := root.Lstat(name)
-	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() > replyRecordLimit {
-		return time.Time{}, false
-	}
-	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	directory, err := root.Open(".")
 	if err != nil {
 		return time.Time{}, false
 	}
+	defer func() { _ = directory.Close() }()
+	fd, err := unix.Openat(int(directory.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return time.Time{}, false
+	}
+	file := os.NewFile(uintptr(fd), name)
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
-	if err != nil || !os.SameFile(before, info) || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > replyRecordLimit {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > replyRecordLimit {
 		return time.Time{}, false
 	}
 	var value replyRecord
