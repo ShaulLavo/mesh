@@ -38,6 +38,12 @@ persisted manual decisions, installer order, helper readiness, rejection,
 rollback, retry, and client-only and development controls. Manager command
 fixtures are isolated unit tests. They do not satisfy the native release gate.
 
+Pending fresh preparation excludes adoption and finished-journal promotion
+under the installation lock. The original fresh preparation can resume its
+own checkpoint. With no journal, first-hop readiness uses the same verified
+installation path that preserves a newer helper; an unfinished transaction
+still requires its exact current helper image.
+
 The integration run exposed an old coordinator-policy assertion against Unit 9's
 general status output. That fixture now checks the empty operation list and
 reads its unchanged policy through `update automatic status`. Its consent,

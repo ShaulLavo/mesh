@@ -124,14 +124,22 @@ func hostHelper(ctx context.Context, stateDir string, source release.Manifest) e
 	cfg.State = func(ctx context.Context) (updateinstall.HelperProcessState, error) {
 		return updatebootstrap.HelperServiceState(ctx, cfg)
 	}
-	status, statusErr := updateinstall.ReadContext(ctx, stateDir)
+	return ensureHostHelper(ctx, cfg, source)
+}
+
+func ensureHostHelper(ctx context.Context, cfg updateinstall.HelperConfig, source release.Manifest) error {
+	status, statusErr := updateinstall.ReadContext(ctx, cfg.StateDir)
 	if statusErr != nil && !errors.Is(statusErr, os.ErrNotExist) {
 		return hostControllerError(statusErr)
 	}
-	if errors.Is(statusErr, os.ErrNotExist) || !finishedHostJournal(status.Phase) {
+	if errors.Is(statusErr, os.ErrNotExist) {
+		_, err := updateinstall.EnsureInstalledHelper(ctx, cfg, source)
+		return hostControllerError(err)
+	}
+	if !finishedHostJournal(status.Phase) {
 		return inspectHostHelper(ctx, cfg, source)
 	}
-	_, err = updateinstall.EnsureCurrentHelper(ctx, cfg, source)
+	_, err := updateinstall.EnsureCurrentHelper(ctx, cfg, source)
 	return hostControllerError(err)
 }
 

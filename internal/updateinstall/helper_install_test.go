@@ -175,6 +175,64 @@ func TestFreshHelperDoesNotReplaceAnOlderUnjournaledHelper(t *testing.T) {
 	}
 }
 
+func TestFreshHelperCheckpointExcludesAdoption(t *testing.T) {
+	f := newFreshHelperFixture(t, promotionSystemd)
+	artifact, err := f.source.Artifact(release.CurrentPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := freshHelperPreparation(t.Context(), f.cfg, artifact.BinarySHA256); err != nil {
+		t.Fatal(err)
+	}
+	authorized := false
+	approval := AdoptionHelperApproval{Operation: strings.Repeat("a", 32), Pin: strings.Repeat("b", 64), Authorize: func(_ context.Context, commit func() error) error {
+		authorized = true
+		return commit()
+	}}
+	if _, err := PrepareAdoptionHelper(t.Context(), f.cfg, f.source, artifact.BinarySHA256, approval); err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatalf("adoption accepted a pending fresh owner: %v", err)
+	}
+	if authorized {
+		t.Fatal("competing adoption reached authority approval")
+	}
+	if _, err := os.Stat(f.commands); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("competing adoption changed manager state: %v", err)
+	}
+	if _, err := EnsureInstalledHelper(t.Context(), f.cfg, f.source); err != nil {
+		t.Fatalf("original fresh owner could not resume: %v", err)
+	}
+}
+
+func TestFreshHelperCheckpointExcludesFinishedPromotion(t *testing.T) {
+	for _, operation := range []string{"install", "ensure", "promote"} {
+		t.Run(operation, func(t *testing.T) { checkFreshCheckpointPromotion(t, operation) })
+	}
+}
+
+func checkFreshCheckpointPromotion(t *testing.T, operation string) {
+	t.Helper()
+	f := newHelperUpgradeFixture(t, promotionSystemd, "v0.1.170")
+	f.cfg.Probe = fixtureHelperProbe
+	if err := atomicWrite(freshHelperPath(f.cfg.StateDir), []byte(`{"schema":1,"digest":"`+f.prior.Digest+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := f.snapshot(t)
+	source := currentHelperManifest(t, f)
+	var err error
+	switch operation {
+	case "install":
+		_, err = EnsureInstalledHelper(t.Context(), f.cfg, source)
+	case "ensure":
+		_, err = EnsureCurrentHelper(t.Context(), f.cfg, source)
+	case "promote":
+		_, err = PromoteHelper(t.Context(), f.cfg, source, source.Artifacts[0].BinarySHA256)
+	}
+	if err == nil || !strings.Contains(err.Error(), "fresh") {
+		t.Fatalf("%s ignored a pending fresh owner: %v", operation, err)
+	}
+	f.assertUnchanged(t, before)
+}
+
 func checkFreshHelperRefusal(t *testing.T, variant string) {
 	t.Helper()
 	f := newFreshHelperFixture(t, promotionSystemd)
