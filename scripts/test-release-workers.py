@@ -4,11 +4,27 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from fixtures import release_workers
 
 
 class ExactWorkerSelectionTests(unittest.TestCase):
+    def test_modern_worker_requires_the_maintained_exporter(self):
+        with mock.patch.object(release_workers.subprocess, "check_output", return_value=b"--instance"):
+            with self.assertRaisesRegex(ValueError, "maintained reservation exporter"):
+                release_workers.reserve_worker(Path("mesh"), Path("state"), 0, {})
+
+    def test_startup_failure_retains_bounded_worker_log_tail(self):
+        with tempfile.TemporaryDirectory(prefix="worker-log-") as directory:
+            root = Path(directory)
+            (root / "worker.log").write_bytes(b"a" * 8192 + b"reservation missing")
+            process = mock.Mock()
+            process.poll.return_value = 1
+            with self.assertRaisesRegex(RuntimeError, "reservation missing") as error:
+                release_workers.wait_worker(root, process)
+            self.assertLess(len(str(error.exception)), 4300)
+
     def test_source_applicability_does_not_require_future_worker_binaries(self):
         with tempfile.TemporaryDirectory(prefix="workers-") as directory:
             root = Path(directory)
