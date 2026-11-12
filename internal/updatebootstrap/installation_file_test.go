@@ -11,7 +11,11 @@ import (
 
 func linkedServiceFixture(t *testing.T) (string, string) {
 	t.Helper()
-	root := t.TempDir()
+	physical := t.TempDir()
+	root := filepath.Join(t.TempDir(), "linked-root")
+	if err := os.Symlink(physical, root); err != nil {
+		t.Fatal(err)
+	}
 	runtime := filepath.Join(root, "run", "user", "systemd", "user")
 	home := filepath.Join(root, "home", "user", ".config", "systemd", "user")
 	for _, directory := range []string{runtime, home} {
@@ -44,7 +48,11 @@ func TestServiceFileDigestAcceptsNativeLinkedDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(files, map[string]string{target: digest}) {
+	resolved, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(files, map[string]string{resolved: digest}) {
 		t.Fatal("snapshot did not bind the resolved definition path and content")
 	}
 	if err := os.Remove(link); err != nil {
