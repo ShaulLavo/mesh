@@ -81,13 +81,30 @@ separate real-manager account positive control and native acceptance remain
 pending. No command provider stands in for a manager or peer.
 
 The fresh managed fixture consumes exact Unit 11 source
-`583b5b914f151c0080deae0db09b4f7968505c8e`. It runs the production
+`785ed5201940471a2c45d27aaa31be8b051223f8`. It runs the production
 `daemon prepare-updates` and matching `daemon installation-check` before daemon
 activation. Policy, adoption envelope and journal must still be absent. The
 first actual native daemon PID must report managed automatic mode at revision
 zero; its signed first automatic hop keeps the original attachment and worker.
 This is distinct from adoption's explicitly seeded policy and has no native
 acceptance result yet.
+
+At `3a468814`, Linux AMD64 and ARM64 reached actual managed first start with
+absent policy and automatic revision zero, then timed out on the first hop.
+Mac reached the distinct preservation assertion. These are partial first-start
+results, not first-hop passes. The old artifacts do not contain final cursor or
+poll state, so no cadence or product cause is inferred. New diagnostics retain
+the exact before/after preservation hashes, host update/cursor/status and helper
+state before exposure, after restart and on failure. No preservation exclusion,
+timer reset, manual target or longer deadline was introduced.
+
+The earlier `ad7` nil ledger failure was a fixture error. Only valid null
+collections normalize to empty lists; malformed collections fail. An actual
+empty Go store/export control supplies the pre-commit case. Teardown attempts
+session, all native units and final process verification independently and does
+not wait for a terminal prompt. Its injected terminal failure control stopped
+an actual listener process and two actual native-manager units. The older failed
+cleanup reports remain unconfirmed; they are not retroactively marked clean.
 
 The new interruption case pauses only the unpublished test-tagged helper at
 startup, verifies its real native PID/mapped image and durable receipt, kills
@@ -101,6 +118,10 @@ profile; the reusable full gate retains every adoption profile by default.
 
 The caller uses `.github/workflows/installed-catchup.yml` with `contents: read`
 and `actions: read`. Unit 3 owns the caller wiring in `ci.yml` and `release.yml`.
+Remote calls must pin both `uses: ...@H` and `harness_source: H`. All checkout
+steps use this independent harness pin and record/assert actual Git HEAD. Direct
+PR runs use their own head. Producer source is a separate input and never selects
+the harness checkout.
 Without inputs, the workflow runs the published-pair adoption matrix. To add the
 signed native cohort/format matrix, supply all of:
 
@@ -117,6 +138,45 @@ platform, and matching SHA256 for candidate, worker-probe, startup-fault-candida
 and boundary. The run head is recorded as context and is not inferred to be the
 preparation source. A queued run or partial artifact set cannot pass intake.
 
+The current complete preparation set is run `43151893803`, source
+`27b8d36f13bd48ac1919308e98cfc720c3661b51`, prefix `update-native`, artifact IDs
+`13916081357`, `13915528126`, `13915074767`. Metadata intake verified these
+without local bulk acquisition. Preparation success is not native matrix success.
+Before runner acquisition, bounded ZIP directory ranges measure actual expanded
+size and destination/scratch free space. Task-owned downloaded workers use
+same-device hard links; borrowed inputs still use independent copies.
+
+Full proof calls pass the actual three-platform candidate manifest unchanged as
+`MESH_ROLLBACK_MANIFEST`. The startup-fault image is separate. The Unit 3 producer
+fix must be consumed before full proof validation; existing prepared tools remain
+valid and no old passing cohort input proof is repeated for that repair.
+
+## Actual draft consumer
+
+The `publication-native` job requires an approved main-only caller after Unit 3's
+`reserve` and `publish` jobs have uploaded the real signed draft. Pass
+`release_version`, `release_source`, `publication_only: true`, and the exact
+`harness_source`. `release_run` identifies the `update-publication-trust`
+artifact and defaults to the caller run. After the first published updater
+exists, the worker artifact pins above are also required for its original-binary
+route and exact cohort.
+
+This consumer downloads the real archive/metadata/signature assets, verifies them
+with the maintained production signer, checks the unmodified native image and
+uses the delivered adoption/preparation APIs. It covers native legacy adoption,
+actual activation failure via a test-owned port collision, helper interruption
+and fresh managed startup. Its loopback transport serves immutable asset bytes
+and forwards TUF as end-to-end public TLS. Separate TLS controls verify the
+unchanged bytes and an independently authenticated upstream certificate; no test
+signature root is accepted for production artifacts. The real draft gate has
+not been executed because that main-only signed draft is an external dependency.
+
+When `firstPublishedUpdater` is null, its absence is recorded explicitly. Once
+populated from an actual publication, the consumer installs that original binary,
+sets real automatic policy, keeps the exact applicable workers across its native
+route to the real draft and tests rollback. It never supplies a synthetic version
+as the published baseline.
+
 ## Cleanup and remaining work
 
 Physical socket-root preflight checks every generated path before setup, including
@@ -125,7 +185,7 @@ symlink-expanded roots and an unmounted requested data drive. Per-operation
 timeouts remain bounded. Teardown is installed before process/service creation.
 Unconfirmed service or process cleanup retains scratch and fails the proof.
 
-The 23 focused controls pass, including real-manager normal and exception cleanup,
+The 33 focused controls pass, including real-manager normal and exception cleanup,
 socket bounds, verified acquisition, exact cohort inputs and complete pinned
 artifact intake. The tagged exporter compiles. The full push quality gates pass
 with no new or stale baseline findings.
@@ -135,6 +195,12 @@ cohort chain/waypoint, ordered-host and helper interruption results,
 and publication execution against the draft's real artifacts/signatures. A reboot
 must report interrupted RAM sessions honestly. An actual first-published updater
 baseline can only be added after publication.
+
+Transition route observation now holds a live request to the original listener,
+records data gaps/reconnections and rejects another listener identity. Expected
+ordered-host offline time is labeled separately. The existing transition case
+bound remains 90 seconds; the ordinary restart control remains 10 seconds. New
+observations do not turn the old failed first-hop cases into passes.
 
 Small evidence and reproducers are retained under
 `/work/reports/mesh-auto-update/unit8-installed-catchup/`. Test binaries, duplicate
