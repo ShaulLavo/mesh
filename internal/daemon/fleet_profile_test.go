@@ -365,7 +365,7 @@ func TestFleetSignedCarrierTrustAndAuthenticatedSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDeliveryJSON(t, f.controller.membershipPath, update.Fleet{Version: 1, Name: "fixture", Revision: 2, Members: []update.Host{{ID: relay.ID, Endpoint: "unix:/not-running"}}})
-	updates, err := newUpdateController(f.state, destination.ID, key)
+	updates, err := newUpdateController(t.Context(), f.state, destination.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}

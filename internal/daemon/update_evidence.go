@@ -34,21 +34,3 @@ func (u *updateController) evidence(ctx context.Context, request protocol.Contro
 	data, err := json.Marshal(reply)
 	return protocol.Control{Type: protocol.TypeUpdateEvidenceResult, RequestID: request.RequestID, Update: data}, true, hostControllerError(err)
 }
-
-func (u *updateController) hostSummary() *protocol.HostUpdateSummary {
-	ctx, cancel := context.WithTimeout(context.Background(), updateSummaryTimeout)
-	defer cancel()
-	policy, err := u.coordinator.Store.HostPolicy(ctx)
-	if err != nil {
-		return &protocol.HostUpdateSummary{Phase: "attention", Problem: err.Error()}
-	}
-	state, err := u.coordinator.Store.HostState(ctx)
-	if err != nil {
-		return &protocol.HostUpdateSummary{Mode: string(policy.Mode), Phase: "attention", Problem: err.Error()}
-	}
-	summary := &protocol.HostUpdateSummary{Mode: string(policy.Mode), Revision: policy.Revision, Phase: string(state.Phase)}
-	if state.Problem != nil {
-		summary.Problem = state.Problem.Detail
-	}
-	return summary
-}
