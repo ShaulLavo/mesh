@@ -149,7 +149,10 @@ func (r Run) ExitCode() int {
 	return 0
 }
 
-type Store struct{ directory string }
+type Store struct {
+	directory        string
+	hostInstallation string
+}
 
 func OpenStore(stateDir string) (*Store, error) {
 	if !filepath.IsAbs(stateDir) {

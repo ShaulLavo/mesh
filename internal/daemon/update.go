@@ -40,6 +40,11 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 	if err != nil {
 		return nil, hostControllerError(err)
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("locate host installation: %w", err)
+	}
+	runs = runs.WithHostInstallation(updateinstall.InstallationKind(executable, release.Current(), true))
 	cache, err := update.CacheDir()
 	if err != nil {
 		return nil, hostControllerError(err)
