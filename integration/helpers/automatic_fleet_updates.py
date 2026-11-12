@@ -72,8 +72,9 @@ def main(binary):
                 "default automatic status exposed authority identifiers")
         structured = coordinator.command("update", "status", "--json")
         joined = json.loads(structured.stdout)
-        require(joined["updates"]["sources"][0]["automatic"]["value"]["record"]["policy"]
-                == disabled["record"]["policy"], str(joined))
+        require(joined is None, "development fixture reported a binary update operation")
+        _, after_status = automatic(coordinator, "status")
+        require(after_status["record"]["policy"] == disabled["record"]["policy"], str(after_status))
         coordinator.stop_daemon()
         coordinator.start()
         _, reopened = automatic(coordinator, "status")
