@@ -1549,6 +1549,34 @@ independent reviews and green CI.
 
 ## Evidence
 
+### Darwin cutover closed as not reproducing
+
+Managing closed this diagnosis on 2026-11-12. No product fix is claimed.
+The original [Darwin cutover failure](https://github.com/ShaulLavo/mesh/actions/runs/43286962367/job/131423622571)
+on PR 455 head `c44f5235` remains preserved in
+[artifact 13976891071](https://github.com/ShaulLavo/mesh/actions/runs/43286962367/artifacts/13976891071).
+The final fleet command returned 2 with `Stopped=true`, but its surviving state
+did not retain the first stop reason. Two replacement daemons started less
+than 0.3 seconds before fixture teardown. That timing does not identify the cause.
+
+Both bounded follow-up controls passed:
+
+- The current-only Linux fixture at composition `d789fcee` completed all four
+  targets with the original 120-second outer bound. Its actual-daemon positive
+  control captured an expected first stop before the measured cutover. The
+  cutover itself never stopped. The report, corrected reproducer, per-host logs,
+  observer evidence and cleanup are in
+  `/work/reports/mesh-auto-update/current-cutover-first-stop/REPORT.md`.
+- PR 446 head `15c81e0c` passed the normal
+  [native Darwin cutover](https://github.com/ShaulLavo/mesh/actions/runs/43287823060/job/131427338690),
+  including its historical workers and session-preservation checks. That run's
+  separate historical update proofs failed and remain blocking.
+
+The original cause remains unknown. Do not run another Darwin diagnostic for
+this closed observation. If normal CI reproduces it, retain that artifact and
+bring it back to managing. This decision changes no timeout, assertion,
+authentication requirement or release gate.
+
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
 The graph analysis reads manifest claims and does not verify receipts.
