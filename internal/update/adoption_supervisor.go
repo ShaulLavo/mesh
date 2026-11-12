@@ -170,6 +170,9 @@ func (u *AdoptionSupervisor) existingStart(ctx context.Context, start AdoptionSt
 	if err != nil {
 		return true, err
 	}
+	if start.Expected != "" && start.Expected != prior.Host.Health.HostID {
+		return true, errors.New("update: SSH account does not contain the expected daemon identity")
+	}
 	if start.ID != "" && start.ID != prior.ID || start.Pin != "" && start.Pin != prior.Pin || start.Version != prior.Version {
 		if prior.Phase == AdoptionRolledBack || prior.Phase == AdoptionAttention {
 			return false, canReplaceAdoption(prior, start.Version)

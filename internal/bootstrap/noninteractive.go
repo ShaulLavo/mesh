@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/user"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -25,6 +28,12 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 		remoteTarget.user, remoteTarget.guessedUser = current.Username, true
 	}
 	opts := SSHOptions{ConnectTimeout: 10 * time.Second}
+	if resolve != nil {
+		opts.KnownHostsPath, err = systemKnownHostsPath(resolve(remoteTarget.alias, "UserKnownHostsFile"))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	if file := sshConfigIdentityFile(remoteTarget.alias, resolve); file != "" {
 		opts.IdentityFiles = []string{file}
 	}
@@ -38,4 +47,25 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 		return stdout, stderr, fmt.Errorf("run system SSH command: %w", err)
 	}
 	return stdout, stderr, nil
+}
+
+func systemKnownHostsPath(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "none" || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("system SSH requires an existing known-hosts file")
+	}
+	if value == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("locate configured system SSH known hosts: %w", err)
+		}
+		value = filepath.Join(home, strings.TrimPrefix(value, "~/"))
+	}
+	if !filepath.IsAbs(value) {
+		return "", fmt.Errorf("configured system SSH known hosts must use one absolute file path")
+	}
+	return value, nil
 }
