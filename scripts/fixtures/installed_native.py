@@ -16,7 +16,7 @@ import uuid
 from xml.sax.saxutils import escape
 from pathlib import Path
 
-from fixtures import native_services
+from fixtures import native_services, installed_routes
 
 REPO = Path(__file__).resolve().parents[2]
 HELPERS = REPO / "integration" / "helpers"
@@ -220,6 +220,7 @@ class Installation:
         self.response = None
         self.worker, self.shell, self.listener = None, None, None
         self.cleaned = False
+        self.route_observer = None
 
     def prepare(self):
         with socket.socket() as reservation:
@@ -306,6 +307,8 @@ class Installation:
         if response.get("type") != "service.upserted":
             raise RuntimeError(f"native service registration failed: {response!r}")
         self.open_stream()
+        self.route_observer = installed_routes.Observer(self.port, self.listener, self.root / "route-observation.json")
+        self.route_observer.start()
 
     def prepare_client(self):
         config = self.root / "cc"
@@ -395,7 +398,11 @@ class Installation:
         self.cleaned = True
 
     def close_session(self):
-        cleanup_all((self.close_stream, self.stop_listener, self.stop_worker, self.close_terminal, self.verify_session_stopped))
+        cleanup_all((self.close_route_observer, self.close_stream, self.stop_listener, self.stop_worker, self.close_terminal, self.verify_session_stopped))
+
+    def close_route_observer(self):
+        if self.route_observer:
+            self.route_observer.close()
 
     def close_stream(self):
         if self.response:
@@ -460,6 +467,9 @@ def prove(root, output, host, pair, preparer):
 
 
 def retain_logs(root, output, name):
+    route = root / "route-observation.json"
+    if route.exists():
+        shutil.copy2(route, output / (name + "-route-observation.json"))
     for filename in ("daemon.log", "daemon.err"):
         path = root / filename
         if path.is_file():

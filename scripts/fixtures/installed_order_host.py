@@ -51,6 +51,8 @@ class Host:
             self.case.fault.write_text(json.dumps({"daemon": value["versions"]}))
             return {"updated": True}
         if operation in ("stop", "start"):
+            if value.get("expectedOffline") is not None:
+                self.case.route_observer.offline(value["expectedOffline"])
             getattr(self.case.units, operation)("daemon")
             return {"completed": True}
         if operation == "close":
@@ -89,6 +91,7 @@ class Host:
         result["ready"] = True
         result["build"] = case.control("host.info")["host"]["build"]
         case.inspect_retained()
+        result["route"] = case.route_observer.snapshot()
         receipt = json.loads((case.state / "update/helper/installed.json").read_text())
         manager = case.units.managers["helper"]
         result["helper"] = native_services.mapped_image(manager.manager_pid(), receipt["executable"])

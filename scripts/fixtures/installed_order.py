@@ -136,7 +136,7 @@ def scenarios(root, drivers, descriptor, record):
     canary, sleeping, burst = drivers
     origin = installed_origin.Origin(root)
     directory = Path(descriptor["releases"]["directory"])
-    sleeping.call("stop")
+    sleeping.call("stop", expectedOffline=True)
     canary.call("fault", versions=[failed])
     origin.head(directory, failed)
     restart(canary)
@@ -154,7 +154,7 @@ def scenarios(root, drivers, descriptor, record):
     restart(burst)
     still_held = await_held(burst, first, 45)
     wait_soak(canary, canary_latest, latest)
-    sleeping.call("start")
+    sleeping.call("start", expectedOffline=False)
     sleeper_latest = await_version(sleeping, latest, "committed", 90)
     wait_soak(sleeping, sleeper_latest, latest)
     restart(burst)
@@ -197,7 +197,7 @@ def await_held(driver, version, timeout):
 
 
 def bounded(value):
-    return {key: value[key] for key in ("build", "state", "entries", "failed", "helper", "peers", "dependents")}
+    return {key: value[key] for key in ("build", "state", "entries", "failed", "helper", "peers", "dependents", "route")}
 
 
 def commit_time(value, version):

@@ -40,6 +40,8 @@ on:
       - 'scripts/fixtures/installed_order.py'
       - 'scripts/fixtures/installed_order_host.py'
       - 'scripts/fixtures/installed_fresh.py'
+      - 'scripts/fixtures/installed_routes.py'
+      - 'scripts/fixtures/installed_storage.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
@@ -225,6 +227,14 @@ jobs:
         run: |
           python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" \
             "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/cohort-control/producer-pin.json"
+      - name: Measure actual archive extraction space before large acquisition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_KEY: ${{ matrix.key }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/cohort-control/storage-preflight.json"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ inputs.worker_artifact_prefix }}-${{ matrix.key }}
@@ -238,6 +248,7 @@ jobs:
           PROOF_MODE: ${{ matrix.mode }}
           PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
           PYTHONDONTWRITEBYTECODE: '1'
+          MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/native-worker-input"

@@ -43,7 +43,7 @@ def verify_set(repository, run, source, prefix):
         matches = [item for item in artifacts if item["name"] == expected and not item["expired"]]
         if len(matches) != 1:
             raise RuntimeError("complete native artifact set requires exactly one live " + expected)
-        result[key] = {"id": matches[0]["id"], "name": expected, "digest": matches[0].get("digest")}
+        result[key] = {"id": matches[0]["id"], "name": expected, "size": matches[0]["size_in_bytes"], "digest": matches[0].get("digest")}
     return {"run": run, "source": source, "runHead": metadata["head_sha"], "artifacts": result}
 
 

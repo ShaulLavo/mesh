@@ -1,5 +1,6 @@
 """Owned copies and observations using the authoritative published-worker API."""
 import hashlib
+import errno
 import json
 import os
 import shutil
@@ -15,15 +16,19 @@ def stage(registry, destination, platform):
     if data["schema"] != 1 or data["platform"] != platform or not data["workers"]:
         raise RuntimeError("native exact worker registry schema/platform differs")
     destination.mkdir(parents=True)
+    owned = os.environ.get("MESH_OWNED_WORKER_INPUT")
+    if owned and (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+        raise RuntimeError("owned native artifact links require the disposable hosted input directory")
+    owned_root = Path(owned).resolve(strict=True) if owned else None
     records = []
     for item in data["workers"]:
-        records.append(copy_record(registry, destination, item))
+        records.append(copy_record(registry, destination, item, owned_root))
     path = destination / "workers.json"
     path.write_text(json.dumps(data | {"workers": records}, sort_keys=True) + "\n")
     return path
 
 
-def copy_record(registry, destination, item):
+def copy_record(registry, destination, item, owned_root=None):
     relative = Path(item["binary"])
     if relative.is_absolute() or ".." in relative.parts:
         raise RuntimeError("worker registry path is not relative beneath its parent")
@@ -34,11 +39,25 @@ def copy_record(registry, destination, item):
     target = destination / digest / "mesh"
     target.parent.mkdir(exist_ok=True)
     if not target.exists():
-        shutil.copy2(source, target)
+        copy_image(source, target, owned_root)
     with target.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
             raise RuntimeError("copied exact archived worker differs from its published identity")
     return item | {"binary": str(target.relative_to(destination))}
+
+
+def copy_image(source, target, owned_root):
+    if owned_root is None:
+        shutil.copy2(source, target)
+        return
+    if not source.is_relative_to(owned_root) or source.stat().st_uid != os.getuid():
+        raise RuntimeError("owned worker source is outside the task-owned artifact directory")
+    try:
+        os.link(source, target)
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            raise
+        shutil.copy2(source, target)
 
 
 class Cohort:

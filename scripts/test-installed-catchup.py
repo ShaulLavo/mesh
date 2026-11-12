@@ -1,6 +1,7 @@
 """Installed proof path boundaries and real native-service failure cleanup."""
 import json
 import ast
+import http.server
 import io
 import importlib.util
 import os
@@ -9,10 +10,11 @@ import socket
 import tempfile
 import tarfile
 import unittest
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -75,7 +77,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -225,6 +227,65 @@ class NativeServiceTest(unittest.TestCase):
         self.assertTrue(evidence["cleanup"]["processAbsent"])
 
 
+class RouteHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        try:
+            while not self.server.stopping.is_set():
+                self.wfile.write((str(self.server.listener_pid) + "\n").encode())
+                self.wfile.flush()
+                self.server.stopping.wait(0.02)
+        except OSError:
+            pass
+
+    def log_message(self, *_arguments):
+        pass
+
+
+class RouteObservationTest(unittest.TestCase):
+    def server(self, port=0, pid=None):
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), RouteHandler)
+        server.stopping = threading.Event()
+        server.listener_pid = os.getpid() if pid is None else pid
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        self.addCleanup(self.stop_server, server, thread)
+        thread.start()
+        return server, thread
+
+    def stop_server(self, server, thread):
+        server.stopping.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    def test_live_stream_loss_and_reconnection_is_measured(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        server, thread = self.server()
+        port = server.server_port
+        observer = installed_routes.Observer(port, {"pid": os.getpid()}, Path(temporary.name) / "route.json", maximum=2)
+        self.addCleanup(observer.close)
+        observer.start()
+        self.stop_server(server, thread)
+        native_services.wait_for(lambda: not observer.snapshot()["connected"], "observer missed the actual TCP stream loss")
+        self.server(port)
+        observer.recovered()
+        value = observer.snapshot()
+        self.assertGreater(value["pulses"], 1)
+        self.assertGreater(len(value["gaps"]), 0)
+        self.assertTrue(all(0 < gap["seconds"] < 2 for gap in value["gaps"]))
+
+    def test_another_listener_is_rejected(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        server, _thread = self.server(pid=os.getpid() + 1)
+        observer = installed_routes.Observer(server.server_port, {"pid": os.getpid()}, Path(temporary.name) / "route.json")
+        self.addCleanup(observer.close)
+        with self.assertRaisesRegex(RuntimeError, "another listener"):
+            observer.start()
+
+
 class AccountIsolationTest(unittest.TestCase):
     def test_account_creation_is_disabled_outside_disposable_hosted_root(self):
         with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}), patch.object(installed_accounts, "command") as command:
@@ -248,7 +309,7 @@ class ArtifactPinTest(unittest.TestCase):
         jobs = [{"name": "Native proofs / prepare (" + key.replace("-", "/") + ", runner)",
                  "status": "completed", "conclusion": "success"} for key in installed_artifacts.KEYS]
         return [{"head_sha": "b" * 40}, {"jobs": jobs}, {"artifacts": [
-            {"id": index, "name": "update-native-" + key, "expired": False, "digest": "sha256:" + "b" * 64}
+            {"id": index, "name": "update-native-" + key, "expired": False, "size_in_bytes": 1234, "digest": "sha256:" + "b" * 64}
             for index, key in enumerate(installed_artifacts.KEYS, 1)]}]
 
     def test_complete_three_platform_set_is_pinned(self):
