@@ -9,6 +9,7 @@ import subprocess
 import signal
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -95,8 +96,8 @@ class OrderDriver:
                                       "workersPreserved": 1, "committedAt": self.model.clock.stamp()})
 
 
-def exercise_model(model):
-    drivers = [OrderDriver(model, role) for role in ("canary", "sleep", "burst")]
+def exercise_model(model, driver_type=OrderDriver):
+    drivers = [driver_type(model, role) for role in ("canary", "sleep", "burst")]
     record = {"observations": []}
     clock = SimpleNamespace(monotonic=lambda: model.clock.seconds, sleep=model.clock.advance)
     dates = SimpleNamespace(now=lambda _: model.clock.now(), fromisoformat=datetime.fromisoformat, fromtimestamp=datetime.fromtimestamp)
@@ -105,7 +106,36 @@ def exercise_model(model):
     return record
 
 
+class SlowInspectionDriver(OrderDriver):
+    def call(self, operation, **fields):
+        value = super().call(operation, **fields)
+        latest = installed_releases.VERSIONS[-1]
+        if operation != "inspect" or not fields.get("active", True) or value["build"]["version"] != latest:
+            return value
+        follower = {"canary": "burst", "burst": "sleep"}.get(self.account["role"])
+        if follower:
+            self.model.inspections[follower] = self.model.holds[follower].wait(timeout=1)
+            self.model.clock.advance(6)
+        return value
+
+
 class OrderReviewTest(unittest.TestCase):
+    def test_slow_full_inspections_do_not_consume_either_preexpiry_opportunity(self):
+        model = OrderModel()
+        model.holds = {role: threading.Event() for role in ("burst", "sleep")}
+        model.inspections = {}
+        original = installed_order.await_opportunity
+        def capture(driver, source, target, *arguments):
+            value = original(driver, source, target, *arguments)
+            if target == installed_releases.VERSIONS[-1]:
+                model.holds[driver.account["role"]].set()
+            return value
+        with patch.object(installed_order, "await_opportunity", side_effect=capture):
+            record = exercise_model(model, SlowInspectionDriver)
+        self.assertEqual(model.inspections, {"burst": True, "sleep": True})
+        self.assertIn("directBeforeSoak", record["observations"][1])
+        self.assertIn("sleepBeforeSoak", record["observations"][1])
+
     def test_product_that_ignores_soak_is_rejected_before_expiry(self):
         with self.assertRaisesRegex(RuntimeError, "before its predecessor"):
             exercise_model(OrderModel(ignore_soak=True))
