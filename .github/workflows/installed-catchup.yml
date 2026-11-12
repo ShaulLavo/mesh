@@ -3,6 +3,10 @@ name: Installed catch-up
 on:
   workflow_call:
     inputs:
+      reusable_call:
+        type: boolean
+        default: true
+        description: 'Isolate reusable proof runs from direct PR cancellation'
       worker_artifact_prefix:
         type: string
         default: ''
@@ -46,8 +50,8 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.workflow }}-installed-catchup-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: installed-catchup-${{ inputs.reusable_call && format('call-{0}-{1}-{2}-{3}', github.run_id, github.workflow, inputs.worker_artifact_run, inputs.worker_artifact_source) || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.reusable_call }}
 
 defaults:
   run:
