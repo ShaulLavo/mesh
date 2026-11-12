@@ -20,8 +20,8 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
-// Twenty-four independent 250 ms observations exceed Inspect's five seconds
-// when serialized. These sockets still use the production native image probe.
+// Both cohorts exceed Inspect's five seconds when serialized. These sockets
+// still use the production native image probe.
 func TestInspectDelayedWorkerCohort(t *testing.T) {
 	for _, count := range []int{24, 40} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) { inspectDelayedWorkerCohort(t, count) })
@@ -68,7 +68,7 @@ func inspectDelayedWorkerCohort(t *testing.T, count int) {
 	if got := lookups.Load(); got != int32((count+31)/32) { //nolint:gosec // fixture count is bounded to 40
 		t.Fatalf("worker image lookups = %d, want %d", got, (count+31)/32)
 	}
-	t.Logf("native worker observations in %s; peak socket concurrency %d", time.Since(started), peak.Load())
+	t.Logf("%d native worker observations in %s; peak socket concurrency %d", count, time.Since(started), peak.Load())
 }
 
 func TestWorkerCohortCancellationJoinsConnections(t *testing.T) {

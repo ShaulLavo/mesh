@@ -14,7 +14,7 @@ import (
 func peerPID(conn net.Conn) (int, error) {
 	socket, ok := conn.(syscall.Conn)
 	if !ok {
-		return 0, fmt.Errorf("inspect Unix peer process: %w", err)ors.New("bootstrap requires a local Unix socket")
+		return 0, errors.New("bootstrap requires a local Unix socket")
 	}
 	raw, err := socket.SyscallConn()
 	if err != nil {

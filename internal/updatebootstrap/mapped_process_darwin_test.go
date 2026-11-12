@@ -30,10 +30,15 @@ func TestMappedProcessSets(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := mappedProcessSets(test.output, []int{11, 22})
-			if (err != nil) != test.invalid || !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("sets = %q, %v; want %q, invalid=%v", got, err, test.want, test.invalid)
-			}
+			checkMappedSets(t, test.output, test.want, test.invalid)
 		})
+	}
+}
+
+func checkMappedSets(t *testing.T, output string, want []string, invalid bool) {
+	t.Helper()
+	got, err := mappedProcessSets(output, []int{11, 22})
+	if (err != nil) != invalid || !reflect.DeepEqual(got, want) {
+		t.Fatalf("sets = %q, %v; want %q, invalid=%v", got, err, want, invalid)
 	}
 }
