@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"github.com/shaul/mesh/internal/release"
@@ -25,10 +26,32 @@ func init() {
 	if err != nil || json.Unmarshal(data, &fault) != nil {
 		os.Exit(71)
 	}
+	if os.Args[1] == "daemon" {
+		recordInstalledStart()
+	}
 	if os.Args[1] == "daemon" && slices.Contains(fault.Daemon, release.Version) {
 		os.Exit(70)
 	}
 	if os.Args[1] == "update-helper" && slices.Contains(fault.Helper, release.Version) {
 		os.Exit(70)
+	}
+}
+
+func recordInstalledStart() {
+	path := os.Getenv("MESH_INSTALLED_START_RECORD")
+	if path == "" {
+		return
+	}
+	policy, err := os.ReadFile(filepath.Join(os.Getenv("MESH_STATE_DIR"), "updates", "host-policy.json"))
+	entry := map[string]any{"version": release.Version, "policy": json.RawMessage("null")}
+	if err == nil {
+		entry["policy"] = json.RawMessage(policy)
+	}
+	data, err := json.Marshal(entry)
+	if err != nil {
+		os.Exit(73)
+	}
+	if err := os.WriteFile(path+"."+release.Version+".json", data, 0600); err != nil {
+		os.Exit(73)
 	}
 }

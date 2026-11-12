@@ -51,6 +51,7 @@ class Units:
         self.managers = {}
         self.links, self.dropins = [], []
         self.registered = []
+        self.external_links = self.helper_links()
         for role, label in (("daemon", "mesh"), ("helper", "mesh-update-helper")):
             manager = native_services.Manager(root)
             manager.label = "dev.shaulavo." + label if sys.platform == "darwin" else label
@@ -94,6 +95,8 @@ class Units:
 
     def stop(self, role):
         manager = self.managers[role]
+        if manager.exists():
+            manager.pid = manager.manager_pid() or manager.pid
         if manager.system == "Linux":
             manager.systemctl("stop", manager.label + ".service", check=False)
             return
@@ -104,8 +107,18 @@ class Units:
         actions = [lambda role=role: self.stop(role) for role in reversed(self.registered)]
         actions.extend(lambda link=link, target=target: self.unlink(link, target) for link, target in self.links)
         actions.extend(lambda directory=directory: self.remove_dropin(directory) for directory in self.dropins)
+        actions.append(self.remove_helper_links)
         actions.extend(lambda manager=manager: self.verify_removed(manager) for manager in self.managers.values())
         cleanup_all(actions)
+
+    def helper_links(self):
+        roots = (Path.home() / ".config/systemd/user", self.root / "home/.config/systemd/user")
+        return {path for root in roots if root.exists() for path in root.glob("*.wants/mesh-update-helper.service") if path.is_symlink()}
+
+    def remove_helper_links(self):
+        for path in self.helper_links().difference(self.external_links):
+            if path.resolve().is_relative_to(self.root):
+                path.unlink()
 
     def unlink(self, link, target):
         if not link.is_symlink():

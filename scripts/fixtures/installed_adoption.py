@@ -18,6 +18,7 @@ class AdoptionCase(installed_native.Installation):
         self.fault = self.root / "fault.json"
         self.fault.write_text("{}")
         self.environment.update(origin.environment() | {"MESH_INSTALLED_FAULT": str(self.fault),
+            "MESH_INSTALLED_START_RECORD": str(self.root / "start"),
             "MESH_UPDATE_CACHE_DIR": str(self.root / "cache")})
         self.snapshots = {}
         self.prior = None
@@ -94,15 +95,20 @@ class AdoptionCase(installed_native.Installation):
         phase = result.get("details", {}).get("phase")
         if result.get("pin") != pin:
             raise RuntimeError("canonical adoption metadata pin differs")
-        if self.scenario == "adopt" and (phase != "adopted" or not result.get("confirmed")):
+        successful = self.scenario in ("adopt", "initial")
+        if successful and (phase != "adopted" or not result.get("confirmed")):
             raise RuntimeError("adoption did not confirm: " + json.dumps(result))
+        if successful:
+            milestone = result.get("adopted") or {}
+            if milestone.get("metadata") != pin or milestone.get("workersPreserved") != 1:
+                raise RuntimeError("confirmed adoption lacks its exact pinned preserved-worker milestone")
         if self.scenario == "rollback" and phase != "rolled-back":
             raise RuntimeError("failed native activation did not roll back: " + json.dumps(result))
         if self.scenario == "helper" and (phase != "recorded" or not result.get("details", {}).get("problem") or result.get("confirmed")):
             raise RuntimeError("failed native helper start did not hold adoption: " + json.dumps(result))
         running = self.control("host.info")["host"]["build"]
-        expected = self.releases.builds[version] if self.scenario == "adopt" else self.pair["daemon"]["artifact"]
-        digest = expected["digest"] if self.scenario == "adopt" else expected["binarySha256"]
+        expected = self.releases.builds[version] if successful else self.pair["daemon"]["artifact"]
+        digest = expected["digest"] if successful else expected["binarySha256"]
         if running["digest"] != digest:
             raise RuntimeError("native daemon image differs after adoption/failure")
         self.inspect_retained()
@@ -111,6 +117,11 @@ class AdoptionCase(installed_native.Installation):
             journal = json.loads((self.state / "update/installation.json").read_text())
             if journal["settings"] != self.prior["settings"]:
                 raise RuntimeError("adoption changed actual prior journal/service/cache settings")
+        if self.scenario != "helper":
+            started = json.loads((self.root / ("start." + version + ".json")).read_text())
+            policy = started.get("policy") or {}
+            if policy.get("mode") != "automatic" or policy.get("revision") != 1:
+                raise RuntimeError("explicit adoption policy was not present at the first native candidate start")
         return {"phase": phase, "confirmed": result.get("confirmed", False), "running": running,
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "client": self.terminal.pid, "helper": helper}
 
@@ -208,8 +219,9 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
             "metadata": releases.metadata, "genuineFullProofs": proofs}, indent=2) + "\n")
         return
     for host in hosts:
-        for scenario in ("adopt", "rollback", "helper"):
-            run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, previous[host["name"]])
+        for scenario in ("adopt", "rollback", "helper", "initial"):
+            prior = None if scenario == "initial" else previous[host["name"]]
+            run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, prior)
 
 
 def retain_producer_logs(root, output):
