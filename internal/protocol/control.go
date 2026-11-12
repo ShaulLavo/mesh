@@ -15,48 +15,50 @@ import (
 
 // Control message type names.
 const (
-	TypeAppRequest         = "app.request"
-	TypeAppResult          = "app.result"
-	TypeAppRegistry        = "app.registry"
-	TypeAttach             = "session.attach"
-	TypeAttachDetached     = "session.attach-detached"
-	TypeAttached           = "session.attached"
-	TypeDetach             = "session.detach"
-	TypeExit               = "session.exit"
-	TypeResize             = "terminal.resize"
-	TypeSignal             = "session.signal"
-	TypeKill               = "session.kill"
-	TypeCreate             = "session.create"
-	TypeCreated            = "session.created"
-	TypeList               = "session.list"
-	TypeListed             = "session.listed"
-	TypeCatalogContinue    = "catalog.continue"
-	TypeInspect            = "session.inspect"
-	TypeInspected          = "session.inspected"
-	TypeContainment        = "session.containment"
-	TypeContained          = "session.contained"
-	TypeNest               = "session.nest"
-	TypeNesting            = "session.nesting"
-	TypeLogs               = "session.logs"
-	TypeRemove             = "session.remove"
-	TypeLogged             = "session.logged"
-	TypeHostInfo           = "host.info"
-	TypeFleetProfileSync   = "fleet.profile.sync"
-	TypeHostContext        = "host.context"
-	TypeHostContextResult  = "host.context.result"
-	TypeHostRename         = "host.rename"
-	TypeHostRenamed        = "host.renamed"
-	TypeServicePreview     = "service.preview"
-	TypeServicePreviewed   = "service.previewed"
-	TypeServiceUpsert      = "service.upsert"
-	TypeServiceLabel       = "service.label"
-	TypeServiceList        = "service.list"
-	TypeServiceDelete      = "service.delete"
-	TypeServiceStart       = "service.start"
-	TypeServiceStop        = "service.stop"
-	TypeCertificateInstall = "certificate.install"
-	TypeCopyRequest        = "copy.request"
-	TypeCopyResult         = "copy.result"
+	TypeAppRequest           = "app.request"
+	TypeAppResult            = "app.result"
+	TypeAppRegistry          = "app.registry"
+	TypeAttach               = "session.attach"
+	TypeAttachDetached       = "session.attach-detached"
+	TypeAttached             = "session.attached"
+	TypeDetach               = "session.detach"
+	TypeExit                 = "session.exit"
+	TypeResize               = "terminal.resize"
+	TypeSignal               = "session.signal"
+	TypeKill                 = "session.kill"
+	TypeCreate               = "session.create"
+	TypeCreated              = "session.created"
+	TypeList                 = "session.list"
+	TypeListed               = "session.listed"
+	TypeCatalogContinue      = "catalog.continue"
+	TypeInspect              = "session.inspect"
+	TypeInspected            = "session.inspected"
+	TypeContainment          = "session.containment"
+	TypeContained            = "session.contained"
+	TypeNest                 = "session.nest"
+	TypeNesting              = "session.nesting"
+	TypeLogs                 = "session.logs"
+	TypeRemove               = "session.remove"
+	TypeLogged               = "session.logged"
+	TypeHostInfo             = "host.info"
+	TypeUpdateEvidence       = "update.evidence"
+	TypeUpdateEvidenceResult = "update.evidence.result"
+	TypeFleetProfileSync     = "fleet.profile.sync"
+	TypeHostContext          = "host.context"
+	TypeHostContextResult    = "host.context.result"
+	TypeHostRename           = "host.rename"
+	TypeHostRenamed          = "host.renamed"
+	TypeServicePreview       = "service.preview"
+	TypeServicePreviewed     = "service.previewed"
+	TypeServiceUpsert        = "service.upsert"
+	TypeServiceLabel         = "service.label"
+	TypeServiceList          = "service.list"
+	TypeServiceDelete        = "service.delete"
+	TypeServiceStart         = "service.start"
+	TypeServiceStop          = "service.stop"
+	TypeCertificateInstall   = "certificate.install"
+	TypeCopyRequest          = "copy.request"
+	TypeCopyResult           = "copy.result"
 
 	TypeHostInfoResult       = "host.info.result"
 	TypeServiceUpserted      = "service.upserted"
@@ -145,19 +147,28 @@ type HostRename struct {
 	ExpectedRevision uint64 `json:"expectedRevision"`
 }
 
+type HostUpdateSummary struct {
+	Mode     string `json:"mode"`
+	Phase    string `json:"phase"`
+	Revision uint64 `json:"revision"`
+	Problem  string `json:"problem,omitempty"`
+}
+
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	MachineName            string         `json:"machineName,omitempty"`
-	NameRevision           uint64         `json:"nameRevision,omitempty"`
-	Build                  *release.Build `json:"build,omitempty"`
-	UpdateSupported        bool           `json:"updateSupported,omitempty"`
-	RecoverySupported      bool           `json:"recoverySupported,omitempty"`
-	ServiceHealthSupported bool           `json:"serviceHealthSupported,omitempty"`
-	ID                     string         `json:"id"`
-	MeshIdentity           string         `json:"meshIdentity"`
-	TailscaleName          string         `json:"tailscaleName,omitempty"`
-	PrivateName            string         `json:"privateName,omitempty"`
-	Wake                   *wake.Grant    `json:"wake,omitempty"`
+	MachineName             string             `json:"machineName,omitempty"`
+	NameRevision            uint64             `json:"nameRevision,omitempty"`
+	Build                   *release.Build     `json:"build,omitempty"`
+	UpdateEvidenceSupported bool               `json:"updateEvidenceSupported,omitempty"`
+	HostUpdate              *HostUpdateSummary `json:"hostUpdate,omitempty"`
+	UpdateSupported         bool               `json:"updateSupported,omitempty"`
+	RecoverySupported       bool               `json:"recoverySupported,omitempty"`
+	ServiceHealthSupported  bool               `json:"serviceHealthSupported,omitempty"`
+	ID                      string             `json:"id"`
+	MeshIdentity            string             `json:"meshIdentity"`
+	TailscaleName           string             `json:"tailscaleName,omitempty"`
+	PrivateName             string             `json:"privateName,omitempty"`
+	Wake                    *wake.Grant        `json:"wake,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its

@@ -126,6 +126,37 @@ func TestHostReaderPacketBoundsAndOriginalBytes(t *testing.T) {
 	}
 }
 
+func TestHostReaderRejectsOversizedComponents(t *testing.T) {
+	f := newHostFixture(t)
+	input := f.readerInput("v0.1.1", "v0.1.2")
+	for _, kind := range []string{"source envelope", "target metadata", "manifest", "page", "forward", "rollback", "workers"} {
+		t.Run(kind, func(t *testing.T) { assertReaderComponentBound(t, input, kind) })
+	}
+}
+
+func assertReaderComponentBound(t *testing.T, input HostReaderInput, kind string) {
+	t.Helper()
+	switch kind {
+	case "source envelope":
+		input.Source.Envelope = make([]byte, release.MaxSignatureBytes+1)
+	case "target metadata":
+		input.Target.Metadata = make([]byte, release.MaxMetadataBytes+1)
+	case "manifest":
+		input.Target.Manifest = make([]byte, release.DocumentLimit(release.ManifestDocument)+1)
+	case "page":
+		input.Source.Page = make([]byte, release.MaxAnchorPageBytes+1)
+	case "forward":
+		input.Forward = make([]byte, release.MaxTransitionProofBytes+1)
+	case "rollback":
+		input.Rollback = make([]byte, release.MaxTransitionProofBytes+1)
+	case "workers":
+		input.Workers = make([]HostReaderWorker, MaxHostReaderWorkers+1)
+	}
+	if err := input.validate(); err == nil {
+		t.Fatalf("unbounded %s accepted", kind)
+	}
+}
+
 func buildOriginalHostReader(t *testing.T, signer *signingFixture, epoch uint32, version string) string {
 	t.Helper()
 	root, err := filepath.Abs("../..")

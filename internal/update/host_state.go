@@ -38,6 +38,7 @@ type OwnedRequest struct {
 	Request        string                 `json:"request"`
 	Generation     uint64                 `json:"generation"`
 	PolicyRevision uint64                 `json:"policyRevision"`
+	IntentRevision uint64                 `json:"intentRevision,omitempty"`
 	Edge           Edge                   `json:"edge"`
 	Installation   updateinstall.Request  `json:"installation"`
 	Metadata       string                 `json:"metadata"`
@@ -150,7 +151,7 @@ func (a HostAdoption) validateUnattended() error {
 	if !a.Confirmed || a.Adopted == nil {
 		return errors.New("update: unattended milestone precedes adoption confirmation")
 	}
-	if err := validateAdoptionEntry(*a.Unattended, "host"); err != nil {
+	if err := validateAdoptionEntry(*a.Unattended, hostOrigin); err != nil {
 		return err
 	}
 	order, err := release.CompareVersions(a.Unattended.Version, a.Adopted.Version)
@@ -195,7 +196,7 @@ func (o OwnedRequest) matches(request updateinstall.Request) error {
 	if err != nil {
 		return hostError(err)
 	}
-	if !ValidRunID(o.Request) || o.Generation == 0 || o.PolicyRevision == 0 || o.Epoch == 0 || !hostDigest(o.Metadata) || request.Automatic != nil {
+	if !ValidRunID(o.Request) || o.Generation == 0 || o.PolicyRevision == 0 && o.IntentRevision == 0 || o.Epoch == 0 || !hostDigest(o.Metadata) || request.Automatic != nil {
 		return errors.New("update: invalid host ownership")
 	}
 	if o.Request != request.ID || o.Generation != request.Generation || o.Edge != (Edge{request.Current.Digest, artifact.BinarySHA256, request.Current.Platform}) || !reflect.DeepEqual(o.Installation, request) {
@@ -299,7 +300,10 @@ func (s *Store) existingLedgerIdentity(head hostLedger, entry LedgerEntry) (bool
 	if err != nil {
 		return false, err
 	}
-	if identity.Seq < head.First || identity.Seq > head.Last {
+	if identity.Seq < head.First {
+		return true, nil
+	}
+	if identity.Seq > head.Last {
 		return false, errors.New("update: ledger request identity outside retained history")
 	}
 	var existing LedgerEntry
@@ -321,6 +325,10 @@ func (s *Store) HostLedger(ctx context.Context, after uint64, limit int) ([]Ledg
 		return nil, false, err
 	}
 	defer unlock()
+	return s.hostLedgerPage(after, limit)
+}
+
+func (s *Store) hostLedgerPage(after uint64, limit int) ([]LedgerEntry, bool, error) {
 	head, err := s.ledgerHead()
 	if err != nil {
 		return nil, false, err
