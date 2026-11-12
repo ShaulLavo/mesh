@@ -77,7 +77,7 @@ func recordInstalledStart() {
 		return
 	}
 	policy, err := os.ReadFile(filepath.Join(os.Getenv("MESH_STATE_DIR"), "updates", "host-policy.json"))
-	entry := map[string]any{"version": release.Version, "policy": json.RawMessage("null")}
+	entry := map[string]any{"version": release.Version, "pid": os.Getpid(), "policy": json.RawMessage("null")}
 	if err == nil {
 		entry["policy"] = json.RawMessage(policy)
 	}

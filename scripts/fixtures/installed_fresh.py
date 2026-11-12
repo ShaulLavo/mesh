@@ -58,7 +58,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         self.require_automatic_zero(host)
         self.require_fresh_state()
         started = json.loads((self.root / ("start." + self.host["daemon"] + ".json")).read_text())
-        if started["policy"] is not None:
+        if started["policy"] is not None or started["pid"] != daemon.manager_pid():
             raise RuntimeError("fresh first native daemon start had a pre-seeded host policy")
         return {"helperBeforeDaemon": prepared, "firstNativeStart": started, "effectiveUpdate": host["hostUpdate"]}
 
