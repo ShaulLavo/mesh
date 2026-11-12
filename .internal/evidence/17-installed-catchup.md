@@ -81,7 +81,7 @@ separate real-manager account positive control and native acceptance remain
 pending. No command provider stands in for a manager or peer.
 
 The fresh managed fixture consumes exact Unit 11 source
-`92cef369111d35b479d7c7bc4cc524cb60485a42`. It runs the production
+`583b5b914f151c0080deae0db09b4f7968505c8e`. It runs the production
 `daemon prepare-updates` and matching `daemon installation-check` before daemon
 activation. Policy, adoption envelope and journal must still be absent. The
 first actual native daemon PID must report managed automatic mode at revision
