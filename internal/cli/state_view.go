@@ -43,6 +43,7 @@ type StateView struct {
 	NameVerified           bool
 	PrivateName            string
 	Build                  release.Build
+	HostUpdate             *protocol.HostUpdateSummary
 	Connection             StateConnection
 	Problem                string
 	Memory                 map[string]protocol.SessionMemory
@@ -61,6 +62,7 @@ type StateView struct {
 
 func (v StateView) Clone() StateView {
 	cloned := v
+	cloned.HostUpdate = protocol.CloneHostUpdateSummary(v.HostUpdate)
 	cloned.Memory = maps.Clone(v.Memory)
 	cloned.Sessions = cloneSessionInfo(v.Sessions)
 	cloned.Services = cloneWireServices(v.Services)
@@ -155,6 +157,7 @@ func (v *StateView) applyEvent(event protocol.StateEvent, received time.Time, tr
 		}
 		v.Name = declaredName(*p.Host)
 		v.NameVerified = true
+		v.HostUpdate = protocol.CloneHostUpdateSummary(p.Host.HostUpdate)
 	case "session.added", "session.changed":
 		if p.Session == nil {
 			return errors.New("missing session event payload")
@@ -228,10 +231,11 @@ func (v *StateView) applySnapshot(snapshot *protocol.StateSnapshot, received tim
 	}
 	s := snapshot
 	metrics, metricsReceived := v.Metrics, v.MetricsReceivedAt
-	*v = StateView{Policy: v.Policy, Name: v.Name, NameVerified: v.NameVerified, PrivateName: v.PrivateName, Build: v.Build, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
+	*v = StateView{Policy: v.Policy, Name: v.Name, NameVerified: v.NameVerified, PrivateName: v.PrivateName, Build: v.Build, HostUpdate: v.HostUpdate, Connection: v.Connection, ServiceHealthSupported: v.ServiceHealthSupported, MetricsUnsupported: v.MetricsUnsupported, Seq: s.Seq, Sessions: cloneSessionInfo(s.Sessions), Services: cloneWireServices(s.Services), Sections: map[string]ObservedSection{}, LastReply: received, initialized: true, Metrics: metrics, MetricsReceivedAt: metricsReceived}
 	if s.Host != nil {
 		v.Name = declaredName(*s.Host)
 		v.NameVerified = true
+		v.HostUpdate = protocol.CloneHostUpdateSummary(s.Host.HostUpdate)
 	}
 	v.applyMemory(s.Memory, received, transit)
 	v.applyCurrent(s.Current, received, transit)

@@ -96,7 +96,7 @@ func TestDashboardUpdatesConfigOnlyPinsExactCoordinatorAndBothGroups(t *testing.
 			defer cancel()
 			if err := watcher.Run(ctx, func(view DashboardUpdates) {
 				cancel()
-				if len(view.Sources) != 1 || view.Sources[0].Automatic != nil || view.Sources[0].Configuration.Value.Revision != 9 {
+				if len(view.Sources) != 1 || view.Sources[0].Configuration.Value.Revision != 9 {
 					t.Fatalf("lost config-only status: %+v", view)
 				}
 			}); err != nil {
@@ -116,28 +116,19 @@ func TestDashboardUpdatesConfigOnlyPinsExactCoordinatorAndBothGroups(t *testing.
 	}
 }
 
-func TestDashboardUpdatesDifferentBinaryAndConfigurationCoordinators(t *testing.T) {
+func TestDashboardUpdatesIgnoresOldBinaryPolicy(t *testing.T) {
 	state, local, coordinator, store := dashboardGrantFixture(t)
-	path, _ := ConfigPath()
-	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
-	if err != nil {
+	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetRecipientConsent(t.Context(), 0, update.ConsentChange{LocalHostID: local.ID, CoordinatorID: coordinator.ID, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, local.ID, true, false); err != nil {
-		t.Fatal(err)
+	for _, file := range []string{"automatic.json", "automatic-consent.json"} {
+		if err := os.WriteFile(filepath.Join(state, "updates", file), []byte("invalid"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	selection, err := readDashboardUpdateSelection(t.Context(), state, local.ID)
-	if err != nil || len(selection.Bindings) != 2 {
-		t.Fatalf("collapsed independent authorities: %+v %v", selection, err)
-	}
-	if !selection.Bindings[0].Automatic || selection.Bindings[0].Configuration || selection.Bindings[0].Host.ID != coordinator.ID {
-		t.Fatal(selection)
-	}
-	if selection.Bindings[1].Automatic || !selection.Bindings[1].Configuration || selection.Bindings[1].Host.ID != local.ID {
-		t.Fatal(selection)
+	if err != nil || len(selection.Bindings) != 1 || len(selection.Problems) != 0 || selection.Bindings[0].Host.ID != coordinator.ID {
+		t.Fatalf("old binary policy affected configuration status: %+v %v", selection, err)
 	}
 }
 func TestDashboardUpdatesRejectsChangedFleetOrLocalBinding(t *testing.T) {
@@ -155,7 +146,7 @@ func TestDashboardUpdatesRejectsChangedFleetOrLocalBinding(t *testing.T) {
 	}
 }
 func TestDashboardUpdatesWithdrawnSelectionAndCancellationJoin(t *testing.T) {
-	binding := dashboardUpdateBinding{Host: update.Host{ID: "pinned"}, Automatic: true}
+	binding := dashboardUpdateBinding{Host: update.Host{ID: "pinned"}}
 	selection := dashboardUpdateSelection{Bindings: []dashboardUpdateBinding{binding}, Fingerprint: [32]byte{1}}
 	var withdrawn atomic.Bool
 	var stopped atomic.Bool
@@ -166,7 +157,7 @@ func TestDashboardUpdatesWithdrawnSelectionAndCancellationJoin(t *testing.T) {
 		return selection, nil
 	}, caller: updateCallFunc(func(_ context.Context, _ update.Host, _ string, _, output any) error {
 		withdrawn.Store(true)
-		*output.(*update.AutomaticStatus) = update.AutomaticStatus{State: "old authority"}
+		*output.(*update.ConfigurationStatus) = update.ConfigurationStatus{Revision: 3}
 		return nil
 	})}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -232,10 +223,10 @@ func TestDashboardUpdateProjectionPreservesCompleteValuesAndAges(t *testing.T) {
 	wanted := update.FeedValue{Present: true, URL: "https://feed.mesh.example.test/usage"}
 	domain := update.DomainValue{Present: true}
 	target := update.ConfigurationTarget{HostID: "recipient", State: "saved", Receipt: &update.ConfigurationReceipt{Revision: 1, State: "saved", FeedState: "saved", Domain: &update.DomainReceipt{State: "saved", Desired: domain}}, Daemon: &update.DomainObservation{Digest: "old", InstanceID: "actual", ObservedAt: now}, Observers: []update.ConfigurationObservation{{HostID: "recipient", Generation: 4, Digest: wanted.Digest(), Enabled: true, State: "enabled", Failing: true, HTTPAt: now, PublishedAt: now.Add(-time.Minute), UpstreamAt: &upstream, RenewedAt: now, DomainDigest: "old"}}}
-	auto := update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "failed", HostID: "recipient"}, Canary: &update.Canary{HostID: "recipient", State: "failed"}, LastCompleted: &update.CompletedFleetRelease{Version: "v0.1.0", At: upstream}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, UpdatedAt: upstream, Targets: []update.Target{{Host: update.Host{ID: "recipient"}, State: update.Offline, Build: &release.Build{Version: "v0.1.0"}}}}}}
+
 	config := update.ConfigurationStatus{Change: &update.ConfigurationChange{Proposal: update.ConfigurationProposal{Recipients: []update.RecipientConfiguration{{Host: update.Host{ID: "recipient"}, Feed: &update.FeedChange{URL: wanted.URL}, Domain: &update.DomainChange{}}}}, Targets: []update.ConfigurationTarget{target}}}
 	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: now}
-	view := DashboardUpdates{Generation: 5, Sources: []DashboardUpdateSource{{Automatic: &DashboardStatus[update.AutomaticStatus]{observation, &auto}, Configuration: &DashboardStatus[update.ConfigurationStatus]{observation, &config}}}}
+	view := DashboardUpdates{Generation: 5, Sources: []DashboardUpdateSource{{Configuration: &DashboardStatus[update.ConfigurationStatus]{observation, &config}}}}
 	before, _ := json.Marshal(view)
 	rows := DashboardUpdateRows(view, now)
 	after, _ := json.Marshal(view)
@@ -243,7 +234,7 @@ func TestDashboardUpdateProjectionPreservesCompleteValuesAndAges(t *testing.T) {
 		t.Fatal("presentation rewrote authority or original ages")
 	}
 	text := fmt.Sprint(rows)
-	for _, expected := range []string{"v0.2.0", "last observed daemon v0.1.0", "Last successful fleet release v0.1.0", "exact pinned release", "Canary failed", "manual bridge", "daemon restart required", "dashboard reopen required", "HTTPS verification unknown", "transport or parse failed", "Upstream observations stale", upstream.Format(time.RFC3339)} {
+	for _, expected := range []string{"daemon restart required", "dashboard reopen required", "HTTPS verification unknown", "transport or parse failed", "Upstream observations stale", upstream.Format(time.RFC3339)} {
 		if !strings.Contains(text, expected) {
 			t.Errorf("missing %q in %s", expected, text)
 		}
@@ -283,7 +274,7 @@ func TestDashboardActualCLIInstallsPassiveUpdateAdapter(t *testing.T) {
 }
 
 func TestDashboardUpdatesIndependentEnrollmentFailures(t *testing.T) {
-	for _, damaged := range []string{"binary-membership", "binary-consent", "automatic-policy", "configuration-binding", "configuration-grant", "configuration-change"} {
+	for _, damaged := range []string{"configuration-binding", "configuration-grant", "configuration-change"} {
 		t.Run(damaged, func(t *testing.T) { testDashboardIndependentEnrollment(t, damaged) })
 	}
 }
@@ -306,7 +297,7 @@ func testDashboardIndependentEnrollment(t *testing.T, damaged string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wanted := damageDashboardEnrollment(t, damaged, state, coordinator, store, fleet)
+	wanted := damageDashboardEnrollment(t, damaged, state, coordinator, store)
 	calls := make(map[string]int)
 	watcher := newDashboardUpdateWatcher(state, local.ID, updateCallFunc(func(_ context.Context, host update.Host, action string, _, output any) error {
 		if !reflect.DeepEqual(host, coordinator) || !wanted[action] {
@@ -314,10 +305,7 @@ func testDashboardIndependentEnrollment(t *testing.T, damaged string) {
 			return errors.New("invalid source")
 		}
 		calls[action]++
-		switch value := output.(type) {
-		case *update.AutomaticStatus:
-			*value = update.AutomaticStatus{State: "independent binary status"}
-		case *update.ConfigurationStatus:
+		if value, ok := output.(*update.ConfigurationStatus); ok {
 			*value = update.ConfigurationStatus{Revision: 3}
 		}
 		return nil
@@ -345,20 +333,11 @@ func testDashboardIndependentEnrollment(t *testing.T, damaged string) {
 	}
 }
 
-func damageDashboardEnrollment(t *testing.T, damaged, state string, coordinator update.Host, store *update.Store, fleet update.Fleet) map[string]bool {
+func damageDashboardEnrollment(t *testing.T, damaged, state string, coordinator update.Host, store *update.Store) map[string]bool {
 	t.Helper()
-	wanted := map[string]bool{"automatic.status": true, "configuration.status": true}
+	wanted := map[string]bool{"configuration.status": true}
 	file := ""
 	switch damaged {
-	case "binary-membership":
-		fleet.Revision++
-		path, _ := ConfigPath()
-		saveUpdateTestFleet(t, filepath.Join(filepath.Dir(path), "fleet.json"), fleet)
-		wanted["automatic.status"] = false
-	case "binary-consent":
-		file, wanted["automatic.status"] = "automatic-consent.json", false
-	case "automatic-policy":
-		file = "automatic.json"
 	case "configuration-binding":
 		if _, err := store.SetConfigurationGrant(t.Context(), 1, coordinator.ID, coordinator.ID, true, false); err != nil {
 			t.Fatal(err)
@@ -379,9 +358,6 @@ func damageDashboardEnrollment(t *testing.T, damaged, state string, coordinator 
 
 func dashboardHasEnrollmentProblem(view DashboardUpdates) bool {
 	for _, source := range view.Sources {
-		if source.Automatic != nil && source.Automatic.Observation.State == DashboardStatusUnavailable && source.Automatic.Observation.Problem != "" {
-			return true
-		}
 		if source.Configuration != nil && source.Configuration.Observation.State == DashboardStatusUnavailable && source.Configuration.Observation.Problem != "" {
 			return true
 		}

@@ -22,10 +22,11 @@ import (
 )
 
 type orderPeerFixture struct {
-	host   Host
-	store  *Store
-	server *httptest.Server
-	state  atomic.Int32
+	host         Host
+	store        *Store
+	server       *httptest.Server
+	state        atomic.Int32
+	failAfterSeq atomic.Uint64
 }
 
 func orderIdentity(t *testing.T) (string, ed25519.PrivateKey) {
@@ -66,6 +67,9 @@ func (f *orderPeerFixture) handle(ctx context.Context, conn transport.Conn) erro
 	var request EvidenceRequest
 	if err := DecodeEvidence(control.Update, &request); err != nil {
 		return hostError(err)
+	}
+	if after := f.failAfterSeq.Load(); after > 0 && request.AfterSeq >= after {
+		return errors.New("fixture connection interrupted between pages")
 	}
 	peer, ok := transport.Peer(ctx)
 	if !ok {

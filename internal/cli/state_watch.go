@@ -169,6 +169,7 @@ func (w *StateWatcher) watchConnected(ctx, setupCtx context.Context, host HostRe
 	} else {
 		view.Build = release.Build{}
 	}
+	view.HostUpdate = protocol.CloneHostUpdateSummary(info.HostUpdate)
 	publish(*view)
 	err = readStateStream(ctx, host, conn, view, transit, publish)
 	if err != nil {
@@ -331,6 +332,7 @@ func (w *StateWatcher) pollSection(ctx context.Context, host HostRecord, section
 	} else {
 		view.Build = release.Build{}
 	}
+	view.HostUpdate = protocol.CloneHostUpdateSummary(info.HostUpdate)
 	section.failures = 0
 	return nil
 }

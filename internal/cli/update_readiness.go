@@ -20,10 +20,9 @@ const updateRecoveryProblem = "An earlier update needs recovery."
 const updateBridgeProblem = "This release does not support updating this installation directly."
 
 type updateTargetReview struct {
-	Kind    string            `json:"kind"`
-	Message string            `json:"message"`
-	Cause   string            `json:"cause,omitempty"`
-	Bridge  *release.Manifest `json:"bridge,omitempty"`
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+	Cause   string `json:"cause,omitempty"`
 }
 
 func prepareUpdateApproval(preview updatePreview) updatePreview {
@@ -166,9 +165,6 @@ func updateTargetLocation(target update.Target) string {
 }
 
 func updateTargetReviewAction(target update.Target, review updateTargetReview) string {
-	if review.Bridge != nil {
-		return "Update in steps: first run mesh update --local --version " + review.Bridge.Version + " on " + updateTargetLocation(target) + "."
-	}
 	if review.Kind == updateReviewRecovery || review.Kind == updateReviewJournal {
 		if update.IsLocal(target.Host) {
 			return "Run mesh update status to review recovery on " + updateTargetLocation(target) + "."

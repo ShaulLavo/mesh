@@ -3,8 +3,6 @@ package tui
 import (
 	tea "charm.land/bubbletea/v2"
 	"context"
-	"github.com/shaul/mesh/internal/release"
-	"github.com/shaul/mesh/internal/update"
 	"io"
 	"reflect"
 	"strings"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/shaul/mesh/internal/cli"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/usagefeed"
 )
 
@@ -92,12 +91,12 @@ func TestFleetDriftClockFrameBoundedWithdrawnAndIndependent(t *testing.T) {
 	if model.render() != plain {
 		t.Fatal("no enrollment reserved a blank update row")
 	}
-	source := cli.DashboardUpdateSource{Coordinator: update.Host{ID: model.hosts[0].Host.ID}, Automatic: &cli.DashboardStatus[update.AutomaticStatus]{Observation: cli.DashboardStatusObservation{State: cli.DashboardStatusObserved, At: now}, Value: &update.AutomaticStatus{State: "stopped", Record: &update.AutomaticRecord{Stop: &update.AutomaticStop{Kind: "failed"}, Current: &update.Run{Release: release.Manifest{Version: "v0.2.0"}, Targets: []update.Target{{Host: update.Host{ID: model.hosts[0].Host.ID}, State: update.Offline}}}}}}}
+	model.hosts[0].HostUpdate = &protocol.HostUpdateSummary{Mode: "automatic", Installation: "managed", Phase: "attention", Problem: "test diagnostic"}
 	model.hosts[0].Connection = cli.StateRefused
 	oldUsage := model.usage
 	oldServices := model.hosts[0].Services
 	previous := model.View().Content
-	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2, Sources: []cli.DashboardUpdateSource{source}}))
+	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2}))
 	model = next.(dashboardModel)
 	if model.View().Content != previous {
 		t.Fatal("update publication painted outside clock frame")
@@ -107,7 +106,7 @@ func TestFleetDriftClockFrameBoundedWithdrawnAndIndependent(t *testing.T) {
 		model = next.(dashboardModel)
 		assertFits(t, model.View().Content, size[0], size[1])
 		frame := ansi.Strip(model.View().Content)
-		if !strings.Contains(frame, "Updates") || !strings.Contains(frame, "manual bridge") {
+		if !strings.Contains(frame, "Updates") || !strings.Contains(frame, "refused access") {
 			t.Fatal(frame)
 		}
 	}
@@ -116,12 +115,18 @@ func TestFleetDriftClockFrameBoundedWithdrawnAndIndependent(t *testing.T) {
 	}
 	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 3}))
 	model = next.(dashboardModel)
-	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2, Sources: []cli.DashboardUpdateSource{source}}))
+	next, _ = model.Update(dashboardUpdatesMsg(cli.DashboardUpdates{Generation: 2}))
 	model = next.(dashboardModel)
 	next, _ = model.Update(dashboardTickMsg(now))
 	model = next.(dashboardModel)
-	if strings.Contains(ansi.Strip(model.View().Content), "Updates") {
-		t.Fatal("late generation restored withdrawn status")
+	if len(model.updates.Sources) != 0 || !strings.Contains(ansi.Strip(model.View().Content), "refused access") {
+		t.Fatal("configuration withdrawal changed independent host status")
+	}
+	model.hosts[0].HostUpdate = nil
+	next, _ = model.Update(dashboardTickMsg(now))
+	model = next.(dashboardModel)
+	if len(model.updateLines()) != 0 {
+		t.Fatal("removed host summary retained an update row")
 	}
 }
 func TestDashboardUpdateReaderJoinsOnProgramClose(t *testing.T) {

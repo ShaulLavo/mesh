@@ -57,6 +57,7 @@ type HostUpdate struct {
 	Phase          HostPhase           `json:"phase"`
 	Owned          *OwnedRequest       `json:"owned,omitempty"`
 	Problem        *HostProblem        `json:"problem,omitempty"`
+	ProblemSince   time.Time           `json:"problemSince,omitempty"`
 	NextAttempt    time.Time           `json:"nextAttempt,omitempty"`
 	Failures       uint32              `json:"failures,omitempty"`
 	LastRequest    string              `json:"lastRequest,omitempty"`
