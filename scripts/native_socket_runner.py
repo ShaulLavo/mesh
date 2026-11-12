@@ -58,16 +58,36 @@ async def stop_group(process):
 
 
 async def command(args, cwd, env, consume=None):
-    process = await asyncio.create_subprocess_exec(
+    creation = asyncio.create_task(asyncio.create_subprocess_exec(
         *map(str, args), cwd=cwd, env=env, start_new_session=True,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         # A test can log a large JSON line, matching go test -json's streaming behavior.
         limit=16 * 1024 * 1024,
-    )
+    ))
     try:
+        # Cancellation must not lose a process created before asyncio hands it back.
+        process = await asyncio.shield(creation)
         return await collect(process, consume)
     finally:
-        await stop_group(process)
+        await join_cleanup(asyncio.create_task(stop_created_group(creation)))
+
+
+async def stop_created_group(creation):
+    process = await creation
+    await stop_group(process)
+
+
+async def join_cleanup(task):
+    cancelled = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            # A second cancellation must not interrupt acquisition or group teardown.
+            cancelled = error
+    task.result()
+    if cancelled is not None:
+        raise cancelled
 
 
 async def collect(process, consume):
