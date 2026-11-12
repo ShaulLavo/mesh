@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from fixtures import installed_origin, installed_releases, release_workers
+from fixtures import installed_origin, installed_releases
 
 
 def prepare(releases, origin, source):
