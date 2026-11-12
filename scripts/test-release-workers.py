@@ -11,6 +11,17 @@ from fixtures import release_workers
 
 
 class ExactWorkerSelectionTests(unittest.TestCase):
+    def test_observation_retains_actual_image_observer_duration(self):
+        result = subprocess.CompletedProcess([], 0, b"--- PASS: TestRetainedWorkerCohortIdentity\n", b"")
+        with tempfile.TemporaryDirectory(prefix="worker-time-") as directory:
+            path = Path(directory) / "cohort.json"
+            path.write_text(json.dumps({"workers": [{"digest": "a" * 64}], "observations": []}))
+            with mock.patch.dict(release_workers.os.environ, MESH_WORKER_PROBE="observer"), mock.patch.object(release_workers.subprocess, "run", return_value=result), mock.patch.object(release_workers.time, "monotonic", side_effect=[10.0, 11.25]), mock.patch.object(release_workers, "verify_one", return_value=7):
+                self.assertEqual(release_workers.verify(Path("state"), path, "checkpoint"), ["a" * 64])
+            observation = json.loads(path.read_bytes())["observations"][0]
+            self.assertEqual(observation, {"label": "checkpoint", "workers": 1, "processes": 2,
+                                           "rssKiB": 7, "observerSeconds": 1.25})
+
     def test_image_observer_failure_keeps_bounded_real_output_and_rejects(self):
         result = subprocess.CompletedProcess([], 1, b"x" * 9000 + b"mapped image mismatch", b"actual stderr control")
         with mock.patch.dict(release_workers.os.environ, MESH_WORKER_PROBE="observer"), mock.patch.object(release_workers.subprocess, "run", return_value=result) as command:
