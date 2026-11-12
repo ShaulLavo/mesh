@@ -44,6 +44,10 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: ${{ github.workflow }}-installed-catchup-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 defaults:
   run:
     shell: bash
