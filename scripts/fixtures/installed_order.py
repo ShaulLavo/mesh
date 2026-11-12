@@ -24,7 +24,8 @@ class Driver:
         script = accounts.source / "scripts/fixtures/installed_order_host.py"
         try:
             self.process = subprocess.Popen(accounts.arguments(account, [sys.executable, script, self.path]),
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, env=os.environ)
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
+                env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
             os.set_blocking(self.process.stdout.fileno(), False)
         except BaseException:
             self.log.close()
