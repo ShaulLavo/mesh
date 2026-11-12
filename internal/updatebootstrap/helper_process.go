@@ -23,6 +23,45 @@ func HelperProcessProbe(cfg updateinstall.HelperConfig) func(context.Context, up
 	}
 }
 
+func HelperServiceState(ctx context.Context, cfg updateinstall.HelperConfig) (updateinstall.HelperProcessState, error) {
+	if cfg.Kind == installationSystemd {
+		command := exec.CommandContext(ctx, "systemctl", "--user", "show", "mesh-update-helper.service", "--property=LoadState", "--property=MainPID")
+		var output inspectionOutput
+		command.Stdout = &output
+		err := command.Run()
+		properties := make(map[string]string)
+		for _, line := range strings.Split(string(output.bytes), "\n") {
+			key, value, _ := strings.Cut(line, "=")
+			properties[key] = value
+		}
+		if properties["LoadState"] == "not-found" && properties["MainPID"] == "0" {
+			return updateinstall.HelperProcessState{}, nil
+		}
+		pid, parseErr := strconv.Atoi(properties["MainPID"])
+		if err != nil || parseErr != nil || pid < 0 || properties["LoadState"] != "loaded" {
+			return updateinstall.HelperProcessState{}, errors.Join(errors.New("cannot inspect helper manager ownership"), err, parseErr)
+		}
+		return updateinstall.HelperProcessState{Loaded: true, PID: pid}, nil
+	}
+	target, err := helperLaunchdTarget(cfg.Domain)
+	if err != nil {
+		return updateinstall.HelperProcessState{}, err
+	}
+	command := exec.CommandContext(ctx, "launchctl", "print")
+	command.Args = append(command.Args, target)
+	var output inspectionOutput
+	command.Stdout = &output
+	if err := command.Run(); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 113 {
+			return updateinstall.HelperProcessState{}, nil
+		}
+		return updateinstall.HelperProcessState{}, fmt.Errorf("inspect helper launch agent ownership: %w", err)
+	}
+	pid, _ := launchdHelperPID(string(output.bytes))
+	return updateinstall.HelperProcessState{Loaded: true, PID: pid}, nil
+}
+
 func probeHelperProcess(ctx context.Context, cfg updateinstall.HelperConfig, installed updateinstall.HelperInstallation) (int, error) {
 	pid, err := helperServicePID(ctx, cfg)
 	if err != nil {
@@ -59,14 +98,14 @@ func probeHelperProcess(ctx context.Context, cfg updateinstall.HelperConfig, ins
 func helperServicePID(ctx context.Context, cfg updateinstall.HelperConfig) (int, error) {
 	var command *exec.Cmd
 	switch cfg.Kind {
-	case "launchd":
+	case installationLaunchd:
 		target, err := helperLaunchdTarget(cfg.Domain)
 		if err != nil {
 			return 0, err
 		}
 		command = exec.CommandContext(ctx, "launchctl", "print")
 		command.Args = append(command.Args, target)
-	case "systemd":
+	case installationSystemd:
 		command = exec.CommandContext(ctx, "systemctl", "--user", "show", "mesh-update-helper.service", "--property=MainPID", "--value")
 	default:
 		return 0, errors.New("helper process probe requires a supported service manager")
@@ -76,7 +115,7 @@ func helperServicePID(ctx context.Context, cfg updateinstall.HelperConfig) (int,
 	if err != nil {
 		return 0, fmt.Errorf("inspect helper service process: %w", errors.Join(ctx.Err(), err))
 	}
-	if cfg.Kind == "systemd" {
+	if cfg.Kind == installationSystemd {
 		pid, err := strconv.Atoi(strings.TrimSpace(string(output)))
 		if err != nil || pid <= 0 {
 			return 0, errors.New("helper service has no running process")

@@ -29,6 +29,7 @@ import (
 type Observation struct {
 	Executable string
 	Health     updateinstall.Health
+	PID        int
 }
 
 type executableImage struct {
@@ -79,7 +80,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	return Observation{Executable: image.Installed, Health: health}, nil
+	return Observation{Executable: image.Installed, Health: health, PID: image.PID}, nil
 }
 
 func readStateVersion(ctx context.Context, stateDir string) (int, error) {

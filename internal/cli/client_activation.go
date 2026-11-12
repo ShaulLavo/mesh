@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updateinstall"
 	"github.com/spf13/cobra"
 )
@@ -23,6 +24,9 @@ func activateClientConfig(command *cobra.Command) error {
 	for top.Parent() != nil && top.Parent().Parent() != nil {
 		top = top.Parent()
 	}
+	if command.Name() == adoptionCommandName || command.Parent() != nil && command.Parent().Name() == adoptionCommandName {
+		return nil
+	}
 	switch top.Name() {
 	case "hosts", agentInspectCommandName, "profile", "dashboard", "session-worker", "agent", "agent-hook", "agent-resume", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "completion", "help", "version":
 		return nil
@@ -35,6 +39,13 @@ func clientConfigCanRetire(ctx context.Context) (bool, error) {
 	stateDir, err := paths.StateDirPath()
 	if err != nil {
 		return false, fmt.Errorf("locate client activation state: %w", err)
+	}
+	pending, err := update.AdoptionPending(ctx, stateDir)
+	if err != nil {
+		return false, fmt.Errorf("check client adoption cutover: %w", err)
+	}
+	if pending {
+		return false, nil
 	}
 	status, err := updateinstall.ReadContext(ctx, stateDir)
 	if errors.Is(err, os.ErrNotExist) {
