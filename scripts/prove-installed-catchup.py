@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--ordered-hosts", action="store_true", help="three disposable native-manager hosts with real predecessor policy")
     parser.add_argument("--fresh-managed", action="store_true", help="actual fresh helper preparation and missing-policy automatic first start")
     parser.add_argument("--scenario", choices=("adopt", "rollback", "helper", "initial", "interrupt"), help="one adoption profile; the default requires all profiles")
+    parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
+    parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -54,6 +56,13 @@ def main():
 
 
 def run_requested(arguments, root, output, native):
+    if arguments.publication_version:
+        if not arguments.publication_source or not arguments.native_helper:
+            raise RuntimeError("real draft mode needs its exact release source and production helper preparer")
+        from fixtures import installed_publication
+        installed_publication.prove(root, output, native, arguments.publication_version, arguments.publication_source,
+            arguments.native_helper.resolve(strict=True), arguments.worker_registry, arguments.worker_probe)
+        return
     if arguments.fresh_managed:
         from fixtures import installed_fresh
         installed_fresh.prove(root, output, native)

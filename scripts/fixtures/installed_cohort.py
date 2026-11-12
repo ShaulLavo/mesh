@@ -64,18 +64,24 @@ class Cohort:
     def __init__(self, registry, probe, state, config, version, binary, record):
         self.registry, self.probe, self.state, self.config = registry, probe, state, config
         self.version, self.binary, self.record = version, binary, record
-        self.selected = release_workers.applicable(registry, version, binary)
+        script = "import json,sys; from fixtures.release_workers import applicable; print(json.dumps(applicable(*sys.argv[1:])))"
+        environment = self.environment() | {"PYTHONPATH": str(Path(release_workers.__file__).parent.parent)}
+        data = subprocess.check_output([os.sys.executable, "-c", script, str(registry), version, str(binary)], env=environment, timeout=90)
+        self.selected = json.loads(data)
+
+    def environment(self):
+        return os.environ | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
 
     def start(self):
         # The shared producer persists ownership before each worker can start.
-        environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe)}
+        environment = self.environment()
         subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start", str(self.state), str(self.config),
             str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
             capture_output=True, text=True, check=True, timeout=90)
         return self.verify("before-install")
 
     def verify(self, label):
-        environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe)}
+        environment = self.environment()
         result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
             env=environment, capture_output=True, text=True, check=True, timeout=90)
         observed = json.loads(result.stdout)

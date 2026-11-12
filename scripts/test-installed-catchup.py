@@ -7,6 +7,10 @@ import importlib.util
 import os
 import shutil
 import socket
+import ssl
+import socketserver
+import http.client
+import zipfile
 import tempfile
 import tarfile
 import unittest
@@ -16,7 +20,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -79,7 +83,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -286,6 +290,138 @@ class RouteObservationTest(unittest.TestCase):
         self.addCleanup(observer.close)
         with self.assertRaisesRegex(RuntimeError, "another listener"):
             observer.start()
+
+
+class PublicationConsumerTest(unittest.TestCase):
+    def test_non_main_publication_is_rejected_before_acquisition(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REF": "refs/pull/435/merge"}):
+            with self.assertRaisesRegex(RuntimeError, "main-only"):
+                installed_publication.require_main()
+
+    def test_transport_serves_the_original_asset_bytes_over_verified_tls(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ipub-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        release = root / "releases/v0.1.1"
+        release.mkdir(parents=True)
+        actual = b"publication transport control; never a signed release proof"
+        (release / "asset.json").write_bytes(actual)
+        origin = publication_origin.Origin(root, release.parent, root / "unused-reader")
+        self.addCleanup(origin.close)
+        origin.start()
+        data = publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/asset.json")
+        self.assertEqual(data, actual)
+        self.assertFalse(origin.close()["testSignatureRootUsed"])
+
+    def test_owned_activation_port_fault_releases_at_actual_rollback_phase(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state = Path(temporary.name)
+        (state / "update").mkdir()
+        previous = socket.socket()
+        self.addCleanup(previous.close)
+        previous.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        previous.bind(("127.0.0.1", 0))
+        previous.listen(1)
+        case = SimpleNamespace(state=state, port=previous.getsockname()[1])
+        journal = state / "update/installation.json"
+        journal.write_text(json.dumps({"phase": "activating", "request": {"manifest": {"version": "control-only"}}}))
+        fault = installed_publication.PortFault(case, "control-only")
+        self.addCleanup(fault.close)
+        fault.start()
+        self.assertFalse(fault.bound)
+        previous.close()
+        native_services.wait_for(lambda: fault.bound, "owned activation port was not acquired")
+        temporary_journal = journal.with_suffix(".tmp")
+        temporary_journal.write_text(json.dumps({"phase": "rolling_back"}))
+        temporary_journal.replace(journal)
+        native_services.wait_for(lambda: fault.released, "owned activation port was not released for rollback")
+        fault.close()
+        self.assertEqual(fault.error, "")
+
+    def test_public_trust_tls_is_tunneled_without_proxy_termination(self):
+        temporary = tempfile.TemporaryDirectory(prefix="iptuf-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        origin = publication_origin.Origin(root, root / "releases", root / "unused")
+        self.addCleanup(origin.close)
+        origin.start()
+        upstream = root / "upstream"
+        upstream.mkdir()
+        publication_origin.tls.fixture_certificates(upstream)
+        server = socketserver.TCPServer(("127.0.0.1", 0), TrustTLSHandler)
+        server.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server.context.load_cert_chain(upstream / "server.pem", upstream / "server.key")
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+        self.addCleanup(stop_trust_server, server, thread)
+        thread.start()
+        connect = socket.create_connection
+        redirected = lambda address, *args, **kwargs: connect(server.server_address if address == ("tuf-repo-cdn.sigstore.dev", 443) else address, *args, **kwargs)
+        with patch.object(publication_origin.socket, "create_connection", side_effect=redirected):
+            data = trust_tunnel_request(origin, ssl.create_default_context(cafile=str(upstream / "cert.pem")))
+        self.assertEqual(data, b"public TLS remained end to end")
+        self.assertEqual(origin.trust_connections, 1)
+
+
+class TrustTLSHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        with self.server.context.wrap_socket(self.request, server_side=True) as secure:
+            secure.sendall(b"public TLS remained end to end")
+
+
+def stop_trust_server(server, thread):
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=2)
+
+
+def trust_tunnel_request(origin, context):
+    with socket.create_connection(("127.0.0.1", origin.server.server_port), timeout=5) as connection:
+        connection.sendall(b"CONNECT tuf-repo-cdn.sigstore.dev:443 HTTP/1.1\r\nHost: tuf-repo-cdn.sigstore.dev:443\r\n\r\n")
+        read_connect_response(connection)
+        with context.wrap_socket(connection, server_hostname="github.com") as secure:
+            return secure.recv(128)
+
+
+class NativeZIPPreflightTest(unittest.TestCase):
+    def test_inventory_reads_only_bounded_directory_ranges(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as package:
+            package.writestr("retained/worker", b"x" * (1 << 20))
+        raw = buffer.getvalue()
+        remote = installed_storage.RemoteZIP("https://unused.fixture.invalid/unit-input", len(raw))
+        with patch.object(remote, "fetch", side_effect=lambda _request, size, _end: raw[remote.position:remote.position + size]):
+            with zipfile.ZipFile(remote) as package:
+                self.assertEqual(sum(item.file_size for item in package.infolist()), 1 << 20)
+        self.assertLess(remote.transferred, 128 << 10)
+
+
+def publication_request(origin, path):
+    context = ssl.create_default_context(cafile=str(origin.bundle))
+    with socket.create_connection(("127.0.0.1", origin.server.server_port), timeout=5) as connection:
+        connection.sendall(b"CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n")
+        read_connect_response(connection)
+        with context.wrap_socket(connection, server_hostname="github.com") as secure:
+            secure.sendall(("GET " + path + " HTTP/1.0\r\nHost: github.com\r\n\r\n").encode())
+            return read_publication_response(secure)
+
+
+def read_publication_response(secure):
+    response = http.client.HTTPResponse(secure)
+    response.begin()
+    if response.status != 200:
+        raise RuntimeError("publication transport did not serve its exact asset")
+    return response.read()
+
+
+def read_connect_response(connection):
+    data = b""
+    while not data.endswith(b"\r\n\r\n"):
+        data += connection.recv(1)
+        if len(data) > 8192:
+            raise RuntimeError("publication proxy header exceeded its control bound")
+    if not data.startswith(b"HTTP/1.0 200"):
+        raise RuntimeError("publication proxy rejected the approved release host")
 
 
 class EmptyLedgerTest(unittest.TestCase):

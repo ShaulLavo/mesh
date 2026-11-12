@@ -82,14 +82,21 @@ def verify_tools(directory, source, platform):
             raise RuntimeError("native prepared tool bytes differ from their recorded source: " + name)
 
 
+def main(arguments):
+    operation, *values = arguments
+    if operation == "set":
+        repository, run, source, prefix, output = values
+        Path(output).write_text(json.dumps(verify_set(repository, int(run), source, prefix), indent=2) + "\n")
+        return
+    if operation == "native":
+        verify_native(*values)
+        return
+    if operation == "harness":
+        verify_harness(*values)
+        return
+    raise SystemExit("expected set, native or harness")
+
+
 if __name__ == "__main__":
     import sys
-    if sys.argv[1] == "set":
-        value = verify_set(sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5])
-        Path(sys.argv[6]).write_text(json.dumps(value, indent=2) + "\n")
-    elif sys.argv[1] == "native":
-        verify_native(sys.argv[2], sys.argv[3], sys.argv[4])
-    elif sys.argv[1] == "harness":
-        verify_harness(sys.argv[2], sys.argv[3])
-    else:
-        raise SystemExit("expected set or native")
+    main(sys.argv[1:])

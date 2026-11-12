@@ -25,11 +25,12 @@ def prove(root, output, native):
 
 
 class FreshCase(installed_adoption.AdoptionCase):
-    def __init__(self, root, origin, releases):
-        first = installed_releases.VERSIONS[0]
+    def __init__(self, root, origin, releases, version=None, publication=False, name="fresh"):
+        first = version or installed_releases.VERSIONS[0]
+        self.publication = publication
         build = releases.builds[first]
         image = {"executable": build["path"], "artifact": {"binarySha256": build["digest"]}}
-        host = {"name": "fresh", "daemon": first, "helper": first, "helperRunning": True}
+        host = {"name": name, "daemon": first, "helper": first, "helperRunning": True}
         super().__init__(root, host, {"daemon": image, "helper": image}, None, origin, releases, "managed")
 
     def prepare(self):
@@ -47,6 +48,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         self.units.reserve_fresh_helper(directory / (helper.label + suffix))
         flags = ["--service-kind", "launchd", "--domain", helper.domain] if sys.platform == "darwin" else ["--service-kind", "systemd"]
         self.production_install_command("prepare-updates", flags)
+        self.helper = json.loads((self.state / "update/helper/installed.json").read_text())
         self.require_fresh_state()
         prepared = self.mapped_helper()
         self.production_install_command("installation-check", flags)
@@ -57,10 +59,18 @@ class FreshCase(installed_adoption.AdoptionCase):
         host = self.control("host.info")["host"]
         self.require_automatic_zero(host)
         self.require_fresh_state()
+        started = self.first_start(daemon)
+        return {"helperBeforeDaemon": prepared, "firstNativeStart": started, "effectiveUpdate": host["hostUpdate"]}
+
+    def first_start(self, daemon):
+        if self.publication:
+            pid = daemon.manager_pid()
+            image = installed_native.native_services.mapped_image(pid, self.binary)
+            return {"pid": pid, "mappedImage": image, "policyAbsentBeforeActivation": True, "observer": "native manager and filesystem"}
         started = json.loads((self.root / ("start." + self.host["daemon"] + ".json")).read_text())
         if started["policy"] is not None or started["pid"] != daemon.manager_pid():
             raise RuntimeError("fresh first native daemon start had a pre-seeded host policy")
-        return {"helperBeforeDaemon": prepared, "firstNativeStart": started, "effectiveUpdate": host["hostUpdate"]}
+        return started
 
     def production_install_command(self, operation, flags):
         result = subprocess.run([str(self.binary), "daemon", operation, *flags], env=self.environment,

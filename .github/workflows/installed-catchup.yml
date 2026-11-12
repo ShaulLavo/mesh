@@ -23,6 +23,22 @@ on:
         type: string
         default: ''
         description: 'Actual preparation checkout SHA recorded in tools/preparation.json'
+      release_version:
+        type: string
+        default: ''
+        description: 'Actual signed main-only draft tag, after signed assets have been uploaded'
+      release_source:
+        type: string
+        default: ''
+        description: 'Main source SHA authenticated by the real draft manifest and executable'
+      release_run:
+        type: number
+        default: 0
+        description: 'Signed publication run carrying update-publication-trust; defaults to the caller run'
+      publication_only:
+        type: boolean
+        default: false
+        description: 'Run the real draft gate using existing reviewed supplemental evidence'
   pull_request:
     paths:
       - '.github/workflows/installed-catchup.yml'
@@ -46,6 +62,8 @@ on:
       - 'scripts/fixtures/installed_fresh.py'
       - 'scripts/fixtures/installed_routes.py'
       - 'scripts/fixtures/installed_storage.py'
+      - 'scripts/fixtures/installed_publication.py'
+      - 'scripts/fixtures/publication_origin.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
@@ -68,6 +86,7 @@ defaults:
 
 jobs:
   ordered-manager-domains:
+    if: inputs.publication_only != true
     name: Real managers for three disposable hosts
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -89,7 +108,105 @@ jobs:
           path: ${{ runner.temp }}/ordered-managers
           retention-days: 7
 
+  publication-native:
+    if: inputs.release_version != '' || inputs.publication_only
+    name: Actual signed draft installation (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Require the main-only publication caller and real native manager
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/publication-control"
+      - name: Determine actual published updater availability
+        id: baseline
+        run: |
+          value=$(python3 -c 'import json; print(str(json.load(open("scripts/fixtures/fleet-baselines.json"))["firstPublishedUpdater"] is not None).lower())')
+          printf 'needed=%s\n' "$value" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-publication-trust
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-trust
+      - name: Require retained worker preparation when a real updater baseline exists
+        if: steps.baseline.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ inputs.worker_artifact_run }}
+          PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
+          PRODUCER_PREFIX: ${{ inputs.worker_artifact_prefix }}
+          ARTIFACT_KEY: ${{ matrix.key }}
+        run: |
+          python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/publication-control/producer-pin.json"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/publication-control/worker-storage.json"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: steps.baseline.outputs.needed == 'true'
+        with:
+          name: ${{ inputs.worker_artifact_prefix }}-${{ matrix.key }}
+          run-id: ${{ inputs.worker_artifact_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-worker-input
+      - name: Exercise the actual signed draft through native services
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_SOURCE: ${{ inputs.release_source }}
+          PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
+          HAS_BASELINE: ${{ steps.baseline.outputs.needed }}
+          MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input
+          MESH_PUBLICATION_TRUST_CACHE: ${{ runner.temp }}/publication-trust
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          extra=()
+          if [[ $HAS_BASELINE == true ]]; then
+            python3 scripts/fixtures/installed_artifacts.py native "$RUNNER_TEMP/native-worker-input" "$PRODUCER_SOURCE" "$INSTALLED_CATCHUP_PLATFORM"
+            chmod +x "$RUNNER_TEMP/native-worker-input/tools/worker-probe"
+            extra=(--worker-registry "$RUNNER_TEMP/native-worker-input/retained/workers.json" --worker-probe "$RUNNER_TEMP/native-worker-input/tools/worker-probe")
+          fi
+          go build -o "$RUNNER_TEMP/native-helper" ./scripts/fixtures/native-helper
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/publication-proof" --native-preflight --native-helper "$RUNNER_TEMP/native-helper" --publication-version "$RELEASE_VERSION" --publication-source "$RELEASE_SOURCE" "${extra[@]}"
+      - name: Remove owned publication consumer tools after installed teardown
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/native-helper" "$RUNNER_TEMP/publication-trust"
+          test ! -e "$RUNNER_TEMP/native-worker-input"
+          test ! -e "$RUNNER_TEMP/native-helper"
+          test ! -e "$RUNNER_TEMP/publication-trust"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-publication-${{ matrix.key }}
+          path: |
+            ${{ runner.temp }}/publication-control
+            ${{ runner.temp }}/publication-proof
+          retention-days: 7
+
   native-adoption:
+    if: inputs.publication_only != true
     name: Installed native adoption (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -150,6 +267,7 @@ jobs:
           retention-days: 7
 
   fresh-managed:
+    if: inputs.publication_only != true
     name: Fresh native automatic first start (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -190,7 +308,7 @@ jobs:
           retention-days: 7
 
   signed-cohort-chain:
-    if: inputs.worker_artifact_prefix != ''
+    if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only
     name: Signed native cohort (${{ matrix.platform }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
