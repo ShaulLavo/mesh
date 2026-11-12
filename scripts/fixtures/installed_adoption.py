@@ -3,6 +3,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import time
 
 from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases
@@ -34,7 +35,11 @@ class AdoptionCase(installed_native.Installation):
         self.host["helperRunning"] = self.desired_host["helperRunning"]
         self.units.managers["daemon"].pid = self.units.managers["daemon"].manager_pid()
         if self.host["helperRunning"]:
-            self.units.start("helper")
+            manager = self.units.managers["helper"]
+            if not manager.exists() or manager.manager_pid() == 0:
+                self.units.start("helper")
+        else:
+            self.units.stop("helper")
 
     def retained(self):
         paths = [self.state / "identity.key", self.state / "authorized_keys"]
@@ -56,6 +61,7 @@ class AdoptionCase(installed_native.Installation):
         self.io()
 
     def start_adoption(self, version):
+        self.check_manager_context()
         side = self.releases.builds[version]["path"]
         metadata = self.releases.directory / version / "mesh-update.json"
         pin = installed_releases.digest(metadata.read_bytes())
@@ -70,9 +76,21 @@ class AdoptionCase(installed_native.Installation):
         result = subprocess.run([side, "update", "adopt", "start", "--local", "--release", version, "--json"],
             input=json.dumps(input_data), env=self.environment, capture_output=True, text=True, timeout=90, check=False)
         (self.root / "adopt-cli.log").write_text(result.stdout + result.stderr)
+        if result.returncode and not (self.state / "updates/host-adoption.json").exists():
+            raise RuntimeError("adopt CLI rejected before canonical operation creation: " + result.stderr.strip())
         # The product may return a durable attention state after a failed native
         # promotion. Only the actual journal/envelope and retained processes decide.
         return {"pin": pin, "exit": result.returncode}
+
+    def check_manager_context(self):
+        if sys.platform != "linux":
+            return
+        pid = installed_native.peer_pid(self.state / "daemon.sock")
+        result = subprocess.run(["/usr/bin/systemctl", "--user", "whoami", str(pid)], env=self.environment,
+            capture_output=True, text=True, timeout=10, check=False)
+        (self.root / "manager-context.log").write_text(result.stdout + result.stderr)
+        if result.returncode or result.stdout.strip() != "mesh.service":
+            raise RuntimeError("actual side-process native manager context failed: " + result.stderr.strip())
 
     def await_result(self, version):
         deadline = time.monotonic() + 90

@@ -113,7 +113,12 @@ class Units:
 
     def helper_links(self):
         roots = (Path.home() / ".config/systemd/user", self.root / "home/.config/systemd/user")
-        return {path for root in roots if root.exists() for path in root.glob("*.wants/mesh-update-helper.service") if path.is_symlink()}
+        links = set()
+        for root in roots:
+            paths = (root / "mesh-update-helper.service",)
+            paths += tuple(root.glob("*.wants/mesh-update-helper.service"))
+            links.update(path for path in paths if path.is_symlink())
+        return links
 
     def remove_helper_links(self):
         for path in self.helper_links().difference(self.external_links):
@@ -160,6 +165,9 @@ class Installation:
             "MESH_FAKE_TAILSCALE_STATUS": str(status), "TERM": "xterm-256color", "NO_COLOR": "1",
             "SHELL": str(HELPERS / "window_shell.sh"), "PYTHONDONTWRITEBYTECODE": "1"}
         self.units = Units(self.root, self.environment)
+        if sys.platform != "darwin":
+            for name in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+                self.environment[name] = self.units.managers["daemon"].environment[name]
         self.preparer = preparer
         self.terminal, self.stream = None, None
         self.response = None
@@ -188,7 +196,7 @@ class Installation:
         if self.host["helperRunning"]:
             self.units.start("helper")
             initial_helper = self.check_helper()
-        elif self.units.managers["helper"].manager_pid() != 0:
+        elif self.units.managers["helper"].exists() and self.units.managers["helper"].manager_pid() != 0:
             raise RuntimeError("PC fixture helper must begin stopped")
         daemon_image = native_services.mapped_image(manager.pid, self.binary)
         if daemon_image["sha256"] != self.pair["daemon"]["artifact"]["binarySha256"]:
