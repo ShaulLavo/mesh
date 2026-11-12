@@ -154,6 +154,10 @@ def validate_commit(case, target, entry, helper):
 
 def finish(case, output, record):
     try:
+        collect_diagnostics(case, output)
+    except Exception as error:
+        record["diagnosticError"] = str(error)
+    try:
         case.close()
         record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
@@ -171,3 +175,19 @@ def retain_install_logs(case, output):
         path = case.root / (name + ".log")
         if path.exists():
             installed_native.copy_log_tail(path, output / ("fresh-" + name + ".log"))
+
+
+def collect_diagnostics(case, output):
+    ledger = installed_chain.read_ledger(case)
+    (output / "fresh-final-ledger.json").write_text(json.dumps(ledger, indent=2) + "\n")
+    journal = installed_chain.read_journal(case)
+    (output / "fresh-final-journal.json").write_text(json.dumps(journal, indent=2) + "\n")
+    if case.ready():
+        (output / "fresh-final-host.json").write_text(json.dumps(case.control("host.info"), indent=2) + "\n")
+    receipt = case.state / "update/helper/installed.json"
+    if receipt.exists():
+        (output / "fresh-final-helper.json").write_bytes(receipt.read_bytes())
+    manager = case.units.managers["helper"]
+    if manager.system == "Linux":
+        status = manager.systemctl("status", manager.label + ".service", "--no-pager", check=False)
+        (output / "fresh-final-helper-status.log").write_text((status.stdout + status.stderr)[-16384:])
