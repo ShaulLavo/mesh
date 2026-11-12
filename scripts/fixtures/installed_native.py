@@ -397,6 +397,8 @@ class Installation:
         raise RuntimeError("old daemon's service stream remained open after native stop")
 
     def close(self):
+        if self.cleaned:
+            return
         cleanup_all((self.close_session, self.units.close, self.verify_session_stopped))
         self.cleaned = True
 
@@ -410,8 +412,10 @@ class Installation:
     def close_stream(self):
         if self.response:
             self.response.close()
+            self.response = None
         if self.stream:
             self.stream.close()
+            self.stream = None
 
     def stop_listener(self):
         if self.listener and native_services.alive(self.listener["pid"]):
@@ -420,18 +424,27 @@ class Installation:
     def stop_worker(self):
         if not self.worker:
             return
+        if not self.owned_session_process(self.worker):
+            return
         if self.ready():
             if self.kill_through_daemon():
                 return
         path = self.state / "s" / self.session / "sock"
-        if path.exists() and peer_pid(path) == self.worker:
-            os.kill(self.worker, signal.SIGTERM)
+        if path.exists():
+            if peer_pid(path) != self.worker:
+                raise RuntimeError("refusing cleanup through a worker socket with unknown ownership")
+            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session})
+            if response.get("type") != "ok":
+                raise RuntimeError("owned worker rejected session cleanup: " + json.dumps(response))
             return
-        self.signal_session_process(self.worker)
+        # Workers hold TERM even when their control socket has disappeared.
+        self.signal_session_process(self.worker, signal.SIGKILL)
 
     def kill_through_daemon(self):
         try:
-            self.control("session.kill", sessionId=self.session)
+            response = self.control("session.kill", sessionId=self.session)
+            if response.get("type") != "ok":
+                raise RuntimeError("daemon rejected session cleanup: " + json.dumps(response))
             return True
         except (OSError, RuntimeError) as error:
             self.cleanup_notes.append({"action": "session.kill", "fallback": "verified owned process", "error": type(error).__name__})
@@ -439,23 +452,29 @@ class Installation:
 
     def stop_shell(self):
         if self.shell and native_services.alive(self.shell):
-            self.signal_session_process(self.shell)
+            self.signal_session_process(self.shell, signal.SIGHUP)
 
-    def signal_session_process(self, pid):
+    def owned_session_process(self, pid):
         stamp = self.process_stamps.get(pid)
         current = process_stamp(pid)
         if current is None:
-            return
+            return False
         if stamp is None or stamp != current:
             raise RuntimeError("refusing cleanup of a session process with unknown ownership")
+        return True
+
+    def signal_session_process(self, pid, number=signal.SIGTERM):
+        if not self.owned_session_process(pid):
+            return
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, number)
         except ProcessLookupError:
             pass
 
     def close_terminal(self):
         if self.terminal:
             self.terminal.close()
+            self.terminal = None
 
     def verify_session_stopped(self):
         for pid in (self.listener and self.listener["pid"], self.worker, self.shell):

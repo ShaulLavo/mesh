@@ -104,6 +104,9 @@ class Accounts:
         self.persist()
         if self.pids(entry.pw_uid) or Path(f"/run/user/{entry.pw_uid}").exists():
             raise RuntimeError("new test UID has pre-existing processes or runtime state")
+        if self.manager_inventory(entry.pw_uid):
+            raise RuntimeError("new test UID has pre-existing manager units")
+        record["managerUnitsAbsentBefore"] = True
         record["ownershipVerified"] = True
         os.chown(home, entry.pw_uid, entry.pw_gid)
         record["managerStarted"] = True
@@ -149,8 +152,6 @@ class Accounts:
             account["absent"] = True
             self.persist()
             return
-        if account.get("absent"):
-            return
         if account_exists(account["name"]) is None:
             self.finish_absent_account(account)
             return
@@ -161,12 +162,14 @@ class Accounts:
             account["absent"] = account_exists(account["name"]) is None
             self.persist()
             return
+        self.require_manager_ownership(account)
         if account["managerStarted"]:
             command(["/usr/bin/systemctl", "stop", f"user@{uid}.service"])
         self.stop_processes(account)
         command(["/usr/bin/systemctl", "stop", f"user-runtime-dir@{uid}.service"])
         if Path(f"/run/user/{uid}").exists() or self.pids(uid):
             raise RuntimeError("owned account processes or runtime remain after teardown")
+        self.clear_failed_managers(account)
         account["processesAbsent"], account["runtimeAbsent"] = True, True
         self.persist()
         command(["/usr/sbin/userdel", account["name"]])
@@ -189,10 +192,39 @@ class Accounts:
         uid = account["uid"]
         if self.pids(uid) or Path(f"/run/user/{uid}").exists():
             raise RuntimeError("absent account has unresolved processes/runtime; retaining scratch")
+        if account["ownershipVerified"]:
+            self.clear_failed_managers(account)
         account.update(absent=True, processesAbsent=True, runtimeAbsent=True)
         if Path(account["home"]).exists():
             shutil.rmtree(account["home"])
         account["homeAbsent"] = True
+        self.persist()
+
+    def manager_inventory(self, uid):
+        units = [f"user@{uid}.service", f"user-runtime-dir@{uid}.service"]
+        result = command(["/usr/bin/systemctl", "list-units", *units, "--all", "--no-pager", "--plain", "--no-legend"])
+        rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+        if any(len(row) < 4 or row[0] not in units for row in rows):
+            raise RuntimeError("test user manager inventory is malformed")
+        return rows
+
+    def require_manager_ownership(self, account):
+        if not account["created"] or not account["ownershipVerified"] or not account.get("managerUnitsAbsentBefore"):
+            raise RuntimeError("test manager cleanup lacks verified ownership")
+
+    def clear_failed_managers(self, account):
+        self.require_manager_ownership(account)
+        uid = account["uid"]
+        if self.pids(uid) or Path(f"/run/user/{uid}").exists():
+            raise RuntimeError("refusing failed-manager cleanup with remaining test processes/runtime")
+        rows = self.manager_inventory(uid)
+        if any(row[2] not in ("inactive", "failed") for row in rows):
+            raise RuntimeError("owned user manager remains active after teardown")
+        for row in rows:
+            if row[2] == "failed":
+                command(["/usr/bin/systemctl", "reset-failed", row[0]])
+        native_services.wait_for(lambda: not self.manager_inventory(uid), "owned user manager unit remains after teardown")
+        account["managerUnitsAbsent"] = True
         self.persist()
 
     def stop_processes(self, account):

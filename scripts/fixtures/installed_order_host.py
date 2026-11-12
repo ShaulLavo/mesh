@@ -75,7 +75,7 @@ class Host:
         fleet = {"version": 1, "name": "installed-order", "revision": 1, "members": value["peers"]}
         (Path(case.environment["MESH_CONFIG_DIR"]) / "fleet.json").write_text(json.dumps(fleet))
         case.adoption_policy = {"schema": 1, "revision": 1, "mode": "automatic", "after": value["after"], "soak": value["soak"]}
-        return {"configured": True}
+        return {"configured": True, "baselineInitialization": case.initialize_preserved_baseline()}
 
     def inspect(self, active):
         case = self.case

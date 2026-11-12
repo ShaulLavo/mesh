@@ -153,7 +153,8 @@ def bootstrap(drivers, record):
     for driver in drivers:
         predecessor = predecessors[driver.account["role"]]
         after = [] if predecessor is None else [peers[predecessor]["id"]]
-        driver.call("configure", peers=members, after=after, soak=5_000_000_000)
+        configured = driver.call("configure", peers=members, after=after, soak=5_000_000_000)
+        record.setdefault("baselineInitialization", {})[driver.account["role"]] = configured["baselineInitialization"]
     for driver in drivers:
         result = driver.call("adopt", timeout=120, version=installed_releases.VERSIONS[0])
         record.setdefault("adopted", {})[driver.account["role"]] = result
