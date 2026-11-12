@@ -45,16 +45,27 @@ def check_coverage(names, events):
 
 async def stop_group(process):
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        await terminate_group(process.pid)
     except ProcessLookupError:
         await process.wait()
         return
-    await asyncio.sleep(0.1)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
     await process.wait()
+
+
+async def terminate_group(pid):
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except PermissionError:
+        # Darwin can deny a group containing only an unreaped zombie. Give the
+        # child watcher the existing grace, then require proof the group is gone.
+        await asyncio.sleep(0.1)
+        os.killpg(pid, 0)
+        raise
+    await asyncio.sleep(0.1)
 
 
 async def command(args, cwd, env, consume=None):
