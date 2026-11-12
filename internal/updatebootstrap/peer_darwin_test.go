@@ -382,7 +382,7 @@ func TestDarwinMappedExecutableSingletonCallers(t *testing.T) {
 	if _, err = processImage(t.Context(), os.Getpid()); !errors.Is(err, one) || !strings.Contains(err.Error(), "inspect mapped process image") {
 		t.Fatalf("singleton error=%v", err)
 	}
-	output := fmt.Sprintf("gui/501/test = {\n state = running\n pid = %d\n}\n", os.Getpid())
+	output := fmt.Sprintf("gui/501/dev.shaulavo.mesh-update-helper = {\n\tstate = running\n\tpid = %d\n}\n", os.Getpid())
 	if err = writeProcessFixture(filepath.Join(root, "launchctl"), []byte("#!/bin/sh\nprintf '%s' '"+output+"'\n")); err != nil {
 		t.Fatal(err)
 	}

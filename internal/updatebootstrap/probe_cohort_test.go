@@ -63,12 +63,12 @@ func inspectDelayedWorkerCohort(t *testing.T, count int) {
 		}
 	}
 	if got := peak.Load(); got < 2 || got > 8 {
-		t.Fatalf("concurrent socket observations = %d, want 2 through 8", got)
+		t.Fatalf("concurrent delayed responses = %d, want 2 through 8", got)
 	}
 	if got := lookups.Load(); got != int32((count+31)/32) { //nolint:gosec // fixture count is bounded to 40
 		t.Fatalf("worker image lookups = %d, want %d", got, (count+31)/32)
 	}
-	t.Logf("%d native worker observations in %s; peak socket concurrency %d", count, time.Since(started), peak.Load())
+	t.Logf("%d native worker observations in %s; peak delayed responses %d", count, time.Since(started), peak.Load())
 }
 
 func TestWorkerCohortCancellationJoinsConnections(t *testing.T) {
@@ -208,19 +208,26 @@ func cohortResponse(id string) protocol.Control {
 func serveProbeResponse(t *testing.T, socket string, response protocol.Control, delay time.Duration, active, peak *atomic.Int32) {
 	t.Helper()
 	serveCohortProbe(t, socket, func(conn net.Conn, stop <-chan struct{}) {
-		if active != nil {
-			count := active.Add(1)
-			defer active.Add(-1)
-			updateProbePeak(peak, count)
-		}
-		timer := time.NewTimer(delay)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
+		if awaitProbeResponse(delay, stop, active, peak) {
 			_ = protocol.NewWriter(conn).WriteControlMsg(response)
-		case <-stop:
 		}
 	})
+}
+
+func awaitProbeResponse(delay time.Duration, stop <-chan struct{}, active, peak *atomic.Int32) bool {
+	if active != nil {
+		count := active.Add(1)
+		defer active.Add(-1)
+		updateProbePeak(peak, count)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-stop:
+		return false
+	}
 }
 
 func updateProbePeak(peak *atomic.Int32, count int32) {
