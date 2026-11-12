@@ -3,7 +3,9 @@
 Unit 8 is in progress. The real-manager adoption cases and signed cohort/format
 fixtures are implemented. The complete publication gate still needs native
 cohort acceptance, ordered hosts, interruption coverage and real draft assets.
-The product default remains manual. `firstPublishedUpdater` remains `null` until
+The source includes Unit 11's fresh managed automatic default for testing;
+generic, client, development and package installations remain ineligible/manual.
+No live fleet policy or installation is changed. `firstPublishedUpdater` remains `null` until
 an actual updater release exists. Versions 9001 through 9003 are supplemental
 source builds with test trust roots and are never published.
 
@@ -78,6 +80,23 @@ five-second configured soaks, common metadata pins and ordered commits. Its
 separate real-manager account positive control and native acceptance remain
 pending. No command provider stands in for a manager or peer.
 
+The fresh managed fixture consumes exact Unit 11 source
+`92cef369111d35b479d7c7bc4cc524cb60485a42`. It runs the production
+`daemon prepare-updates` and matching `daemon installation-check` before daemon
+activation. Policy, adoption envelope and journal must still be absent. The
+first actual native daemon PID must report managed automatic mode at revision
+zero; its signed first automatic hop keeps the original attachment and worker.
+This is distinct from adoption's explicitly seeded policy and has no native
+acceptance result yet.
+
+The new interruption case pauses only the unpublished test-tagged helper at
+startup, verifies its real native PID/mapped image and durable receipt, kills
+that exact process, and requires the actual manager to restart it and complete
+adoption. A local supplemental process control passed both forced interruption
+and barrier release, with process and scratch absent afterward. Hosted native
+interruption acceptance is pending. The direct draft workflow selects this new
+profile; the reusable full gate retains every adoption profile by default.
+
 ## Reusable job contract
 
 The caller uses `.github/workflows/installed-catchup.yml` with `contents: read`
@@ -111,8 +130,8 @@ socket bounds, verified acquisition, exact cohort inputs and complete pinned
 artifact intake. The tagged exporter compiles. The full push quality gates pass
 with no new or stale baseline findings.
 
-Still required before this is the complete Unit 8 gate: current native cohort
-chain/waypoint and ordered-host results, durable helper interruption controls,
+Still required before this is the complete Unit 8 gate: current native fresh,
+cohort chain/waypoint, ordered-host and helper interruption results,
 and publication execution against the draft's real artifacts/signatures. A reboot
 must report interrupted RAM sessions honestly. An actual first-published updater
 baseline can only be added after publication.
