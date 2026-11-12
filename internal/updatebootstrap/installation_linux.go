@@ -85,14 +85,11 @@ func inspectDaemonService(ctx context.Context, pid int, settings *updateinstall.
 		return ServiceSnapshot{}, err
 	}
 	files := append([]string{definition}, strings.Fields(drops)...)
-	snapshot := ServiceSnapshot{Files: make(map[string]string, len(files))}
-	for _, path := range files {
-		digest, err := serviceFileDigest(path)
-		if err != nil {
-			return snapshot, err
-		}
-		snapshot.Files[path] = digest
+	captured, err := captureServiceFiles(files)
+	if err != nil {
+		return ServiceSnapshot{}, err
 	}
+	snapshot := ServiceSnapshot{Files: captured}
 	snapshot.Definition = serviceFilesDigest(snapshot.Files)
 	snapshot.Arguments, snapshot.Environment = invocationSnapshot(invocation)
 	settings.Service = spec

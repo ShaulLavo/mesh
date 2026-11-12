@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/identity"
@@ -204,16 +206,93 @@ func inspectServiceCommand(ctx context.Context, command *exec.Cmd) ([]byte, erro
 }
 
 func serviceFileDigest(path string) (string, error) {
-	root, err := os.OpenRoot(filepath.Dir(path))
+	_, digest, err := serviceFileIdentity(path)
+	return digest, err
+}
+
+func serviceFileIdentity(path string) (string, string, error) {
+	if !filepath.IsAbs(path) {
+		return "", "", errors.New("daemon service definition requires an absolute path")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		return "", fmt.Errorf("open daemon service directory: %w", err)
+		return "", "", fmt.Errorf("resolve daemon service definition: %w", err)
+	}
+	root, err := os.OpenRoot(filepath.Dir(resolved))
+	if err != nil {
+		return "", "", fmt.Errorf("open daemon service directory: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	data, err := root.ReadFile(filepath.Base(path))
-	if err != nil || len(data) > 1<<20 {
-		return "", errors.Join(errors.New("read bounded daemon service definition"), err)
+	file, err := root.OpenFile(filepath.Base(resolved), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", "", fmt.Errorf("open resolved daemon service definition: %w", err)
 	}
-	return installationDigest(data), nil
+	defer func() { _ = file.Close() }()
+	before, err := file.Stat()
+	if err != nil {
+		return "", "", fmt.Errorf("inspect daemon service definition: %w", err)
+	}
+	if err := validateServiceDefinition(before); err != nil {
+		return "", "", err
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil || len(data) > 1<<20 {
+		return "", "", errors.Join(errors.New("read bounded daemon service definition"), err)
+	}
+	if err := settleServiceDefinition(path, resolved, file, before); err != nil {
+		return "", "", err
+	}
+	return resolved, installationDigest(data), nil
+}
+
+func validateServiceDefinition(info os.FileInfo) error {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0022 != 0 || info.Size() > 1<<20 {
+		return errors.New("daemon service definition requires a bounded regular file without other writers")
+	}
+	if stat.Uid != 0 && int64(stat.Uid) != int64(os.Geteuid()) {
+		return errors.New("daemon service definition belongs to another account")
+	}
+	return nil
+}
+
+func settleServiceDefinition(path, resolved string, file *os.File, before os.FileInfo) error {
+	current, err := filepath.EvalSymlinks(path)
+	if err != nil || current != resolved {
+		return errors.Join(errors.New("daemon service definition link changed during inspection"), err)
+	}
+	linked, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, linked) {
+		return errors.Join(errors.New("daemon service definition identity changed during inspection"), err)
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("recheck daemon service definition: %w", err)
+	}
+	if err := validateServiceDefinition(after); err != nil {
+		return err
+	}
+	priorOwner := before.Sys().(*syscall.Stat_t)
+	currentOwner := after.Sys().(*syscall.Stat_t)
+	if priorOwner.Uid != currentOwner.Uid || priorOwner.Gid != currentOwner.Gid {
+		return errors.New("daemon service definition ownership changed during inspection")
+	}
+	if after.Size() != before.Size() || after.Mode() != before.Mode() || !after.ModTime().Equal(before.ModTime()) {
+		return errors.New("daemon service definition changed during inspection")
+	}
+	return nil
+}
+
+func captureServiceFiles(paths []string) (map[string]string, error) {
+	files := make(map[string]string, len(paths))
+	for _, path := range paths {
+		resolved, digest, err := serviceFileIdentity(path)
+		if err != nil {
+			return nil, err
+		}
+		files[resolved] = digest
+	}
+	return files, nil
 }
 
 func parseInvocation(arguments, environment []byte) (processInvocation, error) {
