@@ -122,13 +122,14 @@ def await_commit(case, target):
     while time.monotonic() < deadline:
         ledger = installed_chain.read_ledger(case)
         entries = [entry for entry in ledger["entries"] if entry["version"] == target]
-        if entries and not ledger["state"].get("owned"):
-            return validate_commit(case, target, entries[0])
+        helper = installed_chain.ready_helper(case, target) if entries and not ledger["state"].get("owned") else None
+        if helper is not None:
+            return validate_commit(case, target, entries[0], helper)
         time.sleep(0.05)
     raise RuntimeError("fresh managed daemon did not finish its first revision-zero automatic hop")
 
 
-def validate_commit(case, target, entry):
+def validate_commit(case, target, entry, helper):
     host = case.control("host.info")["host"]
     case.require_automatic_zero(host)
     case.inspect_retained()
@@ -137,7 +138,7 @@ def validate_commit(case, target, entry):
         raise RuntimeError("fresh automatic commit differs from its actual signed release and retained worker")
     if (case.state / "updates/host-policy.json").exists() or (case.state / "updates/host-adoption.json").exists():
         raise RuntimeError("fresh automatic update acquired an explicit policy or adoption envelope")
-    return {"entry": entry, "effectiveUpdate": host["hostUpdate"], "helper": case.mapped_helper(),
+    return {"entry": entry, "effectiveUpdate": host["hostUpdate"], "helper": helper,
             "client": case.terminal.pid, "worker": case.worker, "shell": case.shell, "listener": case.listener}
 
 

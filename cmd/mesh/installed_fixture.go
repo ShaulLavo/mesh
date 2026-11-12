@@ -49,9 +49,6 @@ func holdInstalledHelper(path string) {
 	if err != nil || json.Unmarshal(data, &fault) != nil {
 		os.Exit(71)
 	}
-	if !slices.Contains(fault.Hold, release.Version) {
-		return
-	}
 	prefix := os.Getenv("MESH_INSTALLED_START_RECORD")
 	if prefix == "" {
 		os.Exit(73)

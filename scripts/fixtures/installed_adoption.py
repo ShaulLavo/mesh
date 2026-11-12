@@ -359,8 +359,8 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
         (output / "prepared-chain.json").write_text(json.dumps({"supplementalSourceBuilds": releases.builds,
             "metadata": releases.metadata}, indent=2) + "\n")
         return
-    for fail_final in (False, True):
-        installed_chain.run_case(root, output, host, pair, preparer, origin, releases, previous, fail_final)
+    for failure in ("none", "first", "final"):
+        installed_chain.run_case(root, output, host, pair, preparer, origin, releases, previous, failure)
 
 
 def run_order(root, output, native, preparer, host, releases, origin, prepare_only):

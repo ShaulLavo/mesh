@@ -26,8 +26,8 @@ def prepare(releases, origin, source):
     origin.head(releases.directory, first)
 
 
-def run_case(root, output, host, pair, preparer, origin, releases, previous, fail_final):
-    scenario = "chain-rollback" if fail_final else "chain"
+def run_case(root, output, host, pair, preparer, origin, releases, previous, failure):
+    scenario = {"none": "chain", "first": "chain-first-rollback", "final": "chain-rollback"}[failure]
     case = installed_adoption.AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
     record = {"scenario": scenario, "passed": False, "supplementalSourceBuilds": True, "hops": []}
     first, intermediate, final = installed_releases.VERSIONS
@@ -39,14 +39,18 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         start = case.start_adoption(first)
         record["bootstrap"] = case.validate_result(case.await_result(first), first, start["pin"])
         record["cohort"] = case.start_cohort(releases.registry, releases.probe)
-        if fail_final:
-            case.fault.write_text(json.dumps({"daemon": [final]}))
+        failed_version = {"none": [], "first": [intermediate], "final": [final]}[failure]
+        case.write_fault({"daemon": failed_version, "holdHelper": [intermediate]})
         origin.head(releases.directory, final)
         # A real daemon restart is the documented startup/wake discovery trigger.
         case.units.stop("daemon")
         case.units.start("daemon")
-        await_chain(case, record, intermediate, final, fail_final)
-        if fail_final:
+        if failure == "first":
+            await_first_rollback(case, record, first, intermediate)
+            verify_failed_restart(case, record, first, intermediate)
+        else:
+            await_chain(case, record, intermediate, final, failure == "final")
+        if failure == "final":
             verify_failed_restart(case, record, intermediate, final)
         record["passed"] = True
     except BaseException as error:
@@ -63,7 +67,7 @@ def await_chain(case, record, intermediate, final, fail_final):
         journal = read_journal(case)
         version = journal.get("request", {}).get("manifest", {}).get("version")
         phase = journal.get("phase")
-        if version == intermediate and phase == "committed" and intermediate not in seen and observe_hop(case, record, intermediate):
+        if intermediate not in seen and observe_hop(case, record, intermediate):
             seen.add(intermediate)
         if version == final and phase in ("committed", "rolled_back") and validate_terminal(case, record, journal, seen, intermediate, final, fail_final):
             return
@@ -84,17 +88,63 @@ def observe_hop(case, record, version):
     running = case.control("host.info")["host"]["build"]
     if running["digest"] != case.releases.builds[version]["digest"]:
         return False
-    receipt = json.loads((case.state / "update/helper/installed.json").read_text())
-    if receipt["digest"] != case.releases.builds[version]["digest"]:
+    ledger = read_ledger(case)
+    if not any(entry["version"] == version and entry["origin"] == "host" for entry in ledger["entries"]):
         return False
-    pid = case.units.managers["helper"].manager_pid()
-    image = installed_native.native_services.mapped_image(pid, receipt["executable"])
-    if image["sha256"] != receipt["digest"]:
-        raise RuntimeError("intermediate native helper executes another image")
+    image = ready_helper(case, version)
+    if image is None:
+        return False
     case.inspect_retained()
     digests = case.cohort.verify("native-hop-" + version)
     record["hops"].append({"version": version, "helper": image, "workers": digests})
+    faults = json.loads(case.fault.read_text())
+    faults.pop("holdHelper", None)
+    case.write_fault(faults)
     return True
+
+
+def ready_helper(case, version):
+    marker = case.root / ("start.helper." + version + ".json")
+    receipt = json.loads((case.state / "update/helper/installed.json").read_text())
+    if receipt["digest"] != case.releases.builds[version]["digest"] or not marker.exists():
+        return None
+    manager = case.units.managers["helper"]
+    if not manager.exists():
+        return None
+    pid = manager.manager_pid()
+    if pid == 0 or json.loads(marker.read_text())["pid"] != pid:
+        return None
+    image = installed_native.native_services.mapped_image(pid, receipt["executable"])
+    if image["sha256"] != receipt["digest"]:
+        raise RuntimeError("native helper executes another image")
+    return image if manager.manager_pid() == pid else None
+
+
+def await_first_rollback(case, record, source, target):
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        journal = read_journal(case)
+        rolled_back = journal.get("phase") == "rolled_back" and journal.get("request", {}).get("manifest", {}).get("version") == target
+        ledger = read_ledger(case) if rolled_back else {}
+        if ledger and matching_failure(case, ledger, source, target) and not ledger["state"].get("owned"):
+            observe_first_rollback(case, record, source)
+            return
+        time.sleep(0.05)
+    raise RuntimeError("native first signed hop did not roll back and retain its exact failed edge")
+
+
+def observe_first_rollback(case, record, source):
+    case.inspect_retained()
+    running = case.control("host.info")["host"]["build"]
+    if running["digest"] != case.releases.builds[source]["digest"]:
+        raise RuntimeError("native first-hop rollback did not restore its exact source image")
+    receipt = json.loads((case.state / "update/helper/installed.json").read_text())
+    image = installed_native.native_services.mapped_image(case.units.managers["helper"].manager_pid(), receipt["executable"])
+    if image["sha256"] != case.releases.builds[source]["digest"]:
+        raise RuntimeError("native first-hop rollback lost its verified source helper")
+    record["running"], record["journalPhase"] = running, "rolled_back"
+    record["finalWorkers"] = case.cohort.verify("native-first-hop-rollback")
+    record["helper"] = image
 
 
 def validate_terminal(case, record, journal, seen, intermediate, final, fail_final):
@@ -107,6 +157,9 @@ def validate_terminal(case, record, journal, seen, intermediate, final, fail_fin
     if any(version not in commits for version in required):
         return False
     if fail_final and not matching_failure(case, ledger, intermediate, final):
+        return False
+    helper = ready_helper(case, intermediate if fail_final else final)
+    if helper is None:
         return False
     case.inspect_retained()
     record["finalWorkers"] = case.cohort.verify("native-final-" + expected_phase)
@@ -122,6 +175,7 @@ def validate_terminal(case, record, journal, seen, intermediate, final, fail_fin
         if entry.get("workersPreserved") != case.expected_workers:
             raise RuntimeError("native unattended ledger lost an exact retained worker")
     record["running"], record["journalPhase"] = running, expected_phase
+    record["helper"] = helper
     return True
 
 
