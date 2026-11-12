@@ -15,6 +15,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,6 +31,7 @@ import (
 type Observation struct {
 	Executable string
 	Health     updateinstall.Health
+	PID        int
 }
 
 type executableImage struct {
@@ -67,7 +70,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	build, err := observedBuild(image.Path, response.Host.Build, stateVersion)
+	build, err := observedBuild(ctx, image.Path, response.Host.Build, stateVersion)
 	if err != nil {
 		return Observation{}, fmt.Errorf("verify daemon PID=%d phase=build-identity: %w", image.PID, err)
 	}
@@ -79,7 +82,7 @@ func Inspect(ctx context.Context, stateDir string) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	return Observation{Executable: image.Installed, Health: health}, nil
+	return Observation{Executable: image.Installed, Health: health, PID: image.PID}, nil
 }
 
 func readStateVersion(ctx context.Context, stateDir string) (int, error) {
@@ -98,8 +101,8 @@ func readStateVersion(ctx context.Context, stateDir string) (int, error) {
 	return version, err
 }
 
-func observedBuild(path string, reported *release.Build, stateVersion int) (release.Build, error) {
-	digest, err := imageDigest(path)
+func observedBuild(ctx context.Context, path string, reported *release.Build, stateVersion int) (release.Build, error) {
+	digest, err := imageDigestContext(ctx, path)
 	if err != nil {
 		return release.Build{}, err
 	}
@@ -121,15 +124,20 @@ func observedBuild(path string, reported *release.Build, stateVersion int) (rele
 		applyLegacySetting(&build, setting.Key, setting.Value)
 	}
 	if _, err := release.CompareVersions(build.Version, "v0.0.0"); err != nil {
-		build.Version = legacyVersionFlag(path)
+		build.Version = legacyVersionFlag(ctx, path)
+	}
+	if err := ctx.Err(); err != nil {
+		return release.Build{}, fmt.Errorf("inspect legacy build: %w", err)
 	}
 	return build, nil
 }
 
-func legacyVersionFlag(path string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func legacyVersionFlag(ctx context.Context, path string) string {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, path, "--version").Output() //nolint:gosec // only the OS-identified, already-running local executable is queried
+	command := exec.CommandContext(ctx, path, "--version") //nolint:gosec // only the OS-identified, already-running local executable is queried
+	command.WaitDelay = 100 * time.Millisecond
+	output, err := command.Output()
 	if err != nil || len(output) > 4096 {
 		return ""
 	}
@@ -165,6 +173,7 @@ func imageDigest(path string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = file.Close() }()
+
 	hash := sha256.New()
 	size, err := io.Copy(hash, io.LimitReader(file, (128<<20)+1))
 	if err != nil {
@@ -176,27 +185,106 @@ func imageDigest(path string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+func imageDigestContext(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("inspect executable digest: %w", err)
+	}
+	file, err := os.Open(path) //nolint:gosec // OS-reported executable of the connected local process
+	if err != nil {
+		return "", fmt.Errorf("open executable image: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	size, err := io.Copy(hash, io.LimitReader(probeImageReader{ctx: ctx, file: file}, (128<<20)+1))
+	if err != nil {
+		return "", fmt.Errorf("hash executable image: %w", err)
+	}
+	if size > 128<<20 {
+		return "", errors.New("legacy executable exceeds supported size")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("inspect executable digest: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type probeImageReader struct {
+	ctx  context.Context
+	file *os.File
+}
+
+func (r probeImageReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("read executable image: %w", err)
+	}
+	n, err := r.file.Read(buffer)
+	if err == io.EOF {
+		return n, io.EOF
+	}
+	if err != nil {
+		return n, fmt.Errorf("read executable image: %w", err)
+	}
+	return n, nil
+}
+
+type workerObservation struct {
+	dir    string
+	worker *updateinstall.Worker
+	err    error
+}
+
+// Bound simultaneous sockets, native image tools and executable reads. Results
+// retain ReadDir order, regardless of which observation finishes first.
+const workerProbeConcurrency = 8
+
 func inspectWorkers(ctx context.Context, stateDir string, stateVersion int) ([]updateinstall.Worker, error) {
 	root := filepath.Join(stateDir, "s")
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return collectWorkerObservations(ctx, nil)
 	}
 	if err != nil {
 		return nil, err
 	}
-	var workers []updateinstall.Worker
+	var observations []workerObservation
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		current, err := inspectWorker(ctx, filepath.Join(root, entry.Name()), stateVersion)
-		if err != nil {
-			return nil, err
+		observations = append(observations, workerObservation{dir: filepath.Join(root, entry.Name())})
+	}
+	var next atomic.Int64
+	var group sync.WaitGroup
+	for range min(workerProbeConcurrency, len(observations)) {
+		group.Go(func() { inspectWorkerBatch(ctx, observations, stateVersion, &next) })
+	}
+	group.Wait()
+	return collectWorkerObservations(ctx, observations)
+}
+
+func inspectWorkerBatch(ctx context.Context, observations []workerObservation, stateVersion int, next *atomic.Int64) {
+	for {
+		index := int(next.Add(1)) - 1
+		if index >= len(observations) || ctx.Err() != nil {
+			return
 		}
-		if current != nil {
-			workers = append(workers, *current)
+		current := &observations[index]
+		current.worker, current.err = inspectWorker(ctx, current.dir, stateVersion)
+	}
+}
+
+func collectWorkerObservations(ctx context.Context, observations []workerObservation) ([]updateinstall.Worker, error) {
+	var workers []updateinstall.Worker
+	for _, current := range observations {
+		if current.err != nil {
+			return nil, errors.Join(ctx.Err(), current.err)
 		}
+		if current.worker != nil {
+			workers = append(workers, *current.worker)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("inspect worker cohort: %w", err)
 	}
 	return workers, nil
 }
@@ -241,7 +329,7 @@ func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updatein
 	if !validWorkerProbe(response, meta) {
 		return nil, errors.New("worker cannot answer a read-only session inspection")
 	}
-	build, err := observedBuild(image.Path, meta.Build, stateVersion)
+	build, err := observedBuild(ctx, image.Path, meta.Build, stateVersion)
 	if err != nil {
 		return nil, fmt.Errorf("verify session %s workerPID=%d shellPID=%d phase=build-identity: %w", meta.ID, image.PID, meta.PID, err)
 	}
@@ -273,7 +361,42 @@ func dial(ctx context.Context, path string) (net.Conn, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	return conn, nil
+	closed := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+		close(closed)
+	})
+	return &probeConnection{Conn: conn, stop: stop, closed: closed}, nil
+}
+
+type probeConnection struct {
+	net.Conn
+	stop   func() bool
+	closed <-chan struct{}
+	once   sync.Once
+	err    error
+}
+
+func (c *probeConnection) Close() error {
+	c.once.Do(func() {
+		if !c.stop() {
+			<-c.closed
+		}
+		c.err = c.Conn.Close()
+	})
+	return c.err
+}
+
+func (c *probeConnection) SyscallConn() (syscall.RawConn, error) {
+	socket, ok := c.Conn.(syscall.Conn)
+	if !ok {
+		return nil, errors.New("bootstrap requires a local Unix socket")
+	}
+	raw, err := socket.SyscallConn()
+	if err != nil {
+		return nil, fmt.Errorf("inspect local socket: %w", err)
+	}
+	return raw, nil
 }
 
 func exchange(conn net.Conn, request protocol.Control) (protocol.Control, error) {

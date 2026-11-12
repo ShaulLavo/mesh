@@ -1969,6 +1969,7 @@ Usage:
   mesh update [command]
 
 Available Commands:
+  adopt       Bring an existing installation into automatic updates
   automatic   Manage exact saved-fleet unattended update consent
   cancel      Stop pending updates; issued activation grants may still finish
   config      Deliver explicitly approved feed and domain settings
@@ -1994,6 +1995,77 @@ Global Flags:
       --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
 Use "mesh update [command] --help" for more information about a command.
+```
+
+## mesh update adopt
+
+```text
+Bring an existing installation into automatic updates
+
+Usage:
+  mesh update adopt [command]
+
+Available Commands:
+  start       Start one durable adoption from a verified release executable
+  status      Read this host's durable adoption progress
+
+Flags:
+  -h, --help   help for adopt
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh update adopt [command] --help" for more information about a command.
+```
+
+## mesh update adopt start
+
+```text
+Start one durable adoption from a verified release executable
+
+Usage:
+  mesh update adopt start [--notice -- COMMAND ARG...] [flags]
+
+Flags:
+      --canary stringArray     host identity that adopts first; may repeat
+      --fleet string           fleet manifest to adopt
+  -h, --help                   help for start
+      --last string            local host identity that adopts last (default "LOCAL")
+      --local                  receive this host's pinned adoption input on stdin
+      --notice                 run the argv after -- before the last host activates
+      --notice-lead duration   time between successful notice and local activation (default 30m0s)
+      --release string         exact signed activation release
+      --ssh stringArray        system SSH alias as ID=ALIAS; may repeat
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh update adopt status
+
+```text
+Read this host's durable adoption progress
+
+Usage:
+  mesh update adopt status [flags]
+
+Flags:
+  -h, --help   help for status
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh update automatic
