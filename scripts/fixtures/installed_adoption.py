@@ -72,8 +72,7 @@ class AdoptionCase(installed_native.Installation):
 
     def start_adoption(self, version):
         self.check_manager_context()
-        if sys.platform == "darwin":
-            self.origin.inspect(self.state, self.root / "service-before.json")
+        self.origin.inspect(self.state, self.root / "service-before.json")
         side = self.releases.builds[version]["path"]
         metadata = self.releases.directory / version / "mesh-update.json"
         pin = installed_releases.digest(metadata.read_bytes())
@@ -229,7 +228,7 @@ def finish_case(case, record, output):
 
 
 def collect_service_snapshot(case):
-    if sys.platform == "darwin" and case.ready():
+    if case.ready():
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 

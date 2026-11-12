@@ -114,6 +114,11 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 			t.Fatal(err)
 		}
 		installedWrite(t, root, request.Output, mustHostJSON(installation.Service))
+		hashes, err := updatebootstrap.InstalledEnvironmentHashes(t.Context(), installation.Observation.PID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		installedWrite(t, root, request.Output+".env-hashes.json", mustHostJSON(hashes))
 	}
 	if request.Ledger != "" {
 		installedLedger(t, root, request)
