@@ -375,7 +375,7 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
         return
     descriptor = root / "ordered-input.json"
     descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
-        "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}))
+        "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}, default=str))
     subprocess.run(["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
         "PYTHONPATH=" + str(Path(__file__).parents[1]), "PYTHONDONTWRITEBYTECODE=1", sys.executable,
         str(Path(installed_order.__file__)), str(descriptor), str(output)], check=True, timeout=480)

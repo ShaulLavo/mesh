@@ -3,6 +3,10 @@ name: Installed catch-up
 on:
   workflow_call:
     inputs:
+      harness_source:
+        type: string
+        default: ''
+        description: 'Exact harness checkout SHA for remote calls, independent of producer artifact source'
       reusable_call:
         type: boolean
         default: true
@@ -66,6 +70,8 @@ jobs:
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       - name: Prove three isolated native managers before installed order setup
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
@@ -94,6 +100,8 @@ jobs:
             runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       - name: Prove native manager before builds or downloads
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
@@ -152,6 +160,8 @@ jobs:
             runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       - name: Require the actual native manager before fresh builds or downloads
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
@@ -204,6 +214,8 @@ jobs:
             runner: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       - name: Require the real native manager before acquisition or builds
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}

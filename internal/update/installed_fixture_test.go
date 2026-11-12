@@ -146,6 +146,10 @@ func TestInstalledHostRead(t *testing.T) {
 	defer func() { _ = root.Close() }()
 	request := installedSignRequest{Output: os.Getenv("MESH_INSTALLED_READ_OUTPUT")}
 	state := os.Getenv("MESH_INSTALLED_READ_STATE")
+	if os.Getenv("MESH_INSTALLED_READ_KIND") == "seed" {
+		installedSeedWithClient(t, installedSeed{State: state, Version: os.Getenv("MESH_INSTALLED_READ_VERSION")}, release.Client{})
+		return
+	}
 	if os.Getenv("MESH_INSTALLED_READ_KIND") == "inspect" {
 		request.Inspect = state
 		installedInspect(t, root, request)
@@ -199,6 +203,11 @@ func installedSeedJournal(t *testing.T, signer *signingFixture, proxy *adoptionN
 	transport.TLSClientConfig = &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
 	defer transport.CloseIdleConnections()
 	client := release.Client{HTTPClient: &http.Client{Transport: transport, Timeout: 30 * time.Second}}
+	installedSeedWithClient(t, seed, client)
+}
+
+func installedSeedWithClient(t *testing.T, seed installedSeed, client release.Client) {
+	t.Helper()
 	manifest, err := client.Manifest(t.Context(), seed.Version)
 	if err != nil {
 		t.Fatal(err)

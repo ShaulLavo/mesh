@@ -146,14 +146,17 @@ class Releases:
     def prove(self, source, target):
         directory = self.root / "proofs" / (Path(source).parent.name + "-" + target + "-" + digest(Path(source).read_bytes())[:8])
         directory.mkdir(parents=True)
+        context_manifest = directory / "candidate-context.json"
+        write_json(context_manifest, self.manifests[target])
         with (directory / "proof.log").open("wb") as output:
-            environment = self.environment() | {"MESH_STARTUP_FAULT_BINARY": str(self.startup[target]), "MESH_BOUNDARY_TOOL": str(self.root / "boundary")}
+            environment = self.environment() | {"MESH_STARTUP_FAULT_BINARY": str(self.startup[target]), "MESH_BOUNDARY_TOOL": str(self.root / "boundary"),
+                "MESH_ROLLBACK_MANIFEST": str(context_manifest)}
             if self.registry:
                 environment.update(MESH_WORKER_REGISTRY=str(self.registry), MESH_WORKER_PROBE=str(self.probe))
             subprocess.run(["bash", str(REPO / "scripts/prove-release-transition.sh"), str(source), self.builds[target]["path"],
                 self.native, str(directory)], cwd=REPO, env=environment, stdout=output, stderr=subprocess.STDOUT, check=True,
                 timeout=600 if self.registry else 180)
-        receipts = list(directory.glob("*.json"))
+        receipts = [path for path in directory.glob("*.json") if path != context_manifest]
         rollbacks = list((directory / "rollback").glob("*.rollback.json"))
         if len(receipts) != 1 or len(rollbacks) != 1:
             raise RuntimeError("native full transition did not produce one forward and rollback proof")
