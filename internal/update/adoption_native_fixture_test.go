@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ type adoptionNativeFixture struct {
 	session   string
 }
 
-func newAdoptionNativeFixture(t *testing.T, source string) *adoptionNativeFixture {
+func newAdoptionNativeFixture(t *testing.T, source string, helper bool) *adoptionNativeFixture {
 	t.Helper()
 	root, err := os.MkdirTemp("", "an-")
 	if err != nil {
@@ -83,9 +84,11 @@ func newAdoptionNativeFixture(t *testing.T, source string) *adoptionNativeFixtur
 	f.manager("start", "mesh.service")
 	f.awaitDaemon()
 	f.createSession()
-	_, err = updateinstall.PrepareHelper(t.Context(), updateinstall.HelperConfig{StateDir: f.state, Executable: f.images["v0.1.196"], ServiceDir: filepath.Join(root, "home", ".config", "systemd", "user"), Kind: "systemd"})
-	if err != nil {
-		t.Fatal(err)
+	if helper {
+		_, err = updateinstall.PrepareHelper(t.Context(), updateinstall.HelperConfig{StateDir: f.state, Executable: f.images["v0.1.196"], ServiceDir: filepath.Join(root, "home", ".config", "systemd", "user"), Kind: "systemd"})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	return f
 }
@@ -103,7 +106,7 @@ func (f *adoptionNativeFixture) acquire(version string, client *http.Client) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	archive, err := downloadAdoptionNativeArchive(f.t.Context(), client, release.OfficialBaseURL+"/download/"+version+"/"+artifact.Archive)
+	archive, err := cachedAdoptionNativeArchive(f.t.Context(), client, version, artifact)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -135,6 +138,23 @@ func (f *adoptionNativeFixture) acquire(version string, client *http.Client) {
 	f.images[version], f.manifests[version] = filepath.Join(f.root, name), manifest
 	f.proxy.put(version+"/"+release.ManifestAssetName, mustHostJSON(manifest))
 	f.proxy.put(version+"/"+artifact.Archive, archive)
+}
+
+var adoptionNativeArchives sync.Map
+
+func cachedAdoptionNativeArchive(ctx context.Context, client *http.Client, version string, artifact release.Artifact) ([]byte, error) {
+	if cached, ok := adoptionNativeArchives.Load(artifact.SHA256); ok {
+		return cached.([]byte), nil
+	}
+	data, err := downloadAdoptionNativeArchive(ctx, client, release.OfficialBaseURL+"/download/"+version+"/"+artifact.Archive)
+	if err != nil {
+		return nil, err
+	}
+	if err := release.VerifyDigest(data, artifact.SHA256); err != nil {
+		return nil, hostError(err)
+	}
+	adoptionNativeArchives.Store(artifact.SHA256, data)
+	return data, nil
 }
 
 func (f *adoptionNativeFixture) write(name string, data []byte, executable bool) {
@@ -373,6 +393,7 @@ start_helper() {
   pid=$(pid_value "$root/helper.pid")
   if process_running "$pid"; then return; fi
   if test -f "$root/hold-old-helper"; then return; fi
+  if test -f "$root/fail-helper-start"; then exit 19; fi
   "$root/s/update/helper/current" update-helper --state-dir "$root/s" </dev/null >>"$root/helper.log" 2>&1 &
   printf '%s\n' "$!" > "$root/helper.pid"
   touch "$root/helper.loaded"
@@ -396,6 +417,7 @@ show)
   for property in $properties; do
     case "$property" in
       MainPID)
+        if test "$unit" = mesh-update-helper.service && test -f "$root/delay-helper-probe"; then sleep 0.5; fi
         if test "$unit" = mesh.service; then result=$(pid_value "$root/daemon.pid"); else result=$(pid_value "$root/helper.pid"); fi
         result=${result:-0}
         ;;

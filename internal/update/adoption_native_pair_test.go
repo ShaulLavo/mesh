@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +26,7 @@ func TestAdoptionNativePair(t *testing.T) {
 	if os.Getenv("MESH_ADOPTION_NATIVE") != "1" || runtime.GOOS != "linux" {
 		t.Skip("set MESH_ADOPTION_NATIVE=1 for published-daemon adoption fixtures")
 	}
-	f := newAdoptionNativeFixture(t, "v0.1.248")
+	f := newAdoptionNativeFixture(t, "v0.1.248", true)
 	f.seedGenuinePrior()
 	side, pin := f.publishCandidate()
 	f.startOnce(side, pin)
@@ -42,6 +44,27 @@ func TestAdoptionNativePair(t *testing.T) {
 		}
 	}
 	f.roundTrip()
+}
+
+func TestAdoptionNativeInitialHelper(t *testing.T) {
+	if os.Getenv("MESH_ADOPTION_NATIVE") != "1" || runtime.GOOS != "linux" {
+		t.Skip("set MESH_ADOPTION_NATIVE=1 for unjournaled helper fixtures")
+	}
+	for _, helper := range []bool{false, true} {
+		t.Run(strconv.FormatBool(helper), func(t *testing.T) {
+			f := newAdoptionNativeFixture(t, "v0.1.249", helper)
+			if _, err := updateinstall.Read(f.state); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("fixture unexpectedly has a journal before adoption")
+			}
+			side, pin := f.publishCandidate()
+			f.startOnce(side, pin)
+			envelope := f.awaitAdoption(AdoptionComplete)
+			if !envelope.Confirmed || envelope.Adopted.Generation != 1 {
+				t.Fatal("initial helper did not create a genuine first adoption journal")
+			}
+			f.roundTrip()
+		})
+	}
 }
 
 func (f *adoptionNativeFixture) fixtureClient() release.Client {
