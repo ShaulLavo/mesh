@@ -26,6 +26,27 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def source_build(source, environment, native):
+    source = Path(source)
+    result = subprocess.run([str(source), "version", "--json"], env=environment,
+                            capture_output=True, text=True, check=True, timeout=10)
+    build = json.loads(result.stdout)
+    with source.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if build["digest"] != actual or build["modified"] or build["platform"] != dict(zip(("os", "arch"), native.split("/"))):
+        raise RuntimeError("transition source report differs from its actual unmodified native image")
+    return build
+
+
+def rollback_context(manifest, source):
+    compatibility = manifest["compatibility"]
+    if source["stateVersion"] > compatibility["stateReadMax"] or source["workerProtocol"] > compatibility["workerMax"]:
+        raise RuntimeError("transition source exceeds the actual candidate context capabilities")
+    return manifest | {"compatibility": compatibility | {
+        "stateReadMin": min(compatibility["stateReadMin"], source["stateVersion"]),
+        "workerMin": min(compatibility["workerMin"], source["workerProtocol"]), "transitions": []}}
+
+
 class Releases:
     def __init__(self, root, native, output):
         self.root, self.native, self.output = Path(root), native, Path(output)
@@ -146,10 +167,11 @@ class Releases:
             "sha256": digest((directory / name).read_bytes()), "binarySha256": digest(binary.read_bytes())}
 
     def prove(self, source, target):
-        directory = self.root / "proofs" / (Path(source).parent.name + "-" + target + "-" + digest(Path(source).read_bytes())[:8])
+        original = source_build(source, self.environment(), self.native)
+        directory = self.root / "proofs" / (Path(source).parent.name + "-" + target + "-" + original["digest"][:8])
         directory.mkdir(parents=True)
         context_manifest = directory / "candidate-context.json"
-        write_json(context_manifest, self.manifests[target])
+        write_json(context_manifest, rollback_context(self.manifests[target], original))
         with (directory / "proof.log").open("wb") as output:
             environment = self.environment() | {"MESH_STARTUP_FAULT_BINARY": str(self.startup[target]), "MESH_BOUNDARY_TOOL": str(self.root / "boundary"),
                 "MESH_ROLLBACK_MANIFEST": str(context_manifest)}

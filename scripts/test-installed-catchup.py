@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
 from fixtures import installed_review_controls
+from fixtures import installed_releases, release_transition
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -626,6 +627,55 @@ class ArtifactPinTest(unittest.TestCase):
         (tools / "worker-probe").write_bytes(b"another observer")
         with self.assertRaisesRegex(RuntimeError, "worker-probe"):
             installed_artifacts.verify_tools(root, "a" * 40, platform)
+
+
+class UnpublishedRollbackContextTest(unittest.TestCase):
+    def manifest(self):
+        return {"artifacts": [], "compatibility": {"stateReadMin": 16, "stateReadMax": 16, "stateWrite": 16,
+            "workerMin": 1, "workerMax": 1, "workerWrite": 1, "journalVersion": 1,
+            "transitions": [{"proof": "existing-completed-receipt"}]}}
+
+    def test_actual_source_range_is_only_added_to_the_private_zero_claim_context(self):
+        manifest = self.manifest()
+        before = json.loads(json.dumps(manifest))
+        source = {"stateVersion": 13, "workerProtocol": 1}
+        with self.assertRaisesRegex(ValueError, "actual source database schema"):
+            release_transition.verify_source_range(manifest, source)
+        context = installed_releases.rollback_context(manifest, source)
+        release_transition.verify_source_range(context, source)
+        self.assertEqual(context["compatibility"]["stateReadMin"], 13)
+        self.assertEqual(context["compatibility"]["stateWrite"], 16)
+        self.assertEqual(context["compatibility"]["transitions"], [])
+        self.assertIs(context["artifacts"], manifest["artifacts"])
+        self.assertEqual(manifest, before)
+
+    def test_source_above_compiled_capabilities_is_rejected(self):
+        for source in ({"stateVersion": 17, "workerProtocol": 1}, {"stateVersion": 13, "workerProtocol": 2}):
+            with self.assertRaisesRegex(RuntimeError, "actual candidate context capabilities"):
+                installed_releases.rollback_context(self.manifest(), source)
+
+    def test_executing_source_report_must_match_actual_image_and_platform(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            source.write_bytes(b"source measurement control")
+            build = {"digest": published_releases.digest(source.read_bytes()), "modified": False,
+                     "platform": {"os": "linux", "arch": "amd64"}, "stateVersion": 13, "workerProtocol": 1}
+            self.check_source_report(source, build, True)
+            self.check_source_report(source, build | {"digest": "0" * 64}, False)
+            self.check_source_report(source, build | {"modified": True}, False)
+            self.check_source_report(source, build | {"platform": {"os": "darwin", "arch": "arm64"}}, False)
+
+    def check_source_report(self, source, build, accepted):
+        result = subprocess.CompletedProcess([], 0, json.dumps(build), "")
+        with patch.object(installed_releases.subprocess, "run", return_value=result):
+            if accepted:
+                self.assertEqual(installed_releases.source_build(source, {}, "linux/amd64"), build)
+                return
+            self.reject_source_report(source)
+
+    def reject_source_report(self, source):
+        with self.assertRaisesRegex(RuntimeError, "actual unmodified native image"):
+            installed_releases.source_build(source, {}, "linux/amd64")
 
 
 class PublicationModeTest(unittest.TestCase):
