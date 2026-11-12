@@ -368,23 +368,13 @@ func collectWorkerObservations(ctx context.Context, observations []workerObserva
 	return workers, nil
 }
 
-func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updateinstall.Worker, error) {
-	observations := []workerObservation{{dir: dir}}
-	inspectWorkerGroup(ctx, observations, stateVersion)
-	current := observations[0]
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Join(err, current.err)
-	}
-	return current.worker, current.err
-}
-
 func (current *workerObservation) connect(ctx context.Context) {
 	dir := current.dir
 	if _, err := os.Lstat(paths.Launching(dir)); err == nil { //nolint:gosec // dir comes from entries enumerated under the local workers directory
 		current.done = true
 		return
 	} else if !errors.Is(err, os.ErrNotExist) {
-		current.err = err
+		current.err = fmt.Errorf("inspect worker metadata: %w", err)
 		return
 	}
 	meta, err := worker.ReadMeta(dir)
@@ -393,7 +383,7 @@ func (current *workerObservation) connect(ctx context.Context) {
 		return
 	}
 	if err != nil {
-		current.err = err
+		current.err = fmt.Errorf("inspect worker metadata: %w", err)
 		return
 	}
 	if meta.State == worker.StateExited || meta.State == worker.StateInterrupted {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/updateinstall"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -152,4 +153,14 @@ func serveIdentifiedWorker(t *testing.T, current *workerObservation) {
 		}
 		_ = protocol.NewWriter(server).WriteControlMsg(cohortResponse(current.meta.ID))
 	}()
+}
+
+func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updateinstall.Worker, error) {
+	observations := []workerObservation{{dir: dir}}
+	inspectWorkerGroup(ctx, observations, stateVersion)
+	current := observations[0]
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Join(err, current.err)
+	}
+	return current.worker, current.err
 }

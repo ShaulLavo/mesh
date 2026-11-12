@@ -24,8 +24,8 @@ func mappedProcessSets(output string, pids []int) ([]string, error) {
 			return nil, errors.New("mapped process records precede process identity")
 		}
 		if line[0] != 'p' {
-			sets[current].WriteString(line)
-			sets[current].WriteByte('\n')
+			_, _ = sets[current].WriteString(line)
+			_ = sets[current].WriteByte('\n')
 			continue
 		}
 		pid, err := mappedProcessPID(line[1:])

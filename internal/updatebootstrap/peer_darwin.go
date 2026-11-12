@@ -20,19 +20,19 @@ import (
 func peerPID(conn net.Conn) (int, error) {
 	socket, ok := conn.(syscall.Conn)
 	if !ok {
-		return 0, errors.New("bootstrap requires a local Unix socket")
+		return 0, fmt.Errorf("inspect Unix peer process: %w", err)ors.New("bootstrap requires a local Unix socket")
 	}
 	raw, err := socket.SyscallConn()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("inspect Unix peer process: %w", err)
 	}
 	var pid int
 	var probeErr error
 	if err = raw.Control(func(fd uintptr) { pid, probeErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID) }); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("inspect Unix peer process: %w", err)
 	}
 	if probeErr != nil {
-		return 0, probeErr
+		return 0, fmt.Errorf("inspect Unix peer credentials: %w", probeErr)
 	}
 	return pid, nil
 }
