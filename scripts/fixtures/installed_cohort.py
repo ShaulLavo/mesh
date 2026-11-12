@@ -49,7 +49,10 @@ class Cohort:
 
     def start(self):
         # The shared producer persists ownership before each worker can start.
-        release_workers.start(self.state, self.config, self.selected, self.record)
+        environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe)}
+        subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start", str(self.state), str(self.config),
+            str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
+            capture_output=True, text=True, check=True, timeout=90)
         return self.verify("before-install")
 
     def verify(self, label):
