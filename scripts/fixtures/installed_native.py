@@ -499,6 +499,8 @@ def prove(root, output, host, pair, preparer):
 
 
 def retain_logs(root, output, name):
+    for path in root.glob("preserved-*.json"):
+        shutil.copy2(path, output / (name + "-" + path.name))
     route = root / "route-observation.json"
     if route.exists():
         shutil.copy2(route, output / (name + "-route-observation.json"))

@@ -62,8 +62,13 @@ class AdoptionCase(installed_native.Installation):
         return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths if path.is_file()}
 
     def inspect_retained(self):
-        if self.retained() != self.snapshots:
-            raise RuntimeError("adoption changed preserved identity, device grants, configuration or daemon definition")
+        after = self.retained()
+        (self.root / "preserved-before.json").write_text(json.dumps(self.snapshots, indent=2) + "\n")
+        (self.root / "preserved-after.json").write_text(json.dumps(after, indent=2) + "\n")
+        if after != self.snapshots:
+            changed = [{"path": path, "before": self.snapshots.get(path), "after": after.get(path)}
+                       for path in sorted(set(after) | set(self.snapshots)) if after.get(path) != self.snapshots.get(path)]
+            raise RuntimeError("installed update changed preserved components: " + json.dumps(changed))
         if installed_native.peer_pid(self.state / "s" / self.session / "sock") != self.worker:
             raise RuntimeError("adoption replaced retained worker")
         meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())

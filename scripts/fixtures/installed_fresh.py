@@ -115,9 +115,11 @@ def run(root, output, native, releases, origin):
         record["initial"] = case.prepare()
         case.seed()
         case.snapshots = case.retained()
+        collect_diagnostics(case, output, "before-target-exposure")
         origin.head(releases.directory, target)
         case.units.stop("daemon")
         case.units.start("daemon")
+        collect_diagnostics(case, output, "after-restart")
         record["automatic"] = await_commit(case, target)
         record["passed"] = True
     except BaseException as error:
@@ -177,17 +179,23 @@ def retain_install_logs(case, output):
             installed_native.copy_log_tail(path, output / ("fresh-" + name + ".log"))
 
 
-def collect_diagnostics(case, output):
+def collect_diagnostics(case, output, label="final"):
+    (output / ("fresh-" + label + "-preserved-before.json")).write_text(json.dumps(case.snapshots, indent=2) + "\n")
+    (output / ("fresh-" + label + "-preserved-after.json")).write_text(json.dumps(case.retained(), indent=2) + "\n")
     ledger = installed_chain.read_ledger(case)
-    (output / "fresh-final-ledger.json").write_text(json.dumps(ledger, indent=2) + "\n")
+    (output / ("fresh-" + label + "-ledger.json")).write_text(json.dumps(ledger, indent=2) + "\n")
     journal = installed_chain.read_journal(case)
-    (output / "fresh-final-journal.json").write_text(json.dumps(journal, indent=2) + "\n")
+    (output / ("fresh-" + label + "-journal.json")).write_text(json.dumps(journal, indent=2) + "\n")
     if case.ready():
-        (output / "fresh-final-host.json").write_text(json.dumps(case.control("host.info"), indent=2) + "\n")
+        (output / ("fresh-" + label + "-host.json")).write_text(json.dumps(case.control("host.info"), indent=2) + "\n")
+    for name in ("host-update", "host-discovery", "host-status", "host-policy"):
+        path = case.state / "updates" / (name + ".json")
+        if path.exists():
+            (output / ("fresh-" + label + "-" + name + ".json")).write_bytes(path.read_bytes())
     receipt = case.state / "update/helper/installed.json"
     if receipt.exists():
-        (output / "fresh-final-helper.json").write_bytes(receipt.read_bytes())
+        (output / ("fresh-" + label + "-helper.json")).write_bytes(receipt.read_bytes())
     manager = case.units.managers["helper"]
     if manager.system == "Linux":
         status = manager.systemctl("status", manager.label + ".service", "--no-pager", check=False)
-        (output / "fresh-final-helper-status.log").write_text((status.stdout + status.stderr)[-16384:])
+        (output / ("fresh-" + label + "-helper-status.log")).write_text((status.stdout + status.stderr)[-16384:])
