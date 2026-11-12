@@ -108,6 +108,7 @@ class BaselineTests(unittest.TestCase):
         tools.mkdir()
         retained.mkdir()
         (tools / "candidate-reader.json").write_text("{}")
+        (tools / "preparation.json").write_text(json.dumps({"source": {"commit": "a" * 40, "clean": True}}))
         (retained / "workers.json").write_text("{}")
         selected, paths = [], []
         for index in range(8):
@@ -146,6 +147,17 @@ class BaselineTests(unittest.TestCase):
         sources = [row["source"] for result in results for row in result]
         self.assertEqual(len(sources), 9)
         self.assertEqual(len(set(sources)), 9)
+
+    def test_custom_matrix_freezes_actual_asset_digest_without_published_identity(self):
+        selected, _, custom, _ = self.shard_sources()
+        path = self.root / "selection.json"
+        path.write_text(json.dumps(selected | {"workers": []}))
+        BASELINES.freeze_pins(path, custom.name + ",irrelevant.txt")
+        frozen = json.loads(path.read_bytes())
+        self.assertEqual(frozen["baselines"], selected["baselines"])
+        self.assertEqual(frozen["workers"], [])
+        self.assertEqual(frozen["customBaselines"], [{"artifact": {"platform": {"os": "linux", "arch": "amd64"},
+            "binarySha256": hashlib.sha256(b"custom").hexdigest()}, "asset": custom.name, "rollback": True}])
 
     def test_shard_count_handles_platforms_and_duplicate_pins(self):
         selected, _, custom, _ = self.shard_sources()

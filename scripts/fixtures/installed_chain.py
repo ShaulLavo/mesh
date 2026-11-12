@@ -8,12 +8,9 @@ from fixtures import installed_adoption, installed_native, installed_releases
 
 def prepare(releases, origin, source):
     first, intermediate, final = installed_releases.VERSIONS
-    registry = releases.registry
-    releases.registry = None
     releases.build(first)
     proof = releases.prove(source, first)
     releases.publish(first, 0, [proof])
-    releases.registry = registry
     releases.build(intermediate)
     proof = releases.prove(releases.builds[first]["path"], intermediate)
     releases.publish(intermediate, 1, [proof])
@@ -79,6 +76,7 @@ def run_groups(root, output, host, pair, preparer, origin, releases, previous, f
         installed_adoption.validate_installed_group(directory, group, expected)
         shutil.rmtree(case_root)
         releases.check_budget()
+    installed_adoption.complete_installed_groups(output / "groups" / (host["name"] + "-chain-" + failure), groups, expected)
 
 
 def await_chain(case, record, intermediate, final, fail_final):

@@ -399,6 +399,7 @@ def run_grouped_adoption(root, output, host, pair, previous, preparer, origin, r
         validate_installed_group(directory, group, ["before-install", "after-" + scenario])
         shutil.rmtree(case_root)
         releases.check_budget()
+    complete_installed_groups(destination, groups, ["before-install", "after-" + scenario])
 
 
 def validate_installed_group(output, group, labels):
@@ -412,6 +413,24 @@ def validate_installed_group(output, group, labels):
     observed = json.loads(cohorts[0].read_bytes())
     release_worker_groups.validate_observations(observed, release_worker_groups.public_group(group), labels)
     return observed
+
+
+def complete_installed_groups(destination, selected, labels):
+    from fixtures import release_worker_completion
+    entries, states = [], set()
+    for group in selected:
+        directory = destination / str(group["index"])
+        observed = validate_installed_group(directory, group, labels)
+        original = observed["observations"][0]["original"]
+        if original["stateRun"] in states:
+            raise RuntimeError("installed groups reused an independent state identity")
+        states.add(original["stateRun"])
+        records = list(directory.glob("*-native-pair.json"))
+        cohorts = list(directory.glob("*-cohort.json"))
+        entries.append({"group": release_worker_groups.public_group(group), "stateRun": original["stateRun"],
+            "result": release_worker_completion.asset(destination, records[0]),
+            "observations": release_worker_completion.asset(destination, cohorts[0])})
+    (destination / "installed-groups.json").write_bytes(release_worker_groups.encode({"schema": 1, "requiredLabels": labels, "groups": entries}))
 
 
 def require_clean_case(output, name, releases):

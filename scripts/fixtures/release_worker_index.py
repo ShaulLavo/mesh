@@ -25,6 +25,11 @@ def matrix(selection):
         raise ValueError("frozen source selection and baseline matrix differ")
     if len(expected) != len(versions) * len(PLATFORMS):
         raise ValueError("frozen source selection lacks a platform/profile")
+    for item in selection.get("customBaselines", []):
+        identity = key(item["artifact"]["platform"], item["artifact"]["binarySha256"], "full")
+        if identity in expected:
+            raise ValueError("custom source duplicates an authoritative baseline identity")
+        expected[identity] = item
     return expected
 
 
@@ -53,8 +58,10 @@ def validate_sources(selection, references, resolver, expected_source):
         companion = groups.resolve_asset(ref, resolver, "worker-groups")
         context = companion["context"]
         identity = key(context["platform"], context["sourceDigest"], context["profile"])
-        if identity not in expected or identity in seen or context["sourceVersion"] != expected[identity]["version"]:
+        if identity not in expected or identity in seen:
             raise ValueError("unexpected, duplicate or wrong-version native source/profile")
+        if expected[identity].get("version", context["sourceVersion"]) != context["sourceVersion"]:
+            raise ValueError("native source has another published version")
         seen.add(identity)
         if context["harnessSource"] != expected_source or context["preparationSource"] != expected_source:
             raise ValueError("native worker evidence came from another harness or preparation source")

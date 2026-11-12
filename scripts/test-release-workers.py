@@ -21,7 +21,7 @@ class ExactWorkerSelectionTests(unittest.TestCase):
                 self.assertEqual(release_workers.verify(Path("state"), path, "checkpoint"), ["a" * 64])
             observation = json.loads(path.read_bytes())["observations"][0]
             self.assertEqual(observation, {"label": "checkpoint", "workers": 1, "processes": 2,
-                                           "rssKiB": 7, "observerSeconds": 1.25, "identities": [worker], "original": None})
+                                           "rssKiB": 7, "originalRssKiB": 0, "observerSeconds": 1.25, "identities": [worker], "original": None})
 
     def test_image_observer_failure_keeps_bounded_real_output_and_rejects(self):
         result = subprocess.CompletedProcess([], 1, b"x" * 9000 + b"mapped image mismatch", b"actual stderr control")

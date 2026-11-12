@@ -74,6 +74,7 @@ jobs:
           published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
           go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
+          python3 scripts/prepare-release-baselines.py --pins "$root/selection.json" "$BASELINE_ASSETS"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
           shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
           printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"

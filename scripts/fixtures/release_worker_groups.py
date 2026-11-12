@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import release_workers
+from fixtures import release_workers, noindex_paths
 
 MAX_MEMBERS = 31
 MAX_IMAGES = 1 << 30
@@ -268,6 +268,7 @@ def run(source, candidate, platform, output):
     environment = dict(os.environ)
     registry = environment["MESH_WORKER_REGISTRY"]
     profile = environment.get("MESH_TRANSITION_PROOF_MODE", "full")
+    before = noindex_paths.observation()
     ctx = context(source, candidate, platform, registry, profile, environment)
     build = json.loads(subprocess.check_output([str(source), "version", "--json"], env=environment, timeout=10))
     selected = freeze(registry, build["version"], source)
@@ -281,7 +282,9 @@ def run(source, candidate, platform, output):
         entries.append(run_group(source, candidate, platform, root, leaves, group, original, environment))
     if digest(Path(registry).read_bytes()) != ctx["registrySha256"]:
         raise ValueError("authoritative worker registry changed during independent group runs")
-    value = {"schema": 1, "context": ctx, "originalBytes": original, "groups": entries}
+    peaks = [peak_rss(entry, leaves) for entry in entries]
+    value = {"schema": 1, "context": ctx, "originalBytes": original, "groups": entries,
+             "measurements": {"before": before, "after": noindex_paths.observation(), "peakRetainedRssKiB": max(peaks)}}
     data = encode(value)
     if len(data) > MAX_DOCUMENT:
         raise ValueError("group companion exceeds document bound")
@@ -295,6 +298,11 @@ def run(source, candidate, platform, output):
     publish(output, verified, reference, data)
     (root / "timing.json").write_bytes(encode({"seconds": time.monotonic() - started, "groups": len(groups)}))
     print(digest(verified["forward"]))
+
+
+def peak_rss(entry, leaves):
+    record = typed_leaf(entry["observations"], "observations", file_resolver(leaves))
+    return max(row["rssKiB"] + row["originalRssKiB"] for row in record["observations"])
 
 
 def run_group(source, candidate, platform, root, leaves, group, original, environment):

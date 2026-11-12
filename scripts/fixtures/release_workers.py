@@ -209,8 +209,10 @@ def verify(state, path, label, daemon=True):
     for worker in record["workers"]:
         rss += verify_one(state, worker, label, daemon)
     identities = [{key: row[key] for key in ("session", "pid", "shellPid", "digest", "protocol", "version")} for row in record["workers"]]
+    original_rss = process_info(original["pid"])[1] + process_info(original["shellPid"])[1] if original else 0
     record["observations"].append({"label": label, "workers": len(record["workers"]), "identities": identities, "original": original,
                                    "processes": 2 * len(record["workers"]), "rssKiB": rss,
+                                   "originalRssKiB": original_rss,
                                    "observerSeconds": observer_seconds})
     save(path, record)
     return sorted({worker["digest"] for worker in record["workers"]})

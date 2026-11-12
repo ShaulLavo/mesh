@@ -97,6 +97,17 @@ def pinned_assets(frozen, platform):
     return assets
 
 
+def freeze_pins(path, frozen):
+    path = Path(path)
+    value = json.loads(path.read_bytes())
+    pinned = []
+    for platform in ("linux/amd64", "linux/arm64", "darwin/arm64"):
+        pinned.extend({"artifact": {"platform": dict(zip(("os", "arch"), platform.split("/"))), "binarySha256": digest},
+                       "asset": name, "rollback": True} for name, digest in pinned_assets(frozen, platform).items())
+    value["customBaselines"] = pinned
+    path.write_text(json.dumps(value, sort_keys=True) + "\n")
+
+
 def proof_shards(selection, frozen):
     full = {}
     for item in selection["baselines"]:
@@ -136,7 +147,9 @@ def main(args):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 4 and sys.argv[1] == "--shards":
+    if len(sys.argv) == 4 and sys.argv[1] == "--pins":
+        freeze_pins(*sys.argv[2:])
+    elif len(sys.argv) == 4 and sys.argv[1] == "--shards":
         print(json.dumps(proof_shards(json.loads(Path(sys.argv[2]).read_bytes()), sys.argv[3])))
     else:
         main(sys.argv[1:])

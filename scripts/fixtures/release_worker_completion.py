@@ -116,6 +116,9 @@ def validate_route_groups(root, value, selected):
     observed = [item for entry in value["groups"] for item in entry["group"]["members"]]
     if [groups.member(item) for item in observed] != selected:
         raise ValueError("published grouped route has incomplete authoritative worker coverage")
+    sources = [item for item in selected if item["version"] == value["first"]]
+    if len(sources) != 1:
+        raise ValueError("published route lacks its exact original source image")
     states = set()
     for entry in value["groups"]:
         result = resolve(root, entry["result"])
@@ -124,6 +127,8 @@ def validate_route_groups(root, value, selected):
             raise ValueError("installed group result has another published scenario")
         record = resolve(root, entry["observations"])
         original = groups.validate_observations(record, entry["group"], route_labels(result))
+        if original["digest"] != sources[0]["artifact"]["binarySha256"] or original["protocol"] != sources[0]["protocol"]:
+            raise ValueError("published route retained another original source worker")
         if original["stateRun"] in states:
             raise ValueError("published groups reused a state identity")
         states.add(original["stateRun"])

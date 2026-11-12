@@ -19,6 +19,9 @@ def require(path, system=None):
 
 
 def observation():
+    if platform.system() == "Linux":
+        return {"platform": "Linux", "memoryPressure": Path("/proc/pressure/memory").read_text()[:1024],
+                "memoryAvailable": next(line for line in Path("/proc/meminfo").read_text().splitlines() if line.startswith("MemAvailable:"))}
     if platform.system() != "Darwin":
         return {"platform": platform.system()}
     output = subprocess.check_output(["ps", "-ax", "-o", "comm="], text=True, timeout=5)

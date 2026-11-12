@@ -9,11 +9,8 @@ from fixtures import installed_origin, installed_releases, release_workers
 
 def prepare(releases, origin, source):
     first, waypoint, future = installed_releases.VERSIONS
-    registry = releases.registry
-    releases.registry = None
     releases.build(first)
     releases.publish(first, 0, [releases.prove(source, first)])
-    releases.registry = registry
     releases.build(waypoint, epoch=2)
     releases.publish(waypoint, 1, [releases.prove(releases.builds[first]["path"], waypoint)], reader_epoch=2)
     releases.retain_custom_source(first)

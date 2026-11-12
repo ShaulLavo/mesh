@@ -56,6 +56,12 @@ on:
       - 'scripts/fixtures/installed_releases.py'
       - 'scripts/fixtures/installed_origin.py'
       - 'scripts/fixtures/installed_cohort.py'
+      - 'scripts/fixtures/release_worker_groups.py'
+      - 'scripts/fixtures/release_worker_index.py'
+      - 'scripts/fixtures/release_worker_completion.py'
+      - 'scripts/fixtures/release_workers.py'
+      - 'scripts/fixtures/noindex_paths.py'
+      - 'scripts/test-release-worker-groups.py'
       - 'scripts/fixtures/installed_chain.py'
       - 'scripts/fixtures/installed_waypoint.py'
       - 'scripts/fixtures/installed_artifacts.py'
@@ -331,7 +337,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64]
-        mode: [chain, waypoint, order]
+        mode: [oldest, chain, waypoint, order]
         exclude:
           - platform: linux/arm64
             mode: order
@@ -412,13 +418,14 @@ jobs:
           chmod +x "$input/tools/worker-probe"
           mkdir -p "$RUNNER_TEMP/native-tools.noindex"
           go build -o "$RUNNER_TEMP/native-tools.noindex/native-helper" ./scripts/fixtures/native-helper
-          mode=--signed-chain
-          if [[ $PROOF_MODE == waypoint ]]; then mode=--format-waypoint; fi
-          if [[ $PROOF_MODE == order ]]; then mode=--ordered-hosts; fi
+          mode=(--signed-chain)
+          if [[ $PROOF_MODE == oldest ]]; then mode=(); fi
+          if [[ $PROOF_MODE == waypoint ]]; then mode=(--format-waypoint); fi
+          if [[ $PROOF_MODE == order ]]; then mode=(--ordered-hosts); fi
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
             --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" \
             --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
-            --source-host "$SOURCE_HOST" "$mode"
+            --source-host "$SOURCE_HOST" "${mode[@]}"
       - name: Remove owned downloaded native inputs and helper tool
         if: always()
         run: |
