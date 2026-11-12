@@ -2,6 +2,19 @@ name: Installed catch-up
 
 on:
   workflow_call:
+    inputs:
+      worker_artifact_prefix:
+        type: string
+        default: ''
+        description: 'Unit3 native preparation artifact prefix, for example update-native'
+      worker_artifact_run:
+        type: number
+        default: 0
+        description: 'Pinned producer artifact run ID'
+      worker_artifact_source:
+        type: string
+        default: ''
+        description: 'Exact source SHA bound to the producer run and native preparation'
   pull_request:
     paths:
       - '.github/workflows/installed-catchup.yml'
@@ -18,6 +31,7 @@ on:
       - 'scripts/fixtures/installed_cohort.py'
       - 'scripts/fixtures/installed_chain.py'
       - 'scripts/fixtures/installed_waypoint.py'
+      - 'scripts/fixtures/installed_artifacts.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
@@ -25,6 +39,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 defaults:
   run:
@@ -78,3 +93,83 @@ jobs:
           name: installed-catchup-${{ strategy.job-index }}
           path: ${{ runner.temp }}/installed-catchup
           retention-days: 7
+
+  signed-cohort-chain:
+    if: inputs.worker_artifact_prefix != ''
+    name: Signed native cohort (${{ matrix.platform }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        mode: [chain, waypoint]
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            host: pc
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            host: pi
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            host: mac
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require the real native manager before acquisition or builds
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Require the complete pinned producer artifact set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ inputs.worker_artifact_run }}
+          PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
+          PRODUCER_PREFIX: ${{ inputs.worker_artifact_prefix }}
+        run: |
+          python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" \
+            "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/cohort-control/producer-pin.json"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ${{ inputs.worker_artifact_prefix }}-${{ matrix.key }}
+          run-id: ${{ inputs.worker_artifact_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-worker-input
+      - name: Consume exact native registry and once-built observer
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          SOURCE_HOST: ${{ matrix.host }}
+          PROOF_MODE: ${{ matrix.mode }}
+          PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/native-worker-input"
+          python3 scripts/fixtures/installed_artifacts.py native "$input" "$PRODUCER_SOURCE" "$INSTALLED_CATCHUP_PLATFORM"
+          test -s "$input/retained/workers.json"
+          chmod +x "$input/tools/worker-probe"
+          go build -o "$RUNNER_TEMP/native-helper" ./scripts/fixtures/native-helper
+          mode=--signed-chain
+          if [[ $PROOF_MODE == waypoint ]]; then mode=--format-waypoint; fi
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper" \
+            --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
+            --source-host "$SOURCE_HOST" "$mode"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-cohort-${{ matrix.key }}-${{ matrix.mode }}
+          path: |
+            ${{ runner.temp }}/cohort-control
+            ${{ runner.temp }}/cohort-proof
+          retention-days: 7
+      - name: Remove owned downloaded native inputs and helper tool
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/native-helper"

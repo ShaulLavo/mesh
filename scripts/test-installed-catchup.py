@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -75,7 +75,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -223,6 +223,29 @@ class NativeServiceTest(unittest.TestCase):
         self.assertFalse(evidence["passed"])
         self.assertTrue(evidence["cleanup"]["serviceAbsent"])
         self.assertTrue(evidence["cleanup"]["processAbsent"])
+
+
+class ArtifactPinTest(unittest.TestCase):
+    def inputs(self):
+        return [{"head_sha": "a" * 40}, {"artifacts": [
+            {"id": index, "name": "update-native-" + key, "expired": False, "digest": "sha256:" + "b" * 64}
+            for index, key in enumerate(installed_artifacts.KEYS, 1)]}]
+
+    def test_complete_three_platform_set_is_pinned(self):
+        with patch.object(installed_artifacts, "api", side_effect=self.inputs()):
+            result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+        self.assertEqual(set(result["artifacts"]), set(installed_artifacts.KEYS))
+        self.assertEqual(result["run"], 123)
+
+    def test_source_mismatch_and_missing_or_expired_platform_fail(self):
+        with patch.object(installed_artifacts, "api", return_value={"head_sha": "b" * 40}):
+            with self.assertRaisesRegex(RuntimeError, "different pinned source"):
+                installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+        values = self.inputs()
+        values[1]["artifacts"][-1]["expired"] = True
+        with patch.object(installed_artifacts, "api", side_effect=values):
+            with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
+                installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 
 
 if __name__ == "__main__":
