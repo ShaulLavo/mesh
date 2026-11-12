@@ -1,0 +1,121 @@
+name: Unit8 Linux ordered-hosts acceptance
+
+on:
+  push:
+    branches: [t3/linux-ordered-fixture-acceptance]
+    paths: [.github/workflows/unit8-linux-ordered-hosts.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MESH_HARNESS_SOURCE: d8316978c34f76a3df886ec69f4ec3b6e7ecd269
+  PRODUCER_RUN: '43206409011'
+  PRODUCER_SOURCE: 73401ba3f880de0022666f04011b967803d48368
+  PRODUCER_PREFIX: update-native
+  INSTALLED_CATCHUP_PLATFORM: linux/amd64
+  ARTIFACT_KEY: linux-amd64
+  PYTHONDONTWRITEBYTECODE: '1'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ordered-hosts:
+    name: One installed ordered-hosts case on Linux AMD64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: d8316978c34f76a3df886ec69f4ec3b6e7ecd269
+          persist-credentials: false
+      - name: Record source pins and resource ownership before setup
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/t3/linux-ordered-fixture-acceptance
+          test -z "$(git status --porcelain)"
+          test ! -e "$RUNNER_TEMP/native-worker-input"
+          test ! -e "$RUNNER_TEMP/native-helper"
+          mkdir -p "$RUNNER_TEMP/cohort-control"
+          python3 scripts/fixtures/installed_artifacts.py harness "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/cohort-control/harness-source.json"
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/cohort-control/informational-driver-head.txt"
+          printf '%s\n' 'This job owns native-worker-input, native-helper and the fixture CLI short scratch, processes and native services. Fixture finally blocks stop and verify consumers before scratch removal. The always cleanup step removes downloaded tools and verifies absence before evidence upload.' > "$RUNNER_TEMP/cohort-control/resource-ownership.txt"
+          systemctl --user list-units --all --no-pager > "$RUNNER_TEMP/cohort-control/services-before.txt"
+          ps -u "$(id -u)" -o pid,ppid,args > "$RUNNER_TEMP/cohort-control/processes-before.txt"
+          ps -eo uid,pid,ppid,args > "$RUNNER_TEMP/cohort-control/all-processes-before.txt"
+          systemctl list-units 'user@*.service' --all --no-pager --plain > "$RUNNER_TEMP/cohort-control/account-managers-before.txt"
+          getent passwd > "$RUNNER_TEMP/cohort-control/accounts-before.txt"
+      - name: Require the real native manager before acquisition or builds
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
+      - name: Require three actual user managers before ordered proof builds
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
+            env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/cohort-control/ordered-managers"
+      - name: Require the complete pinned producer artifact set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" \
+            "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/cohort-control/producer-pin.json"
+      - name: Measure actual archive extraction space before large acquisition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/cohort-control/storage-preflight.json"
+      - name: Download only the exact pinned Linux AMD64 packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/cohort-control/worker-download.json"
+      - name: Verify the four actual prepared tools and exact native registry
+        run: |
+          python3 scripts/fixtures/installed_artifacts.py native "$RUNNER_TEMP/native-worker-input" "$PRODUCER_SOURCE" "$INSTALLED_CATCHUP_PLATFORM"
+          test -s "$RUNNER_TEMP/native-worker-input/retained/workers.json"
+          cp "$RUNNER_TEMP/native-worker-input/tools/preparation.json" "$RUNNER_TEMP/cohort-control/preparation.json"
+          cp "$RUNNER_TEMP/native-worker-input/tools/candidate-reader.json" "$RUNNER_TEMP/cohort-control/candidate-reader.json"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Consume the retained observer with the maintained ordered-hosts CLI once
+        env:
+          MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/native-worker-input"
+          chmod +x "$input/tools/worker-probe"
+          go build -o "$RUNNER_TEMP/native-helper" ./scripts/fixtures/native-helper
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper" \
+            --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
+            --source-host pc --ordered-hosts
+      - name: Remove owned downloaded inputs and helper after fixture teardown
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/native-helper"
+          test ! -e "$RUNNER_TEMP/native-worker-input"
+          test ! -e "$RUNNER_TEMP/native-helper"
+          mkdir -p "$RUNNER_TEMP/cohort-control"
+          printf '{"inputsAbsent":true,"helperToolAbsent":true}\n' > "$RUNNER_TEMP/cohort-control/tools-cleanup.json"
+          systemctl --user list-units --all --no-pager > "$RUNNER_TEMP/cohort-control/services-after.txt"
+          ps -u "$(id -u)" -o pid,ppid,args > "$RUNNER_TEMP/cohort-control/processes-after.txt"
+          ps -eo uid,pid,ppid,args > "$RUNNER_TEMP/cohort-control/all-processes-after.txt"
+          systemctl list-units 'user@*.service' --all --no-pager --plain > "$RUNNER_TEMP/cohort-control/account-managers-after.txt"
+          getent passwd > "$RUNNER_TEMP/cohort-control/accounts-after.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: unit8-linux-installed-order-corrected
+          path: |
+            ${{ runner.temp }}/cohort-control
+            ${{ runner.temp }}/cohort-proof
+          retention-days: 7
