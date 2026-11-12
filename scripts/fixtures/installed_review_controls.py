@@ -163,23 +163,25 @@ class AccountRunReviewTest(unittest.TestCase):
                 installed_account_run.verify_cleanup(root, output)
             self.assertTrue(root.exists())
 
+    @unittest.skipUnless(sys.platform == "linux", "ordered-account supervision uses Linux process identities")
     def test_real_owned_timeout_runs_finally_and_preserves_failure(self):
         with tempfile.TemporaryDirectory(prefix="u8r-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as directory:
             self.timeout_control(Path(directory))
 
+    @unittest.skipUnless(sys.platform == "linux", "ordered-account supervision uses Linux process identities")
     def test_real_owned_injected_failure_still_runs_finally(self):
         with tempfile.TemporaryDirectory(prefix="u8r-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as directory:
             self.timeout_control(Path(directory), injected=True)
 
     def test_changed_pid_lifetime_cannot_be_signalled(self):
-        owned = installed_account_run.identity(os.getpid())
+        owned = {"pid": os.getpid(), "uid": os.geteuid(), "birth": "selected-process", "boot": "selected-boot"}
         with patch.object(installed_account_run, "identity", return_value=owned | {"birth": "another-process"}), patch.object(os, "kill") as kill:
             with self.assertRaisesRegex(RuntimeError, "lifetime changed"):
                 installed_account_run.signal_bound(owned, signal.SIGTERM)
         kill.assert_not_called()
 
     def timeout_control(self, directory, injected=False):
-        root, output = directory / "root", directory / "output"
+        root, output = directory.resolve() / "root", directory.resolve() / "output"
         root.mkdir()
         output.mkdir()
         descriptor = root / "ordered-input.json"
