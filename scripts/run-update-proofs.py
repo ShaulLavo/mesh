@@ -83,7 +83,11 @@ def main():
         assignment = full_index if evidence["rollback"] else forward_index
         full_index += int(evidence["rollback"])
         forward_index += int(not evidence["rollback"])
-        if assignment % args.shards != args.shard:
+        # Diagnostic branch only: run one named source, whatever its shard.
+        only = os.environ.get("MESH_DIAG_ONLY_SOURCE")
+        if only and evidence["version"] != only:
+            continue
+        if not only and assignment % args.shards != args.shard:
             continue
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         expected = evidence.get("artifact", {}).get("binarySha256")

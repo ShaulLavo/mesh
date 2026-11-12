@@ -198,6 +198,27 @@ def verify(state, path, label, daemon=True):
     return sorted({worker["digest"] for worker in record["workers"]})
 
 
+def supplemental_phases(probe, environment, status, elapsed):
+    """Diagnostic branch only: phase attribution after the unchanged observer, never acceptance."""
+    output = os.environ.get("MESH_DIAG_OUTPUT")
+    if not output:
+        return
+    probe = os.environ.get("MESH_DIAG_PROBE", probe)
+    log = Path(output)
+    taken = log.read_bytes().count(b"=== profiled") if log.exists() else 0
+    limit = int(os.environ.get("MESH_DIAG_LIMIT", "2"))
+    workers = len(json.loads(Path(environment["MESH_COHORT_RECORD"]).read_bytes())["workers"])
+    line = f"unchanged observer exit {status} after {elapsed:.3f}s workers={workers}\n"
+    if taken >= limit + (2 if status else 0):
+        with log.open("ab") as stream:
+            stream.write(("--- not profiled: " + line).encode())
+        return
+    result = subprocess.run([probe, "-test.v", "-test.run=^TestDiagCohortPhases$"],
+                            env=dict(environment, MESH_DIAG_PHASES="1"), capture_output=True, timeout=200, check=False)
+    with log.open("ab") as stream:
+        stream.write(("=== profiled: " + line).encode() + result.stdout + result.stderr)
+
+
 def verify_images(state, path):
     probe = os.environ.get("MESH_WORKER_PROBE")
     if not probe:
@@ -207,6 +228,7 @@ def verify_images(state, path):
     result = subprocess.run([probe, "-test.v", "-test.run=^TestRetainedWorkerCohortIdentity$"],
                             env=environment, capture_output=True, timeout=30, check=False)
     elapsed = time.monotonic() - started
+    supplemental_phases(probe, environment, result.returncode, elapsed)
     if result.returncode:
         output = (result.stdout[-4096:] + b"\n" + result.stderr[-4096:]).decode(errors="replace")
         raise RuntimeError(f"exact running cohort image observer exited {result.returncode} after {elapsed:.3f}s: {output}")

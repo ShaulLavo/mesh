@@ -1,7 +1,14 @@
 name: Mac runtime historical acceptance run
 
-# Acceptance vehicle only, never merged. It calls the unchanged native
-# release transition proofs for this exact commit. One push is one run.
+# Acceptance vehicle only, never merged. One push is one run.
+#
+# `proofs` calls the unchanged native release transition proofs for the exact
+# acceptance source below: the integration candidate d789fcee plus the reviewed
+# worker probe fix. That commit holds no diagnostic code and no vehicle file.
+#
+# `measure` runs after every proof job has finished. It is supplemental, never
+# acceptance: one hosted Mac measures candidate executable readers on the
+# largest real cohort with this branch's diagnostic test.
 on:
   push:
     branches: [t3/mac-runtime-cohort-accept]
@@ -15,4 +22,99 @@ jobs:
     name: Required native update proofs
     uses: ./.github/workflows/update-proofs.yml
     with:
-      source_sha: ${{ github.sha }}
+      source_sha: 66b17b3b2eca2695b495be79bf0785973e3d5128
+
+  measure:
+    name: Supplemental reader measurement (never acceptance)
+    needs: proofs
+    if: ${{ always() }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Record existing resources before setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e "$RUNNER_TEMP/mesh-native"
+          test ! -e "$RUNNER_TEMP/update-proof"
+          test ! -e "$RUNNER_TEMP/diag-evidence"
+          test ! -e "$RUNNER_TEMP/diag-probe"
+          mkdir -p "$RUNNER_TEMP/diag-evidence"
+          ps -A -o pid,ppid,rss,comm > "$RUNNER_TEMP/diag-evidence/processes-before.txt"
+          ls -d /tmp/ms-* > "$RUNNER_TEMP/diag-evidence/scratch-before.txt" 2>/dev/null || true
+          printf '%s\n' 'Supplemental measurement, never native acceptance. This job owns mesh-native, update-proof, diag-evidence, diag-probe, one /tmp/ms-* scratch directory and every process started from mesh-native. The cleanup step stops and removes them and records what it checked.' > "$RUNNER_TEMP/diag-evidence/resource-ownership.txt"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-native-darwin-arm64
+          path: ${{ runner.temp }}/mesh-native
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-rollback-manifest
+          path: ${{ runner.temp }}/mesh-native
+      - name: Prove every instrument on this runner, then measure one source
+        env:
+          PLATFORM: darwin/arm64
+          MESH_DIAG_ONLY_SOURCE: v0.1.307
+          MESH_DIAG_LIMIT: '2'
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -c -o "$RUNNER_TEMP/diag-probe" ./internal/updatebootstrap
+          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
+          root="$RUNNER_TEMP/mesh-native"
+          chmod +x "$root"/tools/candidate "$root"/tools/startup-fault-candidate "$root"/tools/boundary "$root"/tools/worker-probe
+          find "$root/retained" -type f -name mesh -exec chmod +x {} +
+          mkdir -p "$RUNNER_TEMP/update-proof"
+          MESH_DIAG_PHASES=1 "$RUNNER_TEMP/diag-probe" -test.v -test.run='^TestDiagControls$' | tee "$RUNNER_TEMP/diag-evidence/controls.log"
+          grep -Fq -- '--- PASS: TestDiagControls' "$RUNNER_TEMP/diag-evidence/controls.log"
+          export MESH_DIAG_OUTPUT="$RUNNER_TEMP/diag-evidence/phases.log" MESH_DIAG_PROBE="$RUNNER_TEMP/diag-probe"
+          status=0
+          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard 0 --shards 3 --manifest "$root/mesh-release-context.json" || status=$?
+          printf '%s\n' "$status" > "$RUNNER_TEMP/diag-evidence/proof-exit.txt"
+          mkdir -p "$RUNNER_TEMP/diag-evidence/logs"
+          find "$RUNNER_TEMP/update-proof" -type f \( -name '*.log' -o -name 'timings.json' -o -name '*.cohort.json' \) -size -400k -exec cp {} "$RUNNER_TEMP/diag-evidence/logs/" \;
+          if [[ -f $MESH_DIAG_OUTPUT ]]; then
+            grep -a -E '^(===|---)|DIAG (round|paired|inspect|CONTROL|daemon)' "$MESH_DIAG_OUTPUT" | cut -c1-1500 || true
+          fi
+      - name: Stop owned processes and remove owned inputs
+        if: always()
+        shell: bash
+        run: |
+          set +e +o pipefail
+          mkdir -p "$RUNNER_TEMP/diag-evidence"
+          pgrep -f "$RUNNER_TEMP/mesh-native/" > "$RUNNER_TEMP/diag-evidence/owned-processes-at-cleanup.txt"
+          pkill -KILL -f "$RUNNER_TEMP/mesh-native/"
+          sleep 2
+          remaining=$(pgrep -f "$RUNNER_TEMP/mesh-native/" | wc -l | tr -d ' ')
+          rm -rf -- "$RUNNER_TEMP/mesh-native" "$RUNNER_TEMP/update-proof" "$RUNNER_TEMP/diag-probe"
+          ls -d /tmp/ms-* > "$RUNNER_TEMP/diag-evidence/scratch-after.txt" 2>/dev/null || true
+          ps -A -o pid,ppid,rss,comm > "$RUNNER_TEMP/diag-evidence/processes-after.txt"
+          inputs=absent
+          test ! -e "$RUNNER_TEMP/mesh-native" || inputs=present
+          proof=absent
+          test ! -e "$RUNNER_TEMP/update-proof" || proof=present
+          probe=absent
+          test ! -e "$RUNNER_TEMP/diag-probe" || probe=present
+          workers=$(grep -c 'mesh$' "$RUNNER_TEMP/diag-evidence/processes-after.txt")
+          printf '{"ownedProcessesRemaining":%s,"inputs":"%s","proof":"%s","probe":"%s","sessionWorkersAfter":%s}\n' "$remaining" "$inputs" "$proof" "$probe" "$workers" > "$RUNNER_TEMP/diag-evidence/cleanup.json"
+          cat "$RUNNER_TEMP/diag-evidence/cleanup.json"
+          test "$remaining" = 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mac-runtime-reader-measurement
+          path: ${{ runner.temp }}/diag-evidence
+          retention-days: 7
+      - name: Remove the uploaded evidence copy
+        if: always()
+        shell: bash
+        run: |
+          rm -rf -- "$RUNNER_TEMP/diag-evidence"
+          test ! -e "$RUNNER_TEMP/diag-evidence"
