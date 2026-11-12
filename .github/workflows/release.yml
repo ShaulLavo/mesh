@@ -337,10 +337,28 @@ jobs:
         if: always()
         run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/reader-evidence"
 
+  publication-native:
+    name: Installed signed draft gate
+    needs: [reserve, prove-transition, publish]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@ec3f2845016c536f0bbb9ff7eb90e0bfa1e92c21
+    with:
+      harness_source: ec3f2845016c536f0bbb9ff7eb90e0bfa1e92c21
+      publication_only: true
+      release_version: ${{ needs.reserve.outputs.version }}
+      release_source: ${{ needs.reserve.outputs.source }}
+      release_run: ${{ github.run_id }}
+      worker_artifact_prefix: update-native
+      worker_artifact_run: ${{ fromJSON(needs.prove-transition.outputs.worker_artifact_run) }}
+      worker_artifact_source: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+
   finalize:
     name: Publish verified release
-    needs: [reserve, publish, verify-readers]
-    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
+    needs: [reserve, publish, verify-readers, publication-native]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main' && needs.verify-readers.result == 'success' && needs.publication-native.result == 'success'
     permissions:
       actions: write
       statuses: write

@@ -113,7 +113,7 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
 
     def test_original_reader_jobs_are_required_before_finalization(self):
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
-        self.assertIn("needs: [reserve, publish, verify-readers]", finalize)
+        self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", finalize)
         self.assertNotIn("always()", finalize)
         readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
         self.assertIn("scripts/run-original-update-readers.py", readers)

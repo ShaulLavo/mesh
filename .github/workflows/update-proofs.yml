@@ -19,6 +19,14 @@ on:
         default: ''
         type: string
 
+    outputs:
+      worker_artifact_source:
+        description: Clean checkout source used by all three native preparations
+        value: ${{ jobs.context.outputs.source }}
+      worker_artifact_run:
+        description: This run containing the complete native preparation artifacts
+        value: ${{ jobs.context.outputs.run }}
+
 permissions:
   contents: read
 
@@ -167,6 +175,9 @@ jobs:
   context:
     needs: prepare
     runs-on: ubuntu-24.04
+    outputs:
+      source: ${{ steps.producer.outputs.source }}
+      run: ${{ steps.producer.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -175,6 +186,14 @@ jobs:
         with:
           pattern: update-context-*
           path: ${{ runner.temp }}/rollback-context
+      - name: Export the actual native preparation source and run
+        id: producer
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          RUN: ${{ github.run_id }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          printf 'source=%s\nrun=%s\n' "$SOURCE" "$RUN" >> "$GITHUB_OUTPUT"
       - name: Aggregate only actual native artifact metadata
         run: python3 scripts/prepare-rollback-context.py assemble "$RUNNER_TEMP/rollback-context" "$RUNNER_TEMP/rollback-context/mesh-release-context.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
