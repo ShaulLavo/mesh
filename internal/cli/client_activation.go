@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updateinstall"
 	"github.com/spf13/cobra"
 )
@@ -38,6 +39,13 @@ func clientConfigCanRetire(ctx context.Context) (bool, error) {
 	stateDir, err := paths.StateDirPath()
 	if err != nil {
 		return false, fmt.Errorf("locate client activation state: %w", err)
+	}
+	pending, err := update.AdoptionPending(ctx, stateDir)
+	if err != nil {
+		return false, fmt.Errorf("check client adoption cutover: %w", err)
+	}
+	if pending {
+		return false, nil
 	}
 	status, err := updateinstall.ReadContext(ctx, stateDir)
 	if errors.Is(err, os.ErrNotExist) {
