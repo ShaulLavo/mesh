@@ -116,6 +116,13 @@ jobs:
           if [[ -n $PAIRED_SCENARIO ]]; then extra=(--scenario "$PAIRED_SCENARIO"); fi
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-catchup/pairs" \
             --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper" "${extra[@]}"
+      - name: Remove the owned helper preparation tool after installed teardown
+        if: always()
+        run: |
+          rm -f -- "$RUNNER_TEMP/native-helper"
+          test ! -e "$RUNNER_TEMP/native-helper"
+          mkdir -p "$RUNNER_TEMP/installed-catchup"
+          printf '{"helperToolAbsent":true}\n' > "$RUNNER_TEMP/installed-catchup/tools-cleanup.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -241,6 +248,14 @@ jobs:
             --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper" \
             --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
             --source-host "$SOURCE_HOST" "$mode"
+      - name: Remove owned downloaded native inputs and helper tool
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/native-helper"
+          test ! -e "$RUNNER_TEMP/native-worker-input"
+          test ! -e "$RUNNER_TEMP/native-helper"
+          mkdir -p "$RUNNER_TEMP/cohort-control"
+          printf '{"inputsAbsent":true,"helperToolAbsent":true}\n' > "$RUNNER_TEMP/cohort-control/tools-cleanup.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -249,6 +264,3 @@ jobs:
             ${{ runner.temp }}/cohort-control
             ${{ runner.temp }}/cohort-proof
           retention-days: 7
-      - name: Remove owned downloaded native inputs and helper tool
-        if: always()
-        run: rm -rf -- "$RUNNER_TEMP/native-worker-input" "$RUNNER_TEMP/native-helper"
