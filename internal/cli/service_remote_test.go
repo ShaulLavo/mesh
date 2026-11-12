@@ -123,6 +123,7 @@ func TestRemoteServiceBoundaryDoesNotEchoOversizedInvalidFields(t *testing.T) {
 }
 
 func TestRemoteServiceTransportErrorsAreBoundedAndPreserveCause(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	cause := errors.New("ATTACKER\r\n\u202e" + strings.Repeat("x", 10_000))
 	for _, test := range []struct {
