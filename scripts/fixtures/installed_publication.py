@@ -237,6 +237,7 @@ def run_fresh(root, output, version, releases, origin):
     try:
         record["initial"] = case.prepare()
         case.seed()
+        record["baselineInitialization"] = case.initialize_preserved_baseline()
         case.snapshots = case.retained()
         record["restart"] = case.restart_control()
         case.inspect_retained()
@@ -277,6 +278,7 @@ def published_route(root, output, first, target, releases, origin, registry, pro
     try:
         record["initial"] = case.prepare()
         case.seed()
+        record["baselineInitialization"] = case.initialize_preserved_baseline()
         record["cohort"] = case.start_cohort(registry, probe)
         policy = subprocess.run([str(case.binary), "update", "policy", "set", "--expected-revision", "0", "--json"],
                                 env=case.environment, capture_output=True, text=True, check=True, timeout=15)

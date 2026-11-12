@@ -28,6 +28,7 @@ class FreshCase(installed_adoption.AdoptionCase):
     def __init__(self, root, origin, releases, version=None, publication=False, name="fresh"):
         first = version or installed_releases.VERSIONS[0]
         self.publication = publication
+        self.first_start_verified = False
         build = releases.builds[first]
         image = {"executable": build["path"], "artifact": {"binarySha256": build["digest"]}}
         host = {"name": name, "daemon": first, "helper": first, "helperRunning": True}
@@ -47,6 +48,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         helper = self.units.managers["helper"]
         self.units.reserve_fresh_helper(directory / (helper.label + suffix))
         flags = ["--service-kind", "launchd", "--domain", helper.domain] if sys.platform == "darwin" else ["--service-kind", "systemd"]
+        self.install_flags = flags
         self.production_install_command("prepare-updates", flags)
         self.helper = json.loads((self.state / "update/helper/installed.json").read_text())
         self.require_fresh_state()
@@ -60,6 +62,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         self.require_automatic_zero(host)
         self.require_fresh_state()
         started = self.first_start(daemon)
+        self.first_start_verified = True
         return {"helperBeforeDaemon": prepared, "firstNativeStart": started, "effectiveUpdate": host["hostUpdate"]}
 
     def first_start(self, daemon):
@@ -78,6 +81,21 @@ class FreshCase(installed_adoption.AdoptionCase):
         (self.root / (operation + ".log")).write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError("fresh production " + operation + " failed: " + result.stderr[-4096:])
+
+    def initialize_preserved_baseline(self):
+        if not self.first_start_verified:
+            raise RuntimeError("baseline initialization requires the actual absent-policy first-start assertions first")
+        before = self.retained()
+        helper = self.mapped_helper()
+        self.production_install_command("installation-check", self.install_flags)
+        after = self.retained()
+        validate_initialized_baseline(before, after, str(self.root / "config/domains.json"))
+        self.require_fresh_state()
+        self.require_automatic_zero(self.control("host.info")["host"])
+        if self.mapped_helper()["pid"] != helper["pid"]:
+            raise RuntimeError("baseline initialization changed the verified helper PID")
+        return {"command": "daemon installation-check", "before": before, "after": after,
+                "firstStartAssertionsAlreadyVerified": True}
 
     def require_fresh_state(self):
         paths = (self.state / "updates/host-policy.json", self.state / "updates/host-adoption.json", self.state / "update/installation.json")
@@ -114,6 +132,7 @@ def run(root, output, native, releases, origin):
     try:
         record["initial"] = case.prepare()
         case.seed()
+        record["baselineInitialization"] = case.initialize_preserved_baseline()
         case.snapshots = case.retained()
         collect_diagnostics(case, output, "before-target-exposure")
         origin.head(releases.directory, target)
@@ -177,6 +196,13 @@ def retain_install_logs(case, output):
         path = case.root / (name + ".log")
         if path.exists():
             installed_native.copy_log_tail(path, output / ("fresh-" + name + ".log"))
+
+
+def validate_initialized_baseline(before, after, domain_path):
+    if any(after.get(path) != digest for path, digest in before.items()):
+        raise RuntimeError("baseline initialization changed an already configured preserved component")
+    if set(after).difference(before).difference({domain_path}):
+        raise RuntimeError("baseline initialization created an unexpected preserved component")
 
 
 def collect_diagnostics(case, output, label="final"):

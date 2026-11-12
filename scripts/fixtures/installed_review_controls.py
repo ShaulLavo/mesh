@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fixtures import installed_account_run, installed_order, installed_publication, installed_releases, native_services
+from fixtures import installed_account_run, installed_order, installed_publication, installed_releases, native_services, installed_fresh
 
 
 class Clock:
@@ -254,3 +254,20 @@ class PublishedRouteReviewTest(unittest.TestCase):
             with patch.object(installed_publication.installed_chain, "read_ledger", return_value=ledger), patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
                 installed_publication.await_published_route(SimpleNamespace(), record, "first", "target", None, False)
         self.assertEqual(events, ["observe", "validate"])
+
+
+class InitializationBoundaryTest(unittest.TestCase):
+    def test_initialization_requires_actual_first_start_assertions(self):
+        case = object.__new__(installed_fresh.FreshCase)
+        case.first_start_verified = False
+        with self.assertRaisesRegex(RuntimeError, "first-start assertions"):
+            case.initialize_preserved_baseline()
+
+    def test_only_missing_domain_policy_can_be_initialized(self):
+        before = {"identity.key": "identity", "config/hosts.json": "configured"}
+        installed_fresh.validate_initialized_baseline(before, before | {"config/domains.json": "initialized"}, "config/domains.json")
+
+    def test_configured_policy_stays_strictly_preserved(self):
+        before = {"config/domains.json": "configured"}
+        with self.assertRaisesRegex(RuntimeError, "already configured"):
+            installed_fresh.validate_initialized_baseline(before, {"config/domains.json": "changed"}, "config/domains.json")

@@ -83,7 +83,10 @@ def supervise(process, ticket_path, output, timeout, signal_owner, recover_owner
             failure = RuntimeError("privileged account owner exited unsuccessfully: " + str(status))
     except BaseException as error:
         failure = error
+        record_failure(ticket_path, output, error)
         stop_owner(process, ticket_path, signal_owner)
+    if failure is not None and not (output / "account-run-failure.json").exists():
+        record_failure(ticket_path, output, failure)
     ticket = json.loads(ticket_path.read_text())
     if alive(ticket.get("owner")):
         raise RuntimeError("privileged account owner remains alive; retaining its scratch")
@@ -92,6 +95,11 @@ def supervise(process, ticket_path, output, timeout, signal_owner, recover_owner
     save(output / "account-run-result.json", {"schema": 1, "operation": ticket["operation"], "ownerStopped": True, "cleanupVerified": True})
     if failure is not None:
         raise failure
+
+
+def record_failure(ticket_path, output, error):
+    ticket = json.loads(ticket_path.read_text())
+    save(output / "account-run-failure.json", {"operation": ticket["operation"], "type": type(error).__name__, "error": str(error)})
 
 
 def stop_owner(process, ticket_path, signal_owner):
