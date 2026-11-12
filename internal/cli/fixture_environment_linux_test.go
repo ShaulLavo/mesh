@@ -69,7 +69,7 @@ func checkInheritedCommandEnvironment(t *testing.T, mode string) {
 	if err := os.WriteFile(policy, poison, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	child := exec.CommandContext(t.Context(), "/proc/self/exe", "-test.run=^(TestAgentDecodedServiceGoldens|TestCatalogServiceWriterContentionSkipsAtomicSnapshot|TestDomainGenerationSnapshotCloneAndQueuedResult|TestServeCommandPreviewsThenPublishesCanonicalService|TestPickerServiceActionsRouteToExactHostAndSettle|TestPickerServiceOpenUsesInvokingMachineURL|TestPickerServicePingUnhealthyIsASettledResult|TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure|TestRemoteServiceTransportErrorsAreBoundedAndPreserveCause)$")
+	child := exec.CommandContext(t.Context(), "/proc/self/exe", "-test.run=^(TestAgentDecodedServiceGoldens|TestCatalogServiceWriterContentionSkipsAtomicSnapshot|TestDomainGenerationSnapshotCloneAndQueuedResult|TestServeCommandPreviewsThenPublishesCanonicalService|TestPickerServiceActionsRouteToExactHostAndSettle|TestPickerServiceOpenUsesInvokingMachineURL|TestPickerServicePingUnhealthyIsASettledResult|TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure|TestRemoteServiceTransportErrorsAreBoundedAndPreserveCause|TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement|TestRemoteServiceBoundaryPinsInferredKindAndCanonicalPort|TestRemoteServiceBoundaryDoesNotEchoOversizedInvalidFields)$")
 	child.Env = append(testenv.ForProcess(root), "MESH_STATE_DIR="+filepath.Join(root, "outside-state"))
 	if mode == "mesh" {
 		child.Env = append(child.Env, "MESH_CONFIG_DIR="+config)
