@@ -181,6 +181,9 @@ Closing the command leaves the approved target with the daemon and helper.
 Each later step is verified before installation, and a newer release cannot
 change the approved destination.
 
+A saved local update returns `2` while it is pending. Local status returns `0`
+after the update commits, and `1` when it needs attention or has been cancelled.
+
 These commands keep the automatic policy, predecessor list, and waiting period
 unchanged. An owner can approve one explicit update while automatic updates are
 off. Cancellation or a policy revision change stops future acceptance. Work

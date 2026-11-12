@@ -14,6 +14,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/update"
 	"github.com/shaul/mesh/internal/updateinstall"
@@ -21,8 +22,9 @@ import (
 
 func currentFleetSummary(now time.Time) *protocol.HostUpdateSummary {
 	zero := uint64(0)
+	published := now.Add(-time.Hour)
 	return &protocol.HostUpdateSummary{Mode: "automatic", Phase: "idle", Installation: "managed", SourceVerified: true,
-		Latest: &protocol.HostUpdateRelease{Version: "v0.1.0", Metadata: strings.Repeat("a", 64), PublishedAt: now.Add(-time.Hour)}, Lag: &zero, ObservedAt: &now}
+		Latest: &protocol.HostUpdateRelease{Version: "v0.1.0", Metadata: strings.Repeat("a", 64), PublishedAt: &published}, Lag: &zero, ObservedAt: &now}
 }
 
 func TestFleetUpdateCLIExitAndOrdinaryHostInfo(t *testing.T) {
@@ -129,6 +131,33 @@ func TestFleetUpdateUnknownPolicyAndStaleCheck(t *testing.T) {
 	}
 }
 
+func TestFleetUpdateLastReplyReadsExistingCacheWithoutCreatingOne(t *testing.T) {
+	state, local := setupUpdateCLI(t)
+	members := []update.Host{local}
+	path := filepath.Join(state, catalogDatabaseName)
+	if replies := fleetLastReplies(t.Context(), members); len(replies) != 0 {
+		t.Fatal("missing cache supplied a verified reply")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fleet read created a metadata database", err)
+	}
+	store, err := storage.Open(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	at := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	if _, err := store.UpsertHost(t.Context(), storage.Host{ID: storage.HostID(local.ID), MeshIdentity: local.ID, LastSeenAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if replies := fleetLastReplies(t.Context(), members); !replies[local.ID].Equal(at) {
+		t.Fatal("fleet read lost the exact verified reply", replies)
+	}
+}
+
 func TestFleetUpdatePlainOutputAndDashboardAttention(t *testing.T) {
 	now := time.Now().UTC()
 	summary := currentFleetSummary(now)
@@ -159,8 +188,12 @@ func TestFleetUpdateStateSnapshotOwnsSummary(t *testing.T) {
 	clone := state.Clone()
 	clone.HostUpdate.Latest.Version = "changed"
 	*clone.HostUpdate.Lag = 3
+	*clone.HostUpdate.Latest.PublishedAt = now
 	if summary.Latest.Version != "v0.1.0" || *summary.Lag != 0 {
 		t.Fatal("state clone shared update summary storage")
+	}
+	if summary.Latest.PublishedAt.Equal(now) {
+		t.Fatal("state clone shared publication time storage")
 	}
 	projected := projectDashboardState(DashboardHost{}, state)
 	projected.HostUpdate.Latest.Metadata = "changed"

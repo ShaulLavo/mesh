@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"text/tabwriter"
@@ -154,7 +155,7 @@ func observeLocalClient(ctx context.Context, record HostRecord, member *FleetUpd
 	}
 	build := release.Current()
 	member.Build = &build
-	member.Update = &protocol.HostUpdateSummary{Installation: updateinstall.InstallationKind("", build, false)}
+	member.Update = &protocol.HostUpdateSummary{Mode: fleetUnknown, Phase: fleetUnknown, Installation: updateinstall.InstallationKind("", build, false)}
 	member.State, member.Problem = "", ""
 }
 
@@ -174,13 +175,24 @@ func fleetObservationError(err error) string {
 
 func fleetLastReplies(ctx context.Context, members []update.Host) map[string]time.Time {
 	result := make(map[string]time.Time)
-	cache, err := openAgentCatalogCache(ctx)
-	if err != nil || cache.store == nil {
+	state, err := paths.StateDirPath()
+	if err != nil {
 		return result
 	}
-	defer func() { _ = cache.Close() }()
+	path := filepath.Join(state, catalogDatabaseName)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return result
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	store, err := storage.OpenReadOnly(ctx, path)
+	if err != nil {
+		return result
+	}
+	defer func() { _ = store.Close() }()
 	for _, host := range members {
-		stored, err := cache.store.GetHost(ctx, storage.HostID(host.ID))
+		stored, err := store.GetHost(ctx, storage.HostID(host.ID))
 		if err == nil && stored.MeshIdentity == host.ID {
 			result[host.ID] = stored.LastSeenAt
 		}

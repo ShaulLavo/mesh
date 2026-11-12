@@ -170,9 +170,9 @@ type HostUpdateSummary struct {
 }
 
 type HostUpdateRelease struct {
-	Version     string    `json:"version"`
-	Metadata    string    `json:"metadata"`
-	PublishedAt time.Time `json:"publishedAt"`
+	Version     string     `json:"version"`
+	Metadata    string     `json:"metadata"`
+	PublishedAt *time.Time `json:"publishedAt"`
 }
 
 type HostUpdateCommit struct {

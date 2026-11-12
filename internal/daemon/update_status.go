@@ -11,6 +11,8 @@ import (
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
+const hostUpdateUnknown = "unknown"
+
 func (u *updateController) hostSummary() *protocol.HostUpdateSummary {
 	ctx, cancel := context.WithTimeout(context.Background(), updateSummaryTimeout)
 	defer cancel()
@@ -27,6 +29,12 @@ func (u *updateController) hostSummary() *protocol.HostUpdateSummary {
 func summarizeHostUpdate(status update.HostStatus, build release.Build, installation string) *protocol.HostUpdateSummary {
 	summary := &protocol.HostUpdateSummary{Mode: string(status.Policy.Mode), Revision: status.Policy.Revision,
 		Phase: string(status.State.Phase), Installation: installation, Soak: status.Policy.Soak}
+	if summary.Mode == "" {
+		summary.Mode = hostUpdateUnknown
+	}
+	if summary.Phase == "" {
+		summary.Phase = hostUpdateUnknown
+	}
 	summaryProblem(summary, status.State)
 	summaryPeerProblem(summary, status.Peers, status.Policy.After)
 	if discovery := status.Discovery; discovery != nil {
@@ -140,7 +148,8 @@ func summaryLag(summary *protocol.HostUpdateSummary, build release.Build) {
 }
 
 func summaryRelease(value update.HostObservedRelease) *protocol.HostUpdateRelease {
-	return &protocol.HostUpdateRelease{Version: value.Version, Metadata: value.Metadata, PublishedAt: value.PublishedAt}
+	at := value.PublishedAt
+	return &protocol.HostUpdateRelease{Version: value.Version, Metadata: value.Metadata, PublishedAt: &at}
 }
 
 func summaryPending(summary *protocol.HostUpdateSummary, discovery *update.HostDiscoveryObservation) {

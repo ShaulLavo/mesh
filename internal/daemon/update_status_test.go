@@ -40,6 +40,11 @@ func TestHostSummaryCurrentFutureAndUnknown(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), `"latest":null`) || !strings.Contains(string(data), `"lag":null`) {
 		t.Fatalf("unknown status was omitted or became zero: %s %v", data, err)
 	}
+	status.LocalTarget = &update.HostTargetStatus{Phase: update.HostTargetReserved, Target: update.HostTargetRelease{Version: build.Version, Metadata: observed.Metadata}, PendingSince: now}
+	data, err = json.Marshal(summarizeHostUpdate(status, build, "managed"))
+	if err != nil || !strings.Contains(string(data), `"publishedAt":null`) {
+		t.Fatalf("unknown target publication time became a zero date: %s %v", data, err)
+	}
 }
 
 func TestHostPolicyForgetRequiresUnixOwnerAndReleasesRealRetention(t *testing.T) {
