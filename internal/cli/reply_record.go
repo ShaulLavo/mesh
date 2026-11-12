@@ -59,13 +59,18 @@ func readReplyRecord(state, identity string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	defer func() { _ = root.Close() }()
-	file, err := root.OpenFile(replyRecordName(identity), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	name := replyRecordName(identity)
+	before, err := root.Lstat(name)
+	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0o600 || before.Size() > replyRecordLimit {
+		return time.Time{}, false
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return time.Time{}, false
 	}
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > replyRecordLimit {
+	if err != nil || !os.SameFile(before, info) || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > replyRecordLimit {
 		return time.Time{}, false
 	}
 	var value replyRecord
