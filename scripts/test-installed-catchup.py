@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
+from fixtures import installed_review_controls
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -74,6 +75,17 @@ class SocketPathsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "socket requires"):
             paths.validate(self.root / ("é" * 40))
 
+    def test_missing_account_cleanup_retains_actual_order_scratch(self):
+        root, output = self.root / "scratch", self.root / "evidence"
+        root.mkdir()
+        output.mkdir()
+        (root / "ordered-input.json").write_text("{}")
+        (output / "native-manager.json").write_text(json.dumps({"cleanup": {"serviceAbsent": True, "processAbsent": True}}))
+        with self.assertRaisesRegex(RuntimeError, "missing"):
+            PROOF.clean_scratch(root, output)
+        self.assertTrue(root.exists())
+        self.assertFalse((output / "scratch-cleanup.json").exists())
+
     def test_unmounted_work_drive_cannot_receive_fixture_data(self):
         with (patch.dict(os.environ, {"MESH_SHORT_TMP": "/work/tmp"}), patch.object(Path, "is_mount", return_value=False)):
             with self.assertRaisesRegex(RuntimeError, "not mounted"):
@@ -83,7 +95,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -494,7 +506,7 @@ class AccountIsolationTest(unittest.TestCase):
     def test_preexisting_uid_resources_are_never_stopped(self):
         accounts = object.__new__(installed_accounts.Accounts)
         record = {"name": "test-only", "uid": 12345, "home": "/unused", "created": True, "ownershipVerified": False}
-        with patch.object(accounts, "owned"), patch.object(installed_accounts, "account_exists", return_value=None):
+        with patch.object(accounts, "owned"), patch.object(accounts, "persist"), patch.object(installed_accounts, "account_exists", side_effect=[SimpleNamespace(), None]):
             with patch.object(installed_accounts, "command") as command, patch.object(accounts, "stop_processes") as stop:
                 accounts.remove_account(record)
         command.assert_called_once_with(["/usr/sbin/userdel", "test-only"])
@@ -551,6 +563,10 @@ class ArtifactPinTest(unittest.TestCase):
         (tools / "worker-probe").write_bytes(b"another observer")
         with self.assertRaisesRegex(RuntimeError, "worker-probe"):
             installed_artifacts.verify_tools(root, "a" * 40, platform)
+
+
+def load_tests(loader, tests, _pattern):
+    return unittest.TestSuite((tests, loader.loadTestsFromModule(installed_review_controls)))
 
 
 if __name__ == "__main__":

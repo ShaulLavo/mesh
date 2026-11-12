@@ -1,0 +1,165 @@
+"""Durable ownership and bounded supervision of the privileged account owner."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import uuid
+
+
+def save(path, value):
+    temporary = path.with_suffix(".tmp")
+    with temporary.open("w") as stream:
+        json.dump(value, stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def identity(pid):
+    try:
+        directory = Path(f"/proc/{pid}")
+        fields = (directory / "stat").read_text().rsplit(")", 1)[1].split()
+        return {"pid": pid, "uid": directory.stat().st_uid, "birth": fields[19],
+                "boot": Path("/proc/sys/kernel/random/boot_id").read_text().strip()}
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def alive(owned):
+    return owned is not None and identity(owned["pid"]) == owned
+
+
+def signal_bound(owned, number):
+    if owned is None:
+        return
+    current = identity(owned["pid"])
+    if current is None:
+        return
+    if current != owned:
+        raise RuntimeError("account owner PID lifetime changed; refusing signal")
+    os.kill(owned["pid"], number)
+
+
+def claim(root, output, operation):
+    ticket = json.loads((root / "account-run.json").read_text())
+    if ticket["operation"] != operation or ticket["root"] != str(root.resolve()) or ticket["output"] != str(output.resolve()):
+        raise RuntimeError("privileged account owner does not match its durable launch ticket")
+    if not alive(ticket["supervisor"]) or hashlib.sha256((root / "ordered-input.json").read_bytes()).hexdigest() != ticket["descriptor"]:
+        raise RuntimeError("account-run supervisor lifetime or immutable input changed")
+    ticket["owner"] = identity(os.getpid())
+    save(root / "account-run.json", ticket)
+    return operation
+
+
+def launch(root, output, arguments, timeout=480):
+    operation = uuid.uuid4().hex
+    ticket_path = root / "account-run.json"
+    if ticket_path.exists():
+        raise RuntimeError("refusing an existing privileged account-run ticket")
+    ticket = {"schema": 1, "operation": operation, "root": str(root.resolve()), "output": str(output.resolve()),
+              "supervisor": identity(os.getpid()), "descriptor": hashlib.sha256((root / "ordered-input.json").read_bytes()).hexdigest(), "owner": None}
+    save(ticket_path, ticket)
+    process = subprocess.Popen([*arguments, operation], start_new_session=True)
+    ticket["launcher"] = identity(process.pid)
+    # The child alone writes owner identity; never overwrite its claim.
+    save(output / "account-launcher.json", ticket)
+    supervise(process, ticket_path, output, timeout, privileged_signal, recover)
+
+
+def supervise(process, ticket_path, output, timeout, signal_owner, recover_owner):
+    failure = None
+    try:
+        status = process.wait(timeout=timeout)
+        if status:
+            failure = RuntimeError("privileged account owner exited unsuccessfully: " + str(status))
+    except BaseException as error:
+        failure = error
+        stop_owner(process, ticket_path, signal_owner)
+    ticket = json.loads(ticket_path.read_text())
+    if alive(ticket.get("owner")):
+        raise RuntimeError("privileged account owner remains alive; retaining its scratch")
+    recover_owner(ticket_path)
+    verify_cleanup(ticket_path.parent, output, parent_receipt=False)
+    save(output / "account-run-result.json", {"schema": 1, "operation": ticket["operation"], "ownerStopped": True, "cleanupVerified": True})
+    if failure is not None:
+        raise failure
+
+
+def stop_owner(process, ticket_path, signal_owner):
+    signal_owner(ticket_path, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        signal_owner(ticket_path, signal.SIGKILL)
+        process.wait(timeout=10)
+
+
+def privileged_signal(ticket_path, number):
+    subprocess.run(privileged_arguments("signal", ticket_path, str(int(number))), check=True, timeout=10)
+
+
+def recover(ticket_path):
+    # Recovery's native operations retain their existing per-command bounds.
+    # Do not SIGKILL a second account owner while it is tearing down resources.
+    subprocess.run(privileged_arguments("recover", ticket_path), check=True)
+
+
+def privileged_arguments(operation, path, *arguments):
+    return ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env", "PYTHONPATH=" + str(Path(__file__).parents[1]),
+            "PYTHONDONTWRITEBYTECODE=1", sys.executable, str(Path(__file__)), operation, str(path), *arguments]
+
+
+def verify_cleanup(root, output, parent_receipt=True):
+    ticket_path = root / "account-run.json"
+    cleanup_path = output / "accounts-cleanup.json"
+    if not ticket_path.exists() or not cleanup_path.exists():
+        raise RuntimeError("required account-run ownership or cleanup report is missing; retaining scratch")
+    ticket, result = json.loads(ticket_path.read_text()), json.loads(cleanup_path.read_text())
+    if result.get("operation") != ticket["operation"] or not result.get("groupAbsent") or not result.get("resourcesStopped"):
+        raise RuntimeError("account-run cleanup is not positively bound to this operation")
+    if any(not account.get("absent") for account in result["accounts"] if account.get("created") or account.get("intent")):
+        raise RuntimeError("an owned account remains unconfirmed after cleanup")
+    if alive(ticket.get("owner")):
+        raise RuntimeError("account-run owner still consumes its scratch")
+    if parent_receipt:
+        verify_parent_receipt(output, ticket)
+
+
+def verify_parent_receipt(output, ticket):
+    path = output / "account-run-result.json"
+    if not path.exists():
+        raise RuntimeError("account-run supervisor completion is missing; retaining scratch")
+    result = json.loads(path.read_text())
+    if result.get("operation") != ticket["operation"] or result.get("ownerStopped") is not True or result.get("cleanupVerified") is not True:
+        raise RuntimeError("account-run supervisor did not verify owned cleanup")
+
+
+def root_action(arguments):
+    from fixtures import installed_accounts
+    installed_accounts.require_hosted_root()
+    operation, ticket_path, *values = arguments
+    path = Path(ticket_path).resolve(strict=True)
+    ticket = json.loads(path.read_text())
+    owner = ticket.get("owner")
+    if operation == "signal":
+        signal_bound(owner, int(values[0]))
+        return
+    if operation != "recover" or alive(owner):
+        raise RuntimeError("refusing recovery while the bound account owner may be running")
+    resources = Path(ticket["output"]) / "account-resources.json"
+    if not resources.exists() or resources.stat().st_uid != 0:
+        raise RuntimeError("account resource ownership is missing; retaining scratch")
+    installed_accounts.Accounts.resume(resources, ticket).close()
+
+
+if __name__ == "__main__":
+    root_action(sys.argv[1:])

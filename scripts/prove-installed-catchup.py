@@ -90,6 +90,9 @@ def clean_scratch(root, output):
         if not pair.get("servicesAbsent") or not pair.get("processesAbsent"):
             raise RuntimeError(f"installed cleanup unconfirmed; retained {root} for the test owner")
     accounts = output / "accounts-cleanup.json"
+    if (root / "ordered-input.json").exists() or (root / "account-run.json").exists():
+        from fixtures import installed_account_run
+        installed_account_run.verify_cleanup(root, output)
     if accounts.exists():
         result = json.loads(accounts.read_text())
         if not result.get("groupAbsent") or any(not item.get("absent") for item in result["accounts"] if item["created"]):

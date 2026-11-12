@@ -285,11 +285,21 @@ def published_route(root, output, first, target, releases, origin, registry, pro
             raise RuntimeError("original published updater did not accept its explicit automatic policy")
         case.snapshots = case.retained()
         origin.head(releases.directory, target)
+        plan = read_route_plan(case, target)
+        if plan["next"]["version"] == target:
+            raise RuntimeError("signed publication route is direct; the required intermediate/waypoint proof is unavailable")
+        record["expectedHops"] = [plan["next"]]
+        record["authenticatedTarget"] = plan["target"]
+        record["routePlans"] = [plan]
         if rollback:
             fault.start()
         case.units.stop("daemon")
         case.units.start("daemon")
         await_published_route(case, record, first, target, fault, rollback)
+        if rollback:
+            previous = installed_chain.read_journal(case)["request"]["current"]["version"]
+            installed_chain.verify_failed_restart(case, record, previous, target)
+            verify_restarted_published_helper(case, record, previous)
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
@@ -308,16 +318,25 @@ def finish_fault_case(case, record, output, fault):
         installed_adoption.finish_case(case, record, output)
 
 
+def verify_restarted_published_helper(case, record, previous):
+    helper = case.mapped_helper()
+    if helper["sha256"] != case.releases.builds[previous]["digest"]:
+        raise RuntimeError("restarted rollback helper differs from its authenticated restored release")
+    record["failedRestart"]["helper"] = helper
+
+
 def await_published_route(case, record, first, target, fault, rollback):
+    if not record.get("expectedHops") or not record.get("authenticatedTarget"):
+        raise RuntimeError("original published route lacks its authenticated intended intermediate/waypoint")
     deadline, seen = time.monotonic() + 150, set()
     while time.monotonic() < deadline:
+        observe_published_hop(case, record, first, target, seen)
         ledger = installed_chain.read_ledger(case)
         journal = installed_chain.read_journal(case)
         terminal = journal.get("request", {}).get("manifest", {}).get("version") == target and journal.get("phase") == ("rolled_back" if rollback else "committed")
         if terminal and not ledger["state"].get("owned"):
-            validate_published_route(case, record, journal, ledger, target, fault, rollback)
+            validate_published_route(case, record, journal, ledger, target, fault, rollback, seen)
             return
-        observe_published_hop(case, record, first, target, seen)
         time.sleep(0.05)
     raise RuntimeError("original published updater did not finish its real retained route within the existing chain bound")
 
@@ -328,6 +347,8 @@ def observe_published_hop(case, record, first, target, seen):
     build = case.control("host.info")["host"]["build"]
     if build["version"] in (first, target) or build["version"] in seen:
         return
+    expected = next_expected_hop(record, build["version"])
+    authenticate_hop(case, build, expected)
     receipt = json.loads((case.state / "update/helper/installed.json").read_text())
     if receipt["digest"] != build["digest"]:
         return
@@ -339,22 +360,97 @@ def observe_published_hop(case, record, first, target, seen):
     os.kill(pid, signal.SIGSTOP)
     try:
         case.inspect_retained()
-        record["hops"].append({"build": build, "helper": image, "workers": case.cohort.verify("real-published-hop-" + build["version"])})
+        if image["sha256"] != expected["binary"]:
+            raise RuntimeError("published intermediate helper differs from its authenticated release")
+        record["hops"].append({"expected": expected, "build": build, "helper": image, "workers": case.cohort.verify("real-published-hop-" + build["version"])})
         seen.add(build["version"])
+        case.releases.builds[build["version"]] = build
+        extend_expected_route(case, record, target)
     finally:
         os.kill(pid, signal.SIGCONT)
 
 
-def validate_published_route(case, record, journal, ledger, target, fault, rollback):
+def validate_published_route(case, record, journal, ledger, target, fault, rollback, seen):
+    verify_observed_route(record, seen)
     case.inspect_retained()
     build = case.control("host.info")["host"]["build"]
     expected = journal["request"]["current"]["digest"] if rollback else case.releases.builds[target]["digest"]
     if build["digest"] != expected or rollback and (not fault.bound or not fault.released or fault.error):
         raise RuntimeError("real published route did not restore or activate its exact native image")
+    helper = case.mapped_helper()
+    expected_helper = expected if rollback else record["authenticatedTarget"]["binary"]
+    if helper["sha256"] != expected_helper:
+        raise RuntimeError("final published helper differs from the authenticated expected release image")
+    if rollback:
+        verify_published_failure(case, journal, ledger, target)
     if not rollback:
         pin = published_releases.digest((case.releases.directory / target / "mesh-update.json").read_bytes())
         committed = [entry for entry in ledger["entries"] if entry["version"] == target and entry["metadata"] == pin and entry["workersPreserved"] == case.expected_workers]
         if not committed:
             raise RuntimeError("real published updater lacks its exact pinned preserved-worker commit")
     record["final"] = {"build": build, "ledger": ledger, "route": case.route_observer.snapshot(),
-                       "workers": case.cohort.verify("real-published-final"), "helper": case.mapped_helper()}
+                       "workers": case.cohort.verify("real-published-final"), "helper": helper}
+
+
+def read_route_plan(case, target):
+    result = subprocess.run([str(case.binary), "update", "--local", "--check", "--version", target, "--json"],
+                            env=case.environment, capture_output=True, text=True, check=True, timeout=30)
+    plan = json.loads(result.stdout)
+    current = case.control("host.info")["host"]["build"]
+    metadata = case.releases.directory / target / "mesh-update.json"
+    if plan["currentDigest"] != current["digest"] or not plan.get("next"):
+        raise RuntimeError("read-only authenticated route plan does not match the executing published source")
+    if plan["target"]["binary"] != case.releases.builds[target]["digest"] or plan["target"]["metadata"] != published_releases.digest(metadata.read_bytes()):
+        raise RuntimeError("authenticated route target differs from the actual signed draft")
+    return plan
+
+
+def next_expected_hop(record, version):
+    index = len(record["hops"])
+    if index >= len(record["expectedHops"]) or record["expectedHops"][index]["version"] != version:
+        raise RuntimeError("published route executed an unintended or unplanned intermediate")
+    return record["expectedHops"][index]
+
+
+def authenticate_hop(case, build, expected):
+    prefix = "/ShaulLavo/mesh/releases/download/" + expected["version"] + "/"
+    manifest = case.origin.asset(prefix + "mesh-release.json").read_bytes()
+    metadata = case.origin.asset(prefix + "mesh-update.json").read_bytes()
+    if published_releases.digest(manifest) != expected["manifest"] or published_releases.digest(metadata) != expected["metadata"]:
+        raise RuntimeError("observed intermediate bytes differ from the authenticated route plan")
+    value = json.loads(manifest)
+    platform = dict(zip(("os", "arch"), case.releases.native.split("/")))
+    artifacts = [item for item in value["artifacts"] if item["platform"] == platform]
+    if len(artifacts) != 1 or artifacts[0]["binarySha256"] != expected["binary"]:
+        raise RuntimeError("authenticated intermediate manifest names another native image")
+    if build["version"] != expected["version"] or build["digest"] != expected["binary"] or build["commit"] != value["commit"] or build["modified"] or build["platform"] != platform:
+        raise RuntimeError("executing intermediate differs from its authenticated release identity")
+
+
+def extend_expected_route(case, record, target):
+    plan = read_route_plan(case, target)
+    if release_identity(plan["target"]) != release_identity(record["authenticatedTarget"]):
+        raise RuntimeError("authenticated final target changed between published hops")
+    record["routePlans"].append(plan)
+    if plan["next"]["version"] != target:
+        record["expectedHops"].append(plan["next"])
+
+
+def release_identity(value):
+    return {key: value[key] for key in ("version", "metadata", "manifest", "binary")}
+
+
+def verify_observed_route(record, seen):
+    expected, observed = record.get("expectedHops", []), record.get("hops", [])
+    if not expected or len(observed) != len(expected) or seen != {item["version"] for item in expected}:
+        raise RuntimeError("published terminal state skipped its required signed intermediate/waypoint observations")
+    for wanted, actual in zip(expected, observed, strict=True):
+        if actual["expected"] != wanted or actual["build"]["digest"] != wanted["binary"] or actual["helper"]["sha256"] != wanted["binary"]:
+            raise RuntimeError("published hop or helper does not match its authenticated expected image")
+
+
+def verify_published_failure(case, journal, ledger, target):
+    edge = {"from": journal["request"]["current"]["digest"], "to": case.releases.builds[target]["digest"],
+            "platform": journal["request"]["current"]["platform"]}
+    if not any(item["edge"] == edge and item["version"] == target and item["phase"] == "rolled_back" for item in ledger["failed"]):
+        raise RuntimeError("published rollback lacks its exact durable failed edge")

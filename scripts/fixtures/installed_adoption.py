@@ -370,7 +370,7 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
 
 
 def run_order(root, output, native, preparer, host, releases, origin, prepare_only):
-    from fixtures import installed_order
+    from fixtures import installed_order, installed_account_run
     if native != "linux/amd64" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise RuntimeError("ordered native hosts require a disposable GitHub Linux AMD64 runner")
     pair = fleet_baselines.acquire_pair(root / "public", host)
@@ -381,9 +381,10 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
     descriptor = root / "ordered-input.json"
     descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
         "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}, default=str))
-    subprocess.run(["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
+    arguments = ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
         "PYTHONPATH=" + str(Path(__file__).parents[1]), "PYTHONDONTWRITEBYTECODE=1", sys.executable,
-        str(Path(installed_order.__file__)), str(descriptor), str(output)], check=True, timeout=480)
+        str(Path(installed_order.__file__)), str(descriptor), str(output)]
+    installed_account_run.launch(root, output, arguments)
 
 
 def retain_producer_logs(root, output):

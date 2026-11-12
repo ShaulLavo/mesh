@@ -1,6 +1,6 @@
 """Three native installed hosts using real authenticated predecessor evidence."""
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import select
@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases
+from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run
 
 
 class Driver:
@@ -81,9 +81,10 @@ def prepare(releases, origin, source):
     origin.head(releases.directory, first)
 
 
-def run(root, output, descriptor):
+def run(root, output, descriptor, operation):
     installed_accounts.require_hosted_root()
     installed_paths.validate(root)
+    installed_account_run.claim(root, output, operation)
     accounts, drivers = installed_accounts.Accounts(root, output), []
     record = {"passed": False, "supplementalSourceBuilds": True, "observations": []}
     try:
@@ -121,9 +122,14 @@ def share_inputs(accounts, descriptor):
 
 def bootstrap(drivers, record):
     peers = [driver.call("prepare") for driver in drivers]
+    for driver, peer in zip(drivers, peers, strict=True):
+        driver.account["id"] = peer["id"]
     members = [{key: peer[key] for key in ("id", "endpoint", "platform")} for peer in peers]
-    for index, driver in enumerate(drivers):
-        after = [] if index == 0 else [peers[index - 1]["id"]]
+    # Keep the canary's direct dependent awake; sleep is the final host.
+    predecessors = {"canary": None, "burst": 0, "sleep": 2}
+    for driver in drivers:
+        predecessor = predecessors[driver.account["role"]]
+        after = [] if predecessor is None else [peers[predecessor]["id"]]
         driver.call("configure", peers=members, after=after, soak=5_000_000_000)
     for driver in drivers:
         result = driver.call("adopt", timeout=120, version=installed_releases.VERSIONS[0])
@@ -133,7 +139,7 @@ def bootstrap(drivers, record):
 
 def scenarios(root, drivers, descriptor, record):
     first, failed, latest = installed_releases.VERSIONS
-    canary, sleeping, burst = drivers
+    canary, sleeping, direct = drivers
     origin = installed_origin.Origin(root)
     directory = Path(descriptor["releases"]["directory"])
     sleeping.call("stop", expectedOffline=True)
@@ -143,30 +149,106 @@ def scenarios(root, drivers, descriptor, record):
     failed_state = await_version(canary, first, "rolled_back", 90)
     if not any(edge["version"] == failed for edge in failed_state["failed"]):
         raise RuntimeError("failed native canary did not retain its failed edge")
-    restart(burst)
-    held = await_held(burst, first, 45)
-    record["observations"].append({"canaryFailure": bounded(failed_state), "heldDependent": bounded(held)})
+    started = opportunity(direct)
+    held = await_opportunity(direct, first, failed, started, 45)
+    require_failed_canary_read(held, failed_state, canary.account["id"])
+    record["observations"].append({"canaryFailure": bounded(failed_state), "awakeDirectHold": bounded(held)})
     origin.head(directory, latest)
     canary.call("fault", versions=[])
     restart(canary)
     canary_latest = await_version(canary, latest, "committed", 90)
-    # The intermediate host remains asleep while the real canary advances.
-    restart(burst)
-    still_held = await_held(burst, first, 45)
-    wait_soak(canary, canary_latest, latest)
-    sleeping.call("start", expectedOffline=False)
-    sleeper_latest = await_version(sleeping, latest, "committed", 90)
-    wait_soak(sleeping, sleeper_latest, latest)
-    restart(burst)
-    burst_latest = await_version(burst, latest, "committed", 90)
-    verify_order(canary_latest, sleeper_latest, burst_latest, latest)
-    record["observations"].append({"canaryLatest": bounded(canary_latest), "sleepHeld": bounded(still_held),
-        "sleepLatest": bounded(sleeper_latest), "burstLatest": bounded(burst_latest)})
+    direct_latest, direct_hold = exercise_soak(direct, canary_latest, first, latest)
+    sleeper_latest, sleeper_hold = exercise_soak(sleeping, direct_latest, first, latest)
+    verify_order(canary_latest, direct_latest, sleeper_latest, latest)
+    record["observations"].append({"canaryLatest": bounded(canary_latest), "directBeforeSoak": bounded(direct_hold),
+        "directLatest": bounded(direct_latest), "sleepBeforeSoak": bounded(sleeper_hold), "sleepLatest": bounded(sleeper_latest)})
 
 
 def restart(driver):
     driver.call("stop")
     driver.call("start")
+
+
+def opportunity(driver):
+    started = datetime.now(timezone.utc)
+    driver.call("stop")
+    driver.call("start", expectedOffline=False)
+    return started
+
+
+def assert_held(value, source, target):
+    journal = value.get("journal") or {}
+    attempted = journal.get("request", {}).get("manifest", {}).get("version") == target
+    if attempted or value["state"].get("owned") or value.get("build", {}).get("version", source) != source:
+        raise RuntimeError("dependent issued or activated the release before its predecessor gate permitted it")
+
+
+def fresh_opportunity(value, started):
+    reads = [datetime.fromisoformat(peer["readAt"].replace("Z", "+00:00")) for peer in value["peers"] if peer.get("state") == "verified"]
+    written = datetime.fromtimestamp(value.get("stateWrittenAt", 0), timezone.utc)
+    return bool(reads) and max(reads) >= started and written >= started and value["state"]["phase"] == "waiting"
+
+
+def await_opportunity(driver, source, target, started, timeout, cutoff=None):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = driver.call("inspect", active=False)
+        assert_held(value, source, target)
+        if fresh_opportunity(value, started):
+            return require_preexpiry_read(value, cutoff) | {"opportunityStartedAt": started.isoformat()}
+        if cutoff is not None and datetime.now(timezone.utc) >= cutoff:
+            raise RuntimeError("dependent did not demonstrate a completed update opportunity before its configured soak expired")
+        time.sleep(0.05)
+    raise RuntimeError("awake dependent did not complete a fresh predecessor-gated update opportunity")
+
+
+def require_preexpiry_read(value, cutoff):
+    if cutoff is not None and datetime.now(timezone.utc) >= cutoff:
+        raise RuntimeError("soak hold was only observed after expiry")
+    return value
+
+
+def require_failed_canary_read(held, canary, canary_id):
+    failures = held.get("peerFailures", {}).get(canary_id, [])
+    expected = canary["failed"]
+    if not expected or not all(entry in failures for entry in expected):
+        raise RuntimeError("awake direct dependent did not retain the authenticated failed-canary evidence")
+
+
+def exercise_soak(driver, predecessor, source, target):
+    cutoff = commit_time(predecessor, target) + timedelta(seconds=5)
+    if datetime.now(timezone.utc) >= cutoff:
+        raise RuntimeError("fixture missed the pre-expiry opportunity; no soak proof recorded")
+    started = opportunity(driver)
+    held = await_opportunity(driver, source, target, started, 45, cutoff)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        value = driver.call("inspect", active=False)
+        if datetime.now(timezone.utc) < cutoff:
+            assert_held(value, source, target)
+        if target_committed(value, target):
+            return validated_soaked_commit(driver, target, cutoff), held
+        started = repeat_opportunity(driver, value, started)
+        time.sleep(0.1)
+    raise RuntimeError("dependent did not release after soak despite real update opportunities on both sides of expiry")
+
+
+def target_committed(value, target):
+    journal = value.get("journal") or {}
+    return journal.get("phase") == "committed" and journal.get("request", {}).get("manifest", {}).get("version") == target and not value["state"].get("owned")
+
+
+def repeat_opportunity(driver, value, started):
+    if fresh_opportunity(value, started) and not value["state"].get("owned"):
+        return opportunity(driver)
+    return started
+
+
+def validated_soaked_commit(driver, target, cutoff):
+    observed = driver.call("inspect")
+    if commit_time(observed, target) < cutoff:
+        raise RuntimeError("dependent ignored the configured predecessor soak")
+    return observed
 
 
 def await_version(driver, version, phase, timeout):
@@ -197,22 +279,12 @@ def await_held(driver, version, timeout):
 
 
 def bounded(value):
-    return {key: value[key] for key in ("build", "state", "entries", "failed", "helper", "peers", "dependents", "route")}
+    return {key: value[key] for key in ("state", "entries", "failed", "peers", "peerFailures", "stateWrittenAt")}
 
 
 def commit_time(value, version):
     entry = next(entry for entry in value["entries"] if entry["version"] == version)
     return datetime.fromisoformat(entry["committedAt"].replace("Z", "+00:00"))
-
-
-def wait_soak(driver, value, version):
-    committed = commit_time(value, version)
-    deadline = time.monotonic() + 6
-    while (datetime.now(timezone.utc) - committed).total_seconds() < 5:
-        if time.monotonic() > deadline:
-            raise RuntimeError("ordered native soak clock did not advance")
-        driver.call("inspect")
-        time.sleep(0.1)
 
 
 def verify_order(canary, sleeper, burst, version):
@@ -247,5 +319,5 @@ def interrupted(number, _frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    descriptor_path, destination = map(Path, sys.argv[1:])
-    run(descriptor_path.parent, destination, json.loads(descriptor_path.read_text()))
+    descriptor_path, destination = map(Path, sys.argv[1:3])
+    run(descriptor_path.parent, destination, json.loads(descriptor_path.read_text()), sys.argv[3])

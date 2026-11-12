@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import grp
 import shutil
 import signal
 import subprocess
@@ -10,7 +11,7 @@ import sys
 import time
 import uuid
 
-from fixtures import installed_native, installed_paths, native_services
+from fixtures import installed_native, installed_paths, native_services, installed_account_run
 
 
 def require_hosted_root():
@@ -38,11 +39,48 @@ class Accounts:
         self.group = self.prefix
         self.group_created = False
         self.source = None
+        ticket = self.root / "account-run.json"
+        self.operation = json.loads(ticket.read_text())["operation"] if ticket.exists() else uuid.uuid4().hex
+        self.group_gid = None
+        self.group_intent = False
         self.before = command(["/usr/bin/systemctl", "list-units", "user@*.service", "--all", "--no-pager", "--plain"]).stdout
+        self.persist()
+
+    def persist(self):
+        value = {"schema": 1, "operation": self.operation, "root": str(self.root.resolve()), "output": str(self.output.resolve()),
+                 "accounts": self.accounts, "prefix": self.prefix, "group": self.group, "group_created": self.group_created,
+                 "group_gid": self.group_gid, "group_intent": self.group_intent, "source": str(self.source) if self.source else None, "before": self.before}
+        installed_account_run.save(self.output / "account-resources.json", value)
+
+    @classmethod
+    def resume(cls, path, ticket):
+        value = json.loads(path.read_text())
+        if value["operation"] != ticket["operation"] or value["root"] != ticket["root"] or value["output"] != ticket["output"]:
+            raise RuntimeError("account resource journal differs from the owned run")
+        instance = object.__new__(cls)
+        instance.__dict__.update({key: value[key] for key in ("accounts", "prefix", "group", "group_created", "group_gid", "group_intent", "before", "operation")})
+        instance.root, instance.output = Path(value["root"]), Path(value["output"])
+        instance.source = Path(value["source"]) if value["source"] else None
+        instance.validate_resources()
+        return instance
+
+    def validate_resources(self):
+        if self.group != self.prefix or not self.prefix.startswith("m8"):
+            raise RuntimeError("owned account group binding is invalid")
+        for account in self.accounts:
+            expected_home = self.root / account["role"]
+            if account["name"] != self.prefix + account["role"][0] or Path(account["home"]) != expected_home:
+                raise RuntimeError("owned account name/home binding changed")
+        if self.source and self.source != self.root / "account-source":
+            raise RuntimeError("owned account source location changed")
 
     def create(self):
+        self.group_intent = True
+        self.persist()
         command(["/usr/sbin/groupadd", self.group])
         self.group_created = True
+        self.group_gid = grp.getgrnam(self.group).gr_gid
+        self.persist()
         command(["/usr/bin/chgrp", self.group, str(self.root)])
         self.root.chmod(0o2770)
         for role in ("canary", "sleep", "burst"):
@@ -55,17 +93,21 @@ class Accounts:
             raise RuntimeError("refusing an existing test account: " + name)
         home = self.root / role
         home.mkdir()
-        record = {"name": name, "role": role, "home": str(home), "created": False, "managerStarted": False, "ownershipVerified": False}
+        record = {"name": name, "role": role, "home": str(home), "created": False, "intent": True, "managerStarted": False, "ownershipVerified": False}
         self.accounts.append(record)
+        self.persist()
         command(["/usr/sbin/useradd", "--no-create-home", "--home-dir", str(home), "--gid", self.group, "--shell", "/bin/bash", name])
         record["created"] = True
         entry = pwd.getpwnam(name)
         record["uid"] = entry.pw_uid
+        record["gid"] = entry.pw_gid
+        self.persist()
         if self.pids(entry.pw_uid) or Path(f"/run/user/{entry.pw_uid}").exists():
             raise RuntimeError("new test UID has pre-existing processes or runtime state")
         record["ownershipVerified"] = True
         os.chown(home, entry.pw_uid, entry.pw_gid)
         record["managerStarted"] = True
+        self.persist()
         command(["/usr/bin/systemctl", "start", f"user@{entry.pw_uid}.service"])
         environment = self.environment(record)
         command(["/usr/sbin/runuser", "-u", name, "--", "/usr/bin/env", *environment,
@@ -86,25 +128,38 @@ class Accounts:
         actions = [lambda account=account: self.remove_account(account) for account in reversed(self.accounts)]
         actions.append(self.remove_sources)
         actions.append(self.remove_group)
+        stopped = False
         try:
             installed_native.cleanup_all(actions)
+            stopped = True
         finally:
-            record = {"beforeManagers": self.before, "accounts": self.accounts, "groupAbsent": not self.group_created}
-            (self.output / "accounts-cleanup.json").write_text(json.dumps(record, indent=2) + "\n")
+            record = {"operation": self.operation, "beforeManagers": self.before, "accounts": self.accounts,
+                      "groupAbsent": not self.group_created, "resourcesStopped": stopped}
+            installed_account_run.save(self.output / "accounts-cleanup.json", record)
 
     def owned(self, account):
         entry = account_exists(account["name"])
-        if not entry or entry.pw_uid != account["uid"] or entry.pw_dir != account["home"]:
+        if not entry or entry.pw_uid != account["uid"] or entry.pw_dir != account["home"] or entry.pw_gid != account["gid"]:
             raise RuntimeError("test account identity changed; refusing destructive cleanup")
 
     def remove_account(self, account):
         if not account["created"]:
+            if account_exists(account["name"]):
+                raise RuntimeError("account creation outcome is unknown; retaining ownership evidence")
+            account["absent"] = True
+            self.persist()
+            return
+        if account.get("absent"):
+            return
+        if account_exists(account["name"]) is None:
+            self.finish_absent_account(account)
             return
         self.owned(account)
         uid = account["uid"]
         if not account["ownershipVerified"]:
             command(["/usr/sbin/userdel", account["name"]])
             account["absent"] = account_exists(account["name"]) is None
+            self.persist()
             return
         if account["managerStarted"]:
             command(["/usr/bin/systemctl", "stop", f"user@{uid}.service"])
@@ -112,22 +167,43 @@ class Accounts:
         command(["/usr/bin/systemctl", "stop", f"user-runtime-dir@{uid}.service"])
         if Path(f"/run/user/{uid}").exists() or self.pids(uid):
             raise RuntimeError("owned account processes or runtime remain after teardown")
+        account["processesAbsent"], account["runtimeAbsent"] = True, True
+        self.persist()
         command(["/usr/sbin/userdel", account["name"]])
         account["absent"] = account_exists(account["name"]) is None
         if not account["absent"]:
             raise RuntimeError("owned account remains after removal")
         shutil.rmtree(account["home"])
         account["homeAbsent"] = not Path(account["home"]).exists()
+        self.persist()
+
+    def finish_absent_account(self, account):
+        try:
+            pwd.getpwuid(account["uid"])
+        except KeyError:
+            self.finish_unallocated_uid(account)
+            return
+        raise RuntimeError("owned account UID was reallocated; refusing recovery")
+
+    def finish_unallocated_uid(self, account):
+        uid = account["uid"]
+        if self.pids(uid) or Path(f"/run/user/{uid}").exists():
+            raise RuntimeError("absent account has unresolved processes/runtime; retaining scratch")
+        account.update(absent=True, processesAbsent=True, runtimeAbsent=True)
+        if Path(account["home"]).exists():
+            shutil.rmtree(account["home"])
+        account["homeAbsent"] = True
+        self.persist()
 
     def stop_processes(self, account):
         self.owned(account)
         for pid in self.pids(account["uid"]):
-            signal_owned(pid, account["uid"], signal.SIGTERM)
+            signal_owned(pid, account["uid"], signal.SIGTERM, installed_account_run.identity(pid))
         deadline = time.monotonic() + 5
         while self.pids(account["uid"]) and time.monotonic() < deadline:
             time.sleep(0.05)
         for pid in self.pids(account["uid"]):
-            signal_owned(pid, account["uid"], signal.SIGKILL)
+            signal_owned(pid, account["uid"], signal.SIGKILL, installed_account_run.identity(pid))
         native_services.wait_for(lambda: not self.pids(account["uid"]), "owned account process remains")
 
     def pids(self, uid):
@@ -138,17 +214,23 @@ class Accounts:
 
     def remove_group(self):
         if not self.group_created:
+            if self.group_intent and group_exists(self.group):
+                raise RuntimeError("group creation outcome is unknown; retaining evidence")
             return
+        if grp.getgrnam(self.group).gr_gid != self.group_gid:
+            raise RuntimeError("owned group lifetime binding changed; refusing removal")
         if any(account["created"] and not account.get("absent") for account in self.accounts):
             raise RuntimeError("retaining group for unconfirmed account cleanup")
         command(["/usr/sbin/groupdel", self.group])
         self.group_created = False
+        self.persist()
 
     def prepare_sources(self):
         source = Path(__file__).resolve().parents[2]
         self.source = self.root / "account-source"
         if self.source.exists():
             raise RuntimeError("refusing an existing native account fixture source directory")
+        self.persist()
         for relative in ("scripts/fixtures", "scripts/install/assets", "integration/helpers"):
             shutil.copytree(source / relative, self.source / relative, ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy2(source / "scripts/prove-installed-catchup.py", self.source / "scripts/prove-installed-catchup.py")
@@ -158,7 +240,10 @@ class Accounts:
         if any(account["created"] and not account.get("absent") for account in self.accounts):
             raise RuntimeError("retaining source for unconfirmed native account cleanup")
         if self.source:
-            shutil.rmtree(self.source)
+            if self.source.exists():
+                shutil.rmtree(self.source)
+            self.source = None
+            self.persist()
 
 
 def probe(output):
@@ -186,14 +271,21 @@ def retain_controls(root, output):
         (output / (path.parent.parent.name + "-" + path.name)).write_bytes(path.read_bytes())
 
 
-def signal_owned(pid, uid, number):
+def signal_owned(pid, uid, number, expected):
     try:
-        if Path(f"/proc/{pid}").stat().st_uid == uid:
+        if expected and expected["uid"] == uid and installed_account_run.identity(pid) == expected:
             os.kill(pid, number)
     except ProcessLookupError:
         pass
     except FileNotFoundError:
         pass
+
+
+def group_exists(name):
+    try:
+        return grp.getgrnam(name)
+    except KeyError:
+        return None
 
 
 def interrupted(number, _frame):

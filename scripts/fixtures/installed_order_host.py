@@ -84,6 +84,9 @@ class Host:
         result = installed_chain.normalize_ledger(json.loads((case.root / "ordered-ledger.json").read_text()))
         journal = case.state / "update/installation.json"
         result["journal"] = json.loads(journal.read_text()) if journal.exists() else None
+        updated = case.state / "updates/host-update.json"
+        result["stateWrittenAt"] = updated.stat().st_mtime if updated.exists() else 0
+        result["peerFailures"] = peer_failures(case.state, result["peers"])
         if not active:
             return result
         if not case.ready():
@@ -111,6 +114,16 @@ class Host:
 
 def interrupted(number, _frame):
     raise InterruptedError("installed ordered host interrupted by signal " + str(number))
+
+
+def peer_failures(state, peers):
+    result = {}
+    for peer in peers:
+        paths = sorted((state / "updates").glob("host-peer-failure-" + peer["id"] + "-*.json"))
+        if len(paths) > 64:
+            raise RuntimeError("native peer failure observation exceeds its bounded page")
+        result[peer["id"]] = [json.loads(path.read_text()) for path in paths]
+    return result
 
 
 def main():
