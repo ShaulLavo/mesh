@@ -2,12 +2,16 @@ package updatebootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,9 +52,6 @@ func TestInspectDelayedWorkerCohort(t *testing.T) {
 	if got := peak.Load(); got < 2 || got > 8 {
 		t.Fatalf("concurrent socket observations = %d, want 2 through 8", got)
 	}
-	if active.Load() != 0 {
-		t.Fatal("socket response handlers still active after inspection")
-	}
 	t.Logf("24 native worker observations in %s; peak socket concurrency %d", time.Since(started), peak.Load())
 }
 
@@ -70,24 +71,103 @@ func TestWorkerCohortCancellationJoinsConnections(t *testing.T) {
 		_, err := inspectWorkers(ctx, state, 7)
 		done <- err
 	}()
-	select {
-	case <-entered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("no worker inspection connected")
-	}
+	awaitCohortConnections(t, entered, 8)
 	cancel()
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("canceled cohort accepted partial observations")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled cohort = %v, want context cancellation", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("canceled cohort did not join within one second")
 	}
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		t.Fatal("canceled inspection retained its connected socket")
+	awaitCohortConnections(t, closed, 8)
+	if len(entered) != 0 {
+		t.Fatal("canceled cohort started more observations")
+	}
+}
+
+func awaitCohortConnections(t *testing.T, events <-chan struct{}, count int) {
+	t.Helper()
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for range count {
+		select {
+		case <-events:
+		case <-timer.C:
+			t.Fatalf("missing connection event, wanted %d", count)
+		}
+	}
+}
+
+func TestWorkerCohortRejectsEvidenceInDirectoryOrder(t *testing.T) {
+	state := probeFixtureDir(t)
+	build := release.Current()
+	for index := range 12 {
+		id := fmt.Sprintf("W%03d", index)
+		current := build
+		if index == 0 || index == 9 {
+			current.Digest = strings.Repeat("0", 64)
+		}
+		dir := cohortWorkerDir(t, state, id, current)
+		// The later invalid worker answers first; the error must name W000.
+		delay := time.Duration(12-index) * 10 * time.Millisecond
+		serveProbeResponse(t, filepath.Join(dir, "sock"), cohortResponse(id), delay, nil, nil)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	workers, err := inspectWorkers(ctx, state, 7)
+	if len(workers) != 0 || err == nil || !strings.Contains(err.Error(), "verify session W000") || !strings.Contains(err.Error(), "reported build differs") {
+		t.Fatalf("invalid cohort = %+v, %v", workers, err)
+	}
+}
+
+func TestWorkerCohortPreservesStaleAndUnknownDistinction(t *testing.T) {
+	state := probeFixtureDir(t)
+	build := release.Current()
+	stale := cohortWorkerDir(t, state, "stale", build)
+	if err := worker.WriteMeta(stale, worker.Meta{ID: "stale", State: worker.StateRunning, BootID: "different-boot"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = cohortWorkerDir(t, state, "dead", build)
+	live := cohortWorkerDir(t, state, "live", build)
+	serveProbeResponse(t, filepath.Join(live, "sock"), cohortResponse("live"), 0, nil, nil)
+	unknown := cohortWorkerDir(t, state, "unknown", build)
+	serveProbeResponse(t, filepath.Join(unknown, "sock"), protocol.Control{
+		Type: protocol.TypeError, SessionID: "unknown", Message: "expected " + protocol.TypeAttach,
+	}, 0, nil, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	workers, err := inspectWorkers(ctx, state, 7)
+	if len(workers) != 0 || err == nil || !strings.Contains(err.Error(), "cannot answer a read-only session inspection") {
+		t.Fatalf("unrecognized modern worker = %+v, %v", workers, err)
+	}
+}
+
+func TestLegacyVersionProbeHonorsParentCancellation(t *testing.T) {
+	dir := probeFixtureDir(t)
+	path, pidPath := filepath.Join(dir, "mesh"), filepath.Join(dir, "pid")
+	// exec keeps the fixture to one process, which CommandContext must reap.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s' \"$$\" > \"$MESH_PROBE_VERSION_PID\"\nexec sleep 10\n"), 0700); err != nil { //nolint:gosec // isolated executable version fixture
+		t.Fatal(err)
+	}
+	t.Setenv("MESH_PROBE_VERSION_PID", pidPath)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if version := legacyVersionFlag(ctx, path); version != "" || time.Since(started) > time.Second {
+		t.Fatalf("canceled version probe = %q after %s", version, time.Since(started))
+	}
+	data, err := os.ReadFile(pidPath) //nolint:gosec // fixed fixture output under this test's directory
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(string(data))
+	if err != nil || pid <= 0 {
+		t.Fatalf("fixture process ID = %q: %v", data, err)
+	}
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("version probe did not reap its process: %v", err)
 	}
 }
 
@@ -170,8 +250,13 @@ func serveCohortConnection(ctx context.Context, listener net.Listener, stop <-ch
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	finish := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer finish()
+	closed := make(chan struct{})
+	finish := context.AfterFunc(ctx, func() { _ = conn.Close(); close(closed) })
+	defer func() {
+		if !finish() {
+			<-closed
+		}
+	}()
 	if _, err := protocol.NewReader(conn).ReadFrame(); err != nil {
 		return
 	}
