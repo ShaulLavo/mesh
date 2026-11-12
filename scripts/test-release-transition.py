@@ -141,6 +141,25 @@ read_state_version() { echo 14; }
 
 
 class ProofAssemblyTest(unittest.TestCase):
+    def test_complete_candidate_context_is_bound_without_inventing_artifacts(self):
+        with tempfile.TemporaryDirectory(prefix="rollback-context-") as directory:
+            root = Path(directory)
+            binary = root / "candidate"
+            binary.write_bytes(b"actual test candidate")
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            manifest = json.loads((ROOT.parent / "internal/update/testdata/discovery/v0.1.306/mesh-release.json").read_bytes())
+            build = {"version": manifest["version"], "commit": manifest["commit"], "platform": {"os": "linux", "arch": "amd64"},
+                     "digest": digest, "stateVersion": manifest["compatibility"]["stateWrite"], "workerProtocol": manifest["compatibility"]["workerWrite"]}
+            next(item for item in manifest["artifacts"] if item["platform"] == build["platform"])["binarySha256"] = digest
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            with mock.patch.dict(os.environ, MESH_ROLLBACK_MANIFEST=str(path)), mock.patch.object(TRANSITION.subprocess, "check_output", return_value=json.dumps(build).encode()):
+                actual, _ = TRANSITION.candidate_manifest(binary, {})
+                self.assertEqual(actual, manifest)
+                binary.write_bytes(b"instrumented companion is not the release image")
+                with self.assertRaisesRegex(ValueError, "real release executable"):
+                    TRANSITION.candidate_manifest(binary, {})
+
     def test_pending_migrations_without_fault_input_emit_no_rollback(self):
         guard = re.search(r"^require_startup_fault_input\(\) \{.*?^\}", SOURCE, re.M | re.S)
         self.assertIsNotNone(guard)

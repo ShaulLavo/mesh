@@ -79,6 +79,8 @@ dump_diagnostics() {
   for path in "$test_root/client.err" "$test_root/client.out" "$test_root/old-first.log" \
     "$test_root/candidate.err" "$test_root/candidate.out" "$test_root/candidate.log" \
     "$test_root/restart.err" "$test_root/restart.out" "$test_root/candidate-restart.log" \
+    "$test_root/managed-daemon.log" "$test_root"/helper-*.log \
+    "$test_root"/*.image-context.json \
     "$test_root"/*.inventory.out "$test_root"/*.inventory.err "$state"/s/*/worker.log; do
     [[ -s $path ]] || continue
     printf '%s (last 4096 bytes):\n' "$path" >&2
@@ -260,7 +262,7 @@ assert_saved_recovery() {
 rollback_source() {
   local label=$1 candidate_image=${2:-$candidate_binary}
   local retained_worker_pid=$worker_pid retained_shell_pid=$shell_pid
-  fixture prepare-rollback "$state" "$old_binary" "$candidate_image" "$label"
+  fixture prepare-rollback "$state" "$old_binary" "$candidate_binary" "$label" "$candidate_image"
   env PATH="$test_root/service-tools:$PATH" MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" \
     "$candidate_binary" update-helper --state-dir "$state" >"$test_root/helper-$label.log" 2>&1 &
   helper_pid=$!
@@ -406,6 +408,10 @@ mkdir -p "$state" "$config"
 boundary_tool=${MESH_BOUNDARY_TOOL:-$test_root/boundary}
 if [[ -z ${MESH_BOUNDARY_TOOL:-} ]]; then
   (cd "$repo_root" && go build -o "$boundary_tool" ./internal/storage/cmd/boundary)
+fi
+if [[ $proof_mode == full ]]; then
+  [[ -n ${MESH_ROLLBACK_MANIFEST:-} && -f $MESH_ROLLBACK_MANIFEST ]] || fail 'full proof requires a complete MESH_ROLLBACK_MANIFEST'
+  fixture verify-manifest "$candidate_binary" "$old_binary" "$state" "$config" || fail 'rollback manifest does not bind the actual candidate and source'
 fi
 mkfifo "$test_root/input"
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/old-first.log" 2>&1 &

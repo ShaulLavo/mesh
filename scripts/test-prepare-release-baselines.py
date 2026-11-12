@@ -130,7 +130,7 @@ class BaselineTests(unittest.TestCase):
     def run_shard(self, tools, listing, shard, count):
         output = self.root / f"proof-{shard}"
         args = ["runner", str(tools), str(listing), "linux/amd64", str(output),
-                "--shard", str(shard), "--shards", str(count)]
+                "--shard", str(shard), "--shards", str(count), "--manifest", str(self.root / "manifest.json")]
         def fake_run(_command, _environment, log):
             log.write_text("--- PASS: TestLegacyWorkerProcessProtocolAndVersion\n")
         with mock.patch.object(sys, "argv", args), mock.patch.object(RUNNER, "run", side_effect=fake_run):
@@ -158,7 +158,7 @@ class BaselineTests(unittest.TestCase):
 
     def test_runner_rejects_undersized_matrix_before_running_a_proof(self):
         _, tools, _, listing = self.shard_sources()
-        args = ["runner", str(tools), str(listing), "linux/amd64", str(self.root / "proof"), "--shards", "3"]
+        args = ["runner", str(tools), str(listing), "linux/amd64", str(self.root / "proof"), "--shards", "3", "--manifest", str(self.root / "manifest.json")]
         with mock.patch.object(sys, "argv", args), mock.patch.object(RUNNER, "run") as run:
             with self.assertRaisesRegex(ValueError, "too few shards"):
                 RUNNER.main()

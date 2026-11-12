@@ -90,7 +90,39 @@ def boundary_writes(path):
         assert changed > 0, "missing retained session cache"
 
 
-def prepare_rollback(state, old, candidate, label):
+def candidate_manifest(candidate, environment):
+    path = Path(os.environ.get("MESH_ROLLBACK_MANIFEST", ""))
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("full rollback proof requires MESH_ROLLBACK_MANIFEST with complete actual candidate metadata")
+    if path.stat().st_size > 512 << 10:
+        raise ValueError("rollback context manifest exceeds 512 KiB")
+    manifest = json.loads(path.read_bytes())
+    build = json.loads(subprocess.check_output([candidate, "version", "--json"], env=environment, timeout=10))
+    if manifest.get("schema") != 1 or manifest.get("version") != build["version"] or manifest.get("commit") != build["commit"]:
+        raise ValueError("rollback context names another release source or version")
+    artifacts = manifest.get("artifacts", [])
+    native = [artifact for artifact in artifacts if artifact["platform"] == build["platform"]]
+    if len(artifacts) != 3 or len(native) != 1:
+        raise ValueError("rollback context requires all three actual platform artifacts")
+    with Path(candidate).open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if native[0]["binarySha256"] != digest or build["digest"] != digest:
+        raise ValueError("rollback context differs from the real release executable")
+    compatibility = manifest["compatibility"]
+    if compatibility["stateWrite"] != build["stateVersion"] or compatibility["workerWrite"] != build["workerProtocol"]:
+        raise ValueError("rollback context differs from the actual candidate capabilities")
+    return manifest, build
+
+
+def verify_source_range(manifest, source):
+    compatibility = manifest["compatibility"]
+    if not compatibility["stateReadMin"] <= source["stateVersion"] <= compatibility["stateReadMax"]:
+        raise ValueError("rollback context does not cover the actual source database schema")
+    if not compatibility["workerMin"] <= source["workerProtocol"] <= compatibility["workerMax"]:
+        raise ValueError("rollback context does not cover the actual source worker protocol")
+
+
+def prepare_rollback(state, old, candidate, label, failed_image=None):
     root = state.parent
     installed = root / "installed" / "mesh"
     installed.parent.mkdir(exist_ok=True)
@@ -98,12 +130,20 @@ def prepare_rollback(state, old, candidate, label):
     installed.unlink(missing_ok=True)
     previous.unlink(missing_ok=True)
     shutil.copyfile(old, previous)
-    shutil.copyfile(candidate, installed)
+    failed_image = failed_image or candidate
+    shutil.copyfile(failed_image, installed)
     previous.chmod(0o700)
     installed.chmod(0o700)
     environment = dict(os.environ, MESH_STATE_DIR=str(state))
     source = json.loads(subprocess.check_output([old, "version", "--json"], env=environment, timeout=10))
-    target = json.loads(subprocess.check_output([candidate, "version", "--json"], env=environment, timeout=10))
+    manifest, target = candidate_manifest(candidate, environment)
+    verify_source_range(manifest, source)
+    failed = json.loads(subprocess.check_output([failed_image, "version", "--json"], env=environment, timeout=10))
+    if any(failed[field] != target[field] for field in ("version", "commit", "platform", "stateVersion", "workerProtocol")):
+        raise ValueError("startup companion does not belong to the actual release candidate")
+    (root / (label + ".image-context.json")).write_text(json.dumps({
+        "release": target, "failedImage": failed, "manifest": str(Path(os.environ["MESH_ROLLBACK_MANIFEST"]).resolve()),
+        "startupCompanion": failed["digest"] != target["digest"]}, sort_keys=True) + "\n")
     workers = retained_workers(state)
     with sqlite3.connect(state / "mesh.db") as database:
         host = database.execute("SELECT id FROM hosts ORDER BY id LIMIT 1").fetchone()[0]
@@ -115,11 +155,7 @@ def prepare_rollback(state, old, candidate, label):
         "settings": settings, "candidate": str(root / "installed" / "candidate"),
         "previous": str(previous), "original": {"hostId": host, "build": source, "workers": workers},
         "request": {"id": "boundary-" + label, "targetId": host, "generation": 1,
-                    "current": source, "manifest": {"compatibility": {
-                        "stateReadMin": source["stateVersion"], "stateReadMax": target["stateVersion"],
-                        "stateWrite": target["stateVersion"], "workerMin": 1,
-                        "workerMax": target["workerProtocol"], "workerWrite": target["workerProtocol"],
-                        "journalVersion": 1}}},
+                    "current": source, "manifest": manifest},
     }
     journal = state / "update" / "installation.json"
     journal.parent.mkdir(mode=0o700, exist_ok=True)
@@ -289,6 +325,11 @@ def main(args):
             assert facts > 0, "candidate storage code did not cache retained session facts"
     elif mode == "prepare-rollback":
         prepare_rollback(Path(values[0]), *values[1:])
+    elif mode == "verify-manifest":
+        environment = dict(os.environ, MESH_STATE_DIR=values[2], MESH_CONFIG_DIR=values[3])
+        manifest, _ = candidate_manifest(values[0], environment)
+        source = json.loads(subprocess.check_output([values[1], "version", "--json"], env=environment, timeout=10))
+        verify_source_range(manifest, source)
     elif mode == "verify-rollback":
         verify_rollback(Path(values[0]))
     elif mode == "rollback-phase":

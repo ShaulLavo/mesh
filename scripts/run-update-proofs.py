@@ -60,6 +60,7 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
+    parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
     if not 0 <= args.shard < args.shards:
         parser.error("invalid shard position")
@@ -72,6 +73,7 @@ def main():
     environment = dict(os.environ, MESH_BOUNDARY_TOOL=str(args.tools / "boundary"),
                        MESH_STARTUP_FAULT_BINARY=str(args.tools / "startup-fault-candidate"),
                        MESH_WORKER_PROBE=str(args.tools / "worker-probe"),
+                       MESH_ROLLBACK_MANIFEST=str(args.manifest.resolve()),
                        MESH_WORKER_REGISTRY=str(args.baselines.parent / "retained" / "workers.json"))
     if not Path(environment["MESH_WORKER_REGISTRY"]).is_file():
         raise ValueError("native proof requires the complete exact worker registry")
