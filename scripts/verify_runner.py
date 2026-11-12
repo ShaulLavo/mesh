@@ -192,6 +192,7 @@ class Run:
         self.tools = self.root / "bin"
         self.binary = self.root / "mesh"
         self.integration_binary = self.root / "mesh-integration"
+        self.benchmark_build = None
         self.reported = set()
         self.printed = []
         self.setup = None
@@ -221,11 +222,13 @@ class Run:
                                      ("integration-build", ["-tags", "mesh_integration"], "FAIL: integration build")):
             if not self.build(name, flags, failure):
                 return 1
-        self.reporter.line(f"Running integration tests with {self.jobs} concurrent jobs")
         tests = discover(self.repo)
         if not tests:
             self.error("FAIL: no integration scripts found")
             return 1
+        if not self.build_benchmark(tests):
+            return 1
+        self.reporter.line(f"Running integration tests with {self.jobs} concurrent jobs")
         return self.run_tests(tests)
 
     def read_setup(self):
@@ -294,6 +297,26 @@ class Run:
             return 1
         return 1 if any(not self.succeeded(job) for job in launched) else 0
 
+    def build_benchmark(self, tests):
+        if not any(path.name == "bench_harness.sh" for path in tests):
+            return True
+        # The smoke target uses CGO_ENABLED=0, unlike the shared binaries. Build
+        # and capture its receipt before concurrent tests consume their budgets.
+        output = self.root / "benchmark-build"
+        log = self.root / "benchmark-build.log"
+        command = [self.bash, str(self.repo / "scripts/bench/build.sh"), str(output), "", "smoke"]
+        with open(log, "w") as stream:
+            job = self.start("benchmark-build", stream, subprocess.STDOUT, self.build_env,
+                             command=command, budget=UNBOUNDED)
+        if not self.wait([job]) or not self.report_log(log):
+            return False
+        if not self.succeeded(job):
+            self.error("FAIL: benchmark build")
+            self.report_state(job)
+            return False
+        self.benchmark_build = output
+        return True
+
     def report_until_free(self, launched, outstanding):
         """Report jobs in launch order until at most outstanding remain; False when cancelled first."""
         while len(launched) - len(self.printed) > outstanding:
@@ -313,9 +336,11 @@ class Run:
         environment = {**self.test_env, "HOME": str(home), "MESH": str(self.binary),
                        "MESH_INTEGRATION_BINARY": str(self.integration_binary), "MESH_CONFIG_DIR": str(config)}
         bash = str(self.tools / "bash")
-        isolation = {"bash": bash, "script": str(path), "user_bus": name == "session_scope.sh" and self.setup["user_bus"]}
+        arguments = [str(self.benchmark_build)] if name == "bench_harness.sh" and self.benchmark_build else []
+        isolation = {"bash": bash, "script": str(path), "arguments": arguments,
+                     "user_bus": name == "session_scope.sh" and self.setup["user_bus"]}
         with open(self.root / f"{name}.log", "w") as output:
-            return self.start(name, output, subprocess.STDOUT, environment, command=[bash, str(path)],
+            return self.start(name, output, subprocess.STDOUT, environment, command=[bash, str(path), *arguments],
                               isolation=isolation, budget=budget_for(name, self.budget), scratch_parent=self.tmpdir)
 
     def report_next(self, job):
