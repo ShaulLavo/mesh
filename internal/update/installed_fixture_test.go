@@ -109,16 +109,7 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		installedSeedJournal(t, fixture, proxy, *request.Seed)
 	}
 	if request.Inspect != "" {
-		installation, err := updatebootstrap.InspectInstallation(t.Context(), request.Inspect)
-		if err != nil {
-			t.Fatal(err)
-		}
-		installedWrite(t, root, request.Output, mustHostJSON(installation.Service))
-		hashes, err := updatebootstrap.InstalledEnvironmentHashes(t.Context(), installation.Observation.PID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		installedWrite(t, root, request.Output+".env-hashes.json", mustHostJSON(hashes))
+		installedInspect(t, root, request)
 	}
 	if request.Ledger != "" {
 		installedLedger(t, root, request)
@@ -127,6 +118,41 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		t.Fatal(err)
 	}
 	return request.Stop
+}
+
+func installedInspect(t *testing.T, root *os.Root, request installedSignRequest) {
+	t.Helper()
+	installation, err := updatebootstrap.InspectInstallation(t.Context(), request.Inspect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedWrite(t, root, request.Output, mustHostJSON(installation.Service))
+	hashes, err := updatebootstrap.InstalledEnvironmentHashes(t.Context(), installation.Observation.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedWrite(t, root, request.Output+".env-hashes.json", mustHostJSON(hashes))
+}
+
+func TestInstalledHostRead(t *testing.T) {
+	directory := os.Getenv("MESH_INSTALLED_READ_ROOT")
+	if directory == "" {
+		t.Skip("installed host reader requires its owned case directory")
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	request := installedSignRequest{Output: os.Getenv("MESH_INSTALLED_READ_OUTPUT")}
+	state := os.Getenv("MESH_INSTALLED_READ_STATE")
+	if os.Getenv("MESH_INSTALLED_READ_KIND") == "inspect" {
+		request.Inspect = state
+		installedInspect(t, root, request)
+		return
+	}
+	request.Ledger = state
+	installedLedger(t, root, request)
 }
 
 func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) {
@@ -147,7 +173,15 @@ func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) 
 	if err != nil || next != "" {
 		t.Fatalf("bounded installed failed edges: %v next=%q", err, next)
 	}
-	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state, "failed": failed}))
+	peers, err := store.HostPeers(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependents, err := store.HostDependents(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state, "failed": failed, "peers": peers, "dependents": dependents}))
 }
 
 // This is the delivered producer's signed stage/grant and Engine.Run sequence,

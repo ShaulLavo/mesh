@@ -15,6 +15,11 @@ def socket_paths(root):
         yield state / "daemon.sock"
         yield state / ".d-4294967295"
         yield state / "s" / ("0" * 26) / "sock"
+    for role in ("canary", "sleep", "burst"):
+        state = root / role / (role + "-ordered") / "state"
+        yield state / "daemon.sock"
+        yield state / ".d-4294967295"
+        yield state / "s" / ("0" * 26) / "sock"
     yield root / "control.sock"
     yield root / "mesh-transition.AAAAAA" / "state" / "daemon.sock"
     yield root / "mesh-transition.AAAAAA" / "state" / "s" / ("0" * 26) / "sock"

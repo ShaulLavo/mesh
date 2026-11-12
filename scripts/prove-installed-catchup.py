@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--source-host", help="one inventory host for a full exact-worker source shard")
     parser.add_argument("--signed-chain", action="store_true", help="run real signed intermediate/helper hops with the exact cohort")
     parser.add_argument("--format-waypoint", action="store_true", help="cross an actual incompatible manifest schema through an old-format waypoint")
+    parser.add_argument("--ordered-hosts", action="store_true", help="three disposable native-manager hosts with real predecessor policy")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -54,7 +55,8 @@ def run_requested(arguments, root, output, native):
         from fixtures import installed_adoption
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
         installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
-            arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint, arguments.format_waypoint)
+            arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint,
+            arguments.format_waypoint, arguments.ordered_hosts)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
@@ -69,6 +71,11 @@ def clean_scratch(root, output):
         pair = json.loads(path.read_text()).get("cleanup", {})
         if not pair.get("servicesAbsent") or not pair.get("processesAbsent"):
             raise RuntimeError(f"installed cleanup unconfirmed; retained {root} for the test owner")
+    accounts = output / "accounts-cleanup.json"
+    if accounts.exists():
+        result = json.loads(accounts.read_text())
+        if not result.get("groupAbsent") or any(not item.get("absent") for item in result["accounts"] if item["created"]):
+            raise RuntimeError(f"native account cleanup unconfirmed; retained {root} for the test owner")
     shutil.rmtree(root)
     (output / "scratch-cleanup.json").write_text(json.dumps({"root": str(root), "absent": not root.exists()}) + "\n")
 

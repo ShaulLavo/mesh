@@ -1,6 +1,8 @@
 """Real-manager adoption and rollback consumers of the delivered product CLI."""
 import hashlib
 import json
+import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
@@ -78,7 +80,7 @@ class AdoptionCase(installed_native.Installation):
         pin = installed_releases.digest(metadata.read_bytes())
         host = self.control("host.info")["host"]["id"]
         input_data = {"schema": 1, "id": "a" * 32, "pin": pin, "version": version, "expected": host,
-            "policy": {"schema": 1, "revision": 1, "mode": "automatic"}}
+            "policy": getattr(self, "adoption_policy", {"schema": 1, "revision": 1, "mode": "automatic"})}
         self.snapshots = self.retained()
         if self.scenario == "rollback":
             self.fault.write_text(json.dumps({"daemon": [version]}))
@@ -232,7 +234,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -242,7 +244,7 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         hosts = [host for host in hosts if host["name"] == host_name]
     if not hosts or registry and (len(hosts) != 1 or probe is None):
         raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
-    if signed_chain and registry is None:
+    if (signed_chain or ordered_hosts) and registry is None:
         raise RuntimeError("signed chain requires the authoritative exact worker cohort")
     releases = installed_releases.Releases(root, native, output)
     if registry:
@@ -251,14 +253,17 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
     try:
         # Install the signer teardown before it can create its server or process.
         releases.start_signer()
-        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint)
+        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint, ordered_hosts)
     finally:
         releases.close()
         retain_producer_logs(root, output)
 
 
-def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False):
+def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False, ordered_hosts=False):
     origin = installed_origin.Origin(root)
+    if ordered_hosts:
+        run_order(root, output, native, preparer, hosts[0], releases, origin, prepare_only)
+        return
     if signed_chain:
         run_chain(root, output, native, preparer, hosts[0], releases, origin, prepare_only, format_waypoint)
         return
@@ -328,6 +333,23 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
         return
     for fail_final in (False, True):
         installed_chain.run_case(root, output, host, pair, preparer, origin, releases, previous, fail_final)
+
+
+def run_order(root, output, native, preparer, host, releases, origin, prepare_only):
+    from fixtures import installed_order
+    if native != "linux/amd64" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+        raise RuntimeError("ordered native hosts require a disposable GitHub Linux AMD64 runner")
+    pair = fleet_baselines.acquire_pair(root / "public", host)
+    installed_order.prepare(releases, origin, pair["daemon"]["executable"])
+    origin.serve_tree(root / "public")
+    if prepare_only:
+        return
+    descriptor = root / "ordered-input.json"
+    descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
+        "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}))
+    subprocess.run(["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
+        "PYTHONPATH=" + str(Path(__file__).parents[1]), "PYTHONDONTWRITEBYTECODE=1", sys.executable,
+        str(Path(installed_order.__file__)), str(descriptor), str(output)], check=True, timeout=480)
 
 
 def retain_producer_logs(root, output):

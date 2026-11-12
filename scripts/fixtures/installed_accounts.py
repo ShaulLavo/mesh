@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shutil
 import signal
 import subprocess
 import sys
@@ -36,6 +37,7 @@ class Accounts:
         self.prefix = "m8" + uuid.uuid4().hex[:10]
         self.group = self.prefix
         self.group_created = False
+        self.source = None
         self.before = command(["/usr/bin/systemctl", "list-units", "user@*.service", "--all", "--no-pager", "--plain"]).stdout
 
     def create(self):
@@ -82,6 +84,7 @@ class Accounts:
 
     def close(self):
         actions = [lambda account=account: self.remove_account(account) for account in reversed(self.accounts)]
+        actions.append(self.remove_sources)
         actions.append(self.remove_group)
         try:
             installed_native.cleanup_all(actions)
@@ -113,16 +116,18 @@ class Accounts:
         account["absent"] = account_exists(account["name"]) is None
         if not account["absent"]:
             raise RuntimeError("owned account remains after removal")
+        shutil.rmtree(account["home"])
+        account["homeAbsent"] = not Path(account["home"]).exists()
 
     def stop_processes(self, account):
         self.owned(account)
         for pid in self.pids(account["uid"]):
-            os.kill(pid, signal.SIGTERM)
+            signal_owned(pid, account["uid"], signal.SIGTERM)
         deadline = time.monotonic() + 5
         while self.pids(account["uid"]) and time.monotonic() < deadline:
             time.sleep(0.05)
         for pid in self.pids(account["uid"]):
-            os.kill(pid, signal.SIGKILL)
+            signal_owned(pid, account["uid"], signal.SIGKILL)
         native_services.wait_for(lambda: not self.pids(account["uid"]), "owned account process remains")
 
     def pids(self, uid):
@@ -139,6 +144,22 @@ class Accounts:
         command(["/usr/sbin/groupdel", self.group])
         self.group_created = False
 
+    def prepare_sources(self):
+        source = Path(__file__).resolve().parents[2]
+        self.source = self.root / "account-source"
+        if self.source.exists():
+            raise RuntimeError("refusing an existing native account fixture source directory")
+        for relative in ("scripts/fixtures", "scripts/install/assets", "integration/helpers"):
+            shutil.copytree(source / relative, self.source / relative, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy2(source / "scripts/prove-installed-catchup.py", self.source / "scripts/prove-installed-catchup.py")
+        return self.source
+
+    def remove_sources(self):
+        if any(account["created"] and not account.get("absent") for account in self.accounts):
+            raise RuntimeError("retaining source for unconfirmed native account cleanup")
+        if self.source:
+            shutil.rmtree(self.source)
+
 
 def probe(output):
     require_hosted_root()
@@ -146,17 +167,33 @@ def probe(output):
     output.mkdir(parents=True, exist_ok=True)
     accounts = Accounts(root, output)
     try:
+        source = accounts.prepare_sources()
         for account in accounts.create():
-            script = Path(__file__).parents[1] / "prove-installed-catchup.py"
+            script = source / "scripts/prove-installed-catchup.py"
             accounts.run(account, [sys.executable, script, Path(account["home"]) / "control", "--native-preflight"],
                          check=True, timeout=30, env=os.environ | {"MESH_SHORT_TMP": "/tmp"})
     finally:
-        accounts.close()
-        for path in root.glob("*/control/*.json"):
-            (output / (path.parent.parent.name + "-" + path.name)).write_bytes(path.read_bytes())
-        import shutil
+        try:
+            retain_controls(root, output)
+        finally:
+            accounts.close()
         shutil.rmtree(root)
         (output / "accounts-scratch.json").write_text(json.dumps({"root": str(root), "absent": not root.exists()}) + "\n")
+
+
+def retain_controls(root, output):
+    for path in root.glob("*/control/*.json"):
+        (output / (path.parent.parent.name + "-" + path.name)).write_bytes(path.read_bytes())
+
+
+def signal_owned(pid, uid, number):
+    try:
+        if Path(f"/proc/{pid}").stat().st_uid == uid:
+            os.kill(pid, number)
+    except ProcessLookupError:
+        pass
+    except FileNotFoundError:
+        pass
 
 
 def interrupted(number, _frame):
