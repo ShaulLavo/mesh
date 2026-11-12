@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases
+from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort
 
 
 class AdoptionCase(installed_native.Installation):
@@ -23,6 +23,15 @@ class AdoptionCase(installed_native.Installation):
             "MESH_UPDATE_CACHE_DIR": str(self.root / "cache")})
         self.snapshots = {}
         self.prior = None
+        self.cohort = None
+        self.expected_workers = 1
+
+    def start_cohort(self, registry, probe):
+        self.cohort = installed_cohort.Cohort(registry, probe, self.state, self.root / "config",
+            self.desired_host["daemon"], self.binary, self.root / "cohort.json")
+        observed = self.cohort.start()
+        self.expected_workers += len(self.cohort.selected)
+        return observed
 
     def seed_prior(self):
         if self.previous is None:
@@ -78,6 +87,8 @@ class AdoptionCase(installed_native.Installation):
         (self.root / "adopt-cli.log").write_text(result.stdout + result.stderr)
         if result.returncode and not (self.state / "updates/host-adoption.json").exists():
             raise RuntimeError("adopt CLI rejected before canonical operation creation: " + result.stderr.strip())
+        if result.returncode and self.scenario != "helper":
+            raise RuntimeError("actual adopt start rejected its pinned operation: " + result.stderr.strip())
         # The product may return a durable attention state after a failed native
         # promotion. Only the actual journal/envelope and retained processes decide.
         return {"pin": pin, "exit": result.returncode}
@@ -118,7 +129,7 @@ class AdoptionCase(installed_native.Installation):
             raise RuntimeError("adoption did not confirm: " + json.dumps(result))
         if successful:
             milestone = result.get("adopted") or {}
-            if milestone.get("metadata") != pin or milestone.get("workersPreserved") != 1:
+            if milestone.get("metadata") != pin or milestone.get("workersPreserved") != self.expected_workers:
                 raise RuntimeError("confirmed adoption lacks its exact pinned preserved-worker milestone")
         if self.scenario == "rollback" and phase != "rolled-back":
             raise RuntimeError("failed native activation did not roll back: " + json.dumps(result))
@@ -130,6 +141,7 @@ class AdoptionCase(installed_native.Installation):
         if running["digest"] != digest:
             raise RuntimeError("native daemon image differs after adoption/failure")
         self.inspect_retained()
+        cohort = self.cohort.verify("after-" + self.scenario) if self.cohort else None
         helper = self.validate_helper(version)
         if self.prior:
             journal = json.loads((self.state / "update/installation.json").read_text())
@@ -141,7 +153,14 @@ class AdoptionCase(installed_native.Installation):
             if policy.get("mode") != "automatic" or policy.get("revision") != 1:
                 raise RuntimeError("explicit adoption policy was not present at the first native candidate start")
         return {"phase": phase, "confirmed": result.get("confirmed", False), "running": running,
-            "worker": self.worker, "shell": self.shell, "listener": self.listener, "client": self.terminal.pid, "helper": helper}
+            "worker": self.worker, "shell": self.shell, "listener": self.listener, "client": self.terminal.pid, "helper": helper,
+            "observedCohort": cohort}
+
+    def close_session(self):
+        actions = [super().close_session]
+        if self.cohort:
+            actions.insert(0, self.cohort.close)
+        installed_native.cleanup_all(actions)
 
     def validate_helper(self, version):
         receipt = json.loads((self.state / "update/helper/installed.json").read_text())
@@ -160,7 +179,7 @@ class AdoptionCase(installed_native.Installation):
         return image
 
 
-def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None):
+def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None, registry=None, probe=None):
     case = AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
     record = {"host": host["name"], "scenario": scenario, "passed": False, "supplementalSourceCandidate": True}
     try:
@@ -169,6 +188,8 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         if case.prior:
             record["genuinePrior"] = {"version": host["daemon"], "phase": case.prior["phase"], "settings": case.prior["settings"]}
         case.seed()
+        if registry:
+            record["initialCohort"] = case.start_cohort(registry, probe)
         target = installed_releases.VERSIONS[0]
         started = case.start_adoption(target)
         record["start"] = started
@@ -194,16 +215,25 @@ def finish_case(case, record, output):
         log = case.root / "adopt-cli.log"
         if log.exists():
             installed_native.copy_log_tail(log, output / (case.host["name"] + "-adopt-cli.log"))
+        if case.cohort and case.cohort.record.exists():
+            shutil.copy2(case.cohort.record, output / (case.host["name"] + "-cohort.json"))
         (output / (case.host["name"] + "-native-pair.json")).write_text(json.dumps(record, indent=2) + "\n")
 
 
-def run(root, output, native, preparer, prepare_only=False):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
         raise RuntimeError("native signed fixture needs 4 GiB free before source builds and acquisition")
     hosts = [host for host in fleet_baselines.load()["hosts"] if host["platform"] == native]
+    if host_name:
+        hosts = [host for host in hosts if host["name"] == host_name]
+    if not hosts or registry and (len(hosts) != 1 or probe is None):
+        raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
     releases = installed_releases.Releases(root, native, output)
+    if registry:
+        releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
+        releases.probe = probe
     try:
         # Install the signer teardown before it can create its server or process.
         releases.start_signer()
@@ -237,9 +267,11 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
             "metadata": releases.metadata, "genuineFullProofs": proofs}, indent=2) + "\n")
         return
     for host in hosts:
-        for scenario in ("adopt", "rollback", "helper", "initial"):
+        scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial")
+        for scenario in scenarios:
             prior = None if scenario == "initial" else previous[host["name"]]
-            run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, prior)
+            run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, prior,
+                releases.registry, releases.probe)
 
 
 def retain_producer_logs(root, output):

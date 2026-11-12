@@ -24,6 +24,9 @@ def main():
     parser.add_argument("--native-helper", type=Path, help="run the native installed-pair restart control with this production API fixture")
     parser.add_argument("--installed-adoption", action="store_true", help="run actual native product adoption and failed activation")
     parser.add_argument("--prepare-only", action="store_true", help="prepare real signed proof inputs without native installation")
+    parser.add_argument("--worker-registry", type=Path, help="authoritative Unit3 retained/workers.json with verified binaries")
+    parser.add_argument("--worker-probe", type=Path, help="once-built Unit3 kernel/image observer")
+    parser.add_argument("--source-host", help="one inventory host for a full exact-worker source shard")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -48,7 +51,8 @@ def run_requested(arguments, root, output, native):
             raise RuntimeError("installed adoption requires the production helper preparation fixture")
         from fixtures import installed_adoption
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
-        installed_adoption.run(root, output, native, preparer, arguments.prepare_only)
+        installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
+            arguments.worker_registry, arguments.worker_probe, arguments.source_host)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)

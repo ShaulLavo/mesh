@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -75,7 +75,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -155,6 +155,43 @@ class FleetBaselinesTest(unittest.TestCase):
         self.manifest["version"] = "v0.1.196"
         with self.assertRaisesRegex(RuntimeError, "schema or version differs"):
             fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+
+
+class ExactCohortInputTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="ci-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source = self.root / "source"
+        self.source.mkdir()
+        self.binary = self.source / "mesh"
+        self.binary.write_bytes(b"checksum fixture only; never executed")
+        self.binary.chmod(0o640)
+        self.platform = {"os": "linux", "arch": "amd64"}
+        self.record = {"version": "v0.1.249", "protocol": 1, "binary": "mesh",
+            "artifact": {"platform": self.platform, "binarySha256": published_releases.digest(self.binary.read_bytes())}}
+        self.registry = self.source / "workers.json"
+        self.registry.write_text(json.dumps({"schema": 1, "platform": self.platform, "workers": [self.record]}))
+
+    def test_owned_copy_preserves_exact_digest_and_borrowed_permissions(self):
+        staged = installed_cohort.stage(self.registry, self.root / "owned", self.platform)
+        selected = json.loads(staged.read_text())["workers"]
+        binary = staged.parent / selected[0]["binary"]
+        self.assertEqual(binary.read_bytes(), self.binary.read_bytes())
+        binary.chmod(0o755)
+        self.assertEqual(self.binary.stat().st_mode & 0o777, 0o640)
+
+    def test_changed_bytes_and_escaping_paths_fail_closed(self):
+        self.binary.write_bytes(b"changed fixture bytes")
+        with self.assertRaisesRegex(RuntimeError, "published identity"):
+            installed_cohort.stage(self.registry, self.root / "changed", self.platform)
+        with self.assertRaisesRegex(RuntimeError, "relative beneath"):
+            installed_cohort.copy_record(self.registry, self.root, self.record | {"binary": "../outside"})
+
+    def test_wrong_platform_does_not_stage_binaries(self):
+        with self.assertRaisesRegex(RuntimeError, "schema/platform"):
+            installed_cohort.stage(self.registry, self.root / "wrong", {"os": "darwin", "arch": "arm64"})
+        self.assertFalse((self.root / "wrong").exists())
 
 
 @unittest.skipUnless(os.environ.get("MESH_TEST_NATIVE_MANAGER") == "1", "native control explicitly selected")

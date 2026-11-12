@@ -51,6 +51,7 @@ class Units:
         self.managers = {}
         self.links, self.dropins = [], []
         self.registered = []
+        self.gui_environment = {}
         self.external_links = self.helper_links()
         for role, label in (("daemon", "mesh"), ("helper", "mesh-update-helper")):
             manager = native_services.Manager(root)
@@ -63,9 +64,7 @@ class Units:
         manager = self.managers[role]
         manager.plist = path
         if manager.system == "Darwin":
-            data = plistlib.loads(path.read_bytes())
-            data["EnvironmentVariables"] = self.environment
-            path.write_bytes(plistlib.dumps(data))
+            self.register_launchd(role, path)
             self.registered.append(role)
             return
         runtime = Path(manager.environment["XDG_RUNTIME_DIR"]) / "systemd" / "user"
@@ -82,6 +81,34 @@ class Units:
         (dropin / "50-installed-fixture.conf").write_text("\n".join(lines) + "\n")
         manager.systemctl("link", "--runtime", str(path))
         manager.systemctl("daemon-reload")
+
+    def register_launchd(self, role, path):
+        if role == "helper":
+            self.set_gui_environment()
+            return
+        data = plistlib.loads(path.read_bytes())
+        data["EnvironmentVariables"] = self.environment
+        path.write_bytes(plistlib.dumps(data))
+
+    def gui_command(self, arguments):
+        return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=10, check=False)
+
+    def set_gui_environment(self):
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            raise RuntimeError("managed helper environment isolation requires a disposable hosted GUI account")
+        for name, value in self.environment.items():
+            before = self.gui_command(["getenv", name]).stdout.rstrip("\n")
+            self.gui_environment[name] = before
+            result = self.gui_command(["setenv", name, value])
+            if result.returncode:
+                raise RuntimeError("could not set owned hosted GUI environment key " + name)
+
+    def restore_gui_key(self, name, value):
+        arguments = ["setenv", name, value] if value else ["unsetenv", name]
+        result = self.gui_command(arguments)
+        observed = self.gui_command(["getenv", name]).stdout.rstrip("\n")
+        if result.returncode or observed != value:
+            raise RuntimeError("could not restore hosted GUI environment key " + name)
 
     def start(self, role):
         manager = self.managers[role]
@@ -109,6 +136,7 @@ class Units:
         actions.extend(lambda directory=directory: self.remove_dropin(directory) for directory in self.dropins)
         actions.append(self.remove_helper_links)
         actions.extend(lambda manager=manager: self.verify_removed(manager) for manager in self.managers.values())
+        actions.extend(lambda name=name, value=value: self.restore_gui_key(name, value) for name, value in self.gui_environment.items())
         cleanup_all(actions)
 
     def helper_links(self):
