@@ -18,17 +18,26 @@ import (
 )
 
 func (a *application) updateOperationCommand(action string, options *updateOptions) *cobra.Command {
-	args, usage := cobra.ExactArgs(1), action+" RUN"
+	args, usage := cobra.ExactArgs(1), action+" [RUN]"
 	if action == "status" {
 		args, usage = cobra.MaximumNArgs(1), "status [RUN]"
 	}
 	var expected uint64
 	var commandID string
-	command := &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: args,
+	command := &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: func(cmd *cobra.Command, arguments []string) error {
+		if options.local {
+			return cobra.NoArgs(cmd, arguments)
+		}
+		return args(cmd, arguments)
+	},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.local {
+				return a.localTargetOperation(cmd, action, options)
+			}
 			return a.runUpdateOperationCommand(cmd, args, action, options, expected, commandID)
 		},
 	}
+	command.Flags().BoolVar(&options.local, "local", false, "read or control this machine's approved update target")
 	if action != "status" {
 		command.Flags().Uint64Var(&expected, "expected-policy-revision", 0, "expected automatic policy revision; required for automatic runs")
 		command.Flags().StringVar(&commandID, "command-id", "", "exact administrative command identity for response-loss replay")

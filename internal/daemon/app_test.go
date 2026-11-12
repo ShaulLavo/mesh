@@ -22,7 +22,8 @@ import (
 )
 
 func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
-	stateDir := compactSocketTempDir(t)
+	fixture := newDaemonRunFixture(t)
+	stateDir := fixture.stateDir
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("survived restart"), 0o600); err != nil {
 		t.Fatal(err)
@@ -51,11 +52,9 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 		listener, port := newTCPListener(t, "127.0.0.1:0")
 		url := fmt.Sprintf("http://127.0.0.1:%d/site/", port)
 		options.listen = useTCPListeners(listener)
-		ctx, cancel := context.WithCancel(context.Background())
-		done := make(chan error, 1)
-		go func() {
-			done <- run(ctx, Config{StateDir: stateDir, TailnetPort: port}, options)
-		}()
+		fixture.start(t, func(ctx context.Context) error {
+			return run(ctx, Config{StateDir: stateDir, TailnetPort: port}, options)
+		})
 		body := waitForHTTPBody(t, url, http.StatusOK)
 		if body != "survived restart" {
 			t.Fatalf("restart %d body = %q", restart, body)
@@ -86,10 +85,7 @@ func TestRunRestoresPersistedServicesOnRestart(t *testing.T) {
 				t.Fatalf("restart %d Host %q body = %q", restart, host, responseBody)
 			}
 		}
-		cancel()
-		if err := waitRuntime(t, done); err != nil {
-			t.Fatal(err)
-		}
+		fixture.stop(t)
 	}
 }
 

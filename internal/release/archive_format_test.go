@@ -2,7 +2,6 @@ package release
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 )
 
@@ -43,34 +42,30 @@ func checkPlatformArchiveFormats(t *testing.T, platform Platform) {
 	}
 }
 
-func TestCompactTargetUsesGzipBridgeWithoutRewritingHistory(t *testing.T) {
-	assets, build, target := historicalBridgeFixture(t)
-	for index := range target.Artifacts {
-		target.Artifacts[index].Archive = ArchiveName(target.Artifacts[index].Platform, ArchiveBrotli)
-	}
-	data, err := json.Marshal(target)
+func TestRouteCompactTargetKeepsGzipSourceManifest(t *testing.T) {
+	graph := graphFixture(t, 2)
+	source := graph.metadata[0]
+	sourceRef := AssetRef{Tag: source.Version, Name: ManifestAssetName, SHA256: source.Manifest}
+	persisted := string(graph.documents[sourceRef])
+	target := graph.metadata[1]
+	manifestRef := AssetRef{Tag: target.Version, Name: ManifestAssetName, SHA256: target.Manifest}
+	manifest, err := decodeManifest(graph.documents[manifestRef])
 	if err != nil {
 		t.Fatal(err)
 	}
-	assets["v0.1.159.json"] = data
-	persisted := append([]byte(nil), assets["v0.1.151.json"]...)
-	historical, err := decodeManifest(persisted)
+	for index := range manifest.Artifacts {
+		manifest.Artifacts[index].Archive = ArchiveName(manifest.Artifacts[index].Platform, ArchiveBrotli)
+	}
+	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := historical.Digest()
-	client, _ := bridgeOrigin(t, assets, `[{"tag_name":"v0.1.159"},{"tag_name":"v0.1.151"}]`)
-	hop, err := client.Bridge(t.Context(), build, target)
-	if err != nil || hop.Version != "v0.1.151" || hop.Digest() != before {
-		t.Fatalf("gzip bridge changed: %s %v", hop.Digest(), err)
+	target.Manifest = graph.put(target.Version, ManifestAssetName, data).SHA256
+	step, err := NextHop(t.Context(), graph.builds[0], source.Position, target, RouteCursor{}, graph.source(), NewPassBudget())
+	if err != nil || step.Next == nil || step.Next.Manifest.Version != target.Version {
+		t.Fatalf("compact target route not verified: %+v %v", step, err)
 	}
-	for _, artifact := range hop.Artifacts {
-		if !strings.HasSuffix(artifact.Archive, ".tar.gz") {
-			t.Fatal("gzip history rewritten")
-		}
-	}
-	recovered, err := decodeManifest(persisted)
-	if err != nil || recovered.Digest() != before {
-		t.Fatalf("persisted gzip digest changed: %v", err)
+	if string(graph.documents[sourceRef]) != persisted {
+		t.Fatal("planning changed the source's gzip manifest")
 	}
 }

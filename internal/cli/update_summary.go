@@ -122,7 +122,6 @@ func DashboardUpdateRows(view DashboardUpdates, now time.Time) []DashboardUpdate
 		rows = append(rows, DashboardUpdateRow{Text: view.Problem, Attention: true})
 	}
 	for _, source := range view.Sources {
-		rows = append(rows, dashboardAutomaticRows(source, now)...)
 		rows = append(rows, dashboardConfigurationRows(source, now)...)
 	}
 	return rows
@@ -139,72 +138,6 @@ func statusUnavailableRow(host, subject string, observation DashboardStatusObser
 		state = string(DashboardStatusUnavailable)
 	}
 	return []DashboardUpdateRow{{HostID: host, Text: subject + " status " + state + "; inspect mesh update status --details.", Attention: true}}
-}
-func dashboardAutomaticRows(source DashboardUpdateSource, now time.Time) []DashboardUpdateRow {
-	observed := source.Automatic
-	if observed == nil {
-		return nil
-	}
-	if rows := statusUnavailableRow(source.Coordinator.ID, "Automatic update", observed.Observation, now); len(rows) > 0 {
-		return rows
-	}
-	if observed.Value == nil {
-		return nil
-	}
-	status := observed.Value
-	rows := []DashboardUpdateRow{{HostID: source.Coordinator.ID, Text: "Automatic updates: " + SafeTerminalText(status.State) + "."}}
-	record := status.Record
-	if record == nil {
-		return rows
-	}
-	if record.LastCompleted == nil {
-		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Last successful fleet release unknown."})
-	} else {
-		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Last successful fleet release " + SafeTerminalText(record.LastCompleted.Version) + "; " + statusTime(record.LastCompleted.At) + "."})
-	}
-
-	if record.Stop != nil {
-		rows = append(rows, automaticStopRow(*record.Stop))
-	}
-	if status.Problem != "" || status.TransportProblem != "" {
-		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Automatic policy has a problem; inspect mesh update automatic status --details.", Attention: true})
-	}
-	if record.Continuation != nil {
-		rows = append(rows, DashboardUpdateRow{HostID: source.Coordinator.ID, Text: "Pinned manual continuation: " + SafeTerminalText(record.Continuation.State) + "; binary policy remains separate."})
-	}
-	if record.Canary != nil {
-		text := "Canary " + SafeTerminalText(record.Canary.State) + "; later activation waits for this attempt's proof."
-		if record.Canary.State == "verified" {
-			text = "Canary verified for this attempt; rollout follows the pinned policy."
-		}
-		rows = append(rows, DashboardUpdateRow{HostID: record.Canary.HostID, Text: text, Attention: record.Canary.State != "verified"})
-	}
-	if record.Current != nil {
-		rows = append(rows, automaticTargetRows(*record.Current)...)
-	}
-	return rows
-}
-func automaticTargetRows(run update.Run) []DashboardUpdateRow {
-	rows := make([]DashboardUpdateRow, 0, len(run.Targets))
-	for _, target := range run.Targets {
-		running := "daemon version unknown"
-		if target.Build != nil && target.Build.Version != "" {
-			running = "last observed daemon " + SafeTerminalText(target.Build.Version)
-		}
-		text := "Target " + SafeTerminalText(run.Release.Version) + "; " + running + "; " + SafeTerminalText(string(target.State)) + "."
-		if target.State == update.Offline {
-			text += " Pending at the exact pinned release."
-		}
-		if target.Grant || target.StageUnsettled || target.RetryUnsettled || target.JoinedUnsettled {
-			text += " Issued or joined work may still finish."
-		}
-		if target.Problem != "" {
-			text += " Inspect mesh update status --details."
-		}
-		text += " Run observed " + statusTime(run.UpdatedAt) + "."
-		rows = append(rows, DashboardUpdateRow{HostID: target.Host.ID, Text: text, Attention: target.State != update.Updated && target.State != update.Newer})
-	}
-	return rows
 }
 func dashboardConfigurationRows(source DashboardUpdateSource, now time.Time) []DashboardUpdateRow {
 	observed := source.Configuration
@@ -352,6 +285,67 @@ func statusTime(at time.Time) string {
 	return at.UTC().Format(time.RFC3339)
 }
 
+func automaticStatusRows(value update.AutomaticStatus) []DashboardUpdateRow {
+	status := &value
+	coordinator := ""
+	if status.Record != nil {
+		coordinator = status.Record.Policy.CoordinatorID
+	}
+
+	rows := []DashboardUpdateRow{{HostID: coordinator, Text: "Automatic updates: " + SafeTerminalText(status.State) + "."}}
+	record := status.Record
+	if record == nil {
+		return rows
+	}
+	if record.LastCompleted == nil {
+		rows = append(rows, DashboardUpdateRow{HostID: coordinator, Text: "Last successful fleet release unknown."})
+	} else {
+		rows = append(rows, DashboardUpdateRow{HostID: coordinator, Text: "Last successful fleet release " + SafeTerminalText(record.LastCompleted.Version) + "; " + statusTime(record.LastCompleted.At) + "."})
+	}
+
+	if record.Stop != nil {
+		rows = append(rows, automaticStopRow(*record.Stop))
+	}
+	if status.Problem != "" || status.TransportProblem != "" {
+		rows = append(rows, DashboardUpdateRow{HostID: coordinator, Text: "Automatic policy has a problem; inspect mesh update automatic status --details.", Attention: true})
+	}
+	if record.Continuation != nil {
+		rows = append(rows, DashboardUpdateRow{HostID: coordinator, Text: "Pinned manual continuation: " + SafeTerminalText(record.Continuation.State) + "; binary policy remains separate."})
+	}
+	if record.Canary != nil {
+		text := "Canary " + SafeTerminalText(record.Canary.State) + "; later activation waits for this attempt's proof."
+		if record.Canary.State == "verified" {
+			text = "Canary verified for this attempt; rollout follows the pinned policy."
+		}
+		rows = append(rows, DashboardUpdateRow{HostID: record.Canary.HostID, Text: text, Attention: record.Canary.State != "verified"})
+	}
+	if record.Current != nil {
+		rows = append(rows, automaticTargetRows(*record.Current)...)
+	}
+	return rows
+}
+func automaticTargetRows(run update.Run) []DashboardUpdateRow {
+	rows := make([]DashboardUpdateRow, 0, len(run.Targets))
+	for _, target := range run.Targets {
+		running := "daemon version unknown"
+		if target.Build != nil && target.Build.Version != "" {
+			running = "last observed daemon " + SafeTerminalText(target.Build.Version)
+		}
+		text := "Target " + SafeTerminalText(run.Release.Version) + "; " + running + "; " + SafeTerminalText(string(target.State)) + "."
+		if target.State == update.Offline {
+			text += " Pending at the exact pinned release."
+		}
+		if target.Grant || target.StageUnsettled || target.RetryUnsettled || target.JoinedUnsettled {
+			text += " Issued or joined work may still finish."
+		}
+		if target.Problem != "" {
+			text += " Inspect mesh update status --details."
+		}
+		text += " Run observed " + statusTime(run.UpdatedAt) + "."
+		rows = append(rows, DashboardUpdateRow{HostID: target.Host.ID, Text: text, Attention: target.State != update.Updated && target.State != update.Newer})
+	}
+	return rows
+}
 func automaticStopRow(stop update.AutomaticStop) DashboardUpdateRow {
 	text := "Stopped; review manual bridge if a direct transition is blocked. Inspect details before retry or cancel and acknowledge-stop."
 	if stop.Kind == "recovering" {
