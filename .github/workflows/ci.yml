@@ -97,14 +97,13 @@ jobs:
       - name: Verify the pill docks at one position on every edge
         run: node web/app-pill/tests/snap.mjs
 
-  test:
+  race:
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Race tests and integrations
+    name: Race tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: sudo apt-get update && sudo apt-get install -y zsh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -119,10 +118,40 @@ jobs:
           scripts/check-private-hosting-boundary.sh
       - name: Race tests
         run: go test -race ./...
+
+  integration:
+    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    name: Integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Integration tests
         env:
           MESH_INTEGRATION_TIMEOUT: 60s
         run: ./scripts/verify.sh
+
+  test:
+    name: Race tests and integrations
+    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: [race, integration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify test scheduling and aggregate controls
+        run: python3 -B scripts/test-ci-scheduling.py
+      - name: Require races and integrations
+        env:
+          RACE: ${{ needs.race.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+        run: |
+          [[ $RACE == success && $INTEGRATION == success ]]
 
   socket-portability:
     needs: changes
@@ -401,9 +430,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@d6bc77e2fbee115b4385b1bfa25ee44bebdb6cfe
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@88fa954c62062a4f8e8add1066c6428bf64c1e7e
     with:
-      harness_source: d6bc77e2fbee115b4385b1bfa25ee44bebdb6cfe
+      harness_source: 88fa954c62062a4f8e8add1066c6428bf64c1e7e
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
