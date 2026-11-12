@@ -67,6 +67,26 @@ func TestHostOrderFailureStillProtectsDependentSource(t *testing.T) {
 	}
 }
 
+func TestHostOrderInterPageFailureHoldsPreviouslyVerifiedPeer(t *testing.T) {
+	order, a, _, current, now := orderFixture(t)
+	a.commit(t, 2, now.Add(-3*time.Hour))
+	policy := HostPolicy{After: []string{a.host.ID}}
+	if _, err := order.Refresh(t.Context(), policy, current, now); err != nil {
+		t.Fatal(err)
+	}
+	for n := 3; n <= 69; n++ {
+		a.commit(t, n, now.Add(-3*time.Hour))
+	}
+	a.failAfterSeq.Store(65)
+	if limit, err := order.Refresh(t.Context(), policy, current, now); err == nil {
+		t.Fatalf("interrupted pass admitted partial evidence: %#v", limit)
+	}
+	peer, err := order.Store.hostPeer(t.Context(), a.host.ID)
+	if err != nil || peer.AfterSeq != 65 || !peer.Held {
+		t.Fatalf("inter-page hold = %#v, %v", peer, err)
+	}
+}
+
 func TestHostOrderDroppedOfflinePredecessorDoesNotHoldNewPolicy(t *testing.T) {
 	f := newHostFixture(t)
 	order, a, _, _, now := orderFixture(t)

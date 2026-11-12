@@ -77,7 +77,7 @@ func (a *application) updateCommand() *cobra.Command {
 	for _, action := range []string{"status", "retry", "cancel"} {
 		command.AddCommand(a.updateOperationCommand(action, &options))
 	}
-	command.AddCommand(updateTrustCommand(), a.updateAutomaticCommand(&options), updateAdoptCommand(&options))
+	command.AddCommand(updateTrustCommand(), a.updateAutomaticCommand(&options), a.updatePolicyCommand(&options), a.updateFleetCommand(&options), updateAdoptCommand(&options))
 	return command
 }
 
@@ -106,6 +106,9 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	interactive := a.updateInteractive() && !options.json
 	if !options.check && !options.yes && !interactive {
 		return errors.New("noninteractive updates require --yes; use --check to inspect availability")
+	}
+	if handled, err := a.runLocalHostUpdate(ctx, options, output); handled {
+		return err
 	}
 	options, intents, err := a.resolveUpdateNameIntents(ctx, options)
 	if err != nil {
@@ -145,7 +148,6 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	}
 	preview = reviewLocalUpdateJournal(preview, environment.stateDir, environment.local)
 	preview = prepareUpdateApproval(preview)
-	preview = a.reviewUpdateBridges(ctx, environment, preview)
 	if !options.json {
 		preview.Targets, err = declaredUpdateTargets(ctx, preview.Targets)
 		if err != nil {

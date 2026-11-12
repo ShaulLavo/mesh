@@ -42,7 +42,6 @@ type Client struct {
 	// uses OfficialLatestAPI for the official origin and the download redirect
 	// for any other origin.
 	LatestAPI  string
-	HistoryAPI string
 	HTTPClient *http.Client
 }
 

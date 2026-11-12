@@ -26,6 +26,7 @@ type SQLiteCatalogCache struct {
 	policyToken domainpolicy.CatalogToken
 	store       *storage.Store
 	now         func() time.Time
+	stateDir    string
 
 	openErr     error
 	openErrOnce sync.Once
@@ -51,7 +52,7 @@ func OpenCatalogCache(ctx context.Context) (*SQLiteCatalogCache, error) {
 		// defer one diagnostic to the existing cache warning path.
 		return &SQLiteCatalogCache{now: time.Now, openErr: err}, nil
 	}
-	cache := &SQLiteCatalogCache{store: store, now: time.Now}
+	cache := &SQLiteCatalogCache{store: store, now: time.Now, stateDir: stateDir}
 	if err := cache.bindServicePolicy(ctx); err != nil {
 		log.Printf("catalog policy: %v", err)
 	}
@@ -167,7 +168,12 @@ func (c *SQLiteCatalogCache) saveSessions(ctx context.Context, host HostRecord, 
 			observed[i].Facts = &facts
 		}
 	}
-	return catalogWriteOutcome(ctx, host, "sessions", c.store.ReconcileHost(ctx, cachedHost(host, c.now().UTC()), observed))
+	at := c.now().UTC().Truncate(time.Millisecond)
+	saved, err := catalogWriteOutcome(ctx, host, "sessions", c.store.ReconcileHost(ctx, cachedHost(host, at), observed))
+	if saved {
+		c.recordReply(host, at)
+	}
+	return saved, err
 }
 
 // LoadAllServices returns the bounded cached service snapshot keyed by host ID.
@@ -246,7 +252,11 @@ func (c *SQLiteCatalogCache) SaveServices(ctx context.Context, host HostRecord, 
 	err := c.withServicePolicy(ctx, func(gate *domainpolicy.CatalogGate) error {
 		return c.replaceServiceSnapshot(ctx, gate, cachedHost(host, now), services)
 	})
-	return catalogWriteOutcome(ctx, host, "services", err)
+	saved, err := catalogWriteOutcome(ctx, host, "services", err)
+	if saved {
+		c.recordReply(host, now)
+	}
+	return saved, err
 }
 
 func (c *SQLiteCatalogCache) replaceServiceSnapshot(ctx context.Context, gate *domainpolicy.CatalogGate, host storage.Host, services []storage.CachedService) error {

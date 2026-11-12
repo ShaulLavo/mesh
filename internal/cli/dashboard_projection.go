@@ -21,6 +21,7 @@ func projectDashboardState(host DashboardHost, state StateView) DashboardHostVie
 		host.MachineName, host.NameRevision, host.NameVerified = state.Name.MachineName, state.Name.Revision, state.NameVerified
 	}
 	view := DashboardHostView{Build: state.Build, Host: host, Connection: state.Connection, Problem: dashboardText(state.Problem), LastReply: state.LastReply, MetricsUnsupported: state.MetricsUnsupported}
+	view.HostUpdate = protocol.CloneHostUpdateSummary(state.HostUpdate)
 	view.NameObservedAt = dashboardObservedAt(state.Sections[protocol.TopicHost])
 	view.NameFailing = state.Sections[protocol.TopicHost].Observation.Failing
 	view.Sessions = projectDashboardSessions(state.Sessions, state.Sections[protocol.TopicSessions])

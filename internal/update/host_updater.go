@@ -174,6 +174,11 @@ func (u *HostUpdater) save(ctx context.Context, state HostUpdate) error {
 		return err
 	}
 	defer unlock()
+	prior, err := u.Store.hostUpdate()
+	if err != nil {
+		return err
+	}
+	state.ProblemSince = hostProblemSince(prior, state, u.now())
 	return u.Store.writeAuthority("host-update.json", state)
 }
 
@@ -594,6 +599,9 @@ func (u *HostUpdater) discoverOrdered(ctx context.Context, state HostUpdate, pol
 		return u.backoff(ctx, state, err)
 	}
 	if err := u.saveCursor(ctx, step.Cursor); err != nil {
+		return err
+	}
+	if err := u.observeDiscovery(ctx, current, source, step, selected); err != nil {
 		return err
 	}
 	if limit != nil && !newerHostVersion(limit.Version, current.Version) && len(selected) > 0 {
