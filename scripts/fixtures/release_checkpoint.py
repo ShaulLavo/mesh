@@ -72,7 +72,9 @@ def native_platform():
 def build_image(repo, binary, target, version, overlay=None):
     binary.parent.mkdir(parents=True, exist_ok=True)
     goos, goarch = target.split("/")
-    arguments = ["go", "build", "-trimpath", "-ldflags",
+    # Go omits linker settings with -trimpath. These fixture builds retain them
+    # so foreign images can bind the same version without executing abroad.
+    arguments = ["go", "build", "-ldflags",
                  "-s -w -buildid= -X github.com/shaul/mesh/internal/release.Version=" + version]
     if overlay:
         arguments.extend(["-overlay", str(overlay)])

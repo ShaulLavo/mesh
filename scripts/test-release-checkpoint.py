@@ -43,7 +43,7 @@ class CandidateContextTests(unittest.TestCase):
 
     def run_context(self, root, source, build, baseline):
         with mock.patch.object(FIXTURE.subprocess, "check_output", side_effect=lambda args, **kwargs:
-                               self.output(build, baseline, args, **kwargs)):
+                               self.output(build, baseline, args, **kwargs)), mock.patch("builtins.print"):
             FIXTURE.context(ROOT, root, source)
 
     def test_manifest_binds_every_actual_archive_and_source_range(self):
