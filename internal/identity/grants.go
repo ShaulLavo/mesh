@@ -21,6 +21,8 @@ import (
 
 const AuthorizedKeysMaximum = 1 << 20
 
+var errRetiredGrantSnapshot = errors.New("identity: authorized_keys was replaced before inspection")
+
 type DeviceGrant struct {
 	Identity    string
 	Key         ssh.PublicKey
@@ -366,7 +368,26 @@ func writeGrantPolicy(file *os.File, next []byte, syncFile func(*os.File) error)
 }
 
 func ReadAuthorizedKeys(path string) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // fixed policy path; reject symlinks and nonregular descriptors
+	return readAuthorizedKeys(path, os.OpenFile)
+}
+
+func readAuthorizedKeys(path string, open func(string, int, os.FileMode) (*os.File, error)) ([]byte, error) {
+	contents, err := readAuthorizedKeysSnapshot(path, open)
+	if !errors.Is(err, errRetiredGrantSnapshot) {
+		return contents, err
+	}
+	// Rename can unlink the inode selected by open before fstat validates it.
+	// Discard that descriptor and inspect the current publication once. Readers
+	// never wait for writers or accept an unlinked policy, even under churn.
+	contents, err = readAuthorizedKeysSnapshot(path, open)
+	if errors.Is(err, errRetiredGrantSnapshot) {
+		return nil, fmt.Errorf("identity: authorized_keys snapshot replacement limit reached: %w", err)
+	}
+	return contents, err
+}
+
+func readAuthorizedKeysSnapshot(path string, open func(string, int, os.FileMode) (*os.File, error)) ([]byte, error) {
+	file, err := open(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("identity: open authorized_keys %s: %w", path, err)
 	}
@@ -379,7 +400,7 @@ func ReadAuthorizedKeys(path string) ([]byte, error) {
 		return nil, fmt.Errorf("identity: authorized_keys %s is not a regular file", path)
 	}
 	stat, ok := opened.Sys().(*syscall.Stat_t)
-	if !ok || int64(stat.Uid) != int64(os.Geteuid()) || stat.Nlink != 1 {
+	if !ok || int64(stat.Uid) != int64(os.Geteuid()) || stat.Nlink > 1 {
 		return nil, errors.New("identity: authorized_keys must be owned with one link")
 	}
 	permissions := opened.Mode().Perm()
@@ -388,6 +409,9 @@ func ReadAuthorizedKeys(path string) ([]byte, error) {
 	}
 	if permissions&0o444 == 0 {
 		return nil, fmt.Errorf("identity: authorized_keys %s is not readable", path)
+	}
+	if stat.Nlink == 0 {
+		return nil, errRetiredGrantSnapshot
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, AuthorizedKeysMaximum+1))
 	if err != nil {
