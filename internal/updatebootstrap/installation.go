@@ -169,7 +169,13 @@ func invocationSnapshot(invocation processInvocation) (string, string) {
 }
 
 func volatileServiceVariable(key string) bool {
-	return key == "INVOCATION_ID" || key == "JOURNAL_STREAM" || key == "SYSTEMD_EXEC_PID" || key == "MAINPID" || key == "MANAGERPID" || key == "LISTEN_PID"
+	switch key {
+	case "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MAINPID", "MANAGERPID", "LISTEN_PID",
+		"executable_boothash", "executable_cdhash", "executable_file":
+		return true
+	default:
+		return false
+	}
 }
 
 func installationDigest(data []byte) string {
