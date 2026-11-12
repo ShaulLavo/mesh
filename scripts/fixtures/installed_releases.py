@@ -34,7 +34,9 @@ class Releases:
         self.builds, self.manifests, self.metadata = {}, {}, {}
 
     def environment(self):
-        return os.environ | {"TMPDIR": str(self.root), "TMP": str(self.root), "TEMP": str(self.root), "MESH_SHORT_TMP": str(self.root)}
+        return os.environ | {"TMPDIR": str(self.root), "TMP": str(self.root), "TEMP": str(self.root), "MESH_SHORT_TMP": str(self.root),
+            "MESH_STATE_DIR": str(self.root / "build-state"), "MESH_CONFIG_DIR": str(self.root / "build-config"),
+            "MESH_UPDATE_CACHE_DIR": str(self.root / "build-cache")}
 
     def start_signer(self):
         self.signer_log = (self.root / "signer.log").open("wb")
@@ -59,7 +61,7 @@ class Releases:
             artifacts.append(self.build_platform(version, platform, overlay))
         native = next(row for row in artifacts if row["platform"] == dict(zip(("os", "arch"), self.native.split("/"))))
         binary = self.root / "build" / version / self.native.replace("/", "-") / "mesh"
-        result = subprocess.run([str(binary), "version", "--json"], capture_output=True, text=True, check=True, timeout=10)
+        result = subprocess.run([str(binary), "version", "--json"], env=self.environment(), capture_output=True, text=True, check=True, timeout=10)
         build = json.loads(result.stdout)
         if build["modified"] or build["version"] != version or build["digest"] != native["binarySha256"]:
             raise RuntimeError("supplemental source build identity differs from its compiled image")
