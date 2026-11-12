@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -51,20 +50,22 @@ func TestAdoptionNativeInitialHelper(t *testing.T) {
 		t.Skip("set MESH_ADOPTION_NATIVE=1 for unjournaled helper fixtures")
 	}
 	for _, helper := range []bool{false, true} {
-		t.Run(strconv.FormatBool(helper), func(t *testing.T) {
-			f := newAdoptionNativeFixture(t, "v0.1.249", helper)
-			if _, err := updateinstall.Read(f.state); !errors.Is(err, os.ErrNotExist) {
-				t.Fatal("fixture unexpectedly has a journal before adoption")
-			}
-			side, pin := f.publishCandidate()
-			f.startOnce(side, pin)
-			envelope := f.awaitAdoption(AdoptionComplete)
-			if !envelope.Confirmed || envelope.Adopted.Generation != 1 {
-				t.Fatal("initial helper did not create a genuine first adoption journal")
-			}
-			f.roundTrip()
-		})
+		t.Run(strconv.FormatBool(helper), func(t *testing.T) { testAdoptionNativeInitial(t, helper) })
 	}
+}
+
+func testAdoptionNativeInitial(t *testing.T, helper bool) {
+	f := newAdoptionNativeFixture(t, "v0.1.249", helper)
+	if _, err := updateinstall.Read(f.state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("fixture unexpectedly has a journal before adoption")
+	}
+	side, pin := f.publishCandidate()
+	f.startOnce(side, pin)
+	envelope := f.awaitAdoption(AdoptionComplete)
+	if !envelope.Confirmed || envelope.Adopted.Generation != 1 {
+		t.Fatal("initial helper did not create a genuine first adoption journal")
+	}
+	f.roundTrip()
 }
 
 func (f *adoptionNativeFixture) fixtureClient() release.Client {
@@ -160,9 +161,7 @@ func (f *adoptionNativeFixture) publishCandidate() (string, string) {
 
 func (f *adoptionNativeFixture) startOnce(side, pin string) {
 	f.t.Helper()
-	_, host := f.localClient()
-	input := AdoptionLocalInput{Schema: 1, ID: strings.Repeat("a", 32), Pin: pin, Version: "v0.1.400", Expected: host.ID, Policy: HostPolicy{Mode: HostAutomatic}}
-	command := &exec.Cmd{Path: side, Args: []string{side, "update", "adopt", "start", "--local", "--release", "v0.1.400", "--json"}, Env: os.Environ(), Stdin: strings.NewReader(string(mustHostJSON(input)))}
+	command := f.sideCommand(side, pin)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		f.t.Fatalf("one side adoption start: %s %v", output, err)

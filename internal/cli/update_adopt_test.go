@@ -95,3 +95,15 @@ func TestAdoptMalformedInputPrecedesReleaseNetworkOrMutation(t *testing.T) {
 		t.Fatal("malformed input initialized update state")
 	}
 }
+
+func TestAdoptStatusAndRejectedStartPreserveRetainedClientConfig(t *testing.T) {
+	path := writeClientConfigFixture(t, obsoleteConfigFixture())
+	t.Setenv("MESH_STATE_DIR", filepath.Join(t.TempDir(), "uninitialized"))
+	for _, arguments := range [][]string{{"update", "adopt", "status", "--json"}, {"update", "adopt", "start"}} {
+		_, _, _ = executeCommand(t, Dependencies{}, arguments...)
+		after, err := readClientConfigTestFile(path)
+		if err != nil || !bytes.Equal(after, obsoleteConfigFixture()) {
+			t.Fatal("adoption retired configuration before confirmation")
+		}
+	}
+}

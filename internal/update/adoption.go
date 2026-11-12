@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"time"
@@ -167,6 +168,19 @@ func (s *Store) AdoptionStatus(ctx context.Context) (HostAdoption, Adoption, err
 	}
 	defer unlock()
 	return s.adoption()
+}
+
+// AdoptionPending keeps startup configuration migration behind the same durable
+// confirmation fence as automatic installation. It does not create host state.
+func AdoptionPending(ctx context.Context, stateDir string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(stateDir, "updates", "host-adoption.json")); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("update: inspect adoption startup fence: %w", err)
+	}
+	store := &Store{directory: filepath.Join(stateDir, "updates", "runs")}
+	envelope, _, err := store.AdoptionStatus(ctx)
+	return !envelope.Confirmed, err
 }
 
 func (s *Store) lockAdoptionPass(ctx context.Context) (func(), error) {
