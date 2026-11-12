@@ -55,6 +55,7 @@ func TestPickerFleetServicesWatchUsesCatalogAndPinnedStateWatch(t *testing.T) {
 }
 
 func TestPickerFleetServicesWatchRetainsOfflineCacheAndReportsFailure(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{ID: "alpha", MachineName: "alpha", MeshIdentity: "a"}
 	cache := &pickerServiceCacheStub{rows: []storage.CachedService{{HostID: storage.HostID(host.ID), PrivateName: "alpha.example.test", Service: meshserve.Service{Name: "dev", DisplayName: "Fregat dev", Kind: meshserve.Proxy, Target: "3000"}, Healthy: true}}}
 	var calls atomic.Int32

@@ -19,6 +19,7 @@ func pickerActionFixtureService() protocol.ServiceInfo {
 }
 
 func TestPickerServiceActionsRouteToExactHostAndSettle(t *testing.T) {
+	prepareCommandEnvironment(t)
 	hosts := []HostRecord{{ID: "first", MachineName: "alpha", MeshIdentity: "a"}, {ID: "second", MachineName: "beta", MeshIdentity: "b", Endpoint: "wss://beta.example.test/control/ws"}}
 	for _, action := range []PickerServiceAction{PickerStopService, PickerRestartService, PickerPingService, PickerOpenService} {
 		t.Run(serviceActionTestName(action), func(t *testing.T) {
@@ -90,6 +91,7 @@ func serviceActionTestName(action PickerServiceAction) string {
 }
 
 func TestPickerServiceOpenUsesInvokingMachineURL(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{ID: "host", MachineName: "alpha", MeshIdentity: "key", Endpoint: "wss://alpha.example.test/control/ws"}
 	for _, example := range []struct {
 		name    string
@@ -190,6 +192,7 @@ func TestPickerServiceActionsKeepIdentityPinAndRejectBadAcknowledgement(t *testi
 }
 
 func TestPickerServicePingUnhealthyIsASettledResult(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{ID: "host", MachineName: "alpha", MeshIdentity: "key"}
 	service := pickerActionFixtureService()
 	service.Healthy = false

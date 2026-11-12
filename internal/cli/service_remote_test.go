@@ -65,6 +65,7 @@ func serviceRemoteDial(host HostRecord, handler func(protocol.Control) protocol.
 }
 
 func TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	requested := protocol.ServiceInfo{Name: "blog", Target: "./site"}
 	_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
@@ -88,6 +89,7 @@ func TestRemoteServiceBoundaryRejectsChangedPreviewAndAcknowledgement(t *testing
 }
 
 func TestRemoteServiceBoundaryPinsInferredKindAndCanonicalPort(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	for _, test := range []struct {
 		name      string
@@ -110,6 +112,7 @@ func TestRemoteServiceBoundaryPinsInferredKindAndCanonicalPort(t *testing.T) {
 }
 
 func TestRemoteServiceBoundaryDoesNotEchoOversizedInvalidFields(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	marker := strings.Repeat("ATTACKER\r\n", 50_000)
 	_, _, err := previewRemoteService(context.Background(), host, serviceRemoteDial(host, func(protocol.Control) protocol.Control {
@@ -123,6 +126,7 @@ func TestRemoteServiceBoundaryDoesNotEchoOversizedInvalidFields(t *testing.T) {
 }
 
 func TestRemoteServiceTransportErrorsAreBoundedAndPreserveCause(t *testing.T) {
+	prepareCommandEnvironment(t)
 	host := HostRecord{MachineName: "pc", ID: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE", MeshIdentity: "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"}
 	cause := errors.New("ATTACKER\r\n\u202e" + strings.Repeat("x", 10_000))
 	for _, test := range []struct {
