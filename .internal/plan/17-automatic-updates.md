@@ -1577,6 +1577,21 @@ this closed observation. If normal CI reproduces it, retain that artifact and
 bring it back to managing. This decision changes no timeout, assertion,
 authentication requirement or release gate.
 
+### Pre-policy deployment startup did not reproduce
+
+PR 457 head `c4b729ef` failed the replacement mode of
+`TestPrePolicyDeploymentSurvivesReplacementAndManagedActivation` in
+[its race job](https://github.com/ShaulLavo/mesh/actions/runs/43294894210/job/131450455936).
+The daemon socket stayed absent for the existing ten-second probe, and cleanup
+reported exit 1. Its temporary daemon log was not retained.
+Two focused Go 1.27.4 race attempts on byte-identical deployment code passed
+both replacement and managed activation, with empty daemon logs and verified
+cleanup. Coordinator source review found no demonstrated cause. The observation
+is not reproducing; no startup fix, port-contention cause or longer wait is
+claimed. Preserve the original job and the controls in
+`/work/reports/mesh-auto-update/prepolicy-deployment-race/REPORT.md`.
+Normal current-source green CI remains required before merge.
+
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
 The graph analysis reads manifest claims and does not verify receipts.
