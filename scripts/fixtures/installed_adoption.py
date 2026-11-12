@@ -71,6 +71,8 @@ class AdoptionCase(installed_native.Installation):
 
     def start_adoption(self, version):
         self.check_manager_context()
+        if sys.platform == "darwin":
+            self.origin.inspect(self.state, self.root / "service-before.json")
         side = self.releases.builds[version]["path"]
         metadata = self.releases.directory / version / "mesh-update.json"
         pin = installed_releases.digest(metadata.read_bytes())
@@ -204,7 +206,10 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
 
 def finish_case(case, record, output):
     try:
-        case.close()
+        try:
+            collect_service_snapshot(case)
+        finally:
+            case.close()
         record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
         record["passed"] = False
@@ -217,7 +222,14 @@ def finish_case(case, record, output):
             installed_native.copy_log_tail(log, output / (case.host["name"] + "-adopt-cli.log"))
         if case.cohort and case.cohort.record.exists():
             shutil.copy2(case.cohort.record, output / (case.host["name"] + "-cohort.json"))
+        for path in case.root.glob("service-*.json"):
+            shutil.copy2(path, output / (case.host["name"] + "-" + path.name))
         (output / (case.host["name"] + "-native-pair.json")).write_text(json.dumps(record, indent=2) + "\n")
+
+
+def collect_service_snapshot(case):
+    if sys.platform == "darwin" and case.ready():
+        case.origin.inspect(case.state, case.root / "service-after.json")
 
 
 def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None):
@@ -278,3 +290,8 @@ def retain_producer_logs(root, output):
     for path in root.rglob("*.log"):
         label = "producer-" + str(path.relative_to(root)).replace("/", "-")
         installed_native.copy_log_tail(path, output / label)
+    for path in (root / "proofs").rglob("*.json"):
+        relative = path.relative_to(root / "proofs")
+        destination = output / "measured-proofs" / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)

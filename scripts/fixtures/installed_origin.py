@@ -25,6 +25,9 @@ class Origin:
     def seed(self, state, version):
         request(self.root, {"seed": {"state": str(state), "version": version}}, timeout=90)
 
+    def inspect(self, state, output):
+        request(self.root, {"inspect": str(state), "output": str(output.relative_to(self.root))})
+
 
 def request(root, value, timeout=15):
     with socket.socket(socket.AF_UNIX) as connection:

@@ -23,11 +23,12 @@ import (
 )
 
 type installedSignRequest struct {
-	Files  []string          `json:"files"`
-	Output string            `json:"output"`
-	Stop   bool              `json:"stop"`
-	Put    map[string]string `json:"put"`
-	Seed   *installedSeed    `json:"seed"`
+	Files   []string          `json:"files"`
+	Output  string            `json:"output"`
+	Stop    bool              `json:"stop"`
+	Put     map[string]string `json:"put"`
+	Seed    *installedSeed    `json:"seed"`
+	Inspect string            `json:"inspect"`
 }
 
 type installedSeed struct {
@@ -105,6 +106,13 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 	}
 	if request.Seed != nil {
 		installedSeedJournal(t, fixture, proxy, *request.Seed)
+	}
+	if request.Inspect != "" {
+		installation, err := updatebootstrap.InspectInstallation(t.Context(), request.Inspect)
+		if err != nil {
+			t.Fatal(err)
+		}
+		installedWrite(t, root, request.Output, mustHostJSON(installation.Service))
 	}
 	if err := json.NewEncoder(connection).Encode(map[string]bool{"ok": true}); err != nil {
 		t.Fatal(err)
