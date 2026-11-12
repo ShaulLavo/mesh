@@ -108,6 +108,9 @@ if [ -d "/run/user/$remote_uid" ]; then
 	export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}
 fi
 
+MESH_STATE_DIR="$state_dir" "$binary_path" daemon prepare-updates --service-kind systemd ||
+	fail service_install "cannot prepare the verified update helper"
+
 if [ "$activation_required" -eq 1 ]; then
 	systemctl --user daemon-reload >/dev/null 2>&1 || fail service_install "systemctl --user daemon-reload failed"
 fi
@@ -131,9 +134,9 @@ else
 	systemctl --user start mesh.service >/dev/null 2>&1 || fail service_install "systemctl --user start mesh.service failed"
 fi
 systemctl --user is-active --quiet mesh.service || fail service_install "mesh.service is not active"
+MESH_STATE_DIR="$state_dir" "$binary_path" daemon installation-check --service-kind systemd >&2
 rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
 
-"$binary_path" daemon installation-check >&2
 if [ "$changed" -eq 1 ]; then
 	printf 'MESH_INSTALL_RESULT=configured\n'
 else

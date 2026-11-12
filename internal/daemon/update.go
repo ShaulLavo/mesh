@@ -21,6 +21,7 @@ import (
 )
 
 type updateController struct {
+	hostInstallation       string
 	domainWriter           update.DomainWriter
 	instanceID             string
 	configurationWriter    update.ConfigurationWriter
@@ -35,7 +36,7 @@ type updateController struct {
 
 func executingBuild() *release.Build { build := release.Current(); return &build }
 
-func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateController, error) {
+func newUpdateController(ctx context.Context, stateDir, id string, key ed25519.PrivateKey) (*updateController, error) {
 	runs, err := update.OpenStore(stateDir)
 	if err != nil {
 		return nil, hostControllerError(err)
@@ -44,7 +45,8 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 	if err != nil {
 		return nil, fmt.Errorf("locate host installation: %w", err)
 	}
-	runs = runs.WithHostInstallation(updateinstall.InstallationKind(executable, release.Current(), true))
+	installation := hostDefaultInstallation(ctx, stateDir, executable, release.Current())
+	runs = runs.WithHostInstallation(installation)
 	cache, err := update.CacheDir()
 	if err != nil {
 		return nil, hostControllerError(err)
@@ -53,7 +55,7 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 	if err != nil {
 		return nil, fmt.Errorf("allocate daemon policy instance: %w", err)
 	}
-	controller := &updateController{stateDir: stateDir, id: id, instanceID: instanceID}
+	controller := &updateController{stateDir: stateDir, id: id, instanceID: instanceID, hostInstallation: installation}
 	controller.coordinator = &update.Coordinator{ID: id, Store: runs, Remote: update.Client{ID: id, Key: key}, CacheDir: cache}
 	controller.authority = &update.Authority{StateDir: stateDir, ID: id, Key: key, Handle: controller.handle}
 	controller.coordinator.Trusted = controller.authority.IsAdministrator
@@ -65,6 +67,19 @@ func newUpdateController(stateDir, id string, key ed25519.PrivateKey) (*updateCo
 		Source: update.OfficialHostSource(stateDir), Probe: update.LocalProbe(stateDir),
 		Helper: func(ctx context.Context, source release.Manifest) error { return hostHelper(ctx, stateDir, source) }}
 	return controller, nil
+}
+
+func hostDefaultInstallation(ctx context.Context, stateDir, executable string, build release.Build) string {
+	kind := updateinstall.InstallationKind(executable, build, true)
+	if kind != updateinstall.InstallationManaged {
+		return kind
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := updatebootstrap.InspectCurrentDaemonService(ctx, stateDir); err != nil {
+		return updateinstall.InstallationUnknown
+	}
+	return kind
 }
 
 func hostInstallation(ctx context.Context, stateDir string) (*updateinstall.Engine, error) {

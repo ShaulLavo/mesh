@@ -24,7 +24,7 @@ func TestConfigurationObservationRequiresActualLocalSignedIdentity(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newUpdateController(state, host.ID, key)
+	controller, err := newUpdateController(t.Context(), state, host.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestConfigurationObserverLeaseAndDaemonRestartRequireActualRenewal(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := newUpdateController(state, host.ID, key)
+	first, err := newUpdateController(t.Context(), state, host.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestConfigurationObserverLeaseAndDaemonRestartRequireActualRenewal(t *testi
 	if len(first.configurationObservers.snapshot(renewed.RenewedAt.Add(update.ConfigurationObserverLease))) != 0 {
 		t.Fatal("expired observer stayed live")
 	}
-	second, err := newUpdateController(state, host.ID, key)
+	second, err := newUpdateController(t.Context(), state, host.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}
