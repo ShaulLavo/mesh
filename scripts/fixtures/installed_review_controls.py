@@ -262,6 +262,7 @@ class OrderedBootstrapTest(unittest.TestCase):
         root.mkdir(parents=True)
         output.mkdir(parents=True)
         (root / "route-observation.json").write_text('{"observerStopped":true,"connected":false}')
+        (root / "listener-failure.json").write_text('{"listener":{"status":"stopped"}}')
         driver = object.__new__(installed_order.Driver)
         driver.account = {"role": "canary", "home": str(home)}
         driver.accounts = SimpleNamespace(source=Path(__file__).resolve().parents[2], output=output,
@@ -286,6 +287,8 @@ class OrderedBootstrapTest(unittest.TestCase):
         driver.close()
         route = driver.accounts.output / "canary-ordered-route-observation.json"
         self.assertEqual(json.loads(route.read_text()), {"observerStopped": True, "connected": False})
+        failure = driver.accounts.output / "canary-ordered-listener-failure.json"
+        self.assertEqual(json.loads(failure.read_text()), {"listener": {"status": "stopped"}})
         self.assertTrue(driver.log.closed)
 
     def test_changed_account_identity_refuses_export(self):

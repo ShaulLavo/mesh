@@ -7,7 +7,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from fixtures import installed_adoption, installed_origin, native_services, installed_chain
+from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence
 
 
 class Origin(installed_origin.Origin):
@@ -116,6 +116,8 @@ def export_logs(root):
             continue
         with path.open("rb") as stream:
             result[name] = read_log(stream, name).hex()
+    if (root / installed_listener_evidence.FAILURE).exists():
+        result[installed_listener_evidence.FAILURE] = installed_listener_evidence.failure_bytes(root).hex()
     print(json.dumps(result), flush=True)
 
 

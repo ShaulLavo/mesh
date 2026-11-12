@@ -49,6 +49,8 @@ on:
       - 'scripts/fixtures/fleet_baselines.py'
       - 'scripts/fixtures/installed_native.py'
       - 'scripts/fixtures/installed_listener.py'
+      - 'scripts/fixtures/installed_listener_evidence.py'
+      - 'scripts/fixtures/installed_listener_controls.py'
       - 'scripts/fixtures/installed_adoption.py'
       - 'scripts/fixtures/installed_releases.py'
       - 'scripts/fixtures/installed_origin.py'

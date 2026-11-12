@@ -16,7 +16,7 @@ import uuid
 from xml.sax.saxutils import escape
 from pathlib import Path
 
-from fixtures import native_services, installed_routes
+from fixtures import native_services, installed_routes, installed_listener_evidence
 
 REPO = Path(__file__).resolve().parents[2]
 HELPERS = REPO / "integration" / "helpers"
@@ -303,9 +303,10 @@ class Installation:
         self.io()
         marker = self.root / "listener.json"
         self.challenge = marker.with_suffix(".challenge")
-        command = shlex.join([sys.executable, str(Path(__file__).with_name("installed_listener.py")), str(marker)])
-        self.terminal.send(command + " &\n")
-        native_services.wait_for(marker.exists, "session listener did not start")
+        token = uuid.uuid4().hex
+        command = shlex.join([sys.executable, str(Path(__file__).with_name("installed_listener.py")), str(marker), token])
+        self.terminal.send(installed_listener_evidence.launch_command(command, marker))
+        installed_listener_evidence.wait(self, marker, token, native_services.wait_for)
         self.listener = json.loads(marker.read_text())
         self.process_stamps[self.listener["pid"]] = process_stamp(self.listener["pid"])
         response = self.control("service.upsert", service={"name": "catchup", "kind": "proxy",
@@ -524,6 +525,7 @@ def retain_logs(root, output, name):
     route = root / "route-observation.json"
     if route.exists():
         shutil.copy2(route, output / (name + "-route-observation.json"))
+    installed_listener_evidence.retain(root, output, name)
     for filename in ("daemon.log", "daemon.err"):
         path = root / filename
         if path.is_file():
