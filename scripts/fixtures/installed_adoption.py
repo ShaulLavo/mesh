@@ -283,12 +283,32 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
         (output / "prepared-releases.json").write_text(json.dumps({"supplementalSourceBuilds": releases.builds,
             "metadata": releases.metadata, "genuineFullProofs": proofs}, indent=2) + "\n")
         return
+    failures = []
     for host in hosts:
-        scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial")
-        for scenario in scenarios:
-            prior = None if scenario == "initial" else previous[host["name"]]
-            run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, prior,
-                releases.registry, releases.probe)
+        failures.extend(run_host_cases(root, output, host, pairs[host["name"]], previous[host["name"]], preparer, origin, releases))
+    if failures:
+        raise RuntimeError("native cases failed after their confirmed cleanup: " + "; ".join(failures))
+
+
+def run_host_cases(root, output, host, pair, previous, preparer, origin, releases):
+    failures = []
+    scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial")
+    for scenario in scenarios:
+        try:
+            prior = None if scenario == "initial" else previous
+            run_case(root, output, host, pair, preparer, origin, releases, scenario, prior, releases.registry, releases.probe)
+        except Exception as error:
+            require_clean_case(output, host["name"] + "-" + scenario, releases)
+            failures.append(host["name"] + "/" + scenario + ": " + str(error))
+    return failures
+
+
+def require_clean_case(output, name, releases):
+    path = output / (name + "-native-pair.json")
+    record = json.loads(path.read_text()) if path.exists() else {}
+    cleanup = record.get("cleanup", {})
+    if not cleanup.get("servicesAbsent") or not cleanup.get("processesAbsent") or releases.signer.poll() is not None:
+        raise RuntimeError("native failure cleanup or producer is unconfirmed; remaining profiles were not started")
 
 
 def run_chain(root, output, native, preparer, host, releases, origin, prepare_only, format_waypoint):
