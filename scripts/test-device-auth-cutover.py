@@ -55,7 +55,7 @@ class CutoverEventsTest(unittest.TestCase):
         }
         # Importing the proof starts release acquisition and services.
         tree = ast.parse(SOURCE.read_text(), filename=str(SOURCE))
-        names = {"Host", "ServiceHandler", "event", "digest", "local_cutover", "wait_for_restarts"}
+        names = {"Host", "ServiceHandler", "event", "digest", "command_diagnostic", "local_cutover", "wait_for_restarts"}
         definitions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
                        and node.name in names]
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), self.scope)
@@ -159,6 +159,52 @@ class CutoverEventsTest(unittest.TestCase):
         self.assertEqual(len(failure["stderr"]), 4096)
         self.assertTrue(failure["stderr"].startswith("config refusal "))
         self.assertEqual(config.read_text(), '{"version":1,"hosts":[]}')
+
+    def command_program(self, host, source):
+        host.binary.write_text("#!" + sys.executable + "\n" + source)
+        host.binary.chmod(0o755)
+
+    def test_failed_update_retains_json_and_stderr_before_rejection(self):
+        host = self.hosts[0]
+        self.command_program(host, 'import json, os, sys\n'
+                             'print(json.dumps({"targets": "x" * 6600, "problem": "fleet target failed", "path": os.getcwd()}))\n'
+                             'sys.stderr.write("fixture warning: " + os.getcwd())\n'
+                             'sys.exit(1)\n')
+        with self.assertRaisesRegex(RuntimeError, "h0 fixture update failed with status 1"):
+            self.scope["Host"].command(host, "update", "--fleet", str(host.root / "fleet.json"), "--yes", "--json")
+        failure = json.loads((host.root / "cli-failure.log").read_text())
+        self.assertEqual(failure["operation"], "update")
+        self.assertEqual(failure["status"], 1)
+        self.assertEqual(json.loads(failure["stdout"]),
+                         {"targets": "x" * 6600, "problem": "fleet target failed", "path": "<fixture>/h0"})
+        self.assertEqual(failure["stderr"], "fixture warning: <fixture>/h0")
+        self.assertNotIn(str(self.root), json.dumps(failure))
+        self.assertEqual({key: value for key, value in self.scope["EVENTS"][-1].items() if key != "time"},
+                         {"kind": "cli-failure", **failure})
+        rows = [json.loads(line) for line in (self.root / "events.jsonl").read_text().splitlines()]
+        self.assertEqual(rows, self.scope["EVENTS"])
+
+    def test_failed_command_bounds_both_streams_and_decodes_invalid_utf8(self):
+        host = self.hosts[0]
+        self.command_program(host, 'import sys\n'
+                             'sys.stdout.buffer.write(b"\\xff" + b"o" * 20000)\n'
+                             'sys.stderr.buffer.write(b"\\xff" + b"e" * 5000)\n'
+                             'sys.exit(2)\n')
+        with self.assertRaisesRegex(RuntimeError, "h0 fixture update failed with status 2"):
+            self.scope["Host"].command(host, "update", "--json")
+        failure = json.loads((host.root / "cli-failure.log").read_text())
+        self.assertEqual(failure["stdout"], "\ufffd" + "o" * 16383)
+        self.assertEqual(failure["stderr"], "\ufffd" + "e" * 4095)
+        self.assertEqual(failure["stdoutBytes"], 20001)
+        self.assertEqual(failure["stderrBytes"], 5001)
+
+    def test_successful_command_returns_output_without_failure_record(self):
+        host = self.hosts[0]
+        self.command_program(host, 'import sys\nprint("success")\nsys.stderr.write("warning")\n')
+        result = self.scope["Host"].command(host, "update", "--json")
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"success\n", b"warning"))
+        self.assertFalse((host.root / "cli-failure.log").exists())
+        self.assertEqual(self.scope["EVENTS"][-1]["kind"], "cli")
 
     def test_previous_helper_restart_finishes_before_next_cutover(self):
         first, second = self.hosts

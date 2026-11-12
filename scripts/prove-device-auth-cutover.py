@@ -54,6 +54,10 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def command_diagnostic(data, limit):
+    return data.replace(str(ROOT).encode(), b"<fixture>")[:limit].decode("utf-8", errors="replace")
+
+
 def version(binary):
     env = os.environ | {"HOME": str(ROOT), "MESH_STATE_DIR": str(ROOT / "unused-state"),
                         "MESH_CONFIG_DIR": str(ROOT / "unused-config")}
@@ -350,18 +354,23 @@ sys.exit(data["status"])
         result = subprocess.run([str(self.binary), *args], env=self.environment, cwd=self.root, capture_output=True, timeout=timeout, check=False)
         event("cli", host=self.name, operation=args[0], status=result.returncode,
               stdoutBytes=len(result.stdout), stderrBytes=len(result.stderr))
-        if result.returncode != 0 and args[0] == "ls":
-            config = self.config / "hosts.json"
-            failure = {"host": self.name, "operation": "ls", "status": result.returncode,
-                       "stderr": result.stderr[:4096].decode("utf-8", errors="replace").replace(str(ROOT), "<fixture>")}
-            if config.exists():
-                metadata = config.stat()
-                failure.update(configMode=oct(metadata.st_mode & 0o777), configLinks=metadata.st_nlink,
-                               configOwned=metadata.st_uid == os.getuid())
-            event("cli-failure", **failure)
-            (self.root / "cli-failure.log").write_text(json.dumps(failure) + "\n")
+        if result.returncode != 0:
+            self.report_command_failure(args[0], result)
         require(result.returncode == 0, f"{self.name} fixture {args[0]} failed with status {result.returncode}")
         return result
+
+    def report_command_failure(self, operation, result):
+        failure = {"host": self.name, "operation": operation, "status": result.returncode,
+                   "stdoutBytes": len(result.stdout), "stderrBytes": len(result.stderr),
+                   "stdout": command_diagnostic(result.stdout, 16384),
+                   "stderr": command_diagnostic(result.stderr, 4096)}
+        config = self.config / "hosts.json" if operation == "ls" else None
+        if config is not None and config.exists():
+            metadata = config.stat()
+            failure.update(configMode=oct(metadata.st_mode & 0o777), configLinks=metadata.st_nlink,
+                           configOwned=metadata.st_uid == os.getuid())
+        event("cli-failure", **failure)
+        (self.root / "cli-failure.log").write_text(json.dumps(failure) + "\n")
 
     def seed(self):
         terminal = Terminal([str(self.binary), "local", "--", str(HELPERS / "window_shell.sh")], self.environment, self.root, timeout=8)
