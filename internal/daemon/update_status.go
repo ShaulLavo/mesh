@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"os"
+	"slices"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
@@ -27,7 +28,7 @@ func summarizeHostUpdate(status update.HostStatus, build release.Build, installa
 	summary := &protocol.HostUpdateSummary{Mode: string(status.Policy.Mode), Revision: status.Policy.Revision,
 		Phase: string(status.State.Phase), Installation: installation, Soak: status.Policy.Soak}
 	summaryProblem(summary, status.State)
-	summaryPeerProblem(summary, status.Peers)
+	summaryPeerProblem(summary, status.Peers, status.Policy.After)
 	if discovery := status.Discovery; discovery != nil {
 		summary.Head, summary.Target = summaryRelease(discovery.Head), summaryRelease(discovery.Target)
 		summary.LatestEpoch = discovery.LatestEpoch
@@ -88,12 +89,28 @@ func summarySourceMatches(status update.HostStatus, build release.Build) bool {
 	return last != nil && last.Metadata == status.Discovery.Head.Metadata && last.Binary == build.Digest && last.Version == build.Version
 }
 
-func summaryPeerProblem(summary *protocol.HostUpdateSummary, peers []update.HostPeer) {
+func summaryPeerProblem(summary *protocol.HostUpdateSummary, peers []update.HostPeer, configured []string) {
+	priority := 0
 	for _, peer := range peers {
-		if peer.Held {
-			summary.WaitingState, summary.WaitingPeer = string(peer.State), peer.ID
-			return
+		if !peer.Held || !slices.Contains(configured, peer.ID) {
+			continue
 		}
+		if next := summaryPeerPriority(peer.State); next > priority {
+			priority, summary.WaitingState, summary.WaitingPeer = next, string(peer.State), peer.ID
+		}
+	}
+}
+
+func summaryPeerPriority(state update.EvidenceReadState) int {
+	switch state {
+	case update.EvidenceRefused, update.EvidenceInvalid:
+		return 3
+	case update.EvidenceUnsupported:
+		return 2
+	case update.EvidenceVerified, update.EvidenceReading, update.EvidenceOffline:
+		return 1
+	default:
+		return 1
 	}
 }
 

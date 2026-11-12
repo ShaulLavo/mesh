@@ -115,26 +115,6 @@ prints the selected scope and release without installing it. `--details` shows
 release identifiers, build metadata, and update checks. `--json` preserves
 machine-readable identifiers and the original rejection causes.
 
-An exact installed release needs no update operation. A compatible newer
-installation is kept. Approval is blocked when a checked installation lacks a
-tested direct transition, requires recovery, or has unsupported metadata,
-protocols, journal format, or running-session protocols. For a missing direct
-transition, a local review searches at most 32 published release entries for one
-intermediate release. The search has a ten-second budget and verifies both exact
-transitions against their content-addressed forward transition receipts. The next hop's
-version comes from its published manifest.
-
-Mesh suggests `mesh update --local --version VERSION` only after checking the
-existing daemon installation, settled update history, service preservation
-settings, helper receipt and launcher, helper journal support, and the helper's
-running executable. The helper must already be at least as new as the next hop.
-The preview keeps the direct update blocked and does not install intermediates.
-Run the suggested command on the named destination to review that single step.
-Remote targets, first-updater bootstrap, and client-only installations need a
-local review before Mesh can establish bridge readiness. If discovery or
-readiness fails, the preview says so and gives one scoped review action.
-`--details` and `--json` include the original rejection and discovery evidence.
-
 A missing local daemon still requires verification of the executing CLI and its update
 history before offering helper installation. Unknown legacy sources and failed
 authentication checks cannot authorize bootstrap. Unreachable members stay in
@@ -176,6 +156,46 @@ one-time setup in the approval preview. The independent helper starts the
 coordinator and resumes the saved operation if the command closes during setup.
 For a client-only installation with no local daemon, `--local` installs the
 update helper without adding a hosting daemon.
+
+## Update one managed machine through verified steps
+
+```bash
+mesh update --local --check
+mesh update --local --yes
+mesh update status --local
+mesh update retry --local
+mesh update cancel --local
+```
+
+The local daemon verifies its executing image and the selected release, then
+plans the next supported step. The preview shows the source, next verified
+release, and selected destination. It can use intermediate releases to reach newer release formats safely.
+`--details` and `--json` retain the exact metadata, manifest, binary, and proof
+identifiers.
+
+`--check` reads the real planner. It does not install a helper, reserve an
+update, stage a binary, or approve installation. An already-current result
+requires verified source and release evidence. Approval saves the exact release
+returned by that preview, along with the actual request and generation.
+Closing the command leaves the approved target with the daemon and helper.
+Each later step is verified before installation, and a newer release cannot
+change the approved destination.
+
+These commands keep the automatic policy, predecessor list, and waiting period
+unchanged. An owner can approve one explicit update while automatic updates are
+off. Cancellation or a policy revision change stops future acceptance. Work
+already granted may finish, including recovery. A retry deliberately approves
+the saved next edge using the current installation and intent revision.
+
+Only this machine's owner through its local Unix socket can plan or submit a
+local target. Package-owned and development installations need explicit
+handling before they can use this path. Run `mesh daemon installation-check`
+to inspect the installation.
+
+Ordinary saved-fleet operations keep their coordinator and `RUN` commands.
+Those operations require a tested direct transition. A host without the local
+updater keeps its existing supervised bootstrap path. Authentication,
+installation recovery, and retained-session checks still block unsafe approval.
 
 ## Approve an administrator
 

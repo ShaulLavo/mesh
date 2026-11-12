@@ -74,9 +74,6 @@ func printUpdatePreviewTargets(output io.Writer, preview updatePreview, mask *pr
 		if review.Cause != "" {
 			lines = append(lines, review.Cause)
 		}
-		if review.Bridge != nil {
-			lines = append(lines, fmt.Sprintf("Verified next hop: Mesh %s · release digest %s", review.Bridge.Version, review.Bridge.Digest()))
-		}
 		if len(lines) == 0 {
 			continue
 		}

@@ -66,3 +66,20 @@ func TestHostPolicyForgetRequiresUnixOwnerAndReleasesRealRetention(t *testing.T)
 		t.Fatalf("forgotten dependent retained history: %+v %v", deps, err)
 	}
 }
+
+func TestHostSummaryUsesOnlyConfiguredPredecessorsAndPrioritizesProblems(t *testing.T) {
+	status := update.HostStatus{Policy: update.HostPolicy{After: []string{"reading", "refused"}}, Peers: []update.HostPeer{
+		{ID: "reading", State: update.EvidenceReading, Held: true},
+		{ID: "refused", State: update.EvidenceRefused, Held: true},
+		{ID: "removed", State: update.EvidenceInvalid, Held: true},
+	}}
+	summary := summarizeHostUpdate(status, release.Build{}, "managed")
+	if summary.WaitingState != string(update.EvidenceRefused) || summary.WaitingPeer != "refused" {
+		t.Fatalf("pending or removed predecessor concealed refusal: %+v", summary)
+	}
+	status.Policy.After = []string{"reading"}
+	summary = summarizeHostUpdate(status, release.Build{}, "managed")
+	if summary.WaitingState != string(update.EvidenceReading) || summary.WaitingPeer != "reading" {
+		t.Fatalf("removed predecessor still affected status: %+v", summary)
+	}
+}

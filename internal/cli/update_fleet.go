@@ -256,11 +256,15 @@ func classifyFleetProblems(member *FleetUpdateMember) (int, bool) {
 		return 1, true
 	}
 	if summary.WaitingState == string(update.EvidenceRefused) {
-		member.State, member.Problem = fleetRefused, "An earlier machine refused update evidence. Review its device approval."
+		member.State, member.Problem = fleetRefused, "An earlier machine refused access to its update history. Review its device approval."
 		return 1, true
 	}
-	if summary.WaitingState == string(update.EvidenceInvalid) || summary.WaitingState == string(update.EvidenceUnsupported) {
-		member.State, member.Problem = fleetUnknown, "An earlier machine returned invalid evidence or still needs adoption."
+	if summary.WaitingState == string(update.EvidenceInvalid) {
+		member.State, member.Problem = fleetFailed, "Mesh could not verify an earlier machine's update report."
+		return 1, true
+	}
+	if summary.WaitingState == string(update.EvidenceUnsupported) {
+		member.State, member.Problem = fleetUnknown, "An earlier machine still needs adoption."
 		return 1, true
 	}
 	return 0, false

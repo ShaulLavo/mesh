@@ -107,6 +107,9 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	if !options.check && !options.yes && !interactive {
 		return errors.New("noninteractive updates require --yes; use --check to inspect availability")
 	}
+	if handled, err := a.runLocalHostUpdate(ctx, options, output); handled {
+		return err
+	}
 	options, intents, err := a.resolveUpdateNameIntents(ctx, options)
 	if err != nil {
 		return err
@@ -145,7 +148,6 @@ func (a *application) runUpdate(ctx context.Context, options updateOptions, outp
 	}
 	preview = reviewLocalUpdateJournal(preview, environment.stateDir, environment.local)
 	preview = prepareUpdateApproval(preview)
-	preview = a.reviewUpdateBridges(ctx, environment, preview)
 	if !options.json {
 		preview.Targets, err = declaredUpdateTargets(ctx, preview.Targets)
 		if err != nil {
