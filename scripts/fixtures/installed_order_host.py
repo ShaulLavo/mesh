@@ -7,7 +7,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from fixtures import installed_adoption, installed_native, installed_origin, native_services
+from fixtures import installed_adoption, installed_native, installed_origin, native_services, installed_chain
 
 
 class Origin(installed_origin.Origin):
@@ -81,7 +81,7 @@ class Host:
     def inspect(self, active):
         case = self.case
         case.origin.ledger(case.state, case.root / "ordered-ledger.json")
-        result = json.loads((case.root / "ordered-ledger.json").read_text())
+        result = installed_chain.normalize_ledger(json.loads((case.root / "ordered-ledger.json").read_text()))
         journal = case.state / "update/installation.json"
         result["journal"] = json.loads(journal.read_text()) if journal.exists() else None
         if not active:

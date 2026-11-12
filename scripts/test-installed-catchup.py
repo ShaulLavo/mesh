@@ -11,10 +11,12 @@ import tempfile
 import tarfile
 import unittest
 import threading
+import subprocess
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -284,6 +286,62 @@ class RouteObservationTest(unittest.TestCase):
         self.addCleanup(observer.close)
         with self.assertRaisesRegex(RuntimeError, "another listener"):
             observer.start()
+
+
+class EmptyLedgerTest(unittest.TestCase):
+    def test_before_first_commit_has_no_entries(self):
+        empty = json.loads('{"entries":null,"state":{"schema":1,"phase":"idle"},"failed":[],"peers":null,"dependents":null}')
+        value = installed_chain.normalize_ledger(empty)
+        self.assertEqual(value["entries"], [])
+        self.assertEqual(value["failed"], [])
+        self.assertEqual(value["state"]["phase"], "idle")
+
+    def test_malformed_collection_does_not_become_an_empty_commit(self):
+        with self.assertRaisesRegex(RuntimeError, "malformed"):
+            installed_chain.normalize_ledger({"entries": {"version": "invented"}})
+
+
+class FailingTerminal:
+    def close(self):
+        raise RuntimeError("injected terminal I/O failure")
+
+
+@unittest.skipUnless(os.environ.get("MESH_TEST_NATIVE_MANAGER") == "1", "requires actual native user manager")
+class InstalledCleanupTest(unittest.TestCase):
+    def test_terminal_failure_still_stops_actual_listener_and_both_units(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ic-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        managers = [self.start_manager(root, index) for index in range(2)]
+        listener = subprocess.Popen(["/bin/sleep", "30"])
+        self.addCleanup(self.stop_process, listener)
+        case = object.__new__(installed_native.Installation)
+        case.route_observer, case.stream, case.response = None, None, None
+        case.listener, case.worker, case.shell = {"pid": listener.pid}, None, None
+        case.terminal, case.cleaned = FailingTerminal(), False
+        case.process_stamps = {listener.pid: installed_native.process_stamp(listener.pid)}
+        case.units = SimpleNamespace(close=lambda: installed_native.cleanup_all([manager.close for manager in managers]))
+        case.verify_session_stopped = lambda: listener.wait(timeout=5)
+        with self.assertRaisesRegex(RuntimeError, "injected terminal I/O"):
+            case.close()
+        self.assertIsNotNone(listener.poll())
+        self.assertTrue(all(not manager.exists() and not native_services.alive(manager.pid) for manager in managers))
+
+    def start_manager(self, root, index):
+        directory = root / str(index)
+        directory.mkdir()
+        manager = native_services.Manager(directory)
+        self.addCleanup(manager.close)
+        marker = directory / "started.json"
+        manager.start(marker)
+        native_services.wait_for(marker.exists, "actual cleanup control did not start")
+        manager.pid = manager.manager_pid()
+        return manager
+
+    def stop_process(self, process):
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
 
 
 class AccountIsolationTest(unittest.TestCase):

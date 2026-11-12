@@ -182,7 +182,16 @@ def validate_terminal(case, record, journal, seen, intermediate, final, fail_fin
 def read_ledger(case):
     path = case.root / "chain-ledger.json"
     case.origin.ledger(case.state, path)
-    return json.loads(path.read_text())
+    return normalize_ledger(json.loads(path.read_text()))
+
+
+def normalize_ledger(value):
+    for name in ("entries", "failed", "peers", "dependents"):
+        items = value.get(name)
+        if items is not None and not isinstance(items, list):
+            raise RuntimeError("native ledger collection is malformed: " + name)
+        value[name] = [] if items is None else items
+    return value
 
 
 def matching_failure(case, ledger, source, target):

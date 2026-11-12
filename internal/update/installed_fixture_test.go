@@ -188,6 +188,30 @@ func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) 
 	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state, "failed": failed, "peers": peers, "dependents": dependents}))
 }
 
+func TestInstalledEmptyLedgerBoundary(t *testing.T) {
+	directory := os.Getenv("MESH_EMPTY_LEDGER_REPORT")
+	if directory == "" {
+		directory = t.TempDir()
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	installedLedger(t, root, installedSignRequest{Ledger: filepath.Join(directory, "state"), Output: "empty-ledger.json"})
+	data, err := root.ReadFile("empty-ledger.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actual struct {
+		Entries []LedgerEntry `json:"entries"`
+		State   HostUpdate    `json:"state"`
+	}
+	if err := json.Unmarshal(data, &actual); err != nil || len(actual.Entries) != 0 || actual.State.Phase != HostIdle {
+		t.Fatalf("actual pre-commit ledger differs: %s %v", data, err)
+	}
+}
+
 // This is the delivered producer's signed stage/grant and Engine.Run sequence,
 // with the actual native manager selected by the real daemon's journal settings.
 func installedSeedJournal(t *testing.T, signer *signingFixture, proxy *adoptionNativeProxy, seed installedSeed) {

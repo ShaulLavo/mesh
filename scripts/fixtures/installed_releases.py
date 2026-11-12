@@ -48,6 +48,8 @@ class Releases:
             subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(binary), "./internal/update"],
                 cwd=REPO, env=self.environment(), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
         environment = self.environment() | {"MESH_INSTALLED_FIXTURE_DIR": str(self.root)}
+        subprocess.run([str(binary), "-test.run=^TestInstalledEmptyLedgerBoundary$"], env=environment,
+                       capture_output=True, check=True, timeout=15)
         self.signer = subprocess.Popen([str(binary), "-test.run", "^TestInstalledFixtureExport$", "-test.timeout=600s"], cwd=REPO, env=environment,
             stdout=self.signer_log, stderr=subprocess.STDOUT)
         native_services.wait_for(self.signer_ready, "installed signature exporter did not start")

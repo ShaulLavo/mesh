@@ -35,6 +35,9 @@ def main():
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("MESH_HARNESS_SOURCE"):
+        from fixtures import installed_artifacts
+        installed_artifacts.verify_harness(os.environ["MESH_HARNESS_SOURCE"], output / "harness-source.json")
     native = platform.system().lower() + "/" + {"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(platform.machine(), platform.machine())
     required = os.environ.get("INSTALLED_CATCHUP_PLATFORM", native)
     if native != required:

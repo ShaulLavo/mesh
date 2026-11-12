@@ -221,6 +221,8 @@ class Installation:
         self.worker, self.shell, self.listener = None, None, None
         self.cleaned = False
         self.route_observer = None
+        self.process_stamps = {}
+        self.cleanup_notes = []
 
     def prepare(self):
         with socket.socket() as reservation:
@@ -295,6 +297,8 @@ class Installation:
         self.session = sessions[0]["id"]
         self.worker = peer_pid(self.state / "s" / self.session / "sock")
         self.shell = json.loads((self.state / "s" / self.session / "meta.json").read_text())["pid"]
+        self.process_stamps[self.worker] = process_stamp(self.worker)
+        self.process_stamps[self.shell] = process_stamp(self.shell)
         self.io()
         marker = self.root / "listener.json"
         self.challenge = marker.with_suffix(".challenge")
@@ -302,6 +306,7 @@ class Installation:
         self.terminal.send(command + " &\n")
         native_services.wait_for(marker.exists, "session listener did not start")
         self.listener = json.loads(marker.read_text())
+        self.process_stamps[self.listener["pid"]] = process_stamp(self.listener["pid"])
         response = self.control("service.upsert", service={"name": "catchup", "kind": "proxy",
             "target": str(self.listener["port"])})
         if response.get("type") != "service.upserted":
@@ -391,14 +396,11 @@ class Installation:
         raise RuntimeError("old daemon's service stream remained open after native stop")
 
     def close(self):
-        try:
-            self.close_session()
-        finally:
-            self.units.close()
+        cleanup_all((self.close_session, self.units.close, self.verify_session_stopped))
         self.cleaned = True
 
     def close_session(self):
-        cleanup_all((self.close_route_observer, self.close_stream, self.stop_listener, self.stop_worker, self.close_terminal, self.verify_session_stopped))
+        cleanup_all((self.close_route_observer, self.close_stream, self.stop_listener, self.stop_worker, self.stop_shell, self.close_terminal))
 
     def close_route_observer(self):
         if self.route_observer:
@@ -412,22 +414,43 @@ class Installation:
 
     def stop_listener(self):
         if self.listener and native_services.alive(self.listener["pid"]):
-            os.kill(self.listener["pid"], signal.SIGTERM)
-            if self.terminal.poll() is not None:
-                return
-            start = len(self.terminal.drain())
-            self.terminal.send("wait\n")
-            self.terminal.expect(terminal_module.PROMPT, since=start)
+            self.signal_session_process(self.listener["pid"])
 
     def stop_worker(self):
         if not self.worker:
             return
         if self.ready():
-            self.control("session.kill", sessionId=self.session)
-            return
+            if self.kill_through_daemon():
+                return
         path = self.state / "s" / self.session / "sock"
         if path.exists() and peer_pid(path) == self.worker:
             os.kill(self.worker, signal.SIGTERM)
+            return
+        self.signal_session_process(self.worker)
+
+    def kill_through_daemon(self):
+        try:
+            self.control("session.kill", sessionId=self.session)
+            return True
+        except (OSError, RuntimeError) as error:
+            self.cleanup_notes.append({"action": "session.kill", "fallback": "verified owned process", "error": type(error).__name__})
+            return False
+
+    def stop_shell(self):
+        if self.shell and native_services.alive(self.shell):
+            self.signal_session_process(self.shell)
+
+    def signal_session_process(self, pid):
+        stamp = self.process_stamps.get(pid)
+        current = process_stamp(pid)
+        if current is None:
+            return
+        if stamp is None or stamp != current:
+            raise RuntimeError("refusing cleanup of a session process with unknown ownership")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
     def close_terminal(self):
         if self.terminal:
@@ -437,6 +460,15 @@ class Installation:
         for pid in (self.listener and self.listener["pid"], self.worker, self.shell):
             if pid:
                 native_services.wait_for(lambda: not native_services.alive(pid), "owned session process remains after teardown")
+
+
+def process_stamp(pid):
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart="], capture_output=True, text=True, timeout=5, check=False)
+    if result.returncode == 1 and not native_services.alive(pid):
+        return None
+    if result.returncode or not result.stdout.strip().startswith(str(os.getuid()) + " "):
+        raise RuntimeError("session process UID or birth identity could not be verified")
+    return result.stdout.strip()
 
 
 def prove(root, output, host, pair, preparer):

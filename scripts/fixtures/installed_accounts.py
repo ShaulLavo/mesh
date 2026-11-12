@@ -74,7 +74,7 @@ class Accounts:
     def environment(self, account):
         runtime = f"/run/user/{account['uid']}"
         return ["HOME=" + account["home"], "XDG_RUNTIME_DIR=" + runtime,
-                "DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime + "/bus", "PYTHONDONTWRITEBYTECODE=1"]
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime + "/bus", "PYTHONDONTWRITEBYTECODE=1", "MESH_HARNESS_SOURCE="]
 
     def run(self, account, arguments, **options):
         return subprocess.run(self.arguments(account, arguments), **options)

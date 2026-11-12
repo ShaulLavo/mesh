@@ -8,6 +8,13 @@ from pathlib import Path
 KEYS = ("linux-amd64", "linux-arm64", "darwin-arm64")
 
 
+def verify_harness(expected, output):
+    actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", expected) or actual != expected:
+        raise RuntimeError("actual harness checkout differs from its explicit source pin")
+    Path(output).write_text(json.dumps({"expected": expected, "actual": actual}) + "\n")
+
+
 def api(endpoint):
     result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=True, timeout=30)
     return json.loads(result.stdout)
@@ -82,5 +89,7 @@ if __name__ == "__main__":
         Path(sys.argv[6]).write_text(json.dumps(value, indent=2) + "\n")
     elif sys.argv[1] == "native":
         verify_native(sys.argv[2], sys.argv[3], sys.argv[4])
+    elif sys.argv[1] == "harness":
+        verify_harness(sys.argv[2], sys.argv[3])
     else:
         raise SystemExit("expected set or native")

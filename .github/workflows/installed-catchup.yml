@@ -55,6 +55,9 @@ permissions:
   contents: read
   actions: read
 
+env:
+  MESH_HARNESS_SOURCE: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+
 concurrency:
   group: installed-catchup-${{ inputs.reusable_call && format('call-{0}-{1}-{2}-{3}', github.run_id, github.workflow, inputs.worker_artifact_run, inputs.worker_artifact_source) || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.reusable_call }}
@@ -74,6 +77,8 @@ jobs:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       - name: Prove three isolated native managers before installed order setup
         run: |
+          mkdir -p "$RUNNER_TEMP/ordered-managers"
+          python3 scripts/fixtures/installed_artifacts.py harness "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/ordered-managers/harness-source.json"
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
             env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
             python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/ordered-managers"
