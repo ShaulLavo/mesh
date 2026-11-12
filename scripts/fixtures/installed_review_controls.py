@@ -12,7 +12,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from fixtures import installed_account_run, installed_order, installed_publication, installed_releases, native_services, installed_fresh
+from fixtures import installed_account_run, installed_accounts, installed_order, installed_publication, installed_releases, native_services, installed_fresh
 
 
 class Clock:
@@ -141,6 +141,18 @@ finally:
 
 
 class AccountRunReviewTest(unittest.TestCase):
+    def test_existing_source_is_never_claimed_for_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix="u8r-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as directory:
+            accounts = object.__new__(installed_accounts.Accounts)
+            accounts.root, accounts.source = Path(directory), None
+            existing = accounts.root / "account-source"
+            existing.mkdir()
+            (existing / "preserve").write_text("pre-existing")
+            with self.assertRaisesRegex(RuntimeError, "existing"):
+                accounts.prepare_sources()
+            self.assertIsNone(accounts.source)
+            self.assertTrue((existing / "preserve").exists())
+
     def test_missing_report_retains_order_inputs(self):
         with tempfile.TemporaryDirectory(prefix="u8r-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as directory:
             root, output = Path(directory) / "root", Path(directory) / "output"

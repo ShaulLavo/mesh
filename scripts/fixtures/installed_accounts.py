@@ -227,9 +227,10 @@ class Accounts:
 
     def prepare_sources(self):
         source = Path(__file__).resolve().parents[2]
-        self.source = self.root / "account-source"
-        if self.source.exists():
+        destination = self.root / "account-source"
+        if destination.exists():
             raise RuntimeError("refusing an existing native account fixture source directory")
+        self.source = destination
         self.persist()
         for relative in ("scripts/fixtures", "scripts/install/assets", "integration/helpers"):
             shutil.copytree(source / relative, self.source / relative, ignore=shutil.ignore_patterns("__pycache__"))
