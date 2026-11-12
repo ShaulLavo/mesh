@@ -67,6 +67,11 @@ refresh and acceptance-time saved-order fence remain mandatory. A deliberate
 local retry does not override a predecessor failure and does not erase local
 quarantine before a successful commit.
 
+The exact reserved retry work consumes that exception when it settles. Its
+digest is persisted with settlement before ownership clears, including after
+rollback. The original submission stays unchanged for idempotent replay; it
+cannot authorize a second attempt. A new explicit retry requires a new intent.
+
 The route cache is one bounded, source-and-target-digest-bound record. It holds
 no permission. A different plan replaces it; every use reauthenticates signed
 documents and exact proof. A crash after intent publication but before the

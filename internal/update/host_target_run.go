@@ -61,6 +61,9 @@ func (s *Store) finishLocalTarget(owned OwnedRequest, journal updateinstall.Stat
 		}
 	}
 	intent.SettledWork = targetWorkDigest(owned)
+	if intent.Submission.RetryEdge != nil && *intent.Submission.RetryEdge == owned.Edge {
+		intent.RetrySettled = intent.SettledWork
+	}
 	intent.Work, intent.Status.Next, intent.Status.Problem = nil, nil, nil
 	if journal.Phase == updateinstall.RolledBack {
 		intent.Status.Problem = &HostProblem{Kind: "quarantined", Detail: "Failed activation is quarantined; waiting for a verified alternative"}
@@ -94,7 +97,7 @@ func (u *HostUpdater) tickTarget(ctx context.Context, state HostUpdate, policy H
 	}
 	input := intent.Submission
 	input.CurrentDigest = intent.Status.RunningDigest
-	if input.RetryEdge != nil && input.RetryEdge.From != input.CurrentDigest {
+	if input.RetryEdge != nil && (input.RetryEdge.From != input.CurrentDigest || intent.RetrySettled != "") {
 		input.RetryEdge = nil
 	}
 	prepared, err := u.planTarget(ctx, input, policy, &intent.Status.Target, false)

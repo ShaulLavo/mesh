@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import sys
 
 
@@ -17,7 +18,10 @@ args = parser.parse_args()
 
 transitions = []
 receipts = []
+identities = set()
 for path in sorted(args.proofs.glob("*.json")):
+    if path.name.endswith(".rollback.json"):
+        continue
     contents = path.read_bytes()
     digest = hashlib.sha256(contents).hexdigest()
     if path.name != f"{digest}.json":
@@ -33,8 +37,20 @@ for path in sorted(args.proofs.glob("*.json")):
         "stateReadMin", "stateReadMax", "stateWrite", "workerMin",
         "workerMax", "workerWrite", "journalVersion",
     ):
-        if not isinstance(receipt.get(field), int) or receipt[field] <= 0:
+        if type(receipt.get(field)) is not int or receipt[field] <= 0:
             fail(f"{path.name} has invalid {field}")
+    for field in ("fromDigest", "toDigest"):
+        if not re.fullmatch(r"[0-9a-f]{64}", receipt.get(field, "")):
+            fail(f"{path.name} has invalid {field}")
+    platform = receipt.get("platform")
+    if platform not in ({"os": "linux", "arch": "amd64"}, {"os": "linux", "arch": "arm64"}, {"os": "darwin", "arch": "arm64"}):
+        fail(f"{path.name} has invalid platform")
+    identity = (platform["os"], platform["arch"], receipt["fromDigest"])
+    if identity in identities:
+        fail(f"{path.name} duplicates a source transition")
+    identities.add(identity)
+    if receipt["stateReadMin"] > receipt["stateReadMax"] or receipt["workerMin"] > receipt["workerMax"]:
+        fail(f"{path.name} has invalid compatibility range")
     if receipt["stateWrite"] != receipt["stateReadMax"]:
         fail(f"{path.name} did not observe the candidate's reported state schema")
     receipts.append(receipt)
@@ -53,6 +69,12 @@ for field in candidate_fields:
     values = {receipt[field] for receipt in receipts}
     if len(values) != 1:
         fail(f"transition receipts disagree on {field}: {sorted(values)}")
+
+for platform in ("linux/amd64", "linux/arm64", "darwin/arm64"):
+    targets = {receipt["toDigest"] for receipt in receipts
+               if platform == receipt["platform"]["os"] + "/" + receipt["platform"]["arch"]}
+    if len(targets) > 1:
+        fail(f"transition receipts name different candidate executables on {platform}")
 
 compatibility = {
     "stateReadMin": min(receipt["stateReadMin"] for receipt in receipts),
