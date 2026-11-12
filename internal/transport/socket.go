@@ -129,10 +129,10 @@ func (c *socketConn) Close() error {
 }
 
 // closeCompleted reports whether a close error means the connection is already
-// gone rather than that closing failed. A peer can tear the transport down
-// before replying to our close frame, yielding EOF during the handshake.
+// gone rather than that closing failed. EOF can also mean a truncated frame,
+// so it remains a protocol failure even during the close handshake.
 func closeCompleted(err error) bool {
-	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
+	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)
 }
 
 type frameByteReader struct {

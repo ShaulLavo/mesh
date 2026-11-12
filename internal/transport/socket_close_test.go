@@ -16,7 +16,21 @@ import (
 )
 
 func TestSocketConnClosePeerEOF(t *testing.T) {
-	testSocketCloseReply(t, nil, "")
+	testSocketCloseReply(t, nil, "EOF")
+}
+
+func TestSocketConnClosePreservesTruncatedFrames(t *testing.T) {
+	for _, row := range []struct {
+		name  string
+		reply []byte
+	}{
+		{"header", []byte{0x88}},
+		{"close payload absent", []byte{0x88, 0x02}},
+		{"close payload partial", []byte{0x88, 0x02, 0x03}},
+		{"data payload partial", []byte{0x82, 0x02, 'a'}},
+	} {
+		t.Run(row.name, func(t *testing.T) { testSocketCloseReply(t, row.reply, "EOF") })
+	}
 }
 
 func TestSocketConnClosePreservesInvalidReply(t *testing.T) {
