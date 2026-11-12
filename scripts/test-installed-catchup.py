@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts
+from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -75,7 +75,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
             ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py")))
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -223,6 +223,24 @@ class NativeServiceTest(unittest.TestCase):
         self.assertFalse(evidence["passed"])
         self.assertTrue(evidence["cleanup"]["serviceAbsent"])
         self.assertTrue(evidence["cleanup"]["processAbsent"])
+
+
+class AccountIsolationTest(unittest.TestCase):
+    def test_account_creation_is_disabled_outside_disposable_hosted_root(self):
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}), patch.object(installed_accounts, "command") as command:
+            with self.assertRaisesRegex(RuntimeError, "disposable GitHub-hosted"):
+                installed_accounts.Accounts(Path("/unused"), Path("/unused"))
+        command.assert_not_called()
+
+    def test_preexisting_uid_resources_are_never_stopped(self):
+        accounts = object.__new__(installed_accounts.Accounts)
+        record = {"name": "test-only", "uid": 12345, "home": "/unused", "created": True, "ownershipVerified": False}
+        with patch.object(accounts, "owned"), patch.object(installed_accounts, "account_exists", return_value=None):
+            with patch.object(installed_accounts, "command") as command, patch.object(accounts, "stop_processes") as stop:
+                accounts.remove_account(record)
+        command.assert_called_once_with(["/usr/sbin/userdel", "test-only"])
+        stop.assert_not_called()
+        self.assertTrue(record["absent"])
 
 
 class ArtifactPinTest(unittest.TestCase):

@@ -32,6 +32,7 @@ on:
       - 'scripts/fixtures/installed_chain.py'
       - 'scripts/fixtures/installed_waypoint.py'
       - 'scripts/fixtures/installed_artifacts.py'
+      - 'scripts/fixtures/installed_accounts.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
@@ -46,6 +47,24 @@ defaults:
     shell: bash
 
 jobs:
+  ordered-manager-domains:
+    name: Real managers for three disposable hosts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prove three isolated native managers before installed order setup
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
+            env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/ordered-managers"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-order-manager-domains
+          path: ${{ runner.temp }}/ordered-managers
+          retention-days: 7
+
   native-adoption:
     name: Installed native adoption (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
