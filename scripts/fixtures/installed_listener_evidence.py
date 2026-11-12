@@ -1,4 +1,5 @@
 """Private, bounded observations of the installed fixture's listener startup."""
+import base64
 import json
 import os
 from pathlib import Path
@@ -188,19 +189,21 @@ def last_observation(marker, token, pid):
 
 def collect(expected):
     shell = attempt(lambda: process(expected["shell"]))
-    transcript = attempt(lambda: tail(Path(expected["workerLog"])))
+    transcript = attempt(lambda: decode_transcript(expected["ptyTranscript"]))
     return {"schema": 1, "scope": "original listener readiness timeout", "shell": shell,
             "listener": attempt(lambda: child_observation(expected, shell)), "ptyTranscript": transcript,
+            "ptySource": "live attached terminal with bounded pending output",
             "markerPresentAtCapture": Path(expected["marker"]).exists(),
             "limits": {"seconds": SECONDS, "bytes": MAXIMUM, "signals": False}}
 
 
-def tail(path):
-    if not stat.S_ISREG(path.lstat().st_mode):
-        raise ValueError("not a regular fixture log")
-    with path.open("rb") as stream:
-        stream.seek(max(0, os.fstat(stream.fileno()).st_size - 8192))
-        return stream.read(8192).decode(errors="replace")
+def decode_transcript(value):
+    if isinstance(value, dict):
+        return value
+    data = base64.b64decode(value, validate=True)
+    if len(data) > 8192:
+        raise ValueError("terminal snapshot exceeds its byte bound")
+    return data.decode(errors="replace")
 
 
 def capture(case, marker, token):
@@ -208,9 +211,12 @@ def capture(case, marker, token):
     record = {"schema": 1, "status": "unavailable"}
     started = time.monotonic()
     try:
+        transcript = attempt(case.terminal.snapshot)
+        if isinstance(transcript, bytes):
+            transcript = base64.b64encode(transcript).decode()
         expected = {"marker": str(marker), "token": token, "shell": case.shell,
                     "shellStamp": case.process_stamps[case.shell],
-                    "workerLog": str(case.state / "s" / case.session / "worker.log")}
+                    "ptyTranscript": transcript}
         result = subprocess.run([sys.executable, str(Path(__file__).resolve())], input=json.dumps(expected),
                                 capture_output=True, text=True, timeout=SECONDS, check=False)
         if result.returncode or len(result.stdout.encode()) > MAXIMUM:

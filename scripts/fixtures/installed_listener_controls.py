@@ -1,4 +1,5 @@
 """Listener failure controls without a Mesh seed or native service."""
+import base64
 import io
 import json
 import os
@@ -65,6 +66,11 @@ class ListenerEvidenceTest(unittest.TestCase):
     @staticmethod
     def raise_error(error):
         raise error
+
+    @staticmethod
+    def collect_inline(*_arguments, **arguments):
+        return SimpleNamespace(returncode=0,
+            stdout=json.dumps(evidence.collect(json.loads(arguments["input"]))))
 
     def test_pre_hook_state_is_explicit_and_does_not_request_frames(self):
         with patch.object(evidence, "process", return_value=self.child), patch.object(evidence, "request") as request:
@@ -164,7 +170,79 @@ class ListenerEvidenceTest(unittest.TestCase):
 
     def case(self):
         return SimpleNamespace(root=self.root, state=self.root / "state", session="owned", shell=101,
-                               process_stamps={101: self.expected["shellStamp"]})
+                               process_stamps={101: self.expected["shellStamp"]},
+                               terminal=SimpleNamespace(snapshot=lambda: b""))
+
+    def terminal(self, history=b""):
+        reader, writer = os.pipe()
+        self.addCleanup(os.close, reader)
+        self.addCleanup(os.close, writer)
+        terminal = object.__new__(installed_native.terminal_module.Terminal)
+        terminal.master, terminal.output = reader, bytearray(history)
+        return terminal, writer
+
+    def test_failure_captures_pending_terminal_output_with_empty_live_worker_log(self):
+        case = self.case()
+        case.terminal, writer = self.terminal(b"owned terminal history\n")
+        pending = b"[1] 102\nTraceback: private fixture stderr sentinel\n"
+        os.write(writer, pending)
+        log = case.state / "s" / case.session / "worker.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("")
+        original = RuntimeError("session listener did not start")
+        with patch.object(evidence, "process", return_value={"status": "unavailable"}), patch.object(evidence.subprocess, "run", side_effect=self.collect_inline):
+            with self.assertRaises(RuntimeError) as raised:
+                evidence.wait(case, self.marker, self.token, lambda *_: self.raise_error(original))
+        self.assertIs(raised.exception, original)
+        record = json.loads((self.root / evidence.FAILURE).read_text())
+        self.assertIn("private fixture stderr sentinel", record["ptyTranscript"])
+        self.assertEqual(case.terminal.output, b"owned terminal history\n" + pending)
+        self.assertEqual(log.read_bytes(), b"")
+        output = self.root / "export"
+        output.mkdir()
+        installed_native.retain_logs(self.root, output, "fresh-managed")
+        self.assertEqual(json.loads((output / ("fresh-managed-" + evidence.FAILURE)).read_text()), record)
+
+    def test_terminal_snapshot_bounds_pending_reads_and_preserves_normal_history(self):
+        terminal, _ = self.terminal(b"original history\n")
+        module = installed_native.terminal_module
+        with patch.object(module.select, "select", return_value=([terminal.master], [], [])), patch.object(module.os, "read", return_value=b"x" * 8192) as read:
+            snapshot = terminal.snapshot()
+        self.assertEqual(snapshot, b"x" * 8192)
+        self.assertEqual(read.call_count, 8)
+        self.assertEqual(terminal.output, b"original history\n" + b"x" * 65536)
+        self.assertEqual(read.call_args.args, (terminal.master, 8192))
+
+    def test_terminal_snapshot_keeps_eof_history_and_never_sends_replies(self):
+        terminal, writer = self.terminal(b"original history\n")
+        os.write(writer, b"\x1b[6n")
+        with patch.object(terminal, "_reply") as reply:
+            self.assertEqual(terminal.snapshot(), b"original history\n\x1b[6n")
+        reply.assert_not_called()
+        module = installed_native.terminal_module
+        with patch.object(module.select, "select", return_value=([terminal.master], [], [])), patch.object(module.os, "read", side_effect=OSError(module.errno.EIO, "closed PTY")):
+            self.assertEqual(terminal.snapshot(), b"original history\n\x1b[6n")
+
+    def test_binary_terminal_snapshot_fits_collector_input_bound(self):
+        case = self.case()
+        case.terminal.snapshot = lambda: b"\0" * 8192
+        result = SimpleNamespace(returncode=0, stdout='{"schema":1}')
+        with patch.object(evidence.subprocess, "run", return_value=result) as run:
+            evidence.capture(case, self.marker, self.token)
+        encoded = run.call_args.kwargs["input"].encode()
+        self.assertLessEqual(len(encoded), 16384)
+        self.assertEqual(base64.b64decode(json.loads(encoded)["ptyTranscript"]), b"\0" * 8192)
+
+    def test_snapshot_failure_and_invalid_payload_stay_unavailable(self):
+        case = self.case()
+        case.terminal.snapshot = lambda: self.raise_error(OSError("closed PTY"))
+        with patch.object(evidence, "process", return_value={"status": "unavailable"}), patch.object(evidence.subprocess, "run", side_effect=self.collect_inline):
+            evidence.capture(case, self.marker, self.token)
+        record = json.loads((self.root / evidence.FAILURE).read_text())
+        self.assertEqual(record["ptyTranscript"], {"status": "unavailable", "errorType": "OSError"})
+        for payload in ("not base64!", base64.b64encode(b"x" * 8193).decode()):
+            with self.assertRaises(ValueError):
+                evidence.decode_transcript(payload)
 
     def test_capture_bounds_failure_and_preserves_original_timeout(self):
         failures = (subprocess.TimeoutExpired("collector", evidence.SECONDS), ValueError("bad adapter"))
@@ -185,8 +263,6 @@ class ListenerEvidenceTest(unittest.TestCase):
             self.assertLessEqual((self.root / evidence.FAILURE).stat().st_size, evidence.MAXIMUM)
 
     def test_capture_real_bounded_collector_without_any_mesh_process(self):
-        self.expected["workerLog"] = str(self.root / "worker.log")
-        (self.root / "worker.log").write_text("__ATTACHED__owned__END__\n")
         case = self.case()
         case.shell, case.process_stamps = os.getpid(), {os.getpid(): "intentionally unavailable ownership"}
         evidence.capture(case, self.marker, self.token)
@@ -195,10 +271,9 @@ class ListenerEvidenceTest(unittest.TestCase):
         self.assertFalse(result["limits"]["signals"])
         self.assertLess(result["elapsedSeconds"], evidence.SECONDS + 0.5)
 
-    def test_private_reads_refuse_links_and_oversized_files_and_bound_pty_tail(self):
+    def test_private_reads_refuse_links_and_oversized_files(self):
         log = self.root / "worker.log"
         log.write_bytes(b"old" + b"x" * 8192)
-        self.assertEqual(evidence.tail(log), "x" * 8192)
         link = self.root / "link"
         link.symlink_to(log)
         with self.assertRaisesRegex(ValueError, "regular"):
