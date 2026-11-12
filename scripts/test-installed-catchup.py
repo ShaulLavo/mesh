@@ -74,7 +74,8 @@ class SocketPathsTest(unittest.TestCase):
     def test_python_fixture_blocks_remain_at_most_three_deep(self):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
-            ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py")))
+            ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
+             "installed_origin.py", "installed_releases.py", "installed_adoption.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 

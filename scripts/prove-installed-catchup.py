@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--native-preflight", action="store_true", required=True)
     parser.add_argument("--acquire-baselines", action="store_true", help="verify actual native legacy pairs after the manager control")
     parser.add_argument("--native-helper", type=Path, help="run the native installed-pair restart control with this production API fixture")
+    parser.add_argument("--installed-adoption", action="store_true", help="run actual native product adoption and failed activation")
+    parser.add_argument("--prepare-only", action="store_true", help="prepare real signed proof inputs without native installation")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -35,10 +37,21 @@ def main():
     try:
         (output / "socket-paths.json").write_text(json.dumps(installed_paths.validate(root), indent=2) + "\n")
         native_services.positive_control(root, output / "native-manager.json")
-        if arguments.acquire_baselines:
-            acquire_baselines(root, output, native, arguments.native_helper)
+        run_requested(arguments, root, output, native)
     finally:
         clean_scratch(root, output)
+
+
+def run_requested(arguments, root, output, native):
+    if arguments.installed_adoption:
+        if arguments.native_helper is None and not arguments.prepare_only:
+            raise RuntimeError("installed adoption requires the production helper preparation fixture")
+        from fixtures import installed_adoption
+        preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
+        installed_adoption.run(root, output, native, preparer, arguments.prepare_only)
+        return
+    if arguments.acquire_baselines:
+        acquire_baselines(root, output, native, arguments.native_helper)
 
 
 def clean_scratch(root, output):

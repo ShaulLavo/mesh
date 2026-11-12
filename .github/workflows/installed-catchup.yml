@@ -12,6 +12,11 @@ on:
       - 'scripts/fixtures/fleet_baselines.py'
       - 'scripts/fixtures/installed_native.py'
       - 'scripts/fixtures/installed_listener.py'
+      - 'scripts/fixtures/installed_adoption.py'
+      - 'scripts/fixtures/installed_releases.py'
+      - 'scripts/fixtures/installed_origin.py'
+      - 'internal/update/installed_fixture_test.go'
+      - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
       - 'scripts/test-installed-catchup.py'
 
@@ -23,10 +28,10 @@ defaults:
     shell: bash
 
 jobs:
-  native-manager:
-    name: Installed native manager (${{ matrix.platform }})
+  native-adoption:
+    name: Installed native adoption (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 5
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -57,13 +62,13 @@ jobs:
           cache: true
       - name: Build production helper preparation fixture
         run: go build -o "$RUNNER_TEMP/native-helper" ./scripts/fixtures/native-helper
-      - name: Run actual published native pairs with attached terminal and active stream
+      - name: Adopt actual published native pairs and verify failed activation restoration
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-catchup/pairs" \
-            --native-preflight --acquire-baselines --native-helper "$RUNNER_TEMP/native-helper"
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

@@ -5,7 +5,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst")
+CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst") + tuple(
+    host + "-" + scenario for host in ("pc", "pi", "vps", "mac") for scenario in ("adopt", "rollback", "helper"))
 
 
 def socket_paths(root):
@@ -15,6 +16,8 @@ def socket_paths(root):
         yield state / ".d-4294967295"
         yield state / "s" / ("0" * 26) / "sock"
     yield root / "control.sock"
+    yield root / "mesh-transition.AAAAAA" / "state" / "daemon.sock"
+    yield root / "mesh-transition.AAAAAA" / "state" / "s" / ("0" * 26) / "sock"
 
 
 def validate(root, system=None):
