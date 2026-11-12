@@ -38,6 +38,11 @@ persisted manual decisions, installer order, helper readiness, rejection,
 rollback, retry, and client-only and development controls. Manager command
 fixtures are isolated unit tests. They do not satisfy the native release gate.
 
+The integration run exposed an old coordinator-policy assertion against Unit 9's
+general status output. That fixture now checks the empty operation list and
+reads its unchanged policy through `update automatic status`. Its consent,
+revision, restart, and no-helper assertions remain in place.
+
 The activation release requires normal signed publishing CI and Unit 8's real
 native installed-pair and chain gates. Local implementation checks do not
 authorize publication or a real fleet change.
