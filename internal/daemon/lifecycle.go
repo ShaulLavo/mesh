@@ -43,6 +43,7 @@ type lifecycleCatalog interface {
 type launchWorker func(worker.LaunchConfig) (worker.Launched, error)
 
 type lifecycleConfig struct {
+	UpdateSummary       func() *protocol.HostUpdateSummary
 	Names               *machinename.Store
 	NameChanged         func(protocol.HostInfo)
 	Context             context.Context
@@ -63,6 +64,7 @@ type lifecycleConfig struct {
 }
 
 type lifecycle struct {
+	updateSummary    func() *protocol.HostUpdateSummary
 	executionOnce    sync.Once
 	execution        *execution.Journal
 	executionErr     error
@@ -222,6 +224,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 	return &lifecycle{
 		names:               cfg.Names,
 		nameChanged:         cfg.NameChanged,
+		updateSummary:       cfg.UpdateSummary,
 		context:             cfg.Context,
 		catalog:             cfg.Catalog,
 		connector:           cfg.Connector,
@@ -654,8 +657,11 @@ func (l *lifecycle) declaredHostInfo() protocol.HostInfo {
 		tailscaleName = *l.host.TailscaleName
 	}
 	host := protocol.HostInfo{
-		Build: executingBuild(), UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true,
+		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true,
 		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, TailscaleName: tailscaleName, PrivateName: l.privateName(),
+	}
+	if l.updateSummary != nil {
+		host.HostUpdate = l.updateSummary()
 	}
 	if l.names != nil {
 		claim := l.names.Current()
