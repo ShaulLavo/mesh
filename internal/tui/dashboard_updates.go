@@ -36,13 +36,7 @@ func (m dashboardModel) updateLines() []string {
 		return nil
 	}
 	slices.SortStableFunc(rows, func(a, b cli.DashboardUpdateRow) int {
-		if a.Attention == b.Attention {
-			return 0
-		}
-		if a.Attention {
-			return -1
-		}
-		return 1
+		return dashboardUpdatePriority(b) - dashboardUpdatePriority(a)
 	})
 	limit := min(len(rows), 3)
 	lines := make([]string, 0, limit+1)
@@ -56,9 +50,19 @@ func (m dashboardModel) updateLines() []string {
 		lines = append(lines, m.paint(style).Render(dashboardFit(text, m.width)))
 	}
 	if len(rows) > limit {
-		lines = append(lines, m.paint(dashboardMutedStyle).Render(dashboardFit("Updates · more status in mesh update status; use --details for identifiers.", m.width)))
+		lines = append(lines, m.paint(dashboardMutedStyle).Render(dashboardFit("Updates · more status in mesh update fleet; use --details to inspect.", m.width)))
 	}
 	return lines
+}
+
+func dashboardUpdatePriority(row cli.DashboardUpdateRow) int {
+	if row.Attention {
+		return 2
+	}
+	if row.Pending {
+		return 1
+	}
+	return 0
 }
 func (m dashboardModel) updateHostLabel(id string) string {
 	for _, host := range m.hosts {

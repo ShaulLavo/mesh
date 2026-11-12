@@ -154,7 +154,7 @@ func observeLocalClient(ctx context.Context, record HostRecord, member *FleetUpd
 	}
 	build := release.Current()
 	member.Build = &build
-	member.Update = &protocol.HostUpdateSummary{Mode: string(update.HostManual), Phase: string(update.HostIdle), Installation: updateinstall.InstallationKind("", build, false)}
+	member.Update = &protocol.HostUpdateSummary{Installation: updateinstall.InstallationKind("", build, false)}
 	member.State, member.Problem = "", ""
 }
 

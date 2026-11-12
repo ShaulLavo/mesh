@@ -19,7 +19,7 @@ func DashboardHostUpdateRows(hosts []DashboardHostView, now time.Time) []Dashboa
 		if code != 0 {
 			text += " " + fleetUpdateAttention(member) + " Run mesh update fleet --details."
 		}
-		rows = append(rows, DashboardUpdateRow{HostID: host.Host.ID, Text: text, Attention: code == 1})
+		rows = append(rows, DashboardUpdateRow{HostID: host.Host.ID, Text: text, Attention: code == 1, Pending: code == 2})
 	}
 	return rows
 }

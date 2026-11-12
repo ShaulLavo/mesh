@@ -2138,12 +2138,13 @@ Global Flags:
 Stop pending updates; issued activation grants may still finish
 
 Usage:
-  mesh update cancel RUN [flags]
+  mesh update cancel [RUN] [flags]
 
 Flags:
       --command-id string               exact administrative command identity for response-loss replay
       --expected-policy-revision uint   expected automatic policy revision; required for automatic runs
   -h, --help                            help for cancel
+      --local                           read or control this machine's approved update target
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine
@@ -2461,12 +2462,13 @@ Global Flags:
 Retry unfinished targets at the originally approved release
 
 Usage:
-  mesh update retry RUN [flags]
+  mesh update retry [RUN] [flags]
 
 Flags:
       --command-id string               exact administrative command identity for response-loss replay
       --expected-policy-revision uint   expected automatic policy revision; required for automatic runs
   -h, --help                            help for retry
+      --local                           read or control this machine's approved update target
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine
@@ -2485,7 +2487,8 @@ Usage:
   mesh update status [RUN] [flags]
 
 Flags:
-  -h, --help   help for status
+  -h, --help    help for status
+      --local   read or control this machine's approved update target
 
 Global Flags:
       --coordinator string   adopted host holding the operation; defaults to this machine

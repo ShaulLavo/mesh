@@ -175,4 +175,5 @@ type DashboardUpdateRow struct {
 	HostID    string
 	Text      string
 	Attention bool
+	Pending   bool
 }
