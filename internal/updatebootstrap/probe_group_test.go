@@ -87,11 +87,11 @@ func serveOwnedProbe(t *testing.T, socket, id string, accepted, requested, close
 	t.Cleanup(func() { cancel(); _ = listener.Close(); <-done })
 	go func() {
 		defer close(done)
-		serveOwnedConnection(ctx, listener, id, accepted, requested, closed, stall)
+		serveOwnedConnection(ctx, t, listener, id, accepted, requested, closed, stall)
 	}()
 }
 
-func serveOwnedConnection(ctx context.Context, listener net.Listener, id string, accepted, requested, closed chan<- struct{}, stall bool) {
+func serveOwnedConnection(ctx context.Context, t *testing.T, listener net.Listener, id string, accepted, requested, closed chan<- struct{}, stall bool) {
 	conn, err := listener.Accept()
 	if err != nil {
 		return
@@ -101,13 +101,18 @@ func serveOwnedConnection(ctx context.Context, listener net.Listener, id string,
 	defer finish()
 	accepted <- struct{}{}
 	if _, err = protocol.NewReader(conn).ReadFrame(); err != nil {
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("unasked connection ended with %v, want EOF", err)
+		}
 		return
 	}
 	requested <- struct{}{}
 	if !stall {
 		_ = protocol.NewWriter(conn).WriteControlMsg(cohortResponse(id))
 	}
-	_, _ = io.Copy(io.Discard, conn)
+	if _, err := io.Copy(io.Discard, conn); err != nil {
+		t.Errorf("asked connection ended with %v, want EOF", err)
+	}
 }
 
 func TestIdentifyWorkersMapsDuplicatePIDsAndFailedImage(t *testing.T) {
