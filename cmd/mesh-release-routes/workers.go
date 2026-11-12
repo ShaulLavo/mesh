@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,52 @@ type workerArtifact struct {
 	Commit   string           `json:"commit"`
 	Protocol int              `json:"protocol"`
 	Artifact release.Artifact `json:"artifact"`
+}
+
+func writeWorkerRegistry(directory string, retained []workerArtifact, candidate release.Manifest) error {
+	workers := slices.Clone(retained)
+	for _, artifact := range candidate.Artifacts {
+		workers = append(workers, workerArtifact{Version: candidate.Version, Commit: candidate.Commit, Protocol: candidate.Compatibility.WorkerWrite, Artifact: artifact})
+	}
+	data, err := json.Marshal(workers)
+	if err != nil {
+		return fmt.Errorf("publisher: encode worker registry: %w", err)
+	}
+	if len(data) > 8<<20 {
+		return errors.New("publisher: exact worker registry exceeds 8 MiB; a reviewed format epoch is required")
+	}
+	return writePublisherFile(directory, "mesh-workers.json", data)
+}
+
+func verifyRetainedWorkerRegistry(directory string, history []publishedEvidence, workers []workerArtifact) error {
+	for _, item := range slices.Backward(history) {
+		ref, exists := item.asset("mesh-workers.json")
+		if !exists {
+			continue
+		}
+		data, err := readAsset(directory, ref, 8<<20)
+		if err != nil {
+			return err
+		}
+		if err := verifyRetainedSignature(directory, item, data); err != nil {
+			return err
+		}
+		var retained []workerArtifact
+		if err := json.Unmarshal(data, &retained); err != nil {
+			return fmt.Errorf("publisher: decode authenticated worker registry: %w", err)
+		}
+		return compareWorkerRegistries(retained, workers)
+	}
+	return nil
+}
+
+func compareWorkerRegistries(retained, workers []workerArtifact) error {
+	for _, item := range retained {
+		if !slices.Contains(workers, item) {
+			return fmt.Errorf("publisher: retained worker %s on %s was removed or changed", item.Version, item.Artifact.Platform)
+		}
+	}
+	return nil
 }
 
 func selectWorkerRegistry(policy upgradePolicy, history []publishedEvidence) ([]workerArtifact, error) {

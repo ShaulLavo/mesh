@@ -83,14 +83,18 @@ def await_token(connection, token):
             raise ValueError("worker frame exceeds the existing protocol bound")
         payload = read_exact(connection, length)
         if header[0] == 1:
-            value = json.loads(payload)
-            if value["type"] == "error":
-                raise RuntimeError(f"daemon or worker refused cohort I/O: {value}")
+            check_control(payload)
         if header[0] == 2:
             output.extend(payload[16:])
         if token.encode() in output.replace(b"\r", b"").splitlines():
             return
     raise RuntimeError("retained worker did not exchange its cohort token")
+
+
+def check_control(payload):
+    value = json.loads(payload)
+    if value["type"] == "error":
+        raise RuntimeError(f"daemon or worker refused cohort I/O: {value}")
 
 
 def process_info(pid):
@@ -215,6 +219,16 @@ def stop_one(worker):
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    for _ in range(120):
+        if not worker_running(worker):
+            return
+        time.sleep(0.025)
+    raise RuntimeError("cohort process survived teardown")
+
+
+def worker_running(worker):
+    result = subprocess.run(["ps", "-p", str(worker["pid"]), "-o", "stat="], capture_output=True, timeout=5, check=False)
+    return result.returncode == 0 and not result.stdout.strip().startswith(b"Z")
 
 
 def main(arguments):
@@ -222,13 +236,15 @@ def main(arguments):
     if operation == "start":
         state, config, registry, source_version, source_binary, output = values
         start(state, config, applicable(registry, source_version, source_binary), output)
-    elif operation == "verify":
+        return
+    if operation == "verify":
         digests = verify(*values)
         print(json.dumps(digests))
-    elif operation == "stop":
+        return
+    if operation == "stop":
         stop(values[0])
-    else:
-        raise ValueError("unknown worker cohort operation")
+        return
+    raise ValueError("unknown worker cohort operation")
 
 
 if __name__ == "__main__":

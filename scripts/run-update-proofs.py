@@ -61,14 +61,18 @@ def main():
     if not Path(environment["MESH_WORKER_REGISTRY"]).is_file():
         raise ValueError("native proof requires the complete exact worker registry")
     results = []
-    for index, line in enumerate(args.baselines.read_text().splitlines()):
-        if index % args.shards != args.shard:
-            continue
+    full_index, forward_index = 0, 0
+    for line in args.baselines.read_text().splitlines():
         binary = Path(line)
         if not binary.is_absolute():
             binary = args.baselines.parent / binary
         source = binary.parent / "source.json"
         evidence = json.loads(source.read_bytes()) if source.exists() else {"version": binary.name, "rollback": True}
+        assignment = full_index if evidence["rollback"] else forward_index
+        full_index += int(evidence["rollback"])
+        forward_index += int(not evidence["rollback"])
+        if assignment % args.shards != args.shard:
+            continue
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         expected = evidence.get("artifact", {}).get("binarySha256")
         if not expected:

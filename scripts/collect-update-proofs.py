@@ -8,7 +8,8 @@ import sys
 
 def collect(source, destination):
     count = 0
-    for path in source.glob("*/proofs/**/*.json"):
+    paths = list(source.glob("*/proofs/*.json")) + list(source.glob("*/proofs/rollback/*.rollback.json"))
+    for path in paths:
         name = path.name
         match = re.fullmatch(r"([0-9a-f]{64})(\.rollback)?\.json", name)
         if not match:

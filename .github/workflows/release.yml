@@ -214,6 +214,7 @@ jobs:
             dist/mesh-release.json
             dist/mesh-update.json
             dist/mesh-retention.json
+            dist/mesh-workers.json
             dist/mesh_*.tar.gz
       - name: Verify original bundle and candidate verifier
         env:
@@ -223,7 +224,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh_*.tar.gz; do
+          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz; do
             gh attestation verify "$subject" --bundle "$BUNDLE" \
               --repo ShaulLavo/mesh \
               --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
@@ -240,9 +241,9 @@ jobs:
           done
           (( status == 0 )) || exit "$status"
           "$signer" wrap "$BUNDLE" dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz
           "$signer" verify dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz
           "$signer" verify-metadata dist/mesh-update.json dist/mesh-update.sig.json dist/mesh-release.json "$RUNNER_TEMP/metadata-page.json"
       - name: Upload signed draft assets
         env:
@@ -250,7 +251,7 @@ jobs:
           VERSION: ${{ needs.reserve.outputs.version }}
         run: |
           shopt -s nullglob
-          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json)
+          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json)
           gh release upload "$VERSION" --clobber "${assets[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
