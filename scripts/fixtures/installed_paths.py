@@ -32,7 +32,8 @@ def validate(root, system=None):
     longest = max(row["bytes"] for row in paths)
     if longest > maximum:
         raise ValueError(f"installed fixture socket requires {longest} bytes; maximum is {maximum}")
-    return {"root": str(root), "maximumSocketBytes": maximum, "longestSocketBytes": longest, "paths": paths}
+    return {"root": str(root), "maximumSocketBytes": maximum, "longestSocketBytes": longest, "paths": paths,
+            "directNoindexRoot": root.name.endswith(".noindex")}
 
 
 def create():
@@ -41,9 +42,12 @@ def create():
     require_mounted_drive(selected)
     base = selected.resolve(strict=True)
     require_mounted_drive(base)
-    root = Path(tempfile.mkdtemp(prefix="mi-", dir=base)).resolve()
+    darwin = platform.system() == "Darwin"
+    root = Path(tempfile.mkdtemp(prefix="mg-" if darwin else "mi-", suffix=".noindex" if darwin else "", dir=base)).resolve()
     try:
         validate(root)
+        if darwin and (not root.name.endswith(".noindex") or root.stat().st_uid != os.getuid()):
+            raise ValueError("Darwin installed scratch is not an owned direct .noindex root")
     except ValueError:
         shutil.rmtree(root)
         raise

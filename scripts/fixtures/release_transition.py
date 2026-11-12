@@ -142,7 +142,8 @@ def prepare_rollback(state, old, candidate, label, failed_image=None):
     if any(failed[field] != target[field] for field in ("version", "commit", "platform", "stateVersion", "workerProtocol")):
         raise ValueError("startup companion does not belong to the actual release candidate")
     (root / (label + ".image-context.json")).write_text(json.dumps({
-        "release": target, "failedImage": failed, "manifest": str(Path(os.environ["MESH_ROLLBACK_MANIFEST"]).resolve()),
+        "release": target, "source": source, "failedImage": failed, "manifest": str(Path(os.environ["MESH_ROLLBACK_MANIFEST"]).resolve()),
+        "manifestSha256": hashlib.sha256(Path(os.environ["MESH_ROLLBACK_MANIFEST"]).read_bytes()).hexdigest(),
         "startupCompanion": failed["digest"] != target["digest"]}, sort_keys=True) + "\n")
     workers = retained_workers(state)
     with sqlite3.connect(state / "mesh.db") as database:

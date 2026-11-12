@@ -20,7 +20,7 @@ transitions = []
 receipts = []
 identities = set()
 for path in sorted(args.proofs.glob("*.json")):
-    if path.name.endswith(".rollback.json"):
+    if path.name.endswith((".rollback.json", ".worker-groups.json")):
         continue
     contents = path.read_bytes()
     digest = hashlib.sha256(contents).hexdigest()

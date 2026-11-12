@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort
+from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort, release_worker_groups
 
 
 class AdoptionCase(installed_native.Installation):
@@ -28,14 +28,25 @@ class AdoptionCase(installed_native.Installation):
         self.prior = None
         self.cohort = None
         self.expected_workers = 1
+        self.worker_group = None
 
     def start_cohort(self, registry, probe):
         current = self.control("host.info")["host"]["build"]
         self.cohort = installed_cohort.Cohort(registry, probe, self.state, self.root / "config",
-            current["version"], self.binary, self.root / "cohort.json")
+            current["version"], self.binary, self.root / "cohort.json", self.worker_group,
+            {"stateRun": self.run_identity(), "session": self.session, "pid": self.worker, "shellPid": self.shell,
+             "digest": self.pair["daemon"]["artifact"]["binarySha256"], "protocol": self.original_protocol(),
+             "imageBytes": Path(self.pair["daemon"]["executable"]).stat().st_size})
         observed = self.cohort.start()
         self.expected_workers += len(self.cohort.selected)
         return observed
+
+    def run_identity(self):
+        return self.process_stamps[self.worker] + ":" + str(self.worker) + ":" + str(self.root)
+
+    def original_protocol(self):
+        result = subprocess.check_output([str(self.pair["daemon"]["executable"]), "version", "--json"], env=self.environment, timeout=10)
+        return json.loads(result)["workerProtocol"]
 
     def seed_prior(self):
         if self.previous is None:
@@ -233,8 +244,9 @@ def validate_initialized_baseline(before, after, domain_path):
         raise RuntimeError("baseline initialization created an unexpected preserved component")
 
 
-def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None, registry=None, probe=None):
+def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None, registry=None, probe=None, group=None):
     case = AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
+    case.worker_group = group
     record = {"host": host["name"], "scenario": scenario, "passed": False, "supplementalSourceCandidate": True}
     try:
         record["initial"] = case.prepare()
@@ -258,6 +270,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         raise
     finally:
         finish_case(case, record, output)
+    return case.root
 
 
 def finish_case(case, record, output):
@@ -354,6 +367,11 @@ def run_host_cases(root, output, host, pair, previous, preparer, origin, release
     scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial", "interrupt")
     if selected:
         scenarios = (selected,)
+    if releases.registry:
+        groups = installed_groups(releases.registry, host["daemon"], pair["daemon"]["executable"], pair["daemon"]["executable"])
+        for scenario in scenarios:
+            run_grouped_adoption(root, output, host, pair, previous, preparer, origin, releases, scenario, groups)
+        return []
     for scenario in scenarios:
         try:
             prior = None if scenario == "initial" else previous
@@ -362,6 +380,38 @@ def run_host_cases(root, output, host, pair, previous, preparer, origin, release
             require_clean_case(output, host["name"] + "-" + scenario, releases)
             failures.append(host["name"] + "/" + scenario + ": " + str(error))
     return failures
+
+
+def installed_groups(registry, version, binary, original):
+    selection = release_worker_groups.freeze(registry, version, binary)
+    return release_worker_groups.partition(selection, Path(original).stat().st_size)
+
+
+def run_grouped_adoption(root, output, host, pair, previous, preparer, origin, releases, scenario, groups):
+    destination = output / "groups" / (host["name"] + "-" + scenario)
+    for group in groups:
+        releases.check_budget()
+        directory = destination / str(group["index"])
+        directory.mkdir(parents=True)
+        prior = None if scenario == "initial" else previous
+        case_root = run_case(root, directory, host, pair, preparer, origin, releases, scenario, prior,
+                             releases.registry, releases.probe, group)
+        validate_installed_group(directory, group, ["before-install", "after-" + scenario])
+        shutil.rmtree(case_root)
+        releases.check_budget()
+
+
+def validate_installed_group(output, group, labels):
+    records = list(output.glob("*-native-pair.json"))
+    cohorts = list(output.glob("*-cohort.json"))
+    if len(records) != 1 or len(cohorts) != 1:
+        raise RuntimeError("installed group completion or cohort evidence missing")
+    result = json.loads(records[0].read_bytes())
+    if result.get("passed") is not True or result.get("cleanup") != {"servicesAbsent": True, "processesAbsent": True}:
+        raise RuntimeError("installed group failed or cleanup unconfirmed")
+    observed = json.loads(cohorts[0].read_bytes())
+    release_worker_groups.validate_observations(observed, release_worker_groups.public_group(group), labels)
+    return observed
 
 
 def require_clean_case(output, name, releases):
@@ -387,8 +437,13 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
         (output / "prepared-chain.json").write_text(json.dumps({"supplementalSourceBuilds": releases.builds,
             "metadata": releases.metadata}, indent=2) + "\n")
         return
+    first = installed_releases.VERSIONS[0]
+    groups = installed_groups(releases.registry, first, releases.builds[first]["path"], pair["daemon"]["executable"])
+    if format_waypoint:
+        for group in groups:
+            installed_waypoint.verify_readers(releases, group)
     for failure in ("none", "first", "final"):
-        installed_chain.run_case(root, output, host, pair, preparer, origin, releases, previous, failure)
+        installed_chain.run_groups(root, output, host, pair, preparer, origin, releases, previous, failure, groups)
 
 
 def run_order(root, output, native, preparer, host, releases, origin, prepare_only):

@@ -15,7 +15,11 @@ def verify_harness(expected, output):
     actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     if not re.fullmatch(r"[0-9a-f]{40}", expected) or actual != expected:
         raise RuntimeError("actual harness checkout differs from its explicit source pin")
-    Path(output).write_text(json.dumps({"expected": expected, "actual": actual}) + "\n")
+    from fixtures import release_worker_groups
+    module = Path(release_worker_groups.__file__)
+    Path(output).write_text(json.dumps({"expected": expected, "actual": actual, "workerGrouping": {
+        "moduleSha256": hashlib.sha256(module.read_bytes()).hexdigest(), "maxRegistryMembers": release_worker_groups.MAX_MEMBERS,
+        "imageBudgetBytes": release_worker_groups.MAX_IMAGES, "independentStates": True}}) + "\n")
 
 
 def api(endpoint):
@@ -88,6 +92,8 @@ def fetch_archive(url, archive, artifact):
 
 
 def extract_archive(archive, directory):
+    from fixtures import noindex_paths
+    noindex_paths.require(directory)
     with zipfile.ZipFile(archive) as package:
         for member in package.infolist():
             require_local_member(member)

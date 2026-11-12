@@ -2,14 +2,16 @@
 import hashlib
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
+import time
 import tarfile
 from pathlib import Path
 
 from fixtures import installed_origin, native_services
-from fixtures import release_workers
+from fixtures import release_workers, release_worker_groups
 
 REPO = Path(__file__).resolve().parents[2]
 PLATFORMS = ("linux/amd64", "linux/arm64", "darwin/arm64")
@@ -54,6 +56,7 @@ class Releases:
         self.directory.mkdir()
         self.signer = None
         self.signer_log = None
+        self.signer_started = None
         self.registry, self.probe = None, None
         self.builds, self.manifests, self.metadata, self.startup = {}, {}, {}, {}
 
@@ -71,6 +74,7 @@ class Releases:
         environment = self.environment() | {"MESH_INSTALLED_FIXTURE_DIR": str(self.root)}
         subprocess.run([str(binary), "-test.run=^TestInstalledEmptyLedgerBoundary$"], env=environment,
                        capture_output=True, check=True, timeout=15)
+        self.signer_started = time.monotonic()
         self.signer = subprocess.Popen([str(binary), "-test.run", "^TestInstalledFixtureExport$", "-test.timeout=600s"], cwd=REPO, env=environment,
             stdout=self.signer_log, stderr=subprocess.STDOUT)
         native_services.wait_for(self.signer_ready, "installed signature exporter did not start")
@@ -79,6 +83,10 @@ class Releases:
         if self.signer.poll() is not None:
             raise RuntimeError("installed signature exporter exited: " + (self.root / "signer.log").read_text()[-8192:])
         return (self.root / "control.sock").exists()
+
+    def check_budget(self):
+        if self.signer_started is None or self.signer.poll() is not None or time.monotonic() - self.signer_started >= 600:
+            raise RuntimeError("installed fixture signer lifetime ended; no clock was reset")
 
     def build(self, version, epoch=1):
         overlay = self.overlay(epoch)
@@ -177,10 +185,8 @@ class Releases:
                 "MESH_ROLLBACK_MANIFEST": str(context_manifest)}
             if self.registry:
                 environment.update(MESH_WORKER_REGISTRY=str(self.registry), MESH_WORKER_PROBE=str(self.probe))
-            subprocess.run(["bash", str(REPO / "scripts/prove-release-transition.sh"), str(source), self.builds[target]["path"],
-                self.native, str(directory)], cwd=REPO, env=environment, stdout=output, stderr=subprocess.STDOUT, check=True,
-                timeout=600 if self.registry else 180)
-        receipts = [path for path in directory.glob("*.json") if path != context_manifest]
+            self.run_transition(source, target, directory, environment, output)
+        receipts = [path for path in directory.glob("*.json") if release_worker_groups.RECEIPT.fullmatch(path.name)]
         rollbacks = list((directory / "rollback").glob("*.rollback.json"))
         if len(receipts) != 1 or len(rollbacks) != 1:
             raise RuntimeError("native full transition did not produce one forward and rollback proof")
@@ -191,7 +197,22 @@ class Releases:
         manifest["compatibility"]["transitions"].append({key: proof[key] for key in ("platform", "fromDigest", "toDigest")} | {"proof": receipt.stem})
         shutil.copy2(receipt, self.directory / target / receipt.name)
         shutil.copy2(rollback, self.directory / target / rollback.name)
+        for path in directory.glob("*.worker-groups.json"):
+            shutil.copy2(path, self.directory / target / path.name)
+        for path in (directory / "groups" / "leaves").glob("*.worker-group.json"):
+            shutil.copy2(path, self.directory / target / path.name)
         return {"forward": receipt.stem, "rollback": rollback.name.removesuffix(".rollback.json")}
+
+    def run_transition(self, source, target, directory, environment, output):
+        command = ["bash", str(REPO / "scripts/prove-release-transition.sh"), str(source), self.builds[target]["path"], self.native, str(directory)]
+        with subprocess.Popen(command, cwd=REPO, env=environment, stdout=output, stderr=subprocess.STDOUT, start_new_session=True) as process:
+            try:
+                code = process.wait(timeout=600 if self.registry else 180)
+            except BaseException:
+                stop_transition(process)
+                raise
+        if code:
+            raise subprocess.CalledProcessError(code, command)
 
     def publish(self, version, ordinal, rollbacks, since=(), epoch=1, reader_epoch=1, anchors_from=0, entries=None):
         directory = self.directory / version
@@ -221,6 +242,8 @@ class Releases:
             "head": {"tag": version, "name": "mesh-update.json", "sha256": digest((directory / "mesh-update.json").read_bytes())}})
 
     def close(self):
+        if self.signer_started is not None:
+            write_json(self.output / "signer-lifetime.json", {"seconds": time.monotonic() - self.signer_started, "limitSeconds": 600})
         if self.signer and self.signer.poll() is None:
             try:
                 installed_origin.sign(self.root, [], stop=True)
@@ -230,3 +253,14 @@ class Releases:
                 self.signer.wait(timeout=10)
         if self.signer_log:
             self.signer_log.close()
+
+
+def stop_transition(process):
+    if process.poll() is not None:
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait(timeout=10)

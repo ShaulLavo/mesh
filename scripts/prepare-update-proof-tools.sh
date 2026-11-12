@@ -8,6 +8,7 @@ output=$(python3 -c 'from pathlib import Path; import sys; print(Path(sys.argv[1
 version=$2
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 mkdir -p "$output"
+python3 "$repo_root/scripts/fixtures/noindex_paths.py" "$output"
 cd "$repo_root"
 source_commit=$(git rev-parse HEAD)
 if [[ -n $(git status --porcelain) ]]; then

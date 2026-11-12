@@ -175,7 +175,7 @@ jobs:
           name: update-policy
           path: ${{ runner.temp }}/mesh-policy
       - name: Collect every native proof asset
-        run: python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/proof-shards" proofs
+        run: python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/proof-shards" proofs "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
       - name: Build immutable release manifest
         env:
           VERSION: ${{ needs.reserve.outputs.version }}
@@ -215,6 +215,7 @@ jobs:
             dist/mesh-update.json
             dist/mesh-retention.json
             dist/mesh-workers.json
+            dist/mesh-worker-groups.json
             dist/mesh_*.tar.gz
       - name: Verify original bundle and candidate verifier
         env:
@@ -224,7 +225,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz; do
+          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz; do
             gh attestation verify "$subject" --bundle "$BUNDLE" \
               --repo ShaulLavo/mesh \
               --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
@@ -241,9 +242,9 @@ jobs:
           done
           (( status == 0 )) || exit "$status"
           "$signer" wrap "$BUNDLE" dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
           "$signer" verify dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
           "$signer" verify-metadata dist/mesh-update.json dist/mesh-update.sig.json dist/mesh-release.json "$RUNNER_TEMP/metadata-page.json"
       - name: Upload signed draft assets
         env:
@@ -251,7 +252,7 @@ jobs:
           VERSION: ${{ needs.reserve.outputs.version }}
         run: |
           shopt -s nullglob
-          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json)
+          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json proofs/groups/leaves/*.worker-group.json)
           gh release upload "$VERSION" --clobber "${assets[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -370,6 +371,10 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.reserve.outputs.source }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Recover the verified draft Cask
         env:
           GH_TOKEN: ${{ github.token }}
@@ -377,11 +382,16 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/final-cask"
           gh release download "$VERSION" --pattern mesh.rb --dir "$RUNNER_TEMP/final-cask"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: installed-publication-*
+          path: ${{ runner.temp }}/installed-completion
       - name: Upload and publish after ancestry recheck
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
           PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
+          MESH_INSTALLED_COMPLETION: ${{ runner.temp }}/installed-completion
         run: |
           scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" "$RUNNER_TEMP/final-cask/mesh.rb"

@@ -32,7 +32,8 @@ func TestRetainedWorkerCohortIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	var expected struct {
-		Workers []cohortWorker `json:"workers"`
+		Workers  []cohortWorker `json:"workers"`
+		Original *cohortWorker  `json:"original"`
 	}
 	if err := json.Unmarshal(data, &expected); err != nil {
 		t.Fatal(err)
@@ -43,6 +44,9 @@ func TestRetainedWorkerCohortIdentity(t *testing.T) {
 	}
 	if len(expected.Workers) == 0 {
 		t.Fatal("empty retained cohort cannot certify worker coverage")
+	}
+	if expected.Original != nil {
+		expected.Workers = append(expected.Workers, *expected.Original)
 	}
 	for _, want := range expected.Workers {
 		if !matchesCohort(want, observed.Health.Workers) {

@@ -7,15 +7,17 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fixtures import release_workers
+from fixtures import release_workers, release_worker_groups
 
 
 def stage(registry, destination, platform):
+    from fixtures import noindex_paths
     registry = Path(registry).resolve(strict=True)
     data = json.loads(registry.read_text())
     if data["schema"] != 1 or data["platform"] != platform or not data["workers"]:
         raise RuntimeError("native exact worker registry schema/platform differs")
     destination.mkdir(parents=True)
+    noindex_paths.require(destination)
     owned = os.environ.get("MESH_OWNED_WORKER_INPUT")
     if owned and (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
         raise RuntimeError("owned native artifact links require the disposable hosted input directory")
@@ -61,20 +63,31 @@ def copy_image(source, target, owned_root):
 
 
 class Cohort:
-    def __init__(self, registry, probe, state, config, version, binary, record):
+    def __init__(self, registry, probe, state, config, version, binary, record, group=None, original=None):
         self.registry, self.probe, self.state, self.config = registry, probe, state, config
         self.version, self.binary, self.record = version, binary, record
+        self.group, self.original = group, original
+        if group is not None:
+            self.selected = group["members"]
+            return
         script = "import json,sys; from fixtures.release_workers import applicable; print(json.dumps(applicable(*sys.argv[1:])))"
         environment = self.environment() | {"PYTHONPATH": str(Path(release_workers.__file__).parent.parent)}
         data = subprocess.check_output([os.sys.executable, "-c", script, str(registry), version, str(binary)], env=environment, timeout=90)
         self.selected = json.loads(data)
 
     def environment(self):
-        return os.environ | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
+        environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
+        if self.original is not None:
+            environment["MESH_GROUP_ORIGINAL"] = json.dumps(self.original)
+        return environment
 
     def start(self):
         # The shared producer persists ownership before each worker can start.
         environment = self.environment()
+        if self.group is not None:
+            path = self.record.with_name("selected-group.json")
+            path.write_bytes(release_worker_groups.encode({"group": self.group, "originalBytes": self.original["imageBytes"]}))
+            environment["MESH_WORKER_GROUP"] = str(path)
         subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start", str(self.state), str(self.config),
             str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
             capture_output=True, text=True, check=True, timeout=90)

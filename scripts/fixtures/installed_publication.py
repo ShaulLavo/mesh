@@ -12,7 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases
+from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index
 
 
 def require_main():
@@ -55,9 +55,10 @@ def load_draft(root, output, directory, native, version, source, url):
         raise RuntimeError("real draft metadata or manifest differs from its exact source/version pin")
     if published_releases.digest((directory / "mesh-release.json").read_bytes()) != metadata["manifest"]:
         raise RuntimeError("real signed metadata does not bind its exact release manifest")
-    subjects = [directory / name for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json", "mesh-workers.json")]
+    subjects = [directory / name for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json", "mesh-workers.json", "mesh-worker-groups.json")]
     subjects.extend(directory / item["archive"] for item in manifest["artifacts"])
     verify_signature(root, output, directory / "mesh-update.sig.json", subjects)
+    release_worker_index.validate_index(directory / "mesh-worker-groups.json", manifest)
     platform = dict(zip(("os", "arch"), native.split("/")))
     artifact = next(item for item in manifest["artifacts"] if item["platform"] == platform)
     binary = root / "real-candidate"
@@ -195,6 +196,8 @@ def prove(root, output, native, version, source, preparer, registry=None, probe=
         run_first_published(root, output, version, releases, origin, registry, probe)
     finally:
         (output / "publication-transport-cleanup.json").write_text(json.dumps(origin.close(), indent=2) + "\n")
+    from fixtures import release_worker_completion
+    release_worker_completion.record(root, output, native, version, source)
 
 
 def run_pairs(root, output, native, version, preparer, releases, origin):
@@ -265,13 +268,34 @@ def run_first_published(root, output, version, releases, origin, registry, probe
         raise RuntimeError("original published updater image differs from its published baseline")
     releases.builds[first] = build | {"path": str(baseline["executable"])}
     owned_registry = installed_cohort.stage(registry, root / "published-workers", platform)
+    groups = installed_adoption.installed_groups(owned_registry, first, baseline["executable"], baseline["executable"])
     for rollback in (False, True):
-        published_route(root, output, first, version, releases, origin, owned_registry, probe, rollback)
+        run_published_groups(root, output, first, version, releases, origin, owned_registry, probe, rollback, groups)
 
 
-def published_route(root, output, first, target, releases, origin, registry, probe, rollback):
+def run_published_groups(root, output, first, target, releases, origin, registry, probe, rollback, groups):
+    for group in groups:
+        directory = output / "groups" / ("published-rollback" if rollback else "published") / str(group["index"])
+        directory.mkdir(parents=True)
+        case_root = published_route(root, directory, first, target, releases, origin, registry, probe, rollback, group)
+        records = list(directory.glob("*-native-pair.json"))
+        if len(records) != 1:
+            raise RuntimeError("published group completion is missing")
+        result = json.loads(records[0].read_bytes())
+        required = ["before-install"] + ["real-published-hop-" + hop["build"]["version"] for hop in result["hops"]]
+        required.append("real-published-final")
+        if rollback:
+            required.append("native-failed-edge-restart")
+        installed_adoption.validate_installed_group(directory, group, required)
+        shutil.rmtree(case_root)
+    from fixtures import release_worker_completion
+    release_worker_completion.route_companion(output, first, target, rollback, groups)
+
+
+def published_route(root, output, first, target, releases, origin, registry, probe, rollback, group=None):
     name = "published-rollback" if rollback else "published"
     case = installed_fresh.FreshCase(root, origin, releases, version=first, publication=True, name=name)
+    case.worker_group = group
     fault = PortFault(case, target)
     record = {"passed": False, "firstPublishedUpdater": first, "realDraft": target, "rollback": rollback, "hops": []}
     origin.head(releases.directory, first)
@@ -308,6 +332,7 @@ def published_route(root, output, first, target, releases, origin, registry, pro
         raise
     finally:
         finish_fault_case(case, record, output, fault)
+    return case.root
 
 
 def finish_fault_case(case, record, output, fault):

@@ -77,6 +77,10 @@ def main():
                        MESH_WORKER_REGISTRY=str(args.baselines.parent / "retained" / "workers.json"))
     if not Path(environment["MESH_WORKER_REGISTRY"]).is_file():
         raise ValueError("native proof requires the complete exact worker registry")
+    preparation = json.loads((args.tools / "preparation.json").read_bytes())
+    environment["MESH_PREPARATION_SOURCE"] = preparation["source"]["commit"]
+    shutil.copyfile(environment["MESH_WORKER_REGISTRY"], args.output / "worker-registry.json")
+    shutil.copyfile(args.tools / "preparation.json", args.output / "preparation.json")
     results = []
     full_index, forward_index = 0, 0
     for binary, evidence in sources:

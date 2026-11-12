@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import sys
 
+from fixtures import release_worker_index
+
 
 def stage(root, version, dist, proofs, shards):
     input_path = root / "input.json"
@@ -23,6 +25,15 @@ def stage(root, version, dist, proofs, shards):
     candidate = root / "documents" / version
     candidate.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(dist / "mesh-release.json", candidate / "mesh-release.json")
+    frozen = json.loads((proofs / "groups" / "frozen.json").read_bytes())
+    if frozen["selection"] != json.loads((root / "selection.json").read_bytes()):
+        raise ValueError("frozen worker selection changed before publication")
+    manifest = json.loads((dist / "mesh-release.json").read_bytes())
+    index = release_worker_index.stage(dist, proofs, frozen, manifest["commit"])
+    for name in release_worker_index.closure(index, release_worker_index.resolver(proofs)):
+        source = proofs / name if name.endswith(".worker-groups.json") else proofs / "groups" / "leaves" / name
+        shutil.copyfile(source, candidate / name)
+    shutil.copyfile(dist / "mesh-worker-groups.json", candidate / "mesh-worker-groups.json")
     for path in proofs.glob("*.json"):
         shutil.copyfile(path, candidate / path.name)
     rollback = []

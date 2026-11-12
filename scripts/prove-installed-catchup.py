@@ -48,11 +48,14 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     root = installed_paths.create()
     try:
+        from fixtures import noindex_paths
+        (output / "noindex-setup.json").write_text(json.dumps(noindex_paths.require(root) | {"before": noindex_paths.observation()}) + "\n")
         (output / "socket-paths.json").write_text(json.dumps(installed_paths.validate(root), indent=2) + "\n")
         native_services.positive_control(root, output / "native-manager.json")
         run_requested(arguments, root, output, native)
     finally:
         clean_scratch(root, output)
+        (output / "noindex-after.json").write_text(json.dumps(noindex_paths.observation()) + "\n")
 
 
 def run_requested(arguments, root, output, native):
@@ -85,7 +88,7 @@ def clean_scratch(root, output):
     cleanup = json.loads(record.read_text()).get("cleanup", {}) if record.exists() else {}
     if not cleanup.get("serviceAbsent") or not cleanup.get("processAbsent"):
         raise RuntimeError(f"native cleanup unconfirmed; retained {root} for the test owner")
-    for path in output.glob("*-native-pair.json"):
+    for path in output.rglob("*-native-pair.json"):
         pair = json.loads(path.read_text()).get("cleanup", {})
         if not pair.get("servicesAbsent") or not pair.get("processesAbsent"):
             raise RuntimeError(f"installed cleanup unconfirmed; retained {root} for the test owner")

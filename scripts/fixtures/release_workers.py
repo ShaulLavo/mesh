@@ -201,11 +201,15 @@ def start(state, config, selected, path):
 def verify(state, path, label, daemon=True):
     state, path = Path(state), Path(path)
     record = json.loads(path.read_bytes())
+    original = json.loads(os.environ["MESH_GROUP_ORIGINAL"]) if os.environ.get("MESH_GROUP_ORIGINAL") else None
+    record["original"] = original
+    save(path, record)
     observer_seconds = verify_images(state, path)
     rss = 0
     for worker in record["workers"]:
         rss += verify_one(state, worker, label, daemon)
-    record["observations"].append({"label": label, "workers": len(record["workers"]),
+    identities = [{key: row[key] for key in ("session", "pid", "shellPid", "digest", "protocol", "version")} for row in record["workers"]]
+    record["observations"].append({"label": label, "workers": len(record["workers"]), "identities": identities, "original": original,
                                    "processes": 2 * len(record["workers"]), "rssKiB": rss,
                                    "observerSeconds": observer_seconds})
     save(path, record)
@@ -258,14 +262,20 @@ def stop_one(worker):
         except ProcessLookupError:
             pass
     for _ in range(120):
-        if not worker_running(worker):
+        if not worker_running(worker) and not process_running(worker["shellPid"]):
             return
         time.sleep(0.025)
     raise RuntimeError("cohort process survived teardown")
 
 
 def worker_running(worker):
-    result = subprocess.run(["ps", "-p", str(worker["pid"]), "-o", "stat="], capture_output=True, timeout=5, check=False)
+    return process_running(worker["pid"])
+
+
+def process_running(pid):
+    if not pid:
+        return False
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, timeout=5, check=False)
     return result.returncode == 0 and not result.stdout.strip().startswith(b"Z")
 
 
@@ -273,7 +283,10 @@ def main(arguments):
     operation, *values = arguments
     if operation == "start":
         state, config, registry, source_version, source_binary, output = values
-        start(state, config, applicable(registry, source_version, source_binary), output)
+        from fixtures import release_worker_groups
+        descriptor = os.environ.get("MESH_WORKER_GROUP")
+        selected = release_worker_groups.selected_group(descriptor) if descriptor else applicable(registry, source_version, source_binary)
+        start(state, config, selected, output)
         return
     if operation == "verify":
         digests = verify(*values)

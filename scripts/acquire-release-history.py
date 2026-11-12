@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 
-from fixtures import published_releases
+from fixtures import published_releases, release_worker_groups, release_worker_index
 
 REPOSITORY = "ShaulLavo/mesh"
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
@@ -19,6 +19,7 @@ LIMITS = {"mesh-release.json": 512 << 10, "mesh-update.json": 64 << 10,
           "mesh-update.sig.json": 256 << 10, "mesh-update-root.json": 4 << 10,
           "mesh-retention.json": 16 << 20}
 LIMITS["mesh-workers.json"] = 8 << 20
+LIMITS["mesh-worker-groups.json"] = 1 << 20
 
 
 def api(endpoint):
@@ -73,7 +74,7 @@ def cache_asset(asset, cache, limit):
 
 
 def route_asset(name):
-    return name in LIMITS or PROOF.fullmatch(name) or name.startswith("mesh-anchors-")
+    return name in LIMITS or PROOF.fullmatch(name) or release_worker_groups.ASSET.fullmatch(name) or name.startswith("mesh-anchors-")
 
 
 def api_digest(asset, cache):
@@ -110,6 +111,8 @@ def acquire_release(item, cache, documents, cancelled):
         hits += int(hit)
         (directory / name).write_bytes(data)
         retained.append({"name": name, "sha256": digest(data)})
+    if (directory / "mesh-worker-groups.json").exists():
+        release_worker_index.validate_index(directory / "mesh-worker-groups.json", json.loads((directory / "mesh-release.json").read_bytes()))
     return {"tag": item["tag_name"], "publishedAt": item["published_at"], "assets": retained}, hits
 
 

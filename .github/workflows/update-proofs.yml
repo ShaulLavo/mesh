@@ -135,8 +135,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$PLATFORM"
-          root="$RUNNER_TEMP/mesh-native"
+          root="$RUNNER_TEMP/mesh-native.noindex"
           mkdir -p "$root"
+          python3 scripts/fixtures/noindex_paths.py "$root" > "$root/noindex-setup.json"
           export MESH_BASELINE_CACHE="$HOME/.cache/mesh-release-baselines"
           export MESH_RELEASE_SELECTION="$RUNNER_TEMP/mesh-policy/selection.json"
           if [[ $DRAFT == true ]]; then
@@ -146,7 +147,7 @@ jobs:
             scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
           fi
           python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
-          short=$(mktemp -d /tmp/mw-XXXXXX)
+          short=$(mktemp -d /tmp/mw-XXXXXX.noindex)
           trap 'rm -rf -- "$short"' EXIT
           TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
           grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
@@ -161,16 +162,16 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-native-${{ matrix.key }}
-          path: ${{ runner.temp }}/mesh-native
+          path: ${{ runner.temp }}/mesh-native.noindex
           retention-days: 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-context-${{ matrix.key }}
-          path: ${{ runner.temp }}/mesh-native/tools/rollback-artifact.json
+          path: ${{ runner.temp }}/mesh-native.noindex/tools/rollback-artifact.json
           retention-days: 7
       - name: Remove native staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-native" "$RUNNER_TEMP/mesh-policy"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy"
 
   context:
     needs: prepare
@@ -228,14 +229,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
+      - name: Create owned excluded native extraction root
+        run: |
+          mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
+          python3 scripts/fixtures/noindex_paths.py "$RUNNER_TEMP/mesh-native.noindex"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-native-${{ matrix.key }}
-          path: ${{ runner.temp }}/mesh-native
+          path: ${{ runner.temp }}/mesh-native.noindex
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-rollback-manifest
-          path: ${{ runner.temp }}/mesh-native
+          path: ${{ runner.temp }}/mesh-native.noindex
       - name: Exercise required sources with the actual native executables
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -244,10 +249,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
-          root="$RUNNER_TEMP/mesh-native"
+          root="$RUNNER_TEMP/mesh-native.noindex"
           chmod +x "$root"/tools/candidate "$root"/tools/startup-fault-candidate "$root"/tools/boundary "$root"/tools/worker-probe
           find "$root/retained" -type f -name mesh -exec chmod +x {} +
           count=$(python3 -c 'import json,os; print(len(json.loads(os.environ["SHARDS"])))')
@@ -260,7 +265,7 @@ jobs:
           retention-days: 7
       - name: Remove proof staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-native" "$RUNNER_TEMP/update-proof"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/update-proof"
 
   reader:
     name: Original schema 1 release reader
@@ -293,12 +298,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/reader"
           mkdir -p "$root"
-          python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/reader-proofs" "$root/proofs"
+          python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/reader-proofs" "$root/proofs" "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
           python3 scripts/prepare-legacy-reader-assets.py "$RUNNER_TEMP/reader-native" "$RUNNER_TEMP/mesh-policy" "$root/dist"
           scripts/assemble-release-compatibility.py "$root/proofs" "$root/compatibility.json"
           scripts/generate-release-manifest.sh -dist "$root/dist" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/dist/mesh-release.json"

@@ -26,9 +26,10 @@ def prepare(releases, origin, source):
     origin.head(releases.directory, first)
 
 
-def run_case(root, output, host, pair, preparer, origin, releases, previous, failure):
+def run_case(root, output, host, pair, preparer, origin, releases, previous, failure, group=None):
     scenario = {"none": "chain", "first": "chain-first-rollback", "final": "chain-rollback"}[failure]
     case = installed_adoption.AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
+    case.worker_group = group
     record = {"scenario": scenario, "passed": False, "supplementalSourceBuilds": True, "hops": []}
     first, intermediate, final = installed_releases.VERSIONS
     origin.head(releases.directory, first)
@@ -58,6 +59,26 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         raise
     finally:
         finish(case, record, output)
+    return case.root
+
+
+def run_groups(root, output, host, pair, preparer, origin, releases, previous, failure, groups):
+    first, intermediate, final = installed_releases.VERSIONS
+    expected = ["before-install"]
+    if failure == "first":
+        expected.extend(["native-first-hop-rollback", "native-failed-edge-restart"])
+    else:
+        expected.extend(["native-hop-" + intermediate, "native-final-" + ("rolled_back" if failure == "final" else "committed")])
+    if failure == "final":
+        expected.append("native-failed-edge-restart")
+    for group in groups:
+        releases.check_budget()
+        directory = output / "groups" / (host["name"] + "-chain-" + failure) / str(group["index"])
+        directory.mkdir(parents=True)
+        case_root = run_case(root, directory, host, pair, preparer, origin, releases, previous, failure, group)
+        installed_adoption.validate_installed_group(directory, group, expected)
+        shutil.rmtree(case_root)
+        releases.check_budget()
 
 
 def await_chain(case, record, intermediate, final, fail_final):
