@@ -254,7 +254,20 @@ func finishHelperPromotion(ctx context.Context, cfg HelperConfig, installed Help
 	if err := replaceHelperLink(filepath.Join(transactionDir(cfg.StateDir), "helper", "current"), installed.Executable); err != nil {
 		return installed, err
 	}
+	// The supervised helper restarts itself here, and the manager's stop signal
+	// usually ends it before it can clear the record. A stable manager-owned
+	// process on the promoted image is the activation the record asked for.
+	if cfg.Probe != nil && stableHelperProcess(ctx, cfg, installed) == nil {
+		return installed, clearHelperActivation(cfg.StateDir)
+	}
 	return activateHelper(ctx, cfg, installed)
+}
+
+func clearHelperActivation(stateDir string) error {
+	if err := os.Remove(helperActivationRecord(stateDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("clear settled helper activation: %w", err)
+	}
+	return syncDirectory(filepath.Dir(helperActivationRecord(stateDir)))
 }
 
 func activateHelper(ctx context.Context, cfg HelperConfig, installed HelperInstallation) (HelperInstallation, error) {

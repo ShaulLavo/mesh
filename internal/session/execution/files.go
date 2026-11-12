@@ -230,10 +230,23 @@ func (f *Files) publishName(temp, name string, exclusive bool) (Stage, error) {
 		}
 		return Unconfirmed, nil
 	}
-	if err := f.root.Link(temp, name); err != nil {
-		return BeforePublish, executionBoundaryError("exclusively publish record", err)
+	// Result readers can run before Finish returns, so publication must retain one link.
+	dir, err := f.root.Open(filepath.Dir(name))
+	if err != nil {
+		return BeforePublish, executionBoundaryError("open publication directory", err)
 	}
-	return Unconfirmed, executionBoundaryError("unlink publication temporary", f.root.Remove(temp))
+	err = renameExclusive(dir, filepath.Base(temp), filepath.Base(name))
+	closeErr := dir.Close()
+	if err != nil {
+		return BeforePublish, executionBoundaryError("exclusively publish record", errors.Join(err, closeErr))
+	}
+	if closeErr != nil {
+		return Unconfirmed, executionBoundaryError("close publication directory", closeErr)
+	}
+	if err := f.step("publication_visible"); err != nil {
+		return Unconfirmed, err
+	}
+	return Unconfirmed, nil
 }
 func (f *Files) Ensure(dir string) error {
 	if !validPath(dir) {
