@@ -23,6 +23,9 @@ func activateClientConfig(command *cobra.Command) error {
 	for top.Parent() != nil && top.Parent().Parent() != nil {
 		top = top.Parent()
 	}
+	if command.Name() == adoptionCommandName || command.Parent() != nil && command.Parent().Name() == adoptionCommandName {
+		return nil
+	}
 	switch top.Name() {
 	case "hosts", agentInspectCommandName, "profile", "dashboard", "session-worker", "agent", "agent-hook", "agent-resume", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "completion", "help", "version":
 		return nil

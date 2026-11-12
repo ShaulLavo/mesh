@@ -27,8 +27,10 @@ type adoptOptions struct {
 	lead                 time.Duration
 }
 
+const adoptionCommandName = "adopt"
+
 func updateAdoptCommand(options *updateOptions) *cobra.Command {
-	command := &cobra.Command{Use: "adopt", Short: "Bring an existing installation into automatic updates", Args: cobra.NoArgs}
+	command := &cobra.Command{Use: adoptionCommandName, Short: "Bring an existing installation into automatic updates", Args: cobra.NoArgs}
 	var start adoptOptions
 	begin := &cobra.Command{Use: "start [--notice -- COMMAND ARG...]", Short: "Start one durable adoption from a verified release executable",
 		RunE: func(cmd *cobra.Command, args []string) error { return runAdoptionStart(cmd, start, args, options.json) },

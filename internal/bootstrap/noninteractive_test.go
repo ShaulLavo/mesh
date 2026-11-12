@@ -25,12 +25,12 @@ func TestSystemSSHUsesConfiguredAccountKeyAndKnownHosts(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := writeSSHIdentity(t, private)
-	config := fmt.Sprintf("Host adoption-fixture\n  HostName %s\n  Port %s\n  User configured-account\n  IdentityFile %s\n", host, port, key)
+	config := fmt.Sprintf("Host adoption-fixture\n  HostName %s\n  Port %s\n  User configured-account\n  IdentityFile %s\n  UserKnownHostsFile ~/.ssh/adoption_known_hosts\n", host, port, key)
 	if err := os.WriteFile(filepath.Join(sshDir, "config"), []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
 	known := knownhosts.Line([]string{knownhosts.Normalize(server.address)}, server.hostKey) + "\n"
-	path := filepath.Join(sshDir, "known_hosts")
+	path := filepath.Join(sshDir, "adoption_known_hosts")
 	if err := os.WriteFile(path, []byte(known), 0600); err != nil {
 		t.Fatal(err)
 	}

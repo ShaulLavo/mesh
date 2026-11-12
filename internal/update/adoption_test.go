@@ -501,3 +501,17 @@ func TestAdoptionMilestonesRequireExactOperationAndAllWorkers(t *testing.T) {
 		t.Fatal("lost worker released a descendant")
 	}
 }
+
+func TestAdoptionExistingOperationStillChecksExpectedAccount(t *testing.T) {
+	f := newAdoptionFixture(t)
+	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
+		t.Fatal(err)
+	}
+	f.start.Expected = updateTestID(t)
+	if err := f.supervisor.Start(t.Context(), f.start); err == nil || !strings.Contains(err.Error(), "expected daemon identity") {
+		t.Fatal("existing fleet operation accepted the wrong SSH account")
+	}
+	if len(f.controls) != 0 {
+		t.Fatal("wrong account reached update controls")
+	}
+}
