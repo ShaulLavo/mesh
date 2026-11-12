@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,17 +69,57 @@ func TestNameRefreshUsesOneDeadlineForOfflineHosts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	// Registry refresh may precede dialing; cancel only after both offline
+	// hosts expose the lookup budget they were given.
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	var calls atomic.Int32
-	dial := func(ctx context.Context, _ HostRecord) (transport.Conn, error) {
-		calls.Add(1)
+	contexts := make(chan context.Context, 2)
+	var dial HostDialer = func(ctx context.Context, _ HostRecord) (transport.Conn, error) {
+		contexts <- ctx
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	started := time.Now()
-	_, err := resolveArgumentWithRefresh(ctx, "unknown", []HostRecord{f.host, other.host}, dial)
-	if err == nil || time.Since(started) > time.Second || calls.Load() != 2 {
-		t.Fatalf("lookup exceeded shared deadline: %v, elapsed %s, calls %d", err, time.Since(started), calls.Load())
+	expired := time.After(time.Second)
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		_, err := resolveArgumentWithRefresh(ctx, "unknown", []HostRecord{f.host, other.host}, dial)
+		done <- err
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("name refresh did not stop after cancellation")
+		}
+	})
+	first := receiveNameRefreshContext(t, contexts, expired)
+	second := receiveNameRefreshContext(t, contexts, expired)
+	deadline, bounded := first.Deadline()
+	otherDeadline, otherBounded := second.Deadline()
+	if !bounded || !otherBounded || !deadline.Equal(otherDeadline) {
+		t.Fatalf("offline hosts did not share one bounded context: %v, %v", first, second)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || time.Since(started) > time.Second {
+			t.Fatalf("lookup exceeded shared deadline: %v, elapsed %s", err, time.Since(started))
+		}
+	case <-expired:
+		t.Fatal("name refresh did not return within its shared bound")
+	}
+}
+
+func receiveNameRefreshContext(t *testing.T, contexts <-chan context.Context, expired <-chan time.Time) context.Context {
+	t.Helper()
+	select {
+	case ctx := <-contexts:
+		return ctx
+	case <-expired:
+		t.Fatal("offline name refresh did not start both dials")
+		return nil
 	}
 }
