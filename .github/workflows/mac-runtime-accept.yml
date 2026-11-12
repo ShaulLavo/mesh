@@ -1,0 +1,18 @@
+name: Mac runtime historical acceptance run
+
+# Acceptance vehicle only, never merged. It calls the unchanged native
+# release transition proofs for this exact commit. One push is one run.
+on:
+  push:
+    branches: [t3/mac-runtime-cohort-accept]
+    paths: [.github/workflows/mac-runtime-accept.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  proofs:
+    name: Required native update proofs
+    uses: ./.github/workflows/update-proofs.yml
+    with:
+      source_sha: ${{ github.sha }}
