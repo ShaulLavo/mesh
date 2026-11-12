@@ -2,16 +2,45 @@
 """Exercise the release proof's inventory assertions with a bounded CLI fixture."""
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent
 SOURCE = (ROOT / "prove-release-transition.sh").read_text()
+SPEC = importlib.util.spec_from_file_location("transition_fixture", ROOT / "fixtures/release_transition.py")
+TRANSITION = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(TRANSITION)
+
+
+class CandidateWritePathTest(unittest.TestCase):
+    def test_symlinked_state_keeps_exact_physical_target_check(self):
+        with tempfile.TemporaryDirectory(prefix="proof-path-") as directory:
+            physical = Path(directory) / "physical"
+            physical.mkdir()
+            (physical / "rollback-site").mkdir()
+            alias = Path(directory) / "alias"
+            alias.symlink_to(physical, target_is_directory=True)
+            with sqlite3.connect(physical / "mesh.db") as database:
+                database.execute("CREATE TABLE services(name,kind,target,display_name,isolate)")
+                database.execute("INSERT INTO services VALUES(?,?,?,?,?)", ("rollback-proof", "static",
+                    str((physical / "rollback-site").resolve()), "Candidate rollback proof", 1))
+            (physical / "machine-name.json").write_bytes(b"retained name")
+            (physical / "rollback-name.before").write_bytes(b"retained name")
+            response = {"services": [{"name": "rollback-proof"}], "host": {"machineName": "rollback-proof"}}
+            with mock.patch.object(TRANSITION, "request", return_value=response):
+                TRANSITION.verify_writes(alias)
+            with sqlite3.connect(physical / "mesh.db") as database:
+                database.execute("UPDATE services SET target='different target'")
+            with self.assertRaises(AssertionError):
+                TRANSITION.verify_writes(alias)
 
 
 def inventory_assertions(restart):

@@ -72,7 +72,7 @@ def verify_writes(state):
         service = database.execute(
             "SELECT kind,target,display_name,isolate FROM services WHERE name='rollback-proof'"
         ).fetchone()
-        assert service == ("static", str(state / "rollback-site"), "Candidate rollback proof", 1), service
+        assert service == ("static", str((state / "rollback-site").resolve()), "Candidate rollback proof", 1), service
     assert (state / "machine-name.json").read_bytes() == (state / "rollback-name.before").read_bytes(), \
         "candidate-written machine name changed on rollback"
     response = request(state, {"type": "service.list"})
