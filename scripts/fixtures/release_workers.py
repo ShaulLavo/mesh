@@ -187,12 +187,13 @@ def start(state, config, selected, path):
 def verify(state, path, label, daemon=True):
     state, path = Path(state), Path(path)
     record = json.loads(path.read_bytes())
-    verify_images(state, path)
+    observer_seconds = verify_images(state, path)
     rss = 0
     for worker in record["workers"]:
         rss += verify_one(state, worker, label, daemon)
     record["observations"].append({"label": label, "workers": len(record["workers"]),
-                                   "processes": 2 * len(record["workers"]), "rssKiB": rss})
+                                   "processes": 2 * len(record["workers"]), "rssKiB": rss,
+                                   "observerSeconds": observer_seconds})
     save(path, record)
     return sorted({worker["digest"] for worker in record["workers"]})
 
@@ -202,13 +203,16 @@ def verify_images(state, path):
     if not probe:
         raise ValueError("worker proof requires the actual process-image observer")
     environment = dict(os.environ, MESH_COHORT_STATE=str(state), MESH_COHORT_RECORD=str(path))
+    started = time.monotonic()
     result = subprocess.run([probe, "-test.v", "-test.run=^TestRetainedWorkerCohortIdentity$"],
                             env=environment, capture_output=True, timeout=30, check=False)
+    elapsed = time.monotonic() - started
     if result.returncode:
         output = (result.stdout[-4096:] + b"\n" + result.stderr[-4096:]).decode(errors="replace")
-        raise RuntimeError(f"exact running cohort image observer exited {result.returncode}: {output}")
+        raise RuntimeError(f"exact running cohort image observer exited {result.returncode} after {elapsed:.3f}s: {output}")
     if b"--- PASS: TestRetainedWorkerCohortIdentity" not in result.stdout:
         raise RuntimeError("exact running cohort image observer did not run")
+    return elapsed
 
 
 def verify_one(state, worker, label, daemon):

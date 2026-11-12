@@ -17,34 +17,81 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func peerImage(ctx context.Context, conn net.Conn) (executableImage, error) {
+func peerPID(conn net.Conn) (int, error) {
 	socket, ok := conn.(syscall.Conn)
 	if !ok {
-		return executableImage{}, errors.New("bootstrap requires a local Unix socket")
+		return 0, errors.New("bootstrap requires a local Unix socket")
 	}
 	raw, err := socket.SyscallConn()
 	if err != nil {
-		return executableImage{}, err
+		return 0, fmt.Errorf("inspect Unix peer process: %w", err)
 	}
 	var pid int
 	var probeErr error
 	if err = raw.Control(func(fd uintptr) { pid, probeErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID) }); err != nil {
-		return executableImage{}, err
+		return 0, fmt.Errorf("inspect Unix peer process: %w", err)
 	}
 	if probeErr != nil {
-		return executableImage{}, probeErr
+		return 0, fmt.Errorf("inspect Unix peer credentials: %w", probeErr)
 	}
-	return processImage(ctx, pid)
+	return pid, nil
+}
+
+var mappedImageCommand = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "lsof", args...).Output() //nolint:gosec // fixed native tool; flags and kernel peer PIDs are constructed locally
 }
 
 func processImage(ctx context.Context, pid int) (executableImage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-F", "finD").Output() //nolint:gosec // fixed tool and flags; PID comes from the Unix peer or service manager
-	if err != nil {
+	output, err := mappedImageCommand(ctx, "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-F", "finD")
+	if err != nil || ctx.Err() != nil {
 		return executableImage{}, fmt.Errorf("inspect mapped process image: %w", errors.Join(ctx.Err(), err))
 	}
 	return parseMappedMeshImage(string(output), pid)
+}
+
+func processImages(ctx context.Context, pids []int) []processImageResult {
+	results := make([]processImageResult, len(pids))
+	if len(pids) == 0 {
+		return results
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	names := make([]string, len(pids))
+	for i, pid := range pids {
+		names[i] = strconv.Itoa(pid)
+	}
+	output, commandErr := mappedImageCommand(ctx, "-a", "-p", strings.Join(names, ","), "-d", "txt", "-F", "pfinD")
+	if err := mappedCommandFailure(ctx, commandErr); err != nil {
+		return failedProcessImages(results, err)
+	}
+	sets, err := mappedProcessSets(string(output), pids)
+	if err != nil {
+		return failedProcessImages(results, errors.Join(err, commandErr))
+	}
+	for i, pid := range pids {
+		results[i].image, results[i].err = parseMappedMeshImage(sets[i], pid)
+		if results[i].err != nil {
+			results[i].err = errors.Join(results[i].err, commandErr)
+		}
+	}
+	return results
+}
+
+func mappedCommandFailure(ctx context.Context, err error) error {
+	var exit *exec.ExitError
+	if ctx.Err() == nil && (err == nil || errors.As(err, &exit) && exit.ExitCode() == 1) {
+		return nil
+	}
+	return fmt.Errorf("inspect mapped process image: %w", errors.Join(ctx.Err(), err))
+}
+
+func failedProcessImages(results []processImageResult, err error) []processImageResult {
+	for i := range results {
+		results[i].err = err
+	}
+	return results
 }
 
 func parseMappedMeshImage(output string, pid int) (executableImage, error) {
