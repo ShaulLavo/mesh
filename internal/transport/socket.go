@@ -129,9 +129,8 @@ func (c *socketConn) Close() error {
 }
 
 // closeCompleted reports whether a close error means the connection is already
-// gone rather than that closing failed. A peer that closed first has torn the
-// transport down, so our own close lands on a dead socket and returns
-// net.ErrClosed; the connection is closed either way.
+// gone rather than that closing failed. EOF can also mean a truncated frame,
+// so it remains a protocol failure even during the close handshake.
 func closeCompleted(err error) bool {
 	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)
 }

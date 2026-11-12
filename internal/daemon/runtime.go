@@ -60,7 +60,7 @@ var ErrDaemonAlreadyRunning = errors.New("daemon: already running")
 // HTTPHandler receives HTTPS requests and
 // Tailnet HTTP requests outside WebSocketPath, after the Host policy accepts a
 // bound IP, TailnetNames entry, current PrivateName or private service host.
-// ReportError receives non-fatal listener errors and
+// ReportError receives non-fatal listener and client teardown errors and
 // may be nil. RequireAllTailnetListeners turns any
 // discovered-address bind failure into a startup failure. Zero connection caps
 // select the defaults; negative caps are rejected.
@@ -329,7 +329,11 @@ func serveBoundListeners(
 	cancel()
 
 	closeErr := unixListener.Close()
-	closeErr = errors.Join(closeErr, connections.closeAll(), tailnetConnections.closeAll())
+	// A client's malformed frame or disconnect does not make daemon shutdown
+	// fail. Preserve its close error through the non-fatal connection reporter.
+	if err := errors.Join(connections.closeAll(), tailnetConnections.closeAll()); err != nil {
+		normalized.reporter.report(fmt.Errorf("daemon: close client connections: %w", err))
+	}
 	if err := shutdownHTTPServer(server.Server, normalized.shutdownTimeout); err != nil {
 		closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close WebSocket server: %w", err))
 	}
