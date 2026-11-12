@@ -394,6 +394,10 @@ start_helper() {
   if process_running "$pid"; then return; fi
   if test -f "$root/hold-old-helper"; then return; fi
   if test -f "$root/fail-helper-start"; then exit 19; fi
+  if test -f "$root/fail-helper-candidate"; then
+    image_hash=$(sha256sum "$root/s/update/helper/current"); image_hash=${image_hash%% *}
+    if test "$image_hash" = "$(cat "$root/candidate.sha")"; then exit 19; fi
+  fi
   "$root/s/update/helper/current" update-helper --state-dir "$root/s" </dev/null >>"$root/helper.log" 2>&1 &
   printf '%s\n' "$!" > "$root/helper.pid"
   touch "$root/helper.loaded"

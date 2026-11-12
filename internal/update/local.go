@@ -62,6 +62,9 @@ func EnsureHelper(ctx context.Context, stateDir string) (updateinstall.HelperIns
 	}
 	cfg := updateinstall.HelperConfig{StateDir: stateDir, Executable: executable, Kind: kind, Domain: domain}
 	cfg.Probe = updatebootstrap.HelperProcessProbe(cfg)
+	cfg.State = func(ctx context.Context) (updateinstall.HelperProcessState, error) {
+		return updatebootstrap.HelperServiceState(ctx, cfg)
+	}
 	return ensureLocalHelper(ctx, cfg)
 }
 
@@ -80,6 +83,9 @@ func ensureLocalHelper(ctx context.Context, cfg updateinstall.HelperConfig) (upd
 	if !status.Settings.ClientOnly {
 		cfg.Kind, cfg.Domain = status.Settings.Service.Kind, status.Settings.Service.Domain
 		cfg.Probe = updatebootstrap.HelperProcessProbe(cfg)
+		cfg.State = func(ctx context.Context) (updateinstall.HelperProcessState, error) {
+			return updatebootstrap.HelperServiceState(ctx, cfg)
+		}
 	}
 	switch status.Phase {
 	case updateinstall.Accepted, updateinstall.Staged, updateinstall.Granted, updateinstall.Activating,
