@@ -16,12 +16,12 @@ def fixture_certificates(root):
         subprocess.run(["openssl", *args], cwd=root, check=True, capture_output=True, timeout=15)
 
     (root / "ca.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
-        "[dn]\nCN=Mesh disposable fixture CA\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n")
+        "[dn]\nCN=Mesh disposable fixture CA\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n")
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "cert.pem",
             "-days", "1", "-config", "ca.cnf")
     for name, dns in (("server", "github.com,DNS:api.github.com"), ("wrong-host", "wrong.fixture.test")):
         (root / (name + ".ext")).write_text("basicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:" + dns + "\n")
+            "keyUsage=critical,digitalSignature,keyEncipherment\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always,issuer\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:" + dns + "\n")
         openssl("req", "-new", "-newkey", "rsa:2048", "-nodes", "-keyout", name + ".key", "-out", name + ".csr",
                 "-subj", "/CN=" + dns.split(",")[0])
         openssl("x509", "-req", "-in", name + ".csr", "-CA", "cert.pem", "-CAkey", "ca.key", "-CAcreateserial",

@@ -359,7 +359,9 @@ class PublicationConsumerTest(unittest.TestCase):
         def redirected(address, *args, **kwargs):
             return connect(server.server_address if address == ("tuf-repo-cdn.sigstore.dev", 443) else address, *args, **kwargs)
         with patch.object(publication_origin.socket, "create_connection", side_effect=redirected):
-            data = trust_tunnel_request(origin, ssl.create_default_context(cafile=str(upstream / "cert.pem")))
+            context = ssl.create_default_context(cafile=str(upstream / "cert.pem"))
+            context.verify_flags |= ssl.VERIFY_X509_STRICT
+            data = trust_tunnel_request(origin, context)
         self.assertEqual(data, b"public TLS remained end to end")
         self.assertEqual(origin.trust_connections, 1)
 
@@ -399,6 +401,7 @@ class NativeZIPPreflightTest(unittest.TestCase):
 
 def publication_request(origin, path):
     context = ssl.create_default_context(cafile=str(origin.bundle))
+    context.verify_flags |= ssl.VERIFY_X509_STRICT
     with socket.create_connection(("127.0.0.1", origin.server.server_port), timeout=5) as connection:
         connection.sendall(b"CONNECT github.com:443 HTTP/1.1\r\nHost: github.com:443\r\n\r\n")
         read_connect_response(connection)
