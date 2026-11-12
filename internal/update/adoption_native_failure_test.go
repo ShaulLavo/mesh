@@ -1,6 +1,7 @@
 package update
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -30,6 +31,57 @@ func TestAdoptionNativeHelperFailureRestoresOwnedState(t *testing.T) {
 	for _, existing := range []bool{false, true} {
 		t.Run(strconv.FormatBool(existing), func(t *testing.T) { testNativeHelperFailure(t, existing) })
 	}
+}
+
+func TestAdoptionNativeJournaledHelperFailurePreservesStoppedPrior(t *testing.T) {
+	requireNativeAdoption(t)
+	f := newAdoptionNativeFixture(t, "v0.1.248", true)
+	f.seedGenuinePrior()
+	original := f.awaitDaemon()
+	receiptPath := filepath.Join(f.state, "update", "helper", "installed.json")
+	before, err := readNativeFixtureFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(f.state, "update", "helper", "current")
+	priorLink, err := os.Readlink(launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, pin := f.publishCandidate()
+	f.write("fail-helper-candidate", nil, false)
+	output, err := f.sideCommand(side, pin).CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "19") {
+		t.Fatalf("expected candidate helper failure: %s %v", output, err)
+	}
+	after, err := readNativeFixtureFile(receiptPath)
+	if err != nil || string(before) != string(after) {
+		t.Fatal("failed promotion changed the exact stopped prior receipt")
+	}
+	link, err := os.Readlink(launcher)
+	if err != nil || link != priorLink {
+		t.Fatal("failed promotion changed the stopped prior launcher")
+	}
+	var installed updateinstall.HelperInstallation
+	if err := json.Unmarshal(after, &installed); err != nil {
+		t.Fatal(err)
+	}
+	if err := release.VerifyExecutable(t.Context(), installed.Executable, installed.Digest); err != nil {
+		t.Fatal(err)
+	}
+	state, err := updatebootstrap.HelperServiceState(t.Context(), updateinstall.HelperConfig{Kind: "systemd"})
+	if err != nil || state.PID != 0 {
+		t.Fatalf("failed promotion started previously stopped 196 helper: %+v %v", state, err)
+	}
+	actual := f.awaitDaemon()
+	if actual.PID != original.PID || actual.Health.Build.Digest != original.Health.Build.Digest {
+		t.Fatal("helper recovery changed the daemon")
+	}
+	journal, err := updateinstall.Read(f.state)
+	if err != nil || journal.Phase != updateinstall.Committed || journal.Request.Manifest.Version != "v0.1.249" {
+		t.Fatal("helper recovery changed the genuine prior journal")
+	}
+	f.roundTrip()
 }
 
 func testNativeHelperFailure(t *testing.T, existing bool) {

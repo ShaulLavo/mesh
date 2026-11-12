@@ -204,7 +204,7 @@ func TestEnsureCurrentHelperResumesInterruptedSideRestoration(t *testing.T) {
 	if _, err = prepareHelper(t.Context(), side.cfg, true, sideDigest); err != nil {
 		t.Fatal(err)
 	}
-	record, err := json.Marshal(helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: sideDigest})
+	record, err := json.Marshal(helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: sideDigest, Disposition: helperRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func checkInterruptedHelperPromotion(t *testing.T, boundary string) {
 	}
 	source := currentHelperManifest(t, f)
 	digest := source.Artifacts[0].BinarySHA256
-	record, err := json.Marshal(helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: digest})
+	record, err := json.Marshal(helperPromotion{Prior: prior.installation, Receipt: prior.receipt, Service: prior.service, Target: digest, Disposition: helperRunning})
 	if err != nil {
 		t.Fatal(err)
 	}

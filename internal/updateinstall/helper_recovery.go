@@ -52,6 +52,7 @@ type helperRecoverySnapshot struct {
 	installation HelperInstallation
 	service      []byte
 	receipt      []byte
+	disposition  helperDisposition
 }
 
 // RecoverHelper repairs only the executor. Daemon activation still needs a
@@ -122,6 +123,7 @@ func (e *Engine) recoverySnapshot(ctx context.Context, request HelperRecovery, i
 	if err != nil || priorPID <= 0 {
 		return helperRecoverySnapshot{}, errors.Join(errors.New("verify running prior helper process"), err)
 	}
+	prior.disposition = helperRunning
 	if err = e.verifyRecoveryCandidate(ctx, request, prior.installation, health); err != nil {
 		return helperRecoverySnapshot{}, err
 	}
@@ -439,6 +441,14 @@ func (e *Engine) restoreRecoveryHelper(ctx context.Context, request HelperRecove
 	if err := release.VerifyExecutable(ctx, prior.installation.Executable, prior.installation.Digest); err != nil {
 		return fmt.Errorf("restore prior helper executable: %w", err)
 	}
+	if prior.disposition != helperRunning && prior.disposition != helperStopped {
+		return errors.New("helper restoration requires its verified entry disposition")
+	}
+	if prior.disposition == helperStopped {
+		if err := stopOwnedRecoveryHelper(ctx, request, prior); err != nil {
+			return err
+		}
+	}
 	if err := atomicWrite(prior.installation.ServicePath, prior.service, 0644); err != nil {
 		return fmt.Errorf("restore prior helper service: %w", err)
 	}
@@ -447,6 +457,9 @@ func (e *Engine) restoreRecoveryHelper(ctx context.Context, request HelperRecove
 	}
 	if err := replaceHelperLink(filepath.Join(transactionDir(e.cfg.StateDir), "helper", "current"), prior.installation.Executable); err != nil {
 		return fmt.Errorf("restore prior helper launcher: %w", err)
+	}
+	if prior.disposition == helperStopped {
+		return finishStoppedHelperRestoration(ctx, request, prior)
 	}
 	if _, err := activateHelper(ctx, request.Helper, prior.installation); err != nil {
 		return fmt.Errorf("restart prior helper: %w", err)
