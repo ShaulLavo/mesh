@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--worker-probe", type=Path, help="once-built Unit3 kernel/image observer")
     parser.add_argument("--source-host", help="one inventory host for a full exact-worker source shard")
     parser.add_argument("--signed-chain", action="store_true", help="run real signed intermediate/helper hops with the exact cohort")
+    parser.add_argument("--format-waypoint", action="store_true", help="cross an actual incompatible manifest schema through an old-format waypoint")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -53,7 +54,7 @@ def run_requested(arguments, root, output, native):
         from fixtures import installed_adoption
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
         installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
-            arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain)
+            arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint, arguments.format_waypoint)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)

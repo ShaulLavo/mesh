@@ -232,7 +232,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -251,16 +251,16 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
     try:
         # Install the signer teardown before it can create its server or process.
         releases.start_signer()
-        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain)
+        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint)
     finally:
         releases.close()
         retain_producer_logs(root, output)
 
 
-def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False):
+def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False):
     origin = installed_origin.Origin(root)
     if signed_chain:
-        run_chain(root, output, native, preparer, hosts[0], releases, origin, prepare_only)
+        run_chain(root, output, native, preparer, hosts[0], releases, origin, prepare_only, format_waypoint)
         return
     target = installed_releases.VERSIONS[0]
     releases.build(target)
@@ -291,12 +291,16 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
                 releases.registry, releases.probe)
 
 
-def run_chain(root, output, native, preparer, host, releases, origin, prepare_only):
+def run_chain(root, output, native, preparer, host, releases, origin, prepare_only, format_waypoint):
     from fixtures import installed_chain
     pair = fleet_baselines.acquire_pair(root / "public", host)
     prior_version = "v0.1." + str(int(host["daemon"].split(".")[-1]) - 1)
     previous = fleet_baselines.acquire(root / "public", prior_version, dict(zip(("os", "arch"), native.split("/"))))
-    installed_chain.prepare(releases, origin, pair["daemon"]["executable"])
+    if format_waypoint:
+        from fixtures import installed_waypoint
+        installed_waypoint.prepare(releases, origin, pair["daemon"]["executable"])
+    else:
+        installed_chain.prepare(releases, origin, pair["daemon"]["executable"])
     origin.serve_tree(root / "public")
     if prepare_only:
         (output / "prepared-chain.json").write_text(json.dumps({"supplementalSourceBuilds": releases.builds,

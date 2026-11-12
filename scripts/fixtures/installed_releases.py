@@ -106,6 +106,14 @@ class Releases:
                 raise RuntimeError("epoch fixture did not change compiled reader")
             path.write_text(updated)
             replacements[str(source)] = str(path)
+            manifest_source = REPO / "internal/release/release.go"
+            original = manifest_source.read_text()
+            updated = original.replace("if m.Schema != ManifestSchema {", "if m.Schema != ManifestSchema && m.Schema != 2 {", 1)
+            if updated == original:
+                raise RuntimeError("future-format fixture did not change the manifest decoder")
+            manifest_overlay = self.root / "future-release.go"
+            manifest_overlay.write_text(updated)
+            replacements[str(manifest_source)] = str(manifest_overlay)
         path = self.root / ("overlay-" + str(epoch) + ".json")
         write_json(path, {"Replace": replacements})
         return path
@@ -158,7 +166,7 @@ class Releases:
         shutil.copy2(rollback, self.directory / target / rollback.name)
         return {"forward": receipt.stem, "rollback": rollback.name.removesuffix(".rollback.json")}
 
-    def publish(self, version, ordinal, rollbacks, since=(), epoch=1, reader_epoch=1, anchors_from=0):
+    def publish(self, version, ordinal, rollbacks, since=(), epoch=1, reader_epoch=1, anchors_from=0, entries=None):
         directory = self.directory / version
         manifest = write_json(directory / "mesh-release.json", self.manifests[version])
         page = {"schema": 1, "epoch": epoch, "page": 0, "entries": [], "back": []}
@@ -166,6 +174,8 @@ class Releases:
             page["entries"].append({"ordinal": metadata["position"]["ordinal"], "version": previous,
                 "manifest": metadata["manifest"], "metadata": digest((self.directory / previous / "mesh-update.json").read_bytes()),
                 "anchorsFrom": metadata["direct"]["anchorsFrom"], "publishedAt": metadata["publishedAt"]})
+        if entries is not None:
+            page["entries"] = entries
         page_data = json.dumps(page, separators=(",", ":")).encode()
         page_name = digest(page_data) + ".anchors.json"
         (directory / page_name).write_bytes(page_data)
