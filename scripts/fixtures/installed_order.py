@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run
+from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence
 
 
 class Driver:
@@ -85,7 +85,7 @@ def publish_logs(payload, output, name):
     if len(payload) > 2 << 20:
         raise RuntimeError("ordered account evidence exceeds its transfer bound")
     files = json.loads(payload)
-    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err"}
+    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err", installed_listener_evidence.FAILURE}
     if not isinstance(files, dict) or not files.keys() <= allowed:
         raise RuntimeError("ordered account evidence contains an unexpected file")
     decoded = {filename: bytes.fromhex(data) for filename, data in files.items()}

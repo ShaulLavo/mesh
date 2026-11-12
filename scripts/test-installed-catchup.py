@@ -21,7 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
-from fixtures import installed_review_controls
+from fixtures import installed_review_controls, installed_listener_controls
 from fixtures import installed_releases, release_transition
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
@@ -95,7 +95,7 @@ class SocketPathsTest(unittest.TestCase):
     def test_python_fixture_blocks_remain_at_most_three_deep(self):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
-            ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_native.py", "fleet_baselines.py",
+            ("installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_native.py", "fleet_baselines.py",
              "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
@@ -712,7 +712,8 @@ class PublicationModeTest(unittest.TestCase):
 
 
 def load_tests(loader, tests, _pattern):
-    return unittest.TestSuite((tests, loader.loadTestsFromModule(installed_review_controls)))
+    return unittest.TestSuite((tests, loader.loadTestsFromModule(installed_review_controls),
+                               loader.loadTestsFromModule(installed_listener_controls)))
 
 
 if __name__ == "__main__":
