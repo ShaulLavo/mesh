@@ -105,12 +105,18 @@ func publishRoutes(input publicationInput, selection sourceSelection, history []
 	if err := verifyPreviousRetention(directory, history); err != nil {
 		return err
 	}
+	if err := verifyRetainedWorkerRegistry(directory, history, selection.Workers); err != nil {
+		return err
+	}
 	candidate, err := readCandidate(directory, input)
 	if err != nil {
 		return err
 	}
 	updater, err := candidateUpdater(input, candidate.Manifest, &selection)
 	if err != nil {
+		return err
+	}
+	if err := writeWorkerRegistry(destination, selection.Workers, candidate.Manifest); err != nil {
 		return err
 	}
 	if err := addTargetEdges(directory, history, candidate, graph); err != nil {

@@ -28,6 +28,7 @@ jobs:
     outputs:
       version: ${{ steps.select.outputs.version }}
       previous: ${{ steps.select.outputs.previous }}
+      shards: ${{ steps.select.outputs.shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +65,7 @@ jobs:
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
           go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); n=max(1,len({v["version"] for v in s["baselines"] if v["rollback"]})); print("shards="+json.dumps(list(range(n))))' "$root/selection.json" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-policy
@@ -134,6 +136,10 @@ jobs:
             scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
           fi
           python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
+          short=$(mktemp -d /tmp/mw-XXXXXX)
+          trap 'rm -rf -- "$short"' EXIT
+          TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
+          grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
           scripts/prepare-release-baselines.sh "$VERSION" "$PREVIOUS" "$PLATFORM" "$BASELINE_ASSETS" "$root/retained" "$root/retained.list"
           python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_text("".join(str(Path(v).relative_to(p.parent))+"\n" for v in p.read_text().splitlines()))' "$root/retained.list"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -151,7 +157,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64]
-        shard: [0]
+        shard: ${{ fromJSON(needs.policy.outputs.shards) }}
         include:
           - platform: linux/amd64
             key: linux-amd64
@@ -176,6 +182,7 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.policy.outputs.shards }}
         shell: bash
         run: |
           set -euo pipefail
@@ -185,7 +192,8 @@ jobs:
           root="$RUNNER_TEMP/mesh-native"
           chmod +x "$root"/tools/candidate "$root"/tools/startup-fault-candidate "$root"/tools/boundary "$root"/tools/worker-probe
           find "$root/retained" -type f -name mesh -exec chmod +x {} +
-          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards 1
+          count=$(python3 -c 'import json,os; print(len(json.loads(os.environ["SHARDS"])))')
+          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$count"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

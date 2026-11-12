@@ -18,6 +18,7 @@ PROOF = re.compile(r"[0-9a-f]{64}(?:\.rollback)?\.json\Z")
 LIMITS = {"mesh-release.json": 512 << 10, "mesh-update.json": 64 << 10,
           "mesh-update.sig.json": 256 << 10, "mesh-update-root.json": 4 << 10,
           "mesh-retention.json": 16 << 20}
+LIMITS["mesh-workers.json"] = 8 << 20
 
 
 def api(endpoint):
