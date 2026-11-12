@@ -198,6 +198,13 @@ class CutoverEventsTest(unittest.TestCase):
         self.assertEqual(failure["stdoutBytes"], 20001)
         self.assertEqual(failure["stderrBytes"], 5001)
 
+    def test_failed_command_redacts_both_symlinked_and_physical_roots(self):
+        alias = self.root / "root-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.scope["ROOT"] = alias
+        data = (str(alias / "h0") + " " + str(self.root / "h0")).encode()
+        self.assertEqual(self.scope["command_diagnostic"](data, 4096), "<fixture>/h0 <fixture>/h0")
+
     def test_successful_command_returns_output_without_failure_record(self):
         host = self.hosts[0]
         self.command_program(host, 'import sys\nprint("success")\nsys.stderr.write("warning")\n')

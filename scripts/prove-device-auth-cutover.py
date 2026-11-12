@@ -55,7 +55,9 @@ def digest(data):
 
 
 def command_diagnostic(data, limit):
-    return data.replace(str(ROOT).encode(), b"<fixture>")[:limit].decode("utf-8", errors="replace")
+    for root in sorted({str(ROOT), str(ROOT.resolve())}, key=len, reverse=True):
+        data = data.replace(root.encode(), b"<fixture>")
+    return data[:limit].decode("utf-8", errors="replace")
 
 
 def version(binary):
