@@ -29,6 +29,7 @@ type installedSignRequest struct {
 	Put     map[string]string `json:"put"`
 	Seed    *installedSeed    `json:"seed"`
 	Inspect string            `json:"inspect"`
+	Ledger  string            `json:"ledger"`
 }
 
 type installedSeed struct {
@@ -114,10 +115,30 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		}
 		installedWrite(t, root, request.Output, mustHostJSON(installation.Service))
 	}
+	if request.Ledger != "" {
+		installedLedger(t, root, request)
+	}
 	if err := json.NewEncoder(connection).Encode(map[string]bool{"ok": true}); err != nil {
 		t.Fatal(err)
 	}
 	return request.Stop
+}
+
+func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) {
+	t.Helper()
+	store, err := OpenStore(request.Ledger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, more, err := store.HostLedger(t.Context(), 0, 64)
+	if err != nil || more {
+		t.Fatalf("bounded installed ledger: %v more=%v", err, more)
+	}
+	state, err := store.HostState(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state}))
 }
 
 // This is the delivered producer's signed stage/grant and Engine.Run sequence,

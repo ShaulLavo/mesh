@@ -16,6 +16,7 @@ on:
       - 'scripts/fixtures/installed_releases.py'
       - 'scripts/fixtures/installed_origin.py'
       - 'scripts/fixtures/installed_cohort.py'
+      - 'scripts/fixtures/installed_chain.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'

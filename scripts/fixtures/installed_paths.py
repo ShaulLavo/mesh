@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst") + tuple(
-    host + "-" + scenario for host in ("pc", "pi", "vps", "mac") for scenario in ("adopt", "rollback", "helper", "initial"))
+    host + "-" + scenario for host in ("pc", "pi", "vps", "mac") for scenario in ("adopt", "rollback", "helper", "initial", "chain", "chain-rollback"))
 
 
 def socket_paths(root):

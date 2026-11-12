@@ -27,8 +27,9 @@ class AdoptionCase(installed_native.Installation):
         self.expected_workers = 1
 
     def start_cohort(self, registry, probe):
+        current = self.control("host.info")["host"]["build"]
         self.cohort = installed_cohort.Cohort(registry, probe, self.state, self.root / "config",
-            self.desired_host["daemon"], self.binary, self.root / "cohort.json")
+            current["version"], self.binary, self.root / "cohort.json")
         observed = self.cohort.start()
         self.expected_workers += len(self.cohort.selected)
         return observed
@@ -126,7 +127,7 @@ class AdoptionCase(installed_native.Installation):
         phase = result.get("details", {}).get("phase")
         if result.get("pin") != pin:
             raise RuntimeError("canonical adoption metadata pin differs")
-        successful = self.scenario in ("adopt", "initial")
+        successful = self.scenario not in ("rollback", "helper")
         if successful and (phase != "adopted" or not result.get("confirmed")):
             raise RuntimeError("adoption did not confirm: " + json.dumps(result))
         if successful:
@@ -232,7 +233,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -242,6 +243,8 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         hosts = [host for host in hosts if host["name"] == host_name]
     if not hosts or registry and (len(hosts) != 1 or probe is None):
         raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
+    if signed_chain and registry is None:
+        raise RuntimeError("signed chain requires the authoritative exact worker cohort")
     releases = installed_releases.Releases(root, native, output)
     if registry:
         releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
@@ -249,14 +252,17 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
     try:
         # Install the signer teardown before it can create its server or process.
         releases.start_signer()
-        run_prepared(root, output, native, preparer, hosts, releases, prepare_only)
+        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain)
     finally:
         releases.close()
         retain_producer_logs(root, output)
 
 
-def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False):
+def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False):
     origin = installed_origin.Origin(root)
+    if signed_chain:
+        run_chain(root, output, native, preparer, hosts[0], releases, origin, prepare_only)
+        return
     target = installed_releases.VERSIONS[0]
     releases.build(target)
     pairs, previous, proofs, seen = {}, {}, [], set()
@@ -284,6 +290,21 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
             prior = None if scenario == "initial" else previous[host["name"]]
             run_case(root, output, host, pairs[host["name"]], preparer, origin, releases, scenario, prior,
                 releases.registry, releases.probe)
+
+
+def run_chain(root, output, native, preparer, host, releases, origin, prepare_only):
+    from fixtures import installed_chain
+    pair = fleet_baselines.acquire_pair(root / "public", host)
+    prior_version = "v0.1." + str(int(host["daemon"].split(".")[-1]) - 1)
+    previous = fleet_baselines.acquire(root / "public", prior_version, dict(zip(("os", "arch"), native.split("/"))))
+    installed_chain.prepare(releases, origin, pair["daemon"]["executable"])
+    origin.serve_tree(root / "public")
+    if prepare_only:
+        (output / "prepared-chain.json").write_text(json.dumps({"supplementalSourceBuilds": releases.builds,
+            "metadata": releases.metadata}, indent=2) + "\n")
+        return
+    for fail_final in (False, True):
+        installed_chain.run_case(root, output, host, pair, preparer, origin, releases, previous, fail_final)
 
 
 def retain_producer_logs(root, output):

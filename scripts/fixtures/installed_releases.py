@@ -9,6 +9,7 @@ import tarfile
 from pathlib import Path
 
 from fixtures import installed_origin, native_services
+from fixtures import release_workers
 
 REPO = Path(__file__).resolve().parents[2]
 PLATFORMS = ("linux/amd64", "linux/arm64", "darwin/arm64")
@@ -109,6 +110,13 @@ class Releases:
         write_json(path, {"Replace": replacements})
         return path
 
+    def retain_custom_source(self, version):
+        selected = release_workers.applicable(self.registry, version, self.builds[version]["path"])
+        records = [item | {"binary": str(Path(item["binary"]).relative_to(self.root))} for item in selected]
+        path = self.root / "fixture-workers.json"
+        write_json(path, {"schema": 1, "platform": dict(zip(("os", "arch"), self.native.split("/"))), "workers": records})
+        self.registry = path
+
     def build_platform(self, version, platform, overlay):
         system, architecture = platform.split("/")
         binary = self.root / "build" / version / platform.replace("/", "-") / "mesh"
@@ -150,7 +158,7 @@ class Releases:
         shutil.copy2(rollback, self.directory / target / rollback.name)
         return {"forward": receipt.stem, "rollback": rollback.name.removesuffix(".rollback.json")}
 
-    def publish(self, version, ordinal, rollbacks, since=(), epoch=1, reader_epoch=1):
+    def publish(self, version, ordinal, rollbacks, since=(), epoch=1, reader_epoch=1, anchors_from=0):
         directory = self.directory / version
         manifest = write_json(directory / "mesh-release.json", self.manifests[version])
         page = {"schema": 1, "epoch": epoch, "page": 0, "entries": [], "back": []}
@@ -164,7 +172,7 @@ class Releases:
         position = {"anchor": True, "ordinal": ordinal}
         metadata = {"schema": 1, "epoch": epoch, "trust": 1, "version": version, "manifest": digest(manifest),
             "publishedAt": "2026-11-01T00:00:00Z", "position": position,
-            "direct": {"anchorsFrom": 0, "since": list(since)}, "rollback": rollbacks,
+            "direct": {"anchorsFrom": anchors_from, "since": list(since)}, "rollback": rollbacks,
             "page": {"tag": version, "name": page_name, "sha256": digest(page_data)},
             "updater": {"schema": 1, "epoch": reader_epoch, "position": position if reader_epoch == epoch else {"anchor": True, "ordinal": 0}}}
         write_json(directory / "mesh-update.json", metadata)

@@ -28,6 +28,9 @@ class Origin:
     def inspect(self, state, output):
         request(self.root, {"inspect": str(state), "output": str(output.relative_to(self.root))})
 
+    def ledger(self, state, output):
+        request(self.root, {"ledger": str(state), "output": str(output.relative_to(self.root))})
+
 
 def request(root, value, timeout=15):
     with socket.socket(socket.AF_UNIX) as connection:
