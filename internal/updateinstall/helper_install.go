@@ -12,6 +12,8 @@ import (
 	"github.com/shaul/mesh/internal/release"
 )
 
+const freshHelperCheckpoint = "fresh-installation.json"
+
 // EnsureInstalledHelper accepts a caller-authenticated release for a new managed
 // installation. Existing transaction journals retain the ordinary promotion guard.
 func EnsureInstalledHelper(ctx context.Context, cfg HelperConfig, source release.Manifest) (HelperInstallation, error) {
@@ -66,7 +68,15 @@ func noFreshHelperConflict(ctx context.Context, cfg HelperConfig) error {
 }
 
 func freshHelperPath(stateDir string) string {
-	return filepath.Join(transactionDir(stateDir), "helper", "fresh-installation.json")
+	return filepath.Join(transactionDir(stateDir), "helper", freshHelperCheckpoint)
+}
+
+func noFreshHelperPreparation(ctx context.Context, stateDir string) error {
+	_, err := readMetadata(ctx, stateDir, filepath.Join("update", "helper", freshHelperCheckpoint), true)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return errors.Join(errors.New("unfinished fresh installation owns helper preparation"), err)
 }
 
 func installFreshHelper(ctx context.Context, cfg HelperConfig, source release.Manifest, digest string) (HelperInstallation, error) {
@@ -96,7 +106,7 @@ func installFreshHelper(ctx context.Context, cfg HelperConfig, source release.Ma
 // This checkpoint has its own path and never creates adoption authority.
 func freshHelperPreparation(ctx context.Context, cfg HelperConfig, digest string) (adoptionHelperPreparation, error) {
 	var record adoptionHelperPreparation
-	data, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", "fresh-installation.json"), true)
+	data, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", freshHelperCheckpoint), true)
 	if err == nil {
 		if err := readJSON(data, &record); err != nil {
 			return record, err
