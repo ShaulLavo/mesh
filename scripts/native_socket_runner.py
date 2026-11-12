@@ -45,11 +45,10 @@ def check_coverage(names, events):
 
 async def stop_group(process):
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        await terminate_group(process.pid)
     except ProcessLookupError:
         await process.wait()
         return
-    await asyncio.sleep(0.1)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -57,17 +56,49 @@ async def stop_group(process):
     await process.wait()
 
 
+async def terminate_group(pid):
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except PermissionError:
+        # Darwin can deny a group containing only an unreaped zombie. Give the
+        # child watcher the existing grace, then require proof the group is gone.
+        await asyncio.sleep(0.1)
+        os.killpg(pid, 0)
+        raise
+    await asyncio.sleep(0.1)
+
+
 async def command(args, cwd, env, consume=None):
-    process = await asyncio.create_subprocess_exec(
+    creation = asyncio.create_task(asyncio.create_subprocess_exec(
         *map(str, args), cwd=cwd, env=env, start_new_session=True,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         # A test can log a large JSON line, matching go test -json's streaming behavior.
         limit=16 * 1024 * 1024,
-    )
+    ))
     try:
+        # Cancellation must not lose a process created before asyncio hands it back.
+        process = await asyncio.shield(creation)
         return await collect(process, consume)
     finally:
-        await stop_group(process)
+        await join_cleanup(asyncio.create_task(stop_created_group(creation)))
+
+
+async def stop_created_group(creation):
+    process = await creation
+    await stop_group(process)
+
+
+async def join_cleanup(task):
+    cancelled = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            # A second cancellation must not interrupt acquisition or group teardown.
+            cancelled = error
+    task.result()
+    if cancelled is not None:
+        raise cancelled
 
 
 async def collect(process, consume):

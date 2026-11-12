@@ -7,11 +7,12 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import native_socket_runner as runner
 
@@ -67,6 +68,46 @@ class PartitionTest(unittest.TestCase):
 
 
 class ProcessTest(unittest.IsolatedAsyncioTestCase):
+    async def test_term_denial_accepts_only_a_disappeared_group(self):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[denied, ProcessLookupError()]) as killpg, \
+                patch.object(runner.asyncio, "sleep", AsyncMock()) as sleep:
+            await runner.stop_group(process)
+        self.assertEqual(killpg.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, 0)])
+        sleep.assert_awaited_once_with(0.1)
+        process.wait.assert_awaited_once()
+
+    async def test_term_denial_keeps_existing_and_inaccessible_groups_blocking(self):
+        for probe in (None, PermissionError(1, "Group remains inaccessible")):
+            await self.check_term_denial(probe)
+
+    async def check_term_denial(self, probe):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[denied, probe]) as killpg, \
+                patch.object(runner.asyncio, "sleep", AsyncMock()) as sleep, \
+                self.assertRaises(PermissionError):
+            await runner.stop_group(process)
+        self.assertEqual(killpg.call_args_list, [call(process.pid, signal.SIGTERM), call(process.pid, 0)])
+        sleep.assert_awaited_once_with(0.1)
+        process.wait.assert_not_awaited()
+
+    async def test_protocol_failure_propagates_after_denied_group_disappears(self):
+        with patch.object(runner.os, "killpg", side_effect=[PermissionError(), ProcessLookupError()]), \
+                self.assertRaises(json.JSONDecodeError):
+            await runner.command((sys.executable, "-c", "print('bad JSON')"), Path.cwd(), os.environ,
+                                 json.loads)
+
+    async def test_kill_denial_remains_blocking(self):
+        process = AsyncMock(pid=12345)
+        denied = PermissionError(1, "Operation not permitted")
+        with patch.object(runner.os, "killpg", side_effect=[None, denied]), \
+                patch.object(runner.asyncio, "sleep", AsyncMock()), self.assertRaises(PermissionError) as caught:
+            await runner.stop_group(process)
+        self.assertIs(caught.exception, denied)
+        process.wait.assert_not_awaited()
+
     async def test_setup_and_path_control_failures_remove_scratch(self):
         with tempfile.TemporaryDirectory(prefix="native-cleanup-") as directory:
             await self.check_failure_cleanup(Path(directory))
@@ -89,33 +130,147 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path(schedule["scratch"]["long"]).exists())
 
     async def test_nonzero_command_and_invalid_protocol_propagate(self):
+        with self.assertRaises(FileNotFoundError):
+            await runner.command(("/nonexistent/native-runner-command",), Path.cwd(), os.environ)
         with self.assertRaisesRegex(RuntimeError, "exited 7"):
             await runner.command((sys.executable, "-c", "raise SystemExit(7)"), Path.cwd(), os.environ)
         with self.assertRaises(json.JSONDecodeError):
             await runner.command((sys.executable, "-c", "print('bad JSON')"), Path.cwd(), os.environ,
                                  json.loads)
 
+    async def test_command_and_protocol_failure_stop_surviving_child(self):
+        with tempfile.TemporaryDirectory(prefix="native-failure-") as directory:
+            await self.check_child_failure(Path(directory), "raise SystemExit(7)", None, RuntimeError)
+            await self.check_child_failure(Path(directory), "print('bad JSON',flush=True); time.sleep(60)",
+                                           json.loads, json.JSONDecodeError)
+
+    async def check_child_failure(self, root, ending, consume, error):
+        pidfile = root / "pids"
+        source = self.fixture_source(pidfile, ending)
+        task = asyncio.create_task(runner.command((sys.executable, "-c", source), root, os.environ, consume))
+        try:
+            with self.assertRaises(error):
+                await task
+            self.assert_fixture_stopped(pidfile)
+        finally:
+            await self.cleanup_fixture(task, pidfile)
+            pidfile.unlink(missing_ok=True)
+
     async def test_cancellation_stops_process_group_before_returning(self):
         with tempfile.TemporaryDirectory(prefix="native-cancel-") as directory:
             await self.check_cancel(Path(directory))
 
-    async def check_cancel(self, root):
+    async def test_cancellation_during_creation_handoff_stops_process_group(self):
+        with tempfile.TemporaryDirectory(prefix="native-handoff-") as directory:
+            await self.check_handoff(Path(directory))
+
+    async def test_repeated_cancellation_during_creation_handoff(self):
+        with tempfile.TemporaryDirectory(prefix="native-repeat-") as directory:
+            await self.check_handoff(Path(directory), repeat=True)
+
+    async def test_repeated_cancellation_during_group_cleanup(self):
+        stopping = asyncio.Event()
+        killpg = os.killpg
+
+        def signal_group(pid, signum):
+            killpg(pid, signum)
+            if signum == signal.SIGTERM:
+                stopping.set()
+
+        with tempfile.TemporaryDirectory(prefix="native-stopping-") as directory:
+            with patch.object(runner.os, "killpg", signal_group):
+                await self.check_cancel(Path(directory), stopping=stopping)
+
+    async def check_handoff(self, root, repeat=False):
+        release = asyncio.Event()
+        cleaning = asyncio.Event()
+        create = asyncio.create_subprocess_exec
+        stop_created_group = runner.stop_created_group
+        processes = []
+
+        async def delayed_create(*args, **kwargs):
+            process = await create(*args, **kwargs)
+            processes.append(process)
+            await release.wait()
+            return process
+
+        async def stop_creation(creation):
+            cleaning.set()
+            await stop_created_group(creation)
+
+        try:
+            with patch.object(runner.asyncio, "create_subprocess_exec", delayed_create), \
+                    patch.object(runner, "stop_created_group", stop_creation):
+                await self.check_cancel(root, release, cleaning if repeat else None)
+        finally:
+            for process in processes:
+                await runner.stop_group(process)
+
+    def fixture_source(self, pidfile, ending):
+        pending = str(pidfile) + ".pending"
+        return ("import os,signal,subprocess,sys,time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+                "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+                f"open({pending!r},'w').write(f'{{os.getpid()}} {{child.pid}}'); "
+                f"os.rename({pending!r},{str(pidfile)!r}); " + ending)
+
+    async def check_cancel(self, root, release=None, cleaning=None, stopping=None):
         pidfile = root / "pids"
-        source = ("import os,signal,subprocess,sys,time; "
-                  "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                  "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
-                  f"open({str(pidfile)!r},'w').write(f'{{os.getpid()}} {{child.pid}}'); "
-                  "time.sleep(60)")
+        source = self.fixture_source(pidfile, "time.sleep(60)")
         task = asyncio.create_task(runner.command((sys.executable, "-c", source), root, os.environ))
         try:
             await self.await_file(pidfile)
-        finally:
+            parent, child = map(int, pidfile.read_text().split())
+            self.assertEqual(os.getpgid(parent), parent)
+            self.assertEqual(os.getpgid(child), parent)
             task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
+            await self.cancel_again(task, cleaning or stopping)
+            if release is not None:
+                release.set()
+            await self.check_cancelled(task, pidfile)
+        finally:
+            if release is not None:
+                release.set()
+            await self.cleanup_fixture(task, pidfile)
+
+    async def cancel_again(self, task, event):
+        if event is None:
+            return
+        await asyncio.wait_for(event.wait(), timeout=5)
+        self.assertFalse(task.done())
+        task.cancel()
+
+    async def check_cancelled(self, task, pidfile):
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assert_fixture_stopped(pidfile)
+
+    def assert_fixture_stopped(self, pidfile):
         parent, child = map(int, pidfile.read_text().split())
         self.assert_stopped(parent)
         self.assert_stopped(child)
+
+    async def cleanup_fixture(self, task, pidfile):
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if not pidfile.exists():
+            return
+        parent, child = map(int, pidfile.read_text().split())
+        try:
+            self.assertEqual(os.getpgid(parent), parent)
+            os.killpg(parent, signal.SIGKILL)
+        except ProcessLookupError:
+            # A reaped leader can leave the fixture child in its original group.
+            self.kill_fixture_child(parent, child)
+
+    def kill_fixture_child(self, parent, child):
+        try:
+            self.assertEqual(os.getpgid(child), parent)
+            os.killpg(parent, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     async def await_file(self, path):
         await asyncio.wait_for(self.poll_file(path), timeout=5)

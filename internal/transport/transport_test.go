@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/http"
@@ -175,6 +176,9 @@ func TestCloseCompletedAcceptsAnAlreadyClosedConnection(t *testing.T) {
 		{"nil", nil, true},
 		{"context canceled", context.Canceled, true},
 		{"peer closed first", peerClosedFirst, true},
+		{"peer EOF during close", fmt.Errorf("failed to close WebSocket: failed to read frame header: %w", io.EOF), false},
+		{"truncated payload", io.ErrUnexpectedEOF, false},
+		{"close deadline", context.DeadlineExceeded, false},
 		{"genuine failure", errors.New("write: broken pipe"), false},
 	} {
 		if got := closeCompleted(row.err); got != row.want {
