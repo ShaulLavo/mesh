@@ -1,5 +1,45 @@
 # Installed catch-up fixture
 
+## First review corrections 2–4
+
+The ordered schedule now keeps an awake direct dependent of the failed canary;
+the sleeping host is the final dependent. Each hold requires a fresh authenticated
+peer read and a completed native startup opportunity. Both dependents get those
+opportunities before their real five-second soak expires and continue receiving
+them afterward. The driver no longer waits out the soak before allowing work.
+Countermodels that ignore soak or failed-canary gating are rejected; the enforcing
+model passes. These are assertion controls, not native acceptance.
+
+The privileged account owner now has a durable operation ticket before launch,
+PID/UID/birth/boot identity, and an atomic resource journal. Timeout/interruption
+requests graceful teardown before lifetime-bound escalation. Recovery acts only
+on bound account/group resources after the owner is stopped. Positive cleanup and
+supervisor evidence are mandatory before scratch deletion; missing evidence retains
+the root and fails. Real user-owned parent/child controls exercise timeout and
+injected failure without creating accounts or changing the owner's OS.
+
+The original published route now obtains its intended hops from a real read-only
+authenticated product plan. A required intermediate/waypoint must be observed
+before terminal acceptance. Manifest/metadata hashes, executing build and helper
+must match the authenticated expectation. Final and restarted rollback helpers
+are checked against authenticated release images, not only local receipts. A
+direct route does not masquerade as the required intermediate proof. Durable
+failed-edge, original worker and restart checks remain mandatory.
+
+Findings 1 and 5 remain assigned to the parent. The strict TLS correction remains
+unchanged. No artifact download workflow/API was edited for this checkpoint.
+
+The distinct Mac `domains.json` change was reproduced with one unchanged binary:
+without a DB the file stayed absent; after DB existence its next production
+installation-check produced exactly
+`d04ea91b034c4a70ea83d312574ba469fda497b2e1a6748e17c1a158a5f3436c`.
+A third call preserved it. The fresh fixture now deliberately finishes that
+existing initialization only after proving actual absent-policy first startup,
+then captures its upgrade-preservation baseline. Already configured files cannot
+change during initialization and `domains.json` remains strictly compared afterward.
+The source control is not a native first-hop pass. Production helper diagnosis
+and native confirmation remain separate.
+
 Unit 8 is in progress. The real-manager adoption cases and signed cohort/format
 fixtures are implemented. The complete publication gate still needs native
 cohort acceptance, ordered hosts, interruption coverage and real draft assets.
