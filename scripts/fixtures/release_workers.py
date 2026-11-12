@@ -143,7 +143,8 @@ def start_one(state, config, item, index, boot, host, record, path):
 def wait_worker(directory, process):
     for _ in range(120):
         if process.poll() is not None:
-            raise RuntimeError(f"retained worker exited: {directory}")
+            log = (directory / "worker.log").read_bytes()[-4096:].decode(errors="replace")
+            raise RuntimeError(f"retained worker exited: {directory}; {log}")
         if (directory / "sock").is_socket() and (directory / "meta.json").is_file():
             return
         time.sleep(0.05)
