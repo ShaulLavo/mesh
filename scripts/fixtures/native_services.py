@@ -162,6 +162,7 @@ def positive_control(root, evidence):
             raise RuntimeError("native manager PID does not match executing positive control")
         record["executed"] = child
         record["mappedImage"] = wait_for(lambda: control_image(manager.pid, record), "native control did not exec its expected /bin/sleep image")
+        record.update(side_context(manager, root))
         if manager.manager_pid() != manager.pid:
             raise RuntimeError("native service PID changed during mapped-image verification")
         record["passed"] = True
@@ -178,6 +179,16 @@ def positive_control(root, evidence):
         finally:
             Path(evidence).write_text(json.dumps(record, indent=2) + "\n")
     return record
+
+
+def side_context(manager, root):
+    if manager.system != "Linux":
+        return {}
+    side = manager.environment | {"HOME": str(root)}
+    unit = command(["/usr/bin/systemctl", "--user", "whoami", str(manager.pid)], side).stdout.strip()
+    if unit != manager.label + ".service":
+        raise RuntimeError("native PID-to-unit mapping returned another service")
+    return {"sideContextUnit": unit}
 
 
 def child(marker, token):
