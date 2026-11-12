@@ -47,14 +47,28 @@ func TestStrictRecordsRejectLinksAndOversize(t *testing.T) {
 	if err := f.Read("file", new(any)); err == nil {
 		t.Fatal("accepted hard link")
 	}
+	if err := f.Confirm("file"); err == nil {
+		t.Fatal("confirmed hard link")
+	}
+	if _, err := f.Publish("file", struct{}{}, true); err == nil {
+		t.Fatal("exclusively published over hard link")
+	}
+	if _, err := f.Publish("file", struct{}{}, false); err == nil {
+		t.Fatal("replaced hard link")
+	}
 }
 
 func TestVisiblePublicationRequiresActualBarrierRepair(t *testing.T) {
 	for _, failed := range []string{"data_sync", "publish", "directory_sync", "device_sync", "close"} {
-		t.Run(failed, func(t *testing.T) { testBarrierFailure(t, failed) })
+		t.Run(failed, func(t *testing.T) { testBarrierFailure(t, failed, false) })
 	}
 }
-func testBarrierFailure(t *testing.T, failed string) {
+func TestExclusivePublicationRequiresActualBarrierRepair(t *testing.T) {
+	for _, failed := range []string{"data_sync", "publish", "directory_sync", "device_sync", "close"} {
+		t.Run(failed, func(t *testing.T) { testBarrierFailure(t, failed, true) })
+	}
+}
+func testBarrierFailure(t *testing.T, failed string, exclusive bool) {
 	f, err := OpenFiles(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +85,7 @@ func testBarrierFailure(t *testing.T, failed string) {
 		}
 		return nil
 	}
-	stage, err := f.Publish("execution/record", map[string]int{"n": 7}, false)
+	stage, err := f.Publish("execution/record", map[string]int{"n": 7}, exclusive)
 	if err == nil || stage == Durable {
 		t.Fatalf("barrier %s acknowledged: %s %v", failed, stage, err)
 	}
