@@ -178,7 +178,6 @@ install_systemd_service() {
 	if [ "$activation_required" -eq 1 ]; then
 		systemctl --user daemon-reload >/dev/null
 	fi
-	MESH_STATE_DIR="$state_dir" "$binary_path" daemon prepare-updates --service-kind systemd
 	systemctl --user enable mesh.service >/dev/null
 	if systemctl --user is-active --quiet mesh.service; then
 		if [ "$activation_required" -eq 1 ]; then
@@ -188,7 +187,6 @@ install_systemd_service() {
 		systemctl --user start mesh.service >/dev/null
 	fi
 	systemctl --user is-active --quiet mesh.service || fail "mesh.service did not start"
-	MESH_STATE_DIR="$state_dir" "$binary_path" daemon installation-check --service-kind systemd >&2
 	clear_activation_pending
 }
 
@@ -234,7 +232,6 @@ install_launchd_service() {
 	else
 		fail "launchd has no user domain for UID $uid"
 	fi
-	MESH_STATE_DIR="$state_dir" "$binary_path" daemon prepare-updates --service-kind launchd --domain "$domain"
 	if [ "$other_loaded" -eq 1 ]; then
 		mark_activation_pending
 		launchctl bootout "$other_service" >/dev/null
@@ -247,7 +244,6 @@ install_launchd_service() {
 		launchctl bootstrap "$domain" "$plist_path" >/dev/null
 	fi
 	launchctl print "$service" >/dev/null 2>&1 || fail "$service did not start"
-	MESH_STATE_DIR="$state_dir" "$binary_path" daemon installation-check --service-kind launchd --domain "$domain" >&2
 	clear_activation_pending
 }
 

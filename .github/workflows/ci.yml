@@ -57,15 +57,7 @@ jobs:
               - 'db/**'
               - 'go.mod'
               - 'go.sum'
-              - 'scripts/*release*'
-              - 'scripts/*update-proof*'
-              - 'scripts/*update-reader*'
-              - 'scripts/*legacy*'
-              - 'scripts/*metadata*'
-              - 'scripts/upgrade-policy.json'
-              - 'scripts/fixtures/release_transition.py'
-              - 'scripts/fixtures/published_releases.py'
-              - 'scripts/fixtures/tls.py'
+              - 'scripts/**'
               - '.github/workflows/*'
 
   app-pill:
@@ -347,6 +339,8 @@ jobs:
         run: golangci-lint config verify
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
+      - name: Verify installed release gate wiring
+        run: python3 scripts/test-installed-gate-wiring.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
         timeout-minutes: 8
         run: |
@@ -429,12 +423,26 @@ jobs:
     with:
       source_sha: ${{ github.sha }}
 
+  installed-catchup:
+    name: Required installed update proofs
+    needs: [changes, update-proofs]
+    if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
+    permissions:
+      contents: read
+      actions: read
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@d8316978c34f76a3df886ec69f4ec3b6e7ecd269
+    with:
+      harness_source: d8316978c34f76a3df886ec69f4ec3b6e7ecd269
+      worker_artifact_prefix: update-native
+      worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
+      worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
+
   gate:
     name: Complete CI gate
     permissions:
       statuses: write
     if: always()
-    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, gates, vulnerability, packaging]
+    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, installed-catchup, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require a ready PR
@@ -455,6 +463,7 @@ jobs:
           HELPER_RECOVERY: ${{ needs.helper-recovery.result }}
           UPDATE_PROOFS_REQUIRED: ${{ needs.changes.outputs.update_proofs }}
           UPDATE_PROOFS: ${{ needs.update-proofs.result }}
+          INSTALLED_CATCHUP: ${{ needs.installed-catchup.result }}
           GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
@@ -468,8 +477,8 @@ jobs:
           [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]] || exit 1
           [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]] || exit 1
           case "$UPDATE_PROOFS_REQUIRED" in
-            true) [[ $UPDATE_PROOFS == success ]] || exit 1 ;;
-            false) [[ $UPDATE_PROOFS == skipped ]] || exit 1 ;;
+            true) [[ $UPDATE_PROOFS == success && $INSTALLED_CATCHUP == success ]] || exit 1 ;;
+            false) [[ $UPDATE_PROOFS == skipped && $INSTALLED_CATCHUP == skipped ]] || exit 1 ;;
             *) exit 1 ;;
           esac
 

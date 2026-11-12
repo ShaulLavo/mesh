@@ -81,6 +81,7 @@ def check_filtered_outcomes(command, results, code, proofs):
     environment.update({name: "skipped" if code == "false" and dependency in FILTERED else "success"
                         for name, dependency in results.items()})
     environment["UPDATE_PROOFS"] = "success" if proofs == "true" else "skipped"
+    environment["INSTALLED_CATCHUP"] = environment["UPDATE_PROOFS"]
     assert status(command, environment) == 0, f"aggregate rejects valid CODE={code}, proofs={proofs} results"
     for variable in results:
         reject_outcomes(command, environment, variable)

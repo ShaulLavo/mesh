@@ -222,31 +222,27 @@ func boolToInstallInt(value bool) int {
 	return 0
 }
 
-func TestRootInstallerPreparesHelperBeforeDaemonAndRetries(t *testing.T) {
+func TestLiveRootInstallerDefersHelperPreparationUntilSignedPublication(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin"} {
-		t.Run(goos, func(t *testing.T) { checkRootInstallerDefaults(t, goos) })
+		t.Run(goos, func(t *testing.T) { checkLiveRootInstaller(t, goos) })
 	}
 }
 
-func checkRootInstallerDefaults(t *testing.T, goos string) {
+func checkLiveRootInstaller(t *testing.T, goos string) {
 	t.Helper()
 	f := newInstallerDefaultsFixture(t, goos)
-	if output, err := f.runRoot(t, "FAIL_HELPER", false); err == nil {
-		t.Fatalf("root installer accepted failed helper: %s", output)
-	}
-	if _, err := os.Stat(f.active); !os.IsNotExist(err) {
-		t.Fatalf("root installer started daemon before helper: %v", err)
-	}
-	if output, err := f.runRoot(t, "NO_FAILURE", false); err != nil {
-		t.Fatalf("root installer retry: %v\n%s", err, output)
+	if output, err := f.runRoot(t, "FAIL_HELPER", false); err != nil {
+		t.Fatalf("live root installer requires unpublished helper API: %v\n%s", err, output)
 	}
 	log, err := os.ReadFile(f.log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := filepath.Join(f.home, ".local", "state", "mesh")
-	if want := "helper " + state + "\nhelper " + state + "\ndaemon\ncheck " + state + "\n"; string(log) != want {
-		t.Fatalf("root installer ordering: %q, want %q", log, want)
+	if string(log) != "daemon\n" {
+		t.Fatalf("live root installer reached unpublished helper API: %q", log)
+	}
+	if _, err := os.Stat(f.active); err != nil {
+		t.Fatalf("live root installer did not start daemon: %v", err)
 	}
 }
 
