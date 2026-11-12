@@ -86,6 +86,29 @@ def prepare_workers(selection, platform, output, cache):
     (output / "workers.json").write_text(json.dumps({"schema": 1, "platform": platform, "workers": workers}, sort_keys=True) + "\n")
 
 
+def pinned_assets(frozen, platform):
+    key = platform.replace("/", "_")
+    pattern = re.compile(r"baseline_" + re.escape(key) + r"_([0-9a-f]{64})\.bin")
+    assets = {}
+    for name in sorted(set(frozen.split(","))):
+        match = pattern.fullmatch(name)
+        if match:
+            assets[name] = match[1]
+    return assets
+
+
+def proof_shards(selection, frozen):
+    full = {}
+    for item in selection["baselines"]:
+        platform = item["artifact"]["platform"]
+        key = platform["os"] + "/" + platform["arch"]
+        versions = full.setdefault(key, set())
+        if item["rollback"]:
+            versions.add(item["version"])
+    sizes = [len(versions) + len(pinned_assets(frozen, platform)) for platform, versions in full.items()]
+    return list(range(max([1] + sizes)))
+
+
 def main(args):
     candidate, previous, platform, frozen, directory, output_list = args
     selection = json.loads(Path(os.environ["MESH_RELEASE_SELECTION"]).read_bytes())
@@ -103,12 +126,8 @@ def main(args):
         paths.append(str(binary))
         (binary.parent / "source.json").write_text(json.dumps(item, sort_keys=True) + "\n")
     prepare_workers(selection, dict(zip(("os", "arch"), platform.split("/"), strict=True)), output, cache)
-    key = platform.replace("/", "_")
-    for name in filter(None, frozen.split(",")):
-        match = re.fullmatch(r"baseline_" + re.escape(key) + r"_([0-9a-f]{64})\.bin", name)
-        if not match:
-            continue
-        cached = acquire(candidate, name, match[1], output, cache)
+    for name, digest in pinned_assets(frozen, platform).items():
+        cached = acquire(candidate, name, digest, output, cache)
         binary = output / name
         binary.write_bytes(cached.read_bytes())
         binary.chmod(0o755)
@@ -117,4 +136,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    if len(sys.argv) == 4 and sys.argv[1] == "--shards":
+        print(json.dumps(proof_shards(json.loads(Path(sys.argv[2]).read_bytes()), sys.argv[3])))
+    else:
+        main(sys.argv[1:])

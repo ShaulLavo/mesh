@@ -49,6 +49,7 @@ jobs:
           VERSION: ${{ inputs.version }}
           PREVIOUS: ${{ inputs.previous_tag }}
           DRAFT: ${{ inputs.draft }}
+          BASELINE_ASSETS: ${{ inputs.baseline_assets }}
         shell: bash
         run: |
           set -euo pipefail
@@ -65,7 +66,8 @@ jobs:
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
           go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
-          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); n=max(1,len({v["version"] for v in s["baselines"] if v["rollback"]})); print("shards="+json.dumps(list(range(n))))' "$root/selection.json" >> "$GITHUB_OUTPUT"
+          shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
+          printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-policy

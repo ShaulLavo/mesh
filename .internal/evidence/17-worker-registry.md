@@ -49,9 +49,12 @@ The initial setup attempt stopped before the proof because GNU time was absent;
 its scratch was removed. The successful measurement used shell elapsed time
 and the cohort's actual process observations. No deadline was increased.
 
-Native proof jobs now partition by full-source count. Each shard owns at most
-one full published-source proof, and forward-only sources are distributed over
-the same shards. Every source is assigned exactly once. Original candidate,
+Native proof jobs size the matrix from the largest full-source count across
+platforms, including matching pinned custom binaries. Duplicate pinned names
+are counted once, using the same selector as acquisition. Each shard owns at
+most one full published or custom proof, and the runner refuses an undersized
+matrix before invoking a proof. Forward-only sources are distributed over the
+same shards. Every source is assigned exactly once. Original candidate,
 startup-fault, boundary, and observer executables remain built once per
 platform. Existing receipt, packet, worker-count, and registry byte bounds fail
 closed. Exceeding them requires a reviewed format change, not truncation.

@@ -39,6 +39,18 @@ def terminate_run(signum, _frame):
     raise SystemExit(128 + signum)
 
 
+def read_baselines(path):
+    sources = []
+    for line in path.read_text().splitlines():
+        binary = Path(line)
+        if not binary.is_absolute():
+            binary = path.parent / binary
+        source = binary.parent / "source.json"
+        evidence = json.loads(source.read_bytes()) if source.exists() else {"version": binary.name, "rollback": True}
+        sources.append((binary, evidence))
+    return sources
+
+
 def main():
     signal.signal(signal.SIGTERM, terminate_run)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -51,6 +63,9 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.shard < args.shards:
         parser.error("invalid shard position")
+    sources = read_baselines(args.baselines)
+    if sum(int(evidence["rollback"]) for _, evidence in sources) > args.shards:
+        raise ValueError("too few shards for the required full sources")
     root = Path(__file__).resolve().parent.parent
     args.output.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(args.tools / "candidate-reader.json", args.output / "candidate-reader.json")
@@ -62,12 +77,7 @@ def main():
         raise ValueError("native proof requires the complete exact worker registry")
     results = []
     full_index, forward_index = 0, 0
-    for line in args.baselines.read_text().splitlines():
-        binary = Path(line)
-        if not binary.is_absolute():
-            binary = args.baselines.parent / binary
-        source = binary.parent / "source.json"
-        evidence = json.loads(source.read_bytes()) if source.exists() else {"version": binary.name, "rollback": True}
+    for binary, evidence in sources:
         assignment = full_index if evidence["rollback"] else forward_index
         full_index += int(evidence["rollback"])
         forward_index += int(not evidence["rollback"])
