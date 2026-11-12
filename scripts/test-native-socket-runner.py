@@ -184,9 +184,14 @@ func BenchmarkSocket(b *testing.B) { panic("benchmarks must not run") }
 class BinaryTest(unittest.TestCase):
     def test_actual_race_binary_discovery_execution_and_testmain_errors(self):
         with tempfile.TemporaryDirectory(prefix="native-binary-") as directory:
-            self.check_binary(Path(directory))
+            physical = Path(directory) / "physical"
+            physical.mkdir()
+            alias = Path(directory) / "alias"
+            alias.symlink_to(physical, target_is_directory=True)
+            self.check_binary(alias)
 
     def check_binary(self, root):
+        root = root.resolve()
         package = root / "internal/cli"
         package.mkdir(parents=True)
         (root / "go.mod").write_text("module fixture\n\ngo 1.27.4\n")
