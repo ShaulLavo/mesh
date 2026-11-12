@@ -101,6 +101,9 @@ func hostHelper(ctx context.Context, stateDir string, source release.Manifest) e
 	settings := engine.Settings()
 	cfg := updateinstall.HelperConfig{StateDir: stateDir, Executable: settings.Executable, Kind: settings.Service.Kind, Domain: settings.Service.Domain}
 	cfg.Probe = updatebootstrap.HelperProcessProbe(cfg)
+	cfg.State = func(ctx context.Context) (updateinstall.HelperProcessState, error) {
+		return updatebootstrap.HelperServiceState(ctx, cfg)
+	}
 	status, statusErr := updateinstall.ReadContext(ctx, stateDir)
 	if statusErr != nil && !errors.Is(statusErr, os.ErrNotExist) {
 		return hostControllerError(statusErr)

@@ -344,7 +344,7 @@ func (s *Store) hostFailedPage(after string, limit int) ([]FailedEdge, string, e
 }
 
 func validEvidenceEntry(entry LedgerEntry) error {
-	if entry.Seq == 0 || !ValidRunID(entry.Request) || entry.Generation == 0 || entry.Metadata != "" && !hostDigest(entry.Metadata) || entry.Metadata == "" && entry.Origin != string(HostManual) || !hostDigest(entry.Binary) || !hostDigest(entry.From) || entry.CommittedAt.IsZero() || entry.Workers < 0 || entry.Workers > MaxHostReaderWorkers || entry.WorkersPreserved < 0 || entry.WorkersPreserved > entry.Workers || entry.Origin != hostOrigin && entry.Origin != "adoption" && entry.Origin != string(HostManual) {
+	if entry.Seq == 0 || !ValidRunID(entry.Request) || entry.Generation == 0 || entry.Metadata != "" && !hostDigest(entry.Metadata) || entry.Metadata == "" && entry.Origin != string(HostManual) || !hostDigest(entry.Binary) || !hostDigest(entry.From) || entry.CommittedAt.IsZero() || entry.Workers < 0 || entry.Workers > MaxHostReaderWorkers || entry.WorkersPreserved < 0 || entry.WorkersPreserved > entry.Workers || entry.Origin != hostOrigin && entry.Origin != adoptionOrigin && entry.Origin != string(HostManual) {
 		return errors.New("update: invalid committed evidence entry")
 	}
 	return validEvidenceVersion(entry.Version)

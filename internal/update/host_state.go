@@ -121,11 +121,11 @@ func (a HostAdoption) validate() error {
 	if len(a.Details) > 64<<10 || len(a.Details) > 0 && !json.Valid(a.Details) {
 		return errors.New("update: adoption details exceed their bound or contain invalid JSON")
 	}
-	if a.Confirmed && (a.Adopted == nil || a.Adopted.Metadata != a.Pin || a.Adopted.Origin != "adoption") {
+	if a.Confirmed && (a.Adopted == nil || a.Adopted.Metadata != a.Pin || a.Adopted.Origin != adoptionOrigin) {
 		return errors.New("update: adoption confirmation lacks pinned commit")
 	}
 	if a.Adopted != nil {
-		if err := validateAdoptionEntry(*a.Adopted, "adoption"); err != nil {
+		if err := validateAdoptionEntry(*a.Adopted, adoptionOrigin); err != nil {
 			return err
 		}
 		if a.Adopted.Metadata != a.Pin {
