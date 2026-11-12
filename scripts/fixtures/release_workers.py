@@ -203,7 +203,10 @@ def verify_images(state, path):
         raise ValueError("worker proof requires the actual process-image observer")
     environment = dict(os.environ, MESH_COHORT_STATE=str(state), MESH_COHORT_RECORD=str(path))
     result = subprocess.run([probe, "-test.v", "-test.run=^TestRetainedWorkerCohortIdentity$"],
-                            env=environment, capture_output=True, timeout=30, check=True)
+                            env=environment, capture_output=True, timeout=30, check=False)
+    if result.returncode:
+        output = (result.stdout[-4096:] + b"\n" + result.stderr[-4096:]).decode(errors="replace")
+        raise RuntimeError(f"exact running cohort image observer exited {result.returncode}: {output}")
     if b"--- PASS: TestRetainedWorkerCohortIdentity" not in result.stdout:
         raise RuntimeError("exact running cohort image observer did not run")
 
