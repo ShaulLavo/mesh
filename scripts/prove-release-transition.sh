@@ -41,6 +41,11 @@ cohort=$test_root/cohort.json
 cohort_tool=$repo_root/scripts/fixtures/release_workers.py
 
 cleanup() {
+  local status=$?
+  if (( status != 0 )) && [[ -f $cohort ]]; then
+    mkdir -p "$output_directory/failures" && cp "$cohort" "$output_directory/failures/${source_version:-unknown}.cohort.json" ||
+      echo 'transition proof: could not retain failed cohort startup evidence' >&2
+  fi
   [[ ! -f $cohort ]] || python3 "$cohort_tool" stop "$cohort" || true
   discover_owned_session_processes
   [[ ! -f $test_root/managed-daemon.pid ]] || old_daemon=$(cat "$test_root/managed-daemon.pid")

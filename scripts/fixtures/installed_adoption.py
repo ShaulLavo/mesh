@@ -61,6 +61,21 @@ class AdoptionCase(installed_native.Installation):
         paths.extend((self.root / "config").glob("*.json"))
         return {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths if path.is_file()}
 
+    def initialize_preserved_baseline(self):
+        before = self.retained()
+        binary = self.releases.builds[installed_releases.VERSIONS[0]]["path"]
+        result = subprocess.run([str(binary), "daemon", "installation-check"], env=self.environment,
+                                capture_output=True, text=True, check=False, timeout=75)
+        (self.root / "baseline-initialization.log").write_text(result.stdout + result.stderr)
+        if result.returncode:
+            raise RuntimeError("ordered production installation-check failed: " + result.stderr[-4096:])
+        after = self.retained()
+        domain = str(Path(self.environment["MESH_CONFIG_DIR"]) / "domains.json")
+        validate_initialized_baseline(before, after, domain)
+        if domain not in after:
+            raise RuntimeError("ordered seeded installation did not initialize its domain policy")
+        return {"command": "daemon installation-check", "binary": str(binary), "before": before, "after": after}
+
     def inspect_retained(self):
         after = self.retained()
         (self.root / "preserved-before.json").write_text(json.dumps(self.snapshots, indent=2) + "\n")
@@ -209,6 +224,13 @@ class AdoptionCase(installed_native.Installation):
         if image["sha256"] != expected or manager.manager_pid() != pid:
             raise RuntimeError("actual helper mapped image differs after promotion/restoration")
         return image
+
+
+def validate_initialized_baseline(before, after, domain_path):
+    if any(after.get(path) != digest for path, digest in before.items()):
+        raise RuntimeError("baseline initialization changed an already configured preserved component")
+    if set(after).difference(before).difference({domain_path}):
+        raise RuntimeError("baseline initialization created an unexpected preserved component")
 
 
 def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None, registry=None, probe=None):

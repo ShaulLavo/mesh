@@ -1,4 +1,5 @@
 """Exact archived worker cohorts shared by release proofs and installed catch-up."""
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -147,7 +148,7 @@ def start_one(state, config, item, index, boot, host, record, path):
            "protocol": item["protocol"], "version": item["version"]}
     record["workers"].append(row)
     save(path, record)
-    wait_worker(directory, process)
+    wait_startup(directory, process, item, record, row, path)
     meta = json.loads((directory / "meta.json").read_bytes())
     row["shellPid"] = meta["pid"]
     save(path, record)
@@ -156,10 +157,21 @@ def start_one(state, config, item, index, boot, host, record, path):
         raise RuntimeError("worker cohort shell belongs to another process")
 
 
+def wait_startup(directory, process, item, record, row, path):
+    from fixtures import release_worker_evidence
+    with release_worker_evidence.Startup(process.pid) as observed:
+        try:
+            wait_worker(directory, process)
+        except BaseException:
+            release_worker_evidence.publish(record, row, observed, item, directory, path, save)
+            raise
+
+
 def wait_worker(directory, process):
+    from fixtures import release_worker_evidence
     for _ in range(120):
         if process.poll() is not None:
-            log = (directory / "worker.log").read_bytes()[-4096:].decode(errors="replace")
+            log = release_worker_evidence.log_tail(directory / "worker.log")
             raise RuntimeError(f"retained worker exited: {directory}; {log}")
         if (directory / "sock").is_socket() and (directory / "meta.json").is_file():
             return
@@ -168,12 +180,14 @@ def wait_worker(directory, process):
 
 
 def start(state, config, selected, path):
+    from fixtures import release_worker_evidence
     state, config, path = Path(state), Path(config), Path(path)
     primary = next((state / "s").glob("*/meta.json"))
     boot = json.loads(primary.read_bytes()).get("bootId", "")
-    with sqlite3.connect(state / "mesh.db") as database:
+    with closing(sqlite3.connect(state / "mesh.db")) as database:
         host = database.execute("SELECT id FROM hosts ORDER BY id LIMIT 1").fetchone()[0]
-    record = {"schema": 1, "workers": [], "observations": []}
+    record = {"schema": 1, "workers": [], "observations": [],
+              "startupObserverControl": release_worker_evidence.positive_control()}
     save(path, record)
     try:
         for index, item in enumerate(selected):
@@ -272,4 +286,5 @@ def main(arguments):
 
 
 if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     main(sys.argv[1:])

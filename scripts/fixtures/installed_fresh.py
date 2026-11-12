@@ -89,7 +89,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         helper = self.mapped_helper()
         self.production_install_command("installation-check", self.install_flags)
         after = self.retained()
-        validate_initialized_baseline(before, after, str(self.root / "config/domains.json"))
+        installed_adoption.validate_initialized_baseline(before, after, str(self.root / "config/domains.json"))
         self.require_fresh_state()
         self.require_automatic_zero(self.control("host.info")["host"])
         if self.mapped_helper()["pid"] != helper["pid"]:
@@ -196,13 +196,6 @@ def retain_install_logs(case, output):
         path = case.root / (name + ".log")
         if path.exists():
             installed_native.copy_log_tail(path, output / ("fresh-" + name + ".log"))
-
-
-def validate_initialized_baseline(before, after, domain_path):
-    if any(after.get(path) != digest for path, digest in before.items()):
-        raise RuntimeError("baseline initialization changed an already configured preserved component")
-    if set(after).difference(before).difference({domain_path}):
-        raise RuntimeError("baseline initialization created an unexpected preserved component")
 
 
 def collect_diagnostics(case, output, label="final"):
