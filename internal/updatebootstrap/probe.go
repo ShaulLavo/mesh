@@ -39,6 +39,21 @@ type executableImage struct {
 	PID             int
 }
 
+type processImageResult struct {
+	image executableImage
+	err   error
+}
+
+var workerImages = processImages
+
+func peerImage(ctx context.Context, conn net.Conn) (executableImage, error) {
+	pid, err := peerPID(conn)
+	if err != nil {
+		return executableImage{}, err
+	}
+	return processImage(ctx, pid)
+}
+
 func Probe(stateDir string) updateinstall.Probe {
 	return func(ctx context.Context) (updateinstall.Health, error) {
 		observed, err := Inspect(ctx, stateDir)
@@ -229,13 +244,17 @@ func (r probeImageReader) Read(buffer []byte) (int, error) {
 
 type workerObservation struct {
 	dir    string
+	meta   worker.Meta
+	conn   net.Conn
+	pid    int
+	image  executableImage
 	worker *updateinstall.Worker
 	err    error
+	done   bool
 }
 
-// Bound simultaneous sockets, native image tools and executable reads. Results
-// retain ReadDir order, regardless of which observation finishes first.
 const workerProbeConcurrency = 8
+const workerImageBatch = 32
 
 func inspectWorkers(ctx context.Context, stateDir string, stateVersion int) ([]updateinstall.Worker, error) {
 	root := filepath.Join(stateDir, "s")
@@ -253,23 +272,83 @@ func inspectWorkers(ctx context.Context, stateDir string, stateVersion int) ([]u
 		}
 		observations = append(observations, workerObservation{dir: filepath.Join(root, entry.Name())})
 	}
-	var next atomic.Int64
-	var group sync.WaitGroup
-	for range min(workerProbeConcurrency, len(observations)) {
-		group.Go(func() { inspectWorkerBatch(ctx, observations, stateVersion, &next) })
+	for start := 0; start < len(observations) && ctx.Err() == nil; start += workerImageBatch {
+		inspectWorkerGroup(ctx, observations[start:min(start+workerImageBatch, len(observations))], stateVersion)
 	}
-	group.Wait()
 	return collectWorkerObservations(ctx, observations)
 }
 
-func inspectWorkerBatch(ctx context.Context, observations []workerObservation, stateVersion int, next *atomic.Int64) {
+func inspectWorkerGroup(ctx context.Context, observations []workerObservation, stateVersion int) {
+	// Own connections before Connect can acquire one, including entries never asked.
+	defer closeWorkerConnections(observations)
+	runWorkerStage(ctx, observations, func(current *workerObservation) { current.connect(ctx) })
+	if ctx.Err() != nil {
+		return
+	}
+	identifyWorkers(ctx, observations)
+	runWorkerStage(ctx, observations, func(current *workerObservation) { current.ask() })
+	runWorkerStage(ctx, observations, func(current *workerObservation) { current.digest(ctx, stateVersion) })
+}
+
+func closeWorkerConnections(observations []workerObservation) {
+	for i := range observations {
+		if observations[i].conn != nil {
+			_ = observations[i].conn.Close()
+		}
+	}
+}
+
+func runWorkerStage(ctx context.Context, observations []workerObservation, stage func(*workerObservation)) {
+	var next atomic.Int64
+	var group sync.WaitGroup
+	for range min(workerProbeConcurrency, len(observations)) {
+		group.Go(func() { runWorkerStageBatch(ctx, observations, stage, &next) })
+	}
+	group.Wait()
+}
+
+func runWorkerStageBatch(ctx context.Context, observations []workerObservation, stage func(*workerObservation), next *atomic.Int64) {
 	for {
 		index := int(next.Add(1)) - 1
 		if index >= len(observations) || ctx.Err() != nil {
 			return
 		}
 		current := &observations[index]
-		current.worker, current.err = inspectWorker(ctx, current.dir, stateVersion)
+		if current.done || current.err != nil {
+			continue
+		}
+		stage(current)
+	}
+}
+
+func identifyWorkers(ctx context.Context, observations []workerObservation) {
+	var pids []int
+	indices := make(map[int]int)
+	for i := range observations {
+		current := &observations[i]
+		if current.done || current.err != nil {
+			continue
+		}
+		if _, exists := indices[current.pid]; exists {
+			continue
+		}
+		indices[current.pid] = len(pids)
+		pids = append(pids, current.pid)
+	}
+	if len(pids) == 0 || ctx.Err() != nil {
+		return
+	}
+	results := workerImages(ctx, pids)
+	for i := range observations {
+		current := &observations[i]
+		if current.done || current.err != nil {
+			continue
+		}
+		result := results[indices[current.pid]]
+		current.image = result.image
+		if result.err != nil {
+			current.err = fmt.Errorf("verify session %s shellPID=%d phase=peer-image: %w", current.meta.ID, current.meta.PID, result.err)
+		}
 	}
 }
 
@@ -289,54 +368,75 @@ func collectWorkerObservations(ctx context.Context, observations []workerObserva
 	return workers, nil
 }
 
-func inspectWorker(ctx context.Context, dir string, stateVersion int) (*updateinstall.Worker, error) {
+func (current *workerObservation) connect(ctx context.Context) {
+	dir := current.dir
 	if _, err := os.Lstat(paths.Launching(dir)); err == nil { //nolint:gosec // dir comes from entries enumerated under the local workers directory
-		return nil, nil
+		current.done = true
+		return
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
+		current.err = fmt.Errorf("inspect worker metadata: %w", err)
+		return
 	}
 	meta, err := worker.ReadMeta(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		current.done = true
+		return
 	}
 	if err != nil {
-		return nil, err
+		current.err = fmt.Errorf("inspect worker metadata: %w", err)
+		return
 	}
 	if meta.State == worker.StateExited || meta.State == worker.StateInterrupted {
-		return nil, nil
+		current.done = true
+		return
 	}
 	if meta.BootID != "" && meta.BootID != worker.BootID() {
-		return nil, nil
+		current.done = true
+		return
 	}
 	conn, err := dial(ctx, filepath.Join(dir, "sock"))
 	// A killed worker (SIGKILL, systemd-oomd) never records its end, so its
 	// metadata still says running. Nothing listening means nothing to preserve.
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		current.done = true
+		return
 	}
 	if err != nil {
-		return nil, fmt.Errorf("verify session %s shellPID=%d phase=dial: %w", meta.ID, meta.PID, err)
+		current.err = fmt.Errorf("verify session %s shellPID=%d phase=dial: %w", meta.ID, meta.PID, err)
+		return
 	}
-	defer func() { _ = conn.Close() }()
-	image, err := peerImage(ctx, conn)
+	current.conn = conn
+	current.meta = meta
+	current.pid, err = peerPID(conn)
 	if err != nil {
-		return nil, fmt.Errorf("verify session %s shellPID=%d phase=peer-image: %w", meta.ID, meta.PID, err)
+		current.err = fmt.Errorf("verify session %s shellPID=%d phase=peer-image: %w", meta.ID, meta.PID, err)
 	}
-	response, err := exchange(conn, protocol.Control{Type: protocol.TypeInspect, RequestID: "bootstrap-worker", PreviewCols: 1, PreviewRows: 1})
+}
+
+func (current *workerObservation) ask() {
+	defer func() { _ = current.conn.Close() }()
+	meta, image := current.meta, current.image
+	response, err := exchange(current.conn, protocol.Control{Type: protocol.TypeInspect, RequestID: "bootstrap-worker", PreviewCols: 1, PreviewRows: 1})
 	if err != nil {
-		return nil, fmt.Errorf("verify session %s workerPID=%d shellPID=%d: %w", meta.ID, image.PID, meta.PID, err)
+		current.err = fmt.Errorf("verify session %s workerPID=%d shellPID=%d: %w", meta.ID, image.PID, meta.PID, err)
+		return
 	}
 	if !validWorkerProbe(response, meta) {
-		return nil, errors.New("worker cannot answer a read-only session inspection")
+		current.err = errors.New("worker cannot answer a read-only session inspection")
 	}
+}
+
+func (current *workerObservation) digest(ctx context.Context, stateVersion int) {
+	meta, image := current.meta, current.image
 	build, err := observedBuild(ctx, image.Path, meta.Build, stateVersion)
 	if err != nil {
-		return nil, fmt.Errorf("verify session %s workerPID=%d shellPID=%d phase=build-identity: %w", meta.ID, image.PID, meta.PID, err)
+		current.err = fmt.Errorf("verify session %s workerPID=%d shellPID=%d phase=build-identity: %w", meta.ID, image.PID, meta.PID, err)
+		return
 	}
 	if meta.Build == nil {
 		build.WorkerProtocol = 1
 	}
-	return &updateinstall.Worker{ID: meta.ID, PID: image.PID, ShellPID: meta.PID, Protocol: build.WorkerProtocol, Build: &build}, nil
+	current.worker = &updateinstall.Worker{ID: meta.ID, PID: image.PID, ShellPID: meta.PID, Protocol: build.WorkerProtocol, Build: &build}
 }
 
 func validWorkerProbe(response protocol.Control, meta worker.Meta) bool {
