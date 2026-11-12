@@ -35,6 +35,7 @@ on:
       - 'scripts/fixtures/installed_accounts.py'
       - 'scripts/fixtures/installed_order.py'
       - 'scripts/fixtures/installed_order_host.py'
+      - 'scripts/fixtures/installed_fresh.py'
       - 'internal/update/installed_fixture_test.go'
       - 'cmd/mesh/installed_fixture.go'
       - 'scripts/fixtures/native-helper/**'
@@ -109,14 +110,55 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
+          PAIRED_SCENARIO: ${{ github.workflow == 'Installed catch-up' && 'interrupt' || '' }}
         run: |
+          extra=()
+          if [[ -n $PAIRED_SCENARIO ]]; then extra=(--scenario "$PAIRED_SCENARIO"); fi
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-catchup/pairs" \
-            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper"
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-helper" "${extra[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: installed-catchup-${{ strategy.job-index }}
           path: ${{ runner.temp }}/installed-catchup
+          retention-days: 7
+
+  fresh-managed:
+    name: Fresh native automatic first start (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require the actual native manager before fresh builds or downloads
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Prepare the real helper before the first managed daemon activation
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-fresh-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/fresh-control
+            ${{ runner.temp }}/fresh-proof
           retention-days: 7
 
   signed-cohort-chain:

@@ -90,6 +90,25 @@ class Units:
         data["EnvironmentVariables"] = self.environment
         path.write_bytes(plistlib.dumps(data))
 
+    def reserve_fresh_helper(self, path):
+        manager = self.managers["helper"]
+        manager.plist = path
+        self.registered.append("helper")
+        if manager.system == "Darwin":
+            self.set_gui_environment()
+            return
+        runtime = Path(manager.environment["XDG_RUNTIME_DIR"]) / "systemd/user"
+        link = runtime / "mesh-update-helper.service"
+        dropin = runtime / "mesh-update-helper.service.d"
+        if link.exists() or link.is_symlink() or dropin.exists():
+            raise RuntimeError("refusing existing native helper configuration before fresh preparation")
+        self.links.append((link, path))
+        self.dropins.append(dropin)
+        dropin.mkdir(parents=True)
+        lines = ["[Service]"] + ["Environment=" + json.dumps(key + "=" + value) for key, value in self.environment.items()]
+        (dropin / "50-installed-fixture.conf").write_text("\n".join(lines) + "\n")
+        link.symlink_to(path)
+
     def gui_command(self, arguments):
         return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=10, check=False)
 

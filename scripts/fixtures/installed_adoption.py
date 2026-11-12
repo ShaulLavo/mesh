@@ -260,7 +260,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -279,13 +279,13 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
     try:
         # Install the signer teardown before it can create its server or process.
         releases.start_signer()
-        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint, ordered_hosts)
+        run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint, ordered_hosts, scenario)
     finally:
         releases.close()
         retain_producer_logs(root, output)
 
 
-def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False, ordered_hosts=False):
+def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None):
     origin = installed_origin.Origin(root)
     if ordered_hosts:
         run_order(root, output, native, preparer, hosts[0], releases, origin, prepare_only)
@@ -316,14 +316,16 @@ def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=F
         return
     failures = []
     for host in hosts:
-        failures.extend(run_host_cases(root, output, host, pairs[host["name"]], previous[host["name"]], preparer, origin, releases))
+        failures.extend(run_host_cases(root, output, host, pairs[host["name"]], previous[host["name"]], preparer, origin, releases, scenario))
     if failures:
         raise RuntimeError("native cases failed after their confirmed cleanup: " + "; ".join(failures))
 
 
-def run_host_cases(root, output, host, pair, previous, preparer, origin, releases):
+def run_host_cases(root, output, host, pair, previous, preparer, origin, releases, selected=None):
     failures = []
     scenarios = ("adopt", "rollback") if releases.registry else ("adopt", "rollback", "helper", "initial", "interrupt")
+    if selected:
+        scenarios = (selected,)
     for scenario in scenarios:
         try:
             prior = None if scenario == "initial" else previous

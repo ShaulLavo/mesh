@@ -5,7 +5,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst") + tuple(
+CASES = ("pc", "pi", "vps", "mac", "published", "workers", "reader", "canary", "sleep", "burst", "fresh-managed") + tuple(
     host + "-" + scenario for host in ("pc", "pi", "vps", "mac") for scenario in ("adopt", "rollback", "helper", "initial", "interrupt", "chain", "chain-rollback"))
 
 

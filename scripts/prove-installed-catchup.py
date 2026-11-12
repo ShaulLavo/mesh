@@ -30,6 +30,8 @@ def main():
     parser.add_argument("--signed-chain", action="store_true", help="run real signed intermediate/helper hops with the exact cohort")
     parser.add_argument("--format-waypoint", action="store_true", help="cross an actual incompatible manifest schema through an old-format waypoint")
     parser.add_argument("--ordered-hosts", action="store_true", help="three disposable native-manager hosts with real predecessor policy")
+    parser.add_argument("--fresh-managed", action="store_true", help="actual fresh helper preparation and missing-policy automatic first start")
+    parser.add_argument("--scenario", choices=("adopt", "rollback", "helper", "initial", "interrupt"), help="one adoption profile; the default requires all profiles")
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -49,6 +51,10 @@ def main():
 
 
 def run_requested(arguments, root, output, native):
+    if arguments.fresh_managed:
+        from fixtures import installed_fresh
+        installed_fresh.prove(root, output, native)
+        return
     if arguments.installed_adoption:
         if arguments.native_helper is None and not arguments.prepare_only:
             raise RuntimeError("installed adoption requires the production helper preparation fixture")
@@ -56,7 +62,7 @@ def run_requested(arguments, root, output, native):
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
         installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
             arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint,
-            arguments.format_waypoint, arguments.ordered_hosts)
+            arguments.format_waypoint, arguments.ordered_hosts, arguments.scenario)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
