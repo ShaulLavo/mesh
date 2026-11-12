@@ -14,7 +14,7 @@ on:
       worker_artifact_source:
         type: string
         default: ''
-        description: 'Exact source SHA bound to the producer run and native preparation'
+        description: 'Actual preparation checkout SHA recorded in tools/preparation.json'
   pull_request:
     paths:
       - '.github/workflows/installed-catchup.yml'

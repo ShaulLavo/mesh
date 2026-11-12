@@ -143,7 +143,11 @@ func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state}))
+	failed, next, err := store.hostFailedPage("", 64)
+	if err != nil || next != "" {
+		t.Fatalf("bounded installed failed edges: %v next=%q", err, next)
+	}
+	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state, "failed": failed}))
 }
 
 // This is the delivered producer's signed stage/grant and Engine.Run sequence,

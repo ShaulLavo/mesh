@@ -1,78 +1,114 @@
 # Installed catch-up fixture
 
-Unit 8 is in progress. The native prerequisites and published-pair fixture are
-implemented. Adoption, signed automatic hops, rollback and ordered-host acceptance
-are still required before this is the complete installed publication gate.
+Unit 8 is in progress. The real-manager adoption cases and signed cohort/format
+fixtures are implemented. The complete publication gate still needs native
+cohort acceptance, ordered hosts, interruption coverage and real draft assets.
+The product default remains manual. `firstPublishedUpdater` remains `null` until
+an actual updater release exists. Versions 9001 through 9003 are supplemental
+source builds with test trust roots and are never published.
 
-## Native manager positive controls
+## Native controls and adoption
 
-[Hosted run 43113902836](https://github.com/ShaulLavo/mesh/actions/runs/43113902836)
-passed at source `d5fe07af` on both `ubuntu-24.04` and `macos-15`. Linux used the
-actual systemd user manager. macOS used the actual launchd `gui/501` domain.
-Each manager executed a test-owned program, reported the same PID as the child,
-and removed the service and process. The normal and exception-after-launch
-controls passed. No VM fallback, credential, OS configuration or live fleet
-change was needed.
+[Run 43121166127](https://github.com/ShaulLavo/mesh/actions/runs/43121166127)
+passed native service-manager, mapped executable and original published-pair
+restart controls on Linux AMD64, Linux ARM64 and macOS ARM64. Linux uses the
+actual systemd user manager. macOS uses the actual launchd GUI domain. Each
+control records pre-existing resources before registering anything and checks
+that its owned service and process are absent after normal and exceptional exit.
 
-The follow-up run at `0967b9da` passed mapped native executable controls on all
-three platforms, including Linux ARM64. The control execs `/bin/sleep`, checks
-its mapped inode and digest through procfs or native `lsof`, and checks the
-manager PID again. Native installed-pair startup and cleanup also ran on all
-three platforms. The first stream-registration attempt used a URL where the
-proxy control requires a port, so it failed before restart. The fixture now
-supplies the correct port. All task processes, units and scratch were confirmed
-removed in that failed run's artifacts.
+[Run 43145373056](https://github.com/ShaulLavo/mesh/actions/runs/43145373056)
+passed all four real-manager adoption cases on ARM64 Linux and macOS. The cases
+cover a genuine committed prior transaction, successful side adoption, failed
+daemon activation rollback, failed helper promotion and initial adoption without
+a journal. The original authenticated WebSocket client, worker, shell and service
+listener survive. Fresh terminal token I/O and a reconnected service stream
+verify their continued operation. The first candidate start sees the explicit
+automatic policy. Identity, grants, daemon definition, configuration and prior
+installation settings remain unchanged.
 
-The next run reached restart and retained the worker, shell and listener, but a
-local Unix attachment ends on daemon disconnect by design. The fixture now
-uses the published CLI's real authenticated WebSocket transport, a separate
-test-owned client identity and a pinned daemon endpoint. A fresh nonce printed
-by the original session-owned listener proves that the same client reconnected
-before new input is sent. A local supplemental test with actual published
-v0.1.249 confirmed that path and unchanged identities. Hosted native acceptance
-still requires its own passing result. Teardown also handles an already exited
-client without writing to its closed PTY.
+On AMD64 that run passed PC adoption and daemon rollback, then found that failed
+helper promotion restored the old image but started a previously stopped helper.
+The fixture retained its strict stopped-disposition assertion. Product correction
+`1ce24815941e12c56c9dcb5565f20616abeceeb5` is now integrated. Native run
+43148506260 is queued at `9c000273e4a91e1d8c9850a8d089a10affb11973`; its result
+is pending. Independent profiles now continue only after confirmed cleanup of a
+failed case, and any required failure still fails the job.
 
-`installed_paths.py` resolves the physical root, checks the worst daemon,
-temporary-daemon and retained-worker socket paths for every case, and refuses
-an unmounted `/work` or `/data` destination. Tests bind every generated address,
-exercise the exact Linux and Darwin limits, count filesystem bytes and reject
-an overlong symlink destination. Service cleanup runs before scratch removal.
-Unconfirmed cleanup retains the root and fails the proof.
+The fixture uses the delivered adoption supervisor, real CLI, canonical adoption
+envelope, initial-helper boundary and package migration. It does not implement a
+second adoption or signature mechanism. Genuine prior transactions reuse the
+delivered signed stage/grant producer with the actual native manager.
 
-## Actual published pairs
+## Exact workers and incompatible format
 
-`fleet-baselines.json` records the read-only November 11 inventory. The PC pair
-begins with its helper stopped. The first published updater remains `null`
-until a real release containing the updater has been published. A current
-source build with an old version label cannot supply that baseline.
+The cohort consumes the authoritative append-only published-worker registry and
+`release_workers.py` selection/start/verify/stop functions. It checks archive
+identity, copies owned executable inputs, and retains every applicable exact
+binary digest plus actual custom source images. The observer verifies kernel
+process/image identity and fresh daemon-routed token I/O. Published versions newer
+than the actual source do not enter its cohort.
 
-`fleet_baselines.py` reuses the shared system-trusted public HTTPS downloader,
-archive verifier and executable verifier. It checks the recorded image hashes
-where the inventory supplied them, rechecks cache bytes and executes the native
-published program's `version --json`. Local Linux acquisition verified the
-actual PC 249/196 and VPS 255/196 pairs. Downloads, archives and executables were
-removed after inspection.
+Local preparation at `6e1a06949ee7c90f6be99f6783c5ea6d8894461f` passed the actual
+measured transition and rollback inputs for 9001 to 9002 with 122 unique workers,
+and 9002 to 9003 with 123. Both sets include the 121 published images and the
+applicable actual supplemental source images. These are input measurements,
+not hosted native-manager chain acceptance. All current registry protocols are
+1; no other protocol coverage is claimed.
 
-The native installed fixture refuses existing Mesh units before registering
-anything. It uses the production `PrepareHelper` API for the historical helper
-image, actual systemd units or launchd plists, one attached PTY client, and an
-HTTP listener owned by that session. Its initial restart control checks the
-original worker, shell and listener, reconnects the service stream, bounds the
-route gap and checks the running helper image. It makes no adoption or automatic
-acceptance claim. The real fleet is not involved.
+The original 9001 reader accepts the real waypoint. The original waypoint reader
+accepts a genuinely incompatible schema 2 target. A signed negative control feeds
+the same schema 2 manifest bytes to the original reader in its supported epoch;
+it rejects them with `manifest schema 2 is unsupported`. Raw proof receipts,
+rollback observations and original-reader output remain in the report directory.
+
+The native chain installs the actual intermediate daemon and helper, keeps its
+original attachment and exact cohort, and checks the final successful activation
+or rollback. The failed case also restarts the real daemon and checks durable
+failed-edge retention and unchanged installation request/generation. This native
+chain has not yet run with the current complete producer inputs.
 
 ## Reusable job contract
 
-The caller uses `.github/workflows/installed-catchup.yml` with `contents: read`.
-It takes no inputs or secrets. Its current contract is native prerequisite and
-published-pair restart validation, not the complete Unit 8 gate. Unit 3 owns
-`ci.yml`, `release.yml` and the eventual aggregate publication requirement.
+The caller uses `.github/workflows/installed-catchup.yml` with `contents: read`
+and `actions: read`. Unit 3 owns the caller wiring in `ci.yml` and `release.yml`.
+Without inputs, the workflow runs the published-pair adoption matrix. To add the
+signed native cohort/format matrix, supply all of:
 
-The workflow runs its native positive control before Go setup, builds or release
-downloads. Each installation has bounded operations and owns its service units,
-helper images, session processes and socket root. It preserves small JSON and
-log evidence for seven days. Test roots and binaries are removed after their
-consumers stop. Local reproducer and retained hosted evidence are under
-`/work/reports/mesh-auto-update/unit8-installed-catchup/`; the parent owns their
-retirement after the lane's final review and merge.
+- `worker_artifact_prefix`, normally `update-native`.
+- `worker_artifact_run`, an exact positive Actions run ID.
+- `worker_artifact_source`, the actual preparation checkout SHA recorded in
+  `tools/preparation.json`, which may differ from the run head on a pull request.
+
+Intake requires successful completed preparation jobs and exactly one live
+artifact for each of `linux-amd64`, `linux-arm64` and `darwin-arm64`. It verifies
+the native candidate-reader source, platform, clean build and actual image hash.
+It also requires `tools/preparation.json` schema 1, its actual clean source and
+platform, and matching SHA256 for candidate, worker-probe, startup-fault-candidate
+and boundary. The run head is recorded as context and is not inferred to be the
+preparation source. A queued run or partial artifact set cannot pass intake.
+
+## Cleanup and remaining work
+
+Physical socket-root preflight checks every generated path before setup, including
+the longest retained-worker and temporary-daemon paths. It rejects overlong roots,
+symlink-expanded roots and an unmounted requested data drive. Per-operation
+timeouts remain bounded. Teardown is installed before process/service creation.
+Unconfirmed service or process cleanup retains scratch and fails the proof.
+
+The 21 focused controls pass, including real-manager normal and exception cleanup,
+socket bounds, verified acquisition, exact cohort inputs and complete pinned
+artifact intake. The tagged exporter compiles. The full push quality gates pass
+with no new or stale baseline findings.
+
+Still required before this is the complete Unit 8 gate: current native cohort
+chain/waypoint results, three genuinely installed ordered hosts with a failed
+canary, sleeping host and release burst, durable helper interruption controls,
+and publication execution against the draft's real artifacts/signatures. A reboot
+must report interrupted RAM sessions honestly. An actual first-published updater
+baseline can only be added after publication.
+
+Small evidence and reproducers are retained under
+`/work/reports/mesh-auto-update/unit8-installed-catchup/`. Test binaries, duplicate
+archives and scratch are removed after their consumers stop. The parent owns
+report retirement and prepared-tree removal after review and merge. The live
+fleet is not involved in these tests.

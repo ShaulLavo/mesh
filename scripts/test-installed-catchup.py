@@ -227,7 +227,9 @@ class NativeServiceTest(unittest.TestCase):
 
 class ArtifactPinTest(unittest.TestCase):
     def inputs(self):
-        return [{"head_sha": "a" * 40}, {"artifacts": [
+        jobs = [{"name": "Native proofs / prepare (" + key.replace("-", "/") + ", runner)",
+                 "status": "completed", "conclusion": "success"} for key in installed_artifacts.KEYS]
+        return [{"head_sha": "b" * 40}, {"jobs": jobs}, {"artifacts": [
             {"id": index, "name": "update-native-" + key, "expired": False, "digest": "sha256:" + "b" * 64}
             for index, key in enumerate(installed_artifacts.KEYS, 1)]}]
 
@@ -236,16 +238,42 @@ class ArtifactPinTest(unittest.TestCase):
             result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         self.assertEqual(set(result["artifacts"]), set(installed_artifacts.KEYS))
         self.assertEqual(result["run"], 123)
+        self.assertEqual(result["source"], "a" * 40)
+        self.assertEqual(result["runHead"], "b" * 40)
 
-    def test_source_mismatch_and_missing_or_expired_platform_fail(self):
-        with patch.object(installed_artifacts, "api", return_value={"head_sha": "b" * 40}):
-            with self.assertRaisesRegex(RuntimeError, "different pinned source"):
+    def test_pending_preparation_and_missing_or_expired_platform_fail(self):
+        values = self.inputs()
+        values[1]["jobs"][0].update(status="in_progress", conclusion=None)
+        with patch.object(installed_artifacts, "api", side_effect=values):
+            with self.assertRaisesRegex(RuntimeError, "not completed"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         values = self.inputs()
-        values[1]["artifacts"][-1]["expired"] = True
+        values[2]["artifacts"][-1]["expired"] = True
         with patch.object(installed_artifacts, "api", side_effect=values):
             with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+
+    def test_tool_source_and_actual_bytes_must_agree(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            self.check_tool_provenance(Path(temporary))
+
+    def check_tool_provenance(self, root):
+        platform = {"os": "linux", "arch": "amd64"}
+        tools = root / "tools"
+        tools.mkdir()
+        digests = {}
+        for name in ("candidate", "worker-probe", "startup-fault-candidate", "boundary"):
+            (tools / name).write_bytes(name.encode())
+            digests[name] = published_releases.digest(name.encode())
+        path = tools / "preparation.json"
+        value = {"schema": 1, "source": {"commit": "a" * 40, "clean": True}, "platform": platform, "sha256": digests}
+        path.write_text(json.dumps(value))
+        installed_artifacts.verify_tools(root, "a" * 40, platform)
+        with self.assertRaisesRegex(RuntimeError, "source"):
+            installed_artifacts.verify_tools(root, "b" * 40, platform)
+        (tools / "worker-probe").write_bytes(b"another observer")
+        with self.assertRaisesRegex(RuntimeError, "worker-probe"):
+            installed_artifacts.verify_tools(root, "a" * 40, platform)
 
 
 if __name__ == "__main__":
