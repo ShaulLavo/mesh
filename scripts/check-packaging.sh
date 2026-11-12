@@ -190,6 +190,7 @@ check_source_contract() {
   python3 scripts/test-acquire-release-history.py
   python3 scripts/test-update-reader-publication.py
   python3 scripts/test-release-workers.py
+  python3 scripts/test-release-worker-evidence.py
   python3 scripts/test-rollback-context.py
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
