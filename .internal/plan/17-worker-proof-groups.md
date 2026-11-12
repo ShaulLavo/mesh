@@ -83,12 +83,21 @@ context = {harnessSource, preparationSource, registrySha256, sourceDigest,
 
 Per-source `<sha>.worker-groups.json` binds the partition and hashes of actual
 per-group receipts, observations, startup-image context and cleanup records.
-Use relative content-addressed references with existing path confinement.
-Documents are bounded to 1 MiB each; the complete selected set remains bounded
-to 4096. Store leaves separately, never flatten PIDs into a combined cohort.
-`mesh-worker-groups.json`, a bounded index of source/platform/profile, canonical
-receipt references and companion digests, becomes an additional signed subject.
-No changes to host wire protocols or installed reader schemas are needed.
+Published references are filename-only: `<sha>.worker-groups.json` for a
+source companion and `<sha>.worker-group.json` for typed observation, receipt
+reference and cleanup leaves. Keep local files beneath a separate
+`groups/leaves/` directory, with an explicit basename mapping for upload.
+No release reference contains a directory or traversal. Keep canonical legacy
+receipts at their existing top-level names and exclude group documents from
+the ordinary receipt scan. Documents stay bounded to 1 MiB and selection to
+4096 members. Never flatten PIDs into a combined cohort.
+
+`mesh-worker-groups.json` is an additional signed subject. Its header binds
+the reserved version, release source, exact manifest digest, candidate images,
+preparation and harness sources, registry digest, and complete expected native
+source/platform/profile matrix. Its flat asset references bind bytes by digest
+and size. Retain existing reader-packet and registry bounds; fail closed if
+complete evidence exceeds a bound rather than omitting members.
 
 Validation fails closed on missing, duplicate, extra, failed or interrupted
 groups, members, profiles or labels; mismatched source/candidate/platform; wrong
@@ -107,20 +116,39 @@ claim; the signed companion explicitly records independent groups. Keep original
 per-group rollback assets so every summary assertion can be checked. Never emit
 booleans from a generated boundary range without matching observed labels.
 
-Update `collect-update-proofs.py` to validate all groups before exposing canonical
-assets to `assemble-release-compatibility.py`. Keep group leaves outside its
-top-level `*.json` receipt scan. `stage-release-publication.py` checks exact
-source/profile/platform coverage against frozen selection before staging and
-signing. Update `release.yml` subject verification, upload and retention asset
-lists for the index and referenced companions/leaves. Finalization must require
-the validated signed index for this reserved version/source and all required
-native profiles before `finalize-release.sh` can publish the draft. Old schema 1
-readers still decode the actual legacy receipt; extra release assets confer no
-new authority on them. Preserve `requireWorkerCoverage` in
-`cmd/mesh-release-routes/workers.go` and its authenticated registry comparison,
-including the existing 8 MiB registry bound. The companion validator strengthens
-its digest-membership check to exact member coverage. Test the strict legacy
-reader with the unchanged executable.
+Name one shared `validate_group_assets` boundary in
+`fixtures/release_worker_groups.py`. It receives expected context, authoritative
+selection and an asset resolver, verifies every required group/label/leaf and
+returns verified coverage. Collect, stage, the real draft loader at
+`installed_publication.py:51-60`, and finalization before
+`finalize-release.sh:33` must call it. The post-sign path also verifies the
+index's expected attestation subject through the same trust boundary as the
+reserved metadata. A signature alone cannot authorize missing coverage or
+wrong context.
+
+Update `collect-update-proofs.py` before exposing canonical assets to
+`assemble-release-compatibility.py`. Stage validates the complete native
+transition matrix before signing the draft. Installed completion runs only
+after signing, as the current release dependency requires. Its separate
+completion evidence binds the verified signed index digest and exact required
+installed source/platform/scenario/group matrix. Finalization requires both
+pre-sign native coverage and successful post-sign installed completion. Do not
+pretend installed results were already present in the signed index or mutate
+signed assets after testing.
+
+Extend `acquire-release-history.py`'s acquisition allowlist for
+`mesh-worker-groups.json` and the two content-addressed suffixes. Download and
+bound their actual bytes, not inventory-only names, and resolve the complete
+required leaf closure with the same validator. Update upload, retention,
+signature-subject verification and local-to-flat asset mapping together.
+Regressions reject a missing index, validly signed wrong context, missing or
+swapped leaf, incomplete matrix and a reacquired asset set without bytes.
+
+Old schema 1 readers still decode actual legacy receipts; extra assets confer
+no authority on them. Preserve `requireWorkerCoverage` and its authenticated
+registry comparison, including the 8 MiB bound. Strengthen digest membership
+to exact member coverage with the validated companion. Test the unchanged
+strict legacy-reader executable.
 
 ## Installed consumers and boundaries
 
@@ -143,20 +171,37 @@ reader rejection of the incompatible future manifest. The real first-published
 updater path repeats success and rollback per group, preserving authenticated
 intermediate observations. Per-case ledgers/counts remain actual local counts.
 Terminal attachment, listener identity, route-gap, preservation and order checks
-remain unchanged. Never widen readiness to accept a transient mismatch.
+remain unchanged. Update the top-level cleanup-record scan in
+`prove-installed-catchup.py:88` for group output directories. Never widen
+readiness to accept a transient mismatch. `firstPublishedUpdater` is currently
+null: preserve its existing condition and report that real first-published
+execution is unavailable, rather than inventing a published fixture baseline.
+
+Publish the reviewed grouped harness as immutable source H, then update both
+CI and release reusable workflow references and both `harness_source` inputs
+from d831 to H, plus the matching wiring-test PIN, in one caller checkpoint.
+H must already contain the grouped drivers, validators and path/export code.
+Keep `worker_artifact_source` independently bound to the actual preparation
+commit. Prove the executed harness is H and grouped before the first acceptance
+cycle; editing only the local workflow is insufficient. Any reviewed harness
+correction needs the same consistent five-reference refresh.
 
 ## Spotlight and path contracts
 
-Create an owned `.noindex` parent before any build, extraction, artifact download
-or executable copy on hosted Darwin. Use a short real root such as
-`/tmp/mg-XXXXXX.noindex`; place native preparation/download destinations and
-installed scratch beneath it. Keep packet contents and relative members
-`tools/*`, `retained/workers.json`, `retained/release-*/mesh` unchanged. Update
-both reusable workflows and artifact storage paths together, including cleanup
-and `MESH_OWNED_WORKER_INPUT`. Validate resolved Unix socket lengths before
-setup, retaining Darwin's 103-byte and Linux's 107-byte limits; do not append
-group labels to socket paths. Cache keys, archive pins, source/preparation pins,
-member checks and the installed artifact set contract stay intact.
+Create owned `.noindex` roots before any build, extraction, artifact download
+or executable copy on hosted Darwin. Native packet roots can own their ordinary
+tools subdirectories. Installed cases must use a short owned directory such as
+`/tmp/mg-XXXXXX.noindex` directly as the installed root: do not set it as
+`MESH_SHORT_TMP` and let the existing allocator add another `mi-XXXXXXXX`.
+That nesting produces a 109-byte physical Darwin socket; the direct root gives
+97 bytes. Change allocator ownership, validation and teardown together.
+Group labels belong in evidence directories, not socket roots.
+
+Keep relative packet members `tools/*`, `retained/workers.json` and
+`retained/release-*/mesh` unchanged. Update both reusable workflows, artifact
+paths, cleanup and `MESH_OWNED_WORKER_INPUT` together. Validate resolved physical
+socket lengths before setup, keeping 103/107-byte Darwin/Linux limits. Preserve
+cache keys, archive pins, source/preparation pins and member/artifact checks.
 
 Apple's current [Xcode documentation](https://developer.apple.com/documentation/xcode/locating-a-missing-debug-symbol-file.md)
 explicitly identifies `.noindex` paths as a reason Spotlight cannot find files.
@@ -186,7 +231,13 @@ installed oldest/chain/waypoint consumers on the same exact source. Cycle 2 is
 for necessary fixes only. Keep five-second observer, eight hashing workers,
 128 MiB image bound, six-second helper health, existing 30/90-second subprocess
 bounds, chain 150 seconds, rollback 90 seconds, quarantine 45 seconds and
-15-minute jobs. Repetition never resets an existing source-wide deadline.
+15-minute jobs. Repetition never resets an existing source-wide deadline. Track native source
+600 seconds, each installed `Releases.prove` 600-second call, the existing
+150/90/45-second phase limits, and the fixture signer's overall 600-second
+lifetime across builds, proofs and cases. Do not restart that signer to extend
+its clock. Record total phase times in cycle 1; if repetition cannot fit the
+existing signer or 15-minute job, stop and report the limit instead of extending
+or silently resetting it.
 
 Before setup inventory existing processes, services, scratch, mounts and caches;
 list created resources and install teardown first. On success, error, timeout or
