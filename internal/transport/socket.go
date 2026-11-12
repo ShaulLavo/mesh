@@ -129,11 +129,10 @@ func (c *socketConn) Close() error {
 }
 
 // closeCompleted reports whether a close error means the connection is already
-// gone rather than that closing failed. A peer that closed first has torn the
-// transport down, so our own close lands on a dead socket and returns
-// net.ErrClosed; the connection is closed either way.
+// gone rather than that closing failed. A peer can tear the transport down
+// before replying to our close frame, yielding EOF during the handshake.
 func closeCompleted(err error) bool {
-	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)
+	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF)
 }
 
 type frameByteReader struct {
