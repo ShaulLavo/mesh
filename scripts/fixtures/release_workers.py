@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import secrets
 import signal
 import socket
 import sqlite3
@@ -110,23 +109,40 @@ def save(path, value):
     temporary.replace(path)
 
 
-def worker_arguments(binary, session, directory, boot, environment):
+def reserve_worker(binary, state, index, environment):
     help_text = subprocess.check_output([str(binary), "session-worker", "--help"], env=environment, timeout=10, stderr=subprocess.STDOUT).decode()
-    args = [str(binary), "session-worker", "--id", session, "--dir", str(directory), "--cols", "80", "--rows", "24"]
-    if "--instance" in help_text:
-        args.extend(["--instance", secrets.token_hex(16), "--boot", boot, "--purpose", "generic"])
+    if "--instance" not in help_text:
+        return {"id": "W" + format(index, "03X")}
+    probe = environment.get("MESH_WORKER_PROBE")
+    if not probe:
+        raise ValueError("reserved worker startup requires the maintained reservation exporter")
+    output = state / ("cohort-reservation-" + str(index) + ".json")
+    child = dict(environment, MESH_COHORT_RESERVE_ROOT=str(state / "s"), MESH_COHORT_RESERVATION=str(output))
+    result = subprocess.run([probe, "-test.v", "-test.run=^TestReserveRetainedWorkerCohort$"], env=child,
+                            capture_output=True, timeout=30, check=True)
+    if b"--- PASS: TestReserveRetainedWorkerCohort" not in result.stdout:
+        raise RuntimeError("maintained worker reservation exporter did not run")
+    return json.loads(output.read_bytes())
+
+
+def worker_arguments(binary, reservation, directory):
+    args = [str(binary), "session-worker", "--id", reservation["id"], "--dir", str(directory), "--cols", "80", "--rows", "24"]
+    if "instance" in reservation:
+        args.extend(["--instance", reservation["instance"], "--boot", reservation["bootId"], "--purpose", reservation["purpose"]])
     return args + ["--", "/bin/sh"]
 
 
 def start_one(state, config, item, index, boot, host, record, path):
-    session = "W" + format(index, "03X")
-    directory = state / "s" / session
-    directory.mkdir(mode=0o700)
     binary = Path(item["binary"])
     binary.chmod(0o755)
     environment = dict(os.environ, MESH_STATE_DIR=str(state), MESH_CONFIG_DIR=str(config), MESH_HOST_ID=host)
+    reservation = reserve_worker(binary, state, index, environment)
+    session = reservation["id"]
+    directory = state / "s" / session
+    if "instance" not in reservation:
+        directory.mkdir(mode=0o700)
     with (directory / "worker.log").open("wb") as log:
-        process = subprocess.Popen(worker_arguments(binary, session, directory, boot, environment), env=environment, stdout=log, stderr=log)
+        process = subprocess.Popen(worker_arguments(binary, reservation, directory), env=environment, stdout=log, stderr=log)
     row = {"session": session, "pid": process.pid, "shellPid": 0, "digest": item["artifact"]["binarySha256"],
            "protocol": item["protocol"], "version": item["version"]}
     record["workers"].append(row)
