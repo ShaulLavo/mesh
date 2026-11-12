@@ -211,6 +211,7 @@ class Installation:
             "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.root / "config"),
             "MESH_FAKE_TAILSCALE_STATUS": str(status), "TERM": "xterm-256color", "NO_COLOR": "1",
             "SHELL": str(HELPERS / "window_shell.sh"), "PYTHONDONTWRITEBYTECODE": "1"}
+        Path(self.environment["MESH_CONFIG_DIR"]).mkdir()
         self.units = Units(self.root, self.environment)
         if sys.platform != "darwin":
             for name in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):

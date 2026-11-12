@@ -15,7 +15,7 @@ from fixtures import installed_accounts, installed_native, installed_origin, ins
 
 class Driver:
     def __init__(self, accounts, account, descriptor):
-        self.account = account
+        self.accounts, self.account = accounts, account
         self.path = Path(account["home"]) / "driver.json"
         self.path.write_text(json.dumps(descriptor))
         os.chown(self.path, account["uid"], -1)
@@ -48,13 +48,26 @@ class Driver:
         raise RuntimeError("ordered native host operation exceeded its bound: " + operation)
 
     def close(self):
-        try:
-            if self.process and self.process.poll() is None:
-                self.call("close")
-                self.process.wait(timeout=10)
-        finally:
-            self.stop_driver()
-            self.log.close()
+        installed_native.cleanup_all([self.close_host, self.stop_driver, self.retain_logs, self.log.close])
+
+    def close_host(self):
+        if self.process and self.process.poll() is None:
+            self.call("close")
+            self.process.wait(timeout=10)
+
+    def retain_logs(self):
+        if self.process and self.process.poll() is None:
+            raise RuntimeError("ordered host driver still consumes its evidence")
+        accounts, account = self.accounts, self.account
+        accounts.validate_resources()
+        accounts.owned(account)
+        root = Path(account["home"]) / (account["role"] + "-ordered")
+        script = accounts.source / "scripts/fixtures/installed_order_host.py"
+        result = accounts.run(account, [sys.executable, script, "--logs", root],
+            capture_output=True, text=True, timeout=10, env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
+        if result.returncode:
+            raise RuntimeError("ordered account evidence export failed: " + account["role"] + ": " + result.stderr[-4096:])
+        publish_logs(result.stdout, accounts.output, account["role"] + "-ordered")
 
     def stop_driver(self):
         if self.process is None or self.process.poll() is not None:
@@ -65,6 +78,18 @@ class Driver:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait(timeout=10)
+
+
+def publish_logs(payload, output, name):
+    if len(payload) > 2 << 20:
+        raise RuntimeError("ordered account evidence exceeds its transfer bound")
+    files = json.loads(payload)
+    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err"}
+    if not isinstance(files, dict) or not files.keys() <= allowed:
+        raise RuntimeError("ordered account evidence contains an unexpected file")
+    decoded = {filename: bytes.fromhex(data) for filename, data in files.items()}
+    for filename, data in decoded.items():
+        (output / (name + "-" + filename)).write_bytes(data)
 
 
 def prepare(releases, origin, source):
@@ -91,7 +116,7 @@ def run(root, output, descriptor, operation):
         accounts.create()
         share_inputs(accounts, descriptor)
         for account in accounts.accounts:
-            value = descriptor | {"root": account["home"], "output": str(output), "previous": None,
+            value = descriptor | {"root": account["home"], "previous": None,
                 "host": descriptor["host"] | {"name": account["role"]}}
             drivers.append(Driver(accounts, account, value))
         bootstrap(drivers, record)
@@ -107,8 +132,6 @@ def run(root, output, descriptor, operation):
 def share_inputs(accounts, descriptor):
     command = installed_accounts.command
     source = accounts.prepare_sources()
-    command(["/usr/bin/chgrp", accounts.group, str(accounts.output)])
-    accounts.output.chmod(0o2770)
     for name in ("proxy.json", "fixture-ca.pem"):
         path = accounts.root / name
         command(["/usr/bin/chgrp", accounts.group, str(path)])
@@ -308,6 +331,11 @@ def teardown(accounts, drivers, record, output):
     try:
         installed_native.cleanup_all(actions)
         record["cleanup"] = {"accountsAbsent": True, "servicesAbsent": True, "processesAbsent": True}
+    except BaseException as error:
+        record["passed"] = False
+        record["cleanupError"] = str(error)
+        primary = record.get("error", "ordered native teardown failed")
+        raise RuntimeError(primary + "; cleanup failed: " + str(error)) from error
     finally:
         (output / "ordered-native.json").write_text(json.dumps(record, indent=2) + "\n")
 

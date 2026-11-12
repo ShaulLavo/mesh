@@ -7,7 +7,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from fixtures import installed_adoption, installed_native, installed_origin, native_services, installed_chain
+from fixtures import installed_adoption, installed_origin, native_services, installed_chain
 
 
 class Origin(installed_origin.Origin):
@@ -33,7 +33,6 @@ class Host:
         origin = Origin(Path(value["origin"]))
         self.case = installed_adoption.AdoptionCase(Path(value["root"]), value["host"], value["pair"],
             Path(value["preparer"]), origin, releases, "ordered", value["previous"])
-        self.output = Path(value["output"])
         self.closed = False
 
     def dispatch(self, operation, value):
@@ -74,7 +73,7 @@ class Host:
             subprocess.run([str(case.binary), "device", "approve", "--allow-root", "--", peer["id"]],
                            env=case.environment, capture_output=True, check=True, timeout=10)
         fleet = {"version": 1, "name": "installed-order", "revision": 1, "members": value["peers"]}
-        (case.root / "config/fleet.json").write_text(json.dumps(fleet))
+        (Path(case.environment["MESH_CONFIG_DIR"]) / "fleet.json").write_text(json.dumps(fleet))
         case.adoption_policy = {"schema": 1, "revision": 1, "mode": "automatic", "after": value["after"], "soak": value["soak"]}
         return {"configured": True}
 
@@ -105,11 +104,29 @@ class Host:
     def close(self):
         if self.closed:
             return
-        try:
-            self.case.close()
-            self.closed = True
-        finally:
-            installed_native.retain_logs(self.case.root, self.output, self.case.host["name"])
+        self.case.close()
+        self.closed = True
+
+
+def export_logs(root):
+    result = {}
+    for name in ("preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err"):
+        path = root / name
+        if not path.exists():
+            continue
+        with path.open("rb") as stream:
+            result[name] = read_log(stream, name).hex()
+    print(json.dumps(result), flush=True)
+
+
+def read_log(stream, name):
+    maximum = 65536 if name in ("daemon.log", "daemon.err") else 262144
+    if name in ("daemon.log", "daemon.err"):
+        stream.seek(max(0, os.fstat(stream.fileno()).st_size - maximum))
+    data = stream.read(maximum + 1)
+    if len(data) > maximum:
+        raise RuntimeError("ordered evidence exceeds its file bound: " + name)
+    return data
 
 
 def interrupted(number, _frame):
@@ -131,6 +148,9 @@ def main():
         raise RuntimeError("ordered host requires its disposable hosted user account")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
+    if sys.argv[1] == "--logs":
+        export_logs(Path(sys.argv[2]))
+        return
     host = Host(json.loads(Path(sys.argv[1]).read_text()))
     try:
         serve(host)
