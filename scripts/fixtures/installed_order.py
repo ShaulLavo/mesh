@@ -1,5 +1,6 @@
 """Three native installed hosts using real authenticated predecessor evidence."""
 import json
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -177,15 +178,52 @@ def scenarios(root, drivers, descriptor, record):
     held = await_opportunity(direct, first, failed, started, 45)
     require_failed_canary_read(held, failed_state, canary.account["id"])
     record["observations"].append({"canaryFailure": bounded(failed_state), "awakeDirectHold": bounded(held)})
-    origin.head(directory, latest)
-    canary.call("fault", versions=[])
-    restart(canary)
-    canary_latest = await_version(canary, latest, "committed", 90)
-    direct_latest, direct_hold = exercise_soak(direct, canary_latest, first, latest)
-    sleeper_latest, sleeper_hold = exercise_soak(sleeping, direct_latest, first, latest)
+    canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold = release_latest(origin, directory, drivers, record)
     verify_order(canary_latest, direct_latest, sleeper_latest, latest)
     record["observations"].append({"canaryLatest": bounded(canary_latest), "directBeforeSoak": bounded(direct_hold),
         "directLatest": bounded(direct_latest), "sleepBeforeSoak": bounded(sleeper_hold), "sleepLatest": bounded(sleeper_latest)})
+
+
+def release_latest(origin, directory, drivers, record):
+    first, _, latest = installed_releases.VERSIONS
+    canary, sleeping, direct = drivers
+    canary_commit, direct_commit = Future(), Future()
+    direct_armed, sleeper_armed = Future(), Future()
+    # Each controller owns one driver stream until every inspection has finished.
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="ordered-opportunity") as controllers:
+        try:
+            direct_result = controllers.submit(soak_controller, direct, canary_commit, direct_commit, direct_armed, first, latest)
+            sleeper_result = controllers.submit(soak_controller, sleeping, direct_commit, None, sleeper_armed, first, latest)
+            record["opportunityControllers"] = [direct_armed.result(), sleeper_armed.result()]
+            record["latestReleaseStartedAt"] = datetime.now(timezone.utc).isoformat()
+            origin.head(directory, latest)
+            canary.call("fault", versions=[])
+            restart(canary)
+            canary_latest = await_version(canary, latest, "committed", 90, canary_commit.set_result)
+            direct_latest, direct_hold = direct_result.result()
+            sleeper_latest, sleeper_hold = sleeper_result.result()
+            return canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold
+        except BaseException as error:
+            fail_pending(canary_commit, error)
+            raise
+
+
+def soak_controller(driver, predecessor, successor, armed, source, target):
+    try:
+        observed = driver.call("inspect", active=False)
+        armed.set_result({"host": driver.account["role"], "id": driver.account["id"], "armedAt": datetime.now(timezone.utc).isoformat(),
+                          "observation": bounded(observed)})
+        committed = successor.set_result if successor is not None else None
+        return exercise_soak(driver, predecessor.result(), source, target, committed)
+    except BaseException as error:
+        fail_pending(armed, error)
+        fail_pending(successor, error)
+        raise
+
+
+def fail_pending(future, error):
+    if future is not None and not future.done():
+        future.set_exception(error)
 
 
 def restart(driver):
@@ -239,7 +277,7 @@ def require_failed_canary_read(held, canary, canary_id):
         raise RuntimeError("awake direct dependent did not retain the authenticated failed-canary evidence")
 
 
-def exercise_soak(driver, predecessor, source, target):
+def exercise_soak(driver, predecessor, source, target, committed=None):
     cutoff = commit_time(predecessor, target) + timedelta(seconds=5)
     if datetime.now(timezone.utc) >= cutoff:
         raise RuntimeError("fixture missed the pre-expiry opportunity; no soak proof recorded")
@@ -251,10 +289,18 @@ def exercise_soak(driver, predecessor, source, target):
         if datetime.now(timezone.utc) < cutoff:
             assert_held(value, source, target)
         if target_committed(value, target):
+            publish_soaked_commit(value, target, cutoff, committed)
             return validated_soaked_commit(driver, target, cutoff), held
         started = repeat_opportunity(driver, value, started)
         time.sleep(0.1)
     raise RuntimeError("dependent did not release after soak despite real update opportunities on both sides of expiry")
+
+
+def publish_soaked_commit(value, target, cutoff, committed):
+    if commit_time(value, target) < cutoff:
+        raise RuntimeError("dependent ignored the configured predecessor soak")
+    if committed is not None:
+        committed(value)
 
 
 def target_committed(value, target):
@@ -275,7 +321,7 @@ def validated_soaked_commit(driver, target, cutoff):
     return observed
 
 
-def await_version(driver, version, phase, timeout):
+def await_version(driver, version, phase, timeout, committed=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
@@ -283,6 +329,9 @@ def await_version(driver, version, phase, timeout):
         current = journal.get("request", {}).get("manifest", {}).get("version")
         ready = current == version if phase == "committed" else current == installed_releases.VERSIONS[1]
         settled = ready and journal.get("phase") == phase and not value["state"].get("owned")
+        if settled and committed is not None:
+            committed(value)
+            committed = None
         observed = driver.call("inspect") if settled else {}
         if observed.get("ready") and observed["build"]["version"] == version:
             return observed

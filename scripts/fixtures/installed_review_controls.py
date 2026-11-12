@@ -10,6 +10,7 @@ import signal
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -112,29 +113,102 @@ class SlowInspectionDriver(OrderDriver):
         latest = installed_releases.VERSIONS[-1]
         if operation != "inspect" or not fields.get("active", True) or value["build"]["version"] != latest:
             return value
-        follower = {"canary": "burst", "burst": "sleep"}.get(self.account["role"])
-        if follower:
-            self.model.inspections[follower] = self.model.holds[follower].wait(timeout=1)
-            self.model.clock.advance(6)
+        if self.account["role"] in ("canary", "burst"):
+            time.sleep(6)
+            self.model.inspections.append(self.account["role"])
         return value
+
+
+class LiveOrderClock:
+    def __init__(self):
+        self.base = datetime.now(timezone.utc)
+        self.started = time.monotonic()
+
+    @property
+    def seconds(self):
+        return time.monotonic() - self.started
+
+    def advance(self, seconds):
+        time.sleep(seconds)
+
+    def now(self):
+        return self.base + timedelta(seconds=self.seconds)
+
+    def stamp(self):
+        return self.now().isoformat()
+
+
+class TrackedOrderDriver(OrderDriver):
+    def call(self, operation, **fields):
+        role, owner = self.account["role"], threading.get_ident()
+        latest = self.model.latest == installed_releases.VERSIONS[-1]
+        if latest and self.model.owners.setdefault(role, owner) != owner:
+            raise RuntimeError("host protocol stream changed controller")
+        arming = not latest and owner != self.model.main
+        stage = "validate" if operation == "inspect" and fields.get("active", True) else operation
+        if (latest or arming) and self.model.failure == (role, "arming" if arming else stage):
+            raise RuntimeError("injected controller failure")
+        result = super().call(operation, **fields)
+        if arming:
+            self.model.armed.add(role)
+        if latest and operation == "inspect" and fields.get("active", True):
+            self.model.validated.add(role)
+        return result
+
+
+def tracked_order_model(failure=None):
+    model = OrderModel()
+    model.main, model.failure = threading.get_ident(), failure
+    model.owners, model.armed, model.validated = {}, set(), set()
+    return model
 
 
 class OrderReviewTest(unittest.TestCase):
     def test_slow_full_inspections_do_not_consume_either_preexpiry_opportunity(self):
         model = OrderModel()
-        model.holds = {role: threading.Event() for role in ("burst", "sleep")}
-        model.inspections = {}
-        original = installed_order.await_opportunity
-        def capture(driver, source, target, *arguments):
-            value = original(driver, source, target, *arguments)
-            if target == installed_releases.VERSIONS[-1]:
-                model.holds[driver.account["role"]].set()
-            return value
-        with patch.object(installed_order, "await_opportunity", side_effect=capture):
-            record = exercise_model(model, SlowInspectionDriver)
-        self.assertEqual(model.inspections, {"burst": True, "sleep": True})
+        model.clock = LiveOrderClock()
+        model.inspections = []
+        record = exercise_model(model, SlowInspectionDriver)
+        self.assertEqual(model.inspections, ["canary", "burst"])
         self.assertIn("directBeforeSoak", record["observations"][1])
         self.assertIn("sleepBeforeSoak", record["observations"][1])
+
+    def test_release_waits_for_both_context_reads_and_streams_have_single_owners(self):
+        model = tracked_order_model()
+        original = model.head
+        def release(directory, version):
+            if version == installed_releases.VERSIONS[-1]:
+                self.assertEqual(model.armed, {"burst", "sleep"})
+                self.assertFalse(model.drivers["sleep"].online)
+            original(directory, version)
+        model.head = release
+        record = exercise_model(model, TrackedOrderDriver)
+        self.assertEqual(len(set(model.owners.values())), 3)
+        self.assertEqual(model.validated, {"canary", "burst", "sleep"})
+        self.assertEqual({row["host"] for row in record["opportunityControllers"]}, {"burst", "sleep"})
+        self.assertTrue(all(row["armedAt"] <= record["latestReleaseStartedAt"] for row in record["opportunityControllers"]))
+
+    def test_controller_failures_drain_waiters_before_returning(self):
+        failures = (("burst", "arming"), ("sleep", "arming"), ("canary", "start"), ("burst", "start"),
+                    ("sleep", "start"), ("canary", "validate"), ("burst", "validate"), ("sleep", "validate"))
+        for failure in failures:
+            self.check_controller_failure(failure)
+
+    def check_controller_failure(self, failure):
+        model = tracked_order_model(failure)
+        with self.assertRaisesRegex(RuntimeError, "injected controller failure"):
+            exercise_model(model, TrackedOrderDriver)
+        self.assertFalse(any(thread.name.startswith("ordered-opportunity") for thread in threading.enumerate()))
+
+    def test_after_expiry_state_cannot_become_a_preexpiry_proof(self):
+        model = OrderModel()
+        latest = installed_releases.VERSIONS[-1]
+        predecessor = {"entries": [{"version": latest, "committedAt": model.clock.stamp()}]}
+        model.clock.advance(5)
+        dates = SimpleNamespace(now=lambda _: model.clock.now(), fromisoformat=datetime.fromisoformat)
+        with patch.object(installed_order, "datetime", dates):
+            with self.assertRaisesRegex(RuntimeError, "fixture missed the pre-expiry opportunity"):
+                installed_order.exercise_soak(None, predecessor, installed_releases.VERSIONS[0], latest)
 
     def test_product_that_ignores_soak_is_rejected_before_expiry(self):
         with self.assertRaisesRegex(RuntimeError, "before its predecessor"):
