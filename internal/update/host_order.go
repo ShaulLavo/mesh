@@ -46,6 +46,14 @@ type HostOrder struct {
 }
 
 func (o *HostOrder) Refresh(ctx context.Context, policy HostPolicy, current release.Build, now time.Time) (*HostLimit, error) {
+	return o.refresh(ctx, policy, current, now, true)
+}
+
+func (o *HostOrder) preview(ctx context.Context, policy HostPolicy, current release.Build, now time.Time) (*HostLimit, error) {
+	return o.refresh(ctx, policy, current, now, false)
+}
+
+func (o *HostOrder) refresh(ctx context.Context, policy HostPolicy, current release.Build, now time.Time, acknowledge bool) (*HostLimit, error) {
 	if len(policy.After) == 0 {
 		return nil, nil
 	}
@@ -57,9 +65,13 @@ func (o *HostOrder) Refresh(ctx context.Context, policy HostPolicy, current rele
 		return nil, hostError(err)
 	}
 	var result *HostLimit
+	settled := ""
+	if acknowledge {
+		settled = current.Version
+	}
 	for _, id := range policy.After {
 		peer := findEvidenceHost(fleet, id)
-		if err := o.refreshPeer(ctx, id, peer, current.Version, now); err != nil {
+		if err := o.refreshPeer(ctx, id, peer, settled, now); err != nil {
 			return nil, err
 		}
 		limit, err := o.Store.peerLimit(ctx, id, current, policy.Soak, now)
@@ -254,6 +266,20 @@ func (s *Store) savePeerPage(ctx context.Context, id string, request EvidenceReq
 	if reply.Phase == HostAttention || reply.Attention != "" {
 		return fmt.Errorf("update: predecessor %s requires attention: %s", id, reply.Attention)
 	}
+	peers, err := s.readHostPeers()
+	if err != nil {
+		return err
+	}
+	peer := HostPeer{ID: id}
+	index := slices.IndexFunc(peers.Entries, func(value HostPeer) bool { return value.ID == id })
+	if index >= 0 {
+		peer = peers.Entries[index]
+	}
+	// A restart must not admit page data from an unfinished read.
+	peer.Held, peer.State = true, EvidenceReading
+	if err := s.putHostPeer(peer); err != nil {
+		return err
+	}
 	for _, entry := range reply.Entries {
 		if err := s.savePeerEntry(id, entry); err != nil {
 			return err
@@ -262,17 +288,6 @@ func (s *Store) savePeerPage(ctx context.Context, id string, request EvidenceReq
 	for _, failed := range reply.Failed {
 		if err := s.writeAuthority(peerFailureName(id, failed.Edge), failed); err != nil {
 			return err
-		}
-	}
-	peers, err := s.readHostPeers()
-	if err != nil {
-		return err
-	}
-	peer := HostPeer{ID: id, Held: true}
-	for _, saved := range peers.Entries {
-		if saved.ID == id {
-			peer = saved
-			break
 		}
 	}
 	if len(reply.Entries) > 0 {
@@ -470,29 +485,36 @@ func (o *HostOrder) ReleaseDropped(ctx context.Context, policy HostPolicy) error
 	if len(dropped) == 0 {
 		return nil
 	}
-	if o.SavedFleet == nil {
-		return errors.New("update: cannot release predecessors without identity fleet")
+	var fleet Fleet
+	err = errors.New("update: cannot release predecessors without identity fleet")
+	if o.SavedFleet != nil {
+		fleet, err = o.SavedFleet()
 	}
-	fleet, err := o.SavedFleet()
-	if err != nil {
-		return hostError(err)
-	}
+	dropCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
 	for _, peer := range dropped {
-		if err := o.releasePeer(ctx, fleet, peer); err != nil {
-			return err
+		var releaseErr error
+		if err != nil {
+			releaseErr = o.Store.recordPeerRead(ctx, peer, time.Now().UTC(), err)
+		} else {
+			releaseErr = o.releasePeer(ctx, dropCtx, fleet, peer)
+		}
+		if releaseErr != nil {
+			return releaseErr
 		}
 	}
 	return nil
 }
 
-func (o *HostOrder) releasePeer(ctx context.Context, fleet Fleet, peer HostPeer) error {
+func (o *HostOrder) releasePeer(ctx, dropCtx context.Context, fleet Fleet, peer HostPeer) error {
 	host := findEvidenceHost(fleet, peer.ID)
 	if host == nil {
-		return fmt.Errorf("update: dropped predecessor %s needs its saved endpoint to release retention", peer.ID)
+		cause := fmt.Errorf("update: dropped predecessor %s needs its saved endpoint to release retention", peer.ID)
+		return o.Store.recordPeerRead(ctx, peer, time.Now().UTC(), cause)
 	}
-	_, err := o.Client.Evidence(ctx, *host, EvidenceRequest{Drop: true, Limit: 1})
+	_, err := o.Client.Evidence(dropCtx, *host, EvidenceRequest{Drop: true, Limit: 1})
 	if err != nil {
-		return err
+		return o.Store.recordPeerRead(ctx, peer, time.Now().UTC(), err)
 	}
 	return o.Store.removeHostPeer(ctx, peer.ID)
 }

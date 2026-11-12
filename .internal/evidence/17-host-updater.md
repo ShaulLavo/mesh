@@ -99,12 +99,11 @@ baseline entries were removed after fixing them in touched daemon code.
 
 ## Remaining gates
 
-The corrected rollback source at `512fb62b` is integrated. The parent must
-deliver corrected signing-cache source, arrange independent review and require
-green CI before merge. The shared marker and original-source command contracts
-are implemented. The PR remains a draft until the remaining cross-unit gates
-are complete. No installed-platform or fleet activation claim is made by these
-fixture tests.
+Corrected rollback `b3adc107`, signing-cache `81f7efcd`, and Unit 7 predecessor
+evidence `a6c6c99e` are integrated. The explicit local submission and adoption
+confirmation integration is described in [the local target evidence](17-local-target.md).
+The parent owns independent review, green CI and merge. No installed-platform
+or fleet activation claim is made by these fixture tests.
 
 The prepared tree remains for that review and belongs to the parent for final
 retirement. Temporary binaries, test state and workers are removed after their
