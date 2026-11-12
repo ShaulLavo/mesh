@@ -43,7 +43,7 @@ func TestHostTargetPlanIsReadOnlyAndSubmissionIsReserved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Revision != 1 || status.Phase != HostTargetReserved || status.Request == "" || status.Generation != 1 || status.Next == nil || status.Target != plan.Target || *status.Next != plan.Next {
+	if status.Revision != 1 || status.Phase != HostTargetReserved || status.Request == "" || status.Generation != 1 || status.Next == nil || status.Target != plan.Target || *status.Next != *plan.Next {
 		t.Fatalf("submission did not reserve verified work: %+v", status)
 	}
 	if _, err := f.engine.Read(); !errors.Is(err, os.ErrNotExist) {

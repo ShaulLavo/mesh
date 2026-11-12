@@ -29,6 +29,13 @@ predecessor retention acknowledgement. It may refresh bounded authenticated
 peer/discovery caches. Its ordinary-device evidence request has empty `Settled`
 and `Drop=false`.
 
+Preview also accepts `Version="latest"`. It traverses stable discovery roots
+to the compatible executing reader epoch and authenticates that exact head;
+it never calls the manifest client's unqualified latest selector. A verified
+already-current version/artifact returns `Next=nil`, omitted from JSON.
+Submission still requires an exact newer version and never persists a latest
+alias or an already-current no-op as approved work.
+
 Submission verifies the source, exact target metadata and manifest, route,
 forward/full rollback proof and retained workers. It checks the current helper
 and records the private intent and exact owned request under authority before
@@ -59,6 +66,11 @@ Pending time survives polls and daemon replacement. The existing Unit 7 order
 refresh and acceptance-time saved-order fence remain mandatory. A deliberate
 local retry does not override a predecessor failure and does not erase local
 quarantine before a successful commit.
+
+The exact reserved retry work consumes that exception when it settles. Its
+digest is persisted with settlement before ownership clears, including after
+rollback. The original submission stays unchanged for idempotent replay; it
+cannot authorize a second attempt. A new explicit retry requires a new intent.
 
 The route cache is one bounded, source-and-target-digest-bound record. It holds
 no permission. A different plan replaces it; every use reauthenticates signed
