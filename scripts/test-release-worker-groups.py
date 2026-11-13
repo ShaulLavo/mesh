@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Controlled group, asset-closure and signed-context regressions; no native launch."""
 import json
+import copy
 import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
 
-from fixtures import noindex_paths, release_worker_groups as groups, release_worker_index as index
-from fixtures import release_worker_completion as completion, installed_paths
+from fixtures import noindex_paths, release_worker_groups as groups, release_worker_index as index, installed_adoption
+from fixtures import release_worker_completion as completion, installed_paths, installed_publication
 
 PLATFORM = {"os": "linux", "arch": "amd64"}
 SOURCE = "a" * 40
@@ -152,6 +153,18 @@ class WorkerGroupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity changed"):
             bundle.validate()
 
+    def test_original_protocol_session_and_ownership_are_required(self):
+        variants = ({"protocol": 999}, {"session": ""}, {"stateRun": ""},
+                    {"session": "W0"}, {"shellPid": 1000}, {"protocol": True})
+        for changes in variants:
+            bundle = Bundle(self.root, selected(1))
+            def corrupt(record, changes=changes):
+                for row in record["observations"]:
+                    row["original"].update(changes)
+            bundle.mutate_leaf("observations", corrupt)
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                bundle.validate()
+
     def test_reused_state_identity_rejected(self):
         bundle = Bundle(self.root, selected(32))
         bundle.value["groups"][1]["stateRun"] = bundle.value["groups"][0]["stateRun"]
@@ -211,9 +224,23 @@ class WorkerGroupTests(unittest.TestCase):
 
     def test_unavailable_published_updater_has_no_invented_route(self):
         with mock.patch.object(completion.fleet_baselines, "load", return_value={"firstPublishedUpdater": None}):
-            completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": []}, {})
+            completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": []}, {}, {})
             with self.assertRaisesRegex(ValueError, "invented"):
-                completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": [{}]}, {})
+                completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": [{}]}, {}, {})
+
+    def test_installed_original_uses_actual_baseline_after_daemon_bootstrap(self):
+        bundle = Bundle(self.root, selected(1))
+        observations = groups.typed_leaf(bundle.value["groups"][0]["observations"], "observations", groups.file_resolver(self.root))
+        for row in observations["observations"]:
+            row["original"].update(digest="f" * 64, protocol=7)
+        (self.root / "case-native-pair.json").write_bytes(groups.encode({"passed": True,
+            "cleanup": {"servicesAbsent": True, "processesAbsent": True}}))
+        (self.root / "case-cohort.json").write_bytes(groups.encode(observations))
+        group = groups.partition(bundle.workers, 5)[0]
+        labels = groups.labels("full", 1, 2)
+        installed_adoption.validate_installed_group(self.root, group, labels, {"digest": "f" * 64, "protocol": 7})
+        with self.assertRaisesRegex(ValueError, "original"):
+            installed_adoption.validate_installed_group(self.root, group, labels, {"digest": bundle.context["sourceDigest"], "protocol": 1})
 
 
 class IndexTests(unittest.TestCase):
@@ -244,8 +271,12 @@ class IndexTests(unittest.TestCase):
             artifacts.append({"platform": platform, "binarySha256": "c" * 64})
         dist = self.root / "dist"
         dist.mkdir()
-        manifest = {"version": "v0.1.99", "commit": SOURCE, "artifacts": artifacts, "compatibility": {"transitions": transitions}}
+        manifest = {"version": "v0.1.99", "commit": SOURCE, "artifacts": artifacts,
+                    "compatibility": {"transitions": transitions, "stateWrite": 2, "workerWrite": 2}}
         (dist / "mesh-release.json").write_bytes(groups.encode(manifest))
+        candidates = [{"version": manifest["version"], "commit": SOURCE, "protocol": 2, "artifact": artifact}
+                      for artifact in artifacts]
+        (dist / "mesh-workers.json").write_bytes(groups.encode(selection["workers"] + candidates))
         frozen = {"selection": selection, "sources": references, "registries": registries}
         index.stage(dist, proofs, frozen, SOURCE)
         return dist, proofs, manifest
@@ -293,27 +324,155 @@ class IndexTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "authoritative"):
             index.validate_index(dist / "mesh-worker-groups.json", manifest, proofs)
 
-    def test_installed_completion_requires_every_platform_and_bound_case(self):
-        inventory = {"firstPublishedUpdater": None, "hosts": [{"name": host, "platform": native} for host, native in
-                     (("pc", "linux/amd64"), ("pi", "linux/arm64"), ("mac", "darwin/arm64"))]}
-        with mock.patch.object(completion.fleet_baselines, "load", return_value=inventory):
-            for native in ("linux/amd64", "linux/arm64", "darwin/arm64"):
-                output = self.root / native.replace("/", "-")
-                output.mkdir()
-                refs = []
-                for name in completion.expected_pairs(native):
-                    path = output / name
-                    path.write_bytes(groups.encode({"passed": True, "cleanup": {"servicesAbsent": True, "processesAbsent": True}}))
-                    refs.append(completion.asset(output, path))
-                value = {"schema": 1, "version": "v0.1.99", "releaseSource": SOURCE, "platform": native,
-                         "signedIndexSha256": "b" * 64, "firstPublishedUpdater": None, "installedHarness": SOURCE, "cases": refs, "routes": []}
-                (output / "worker-completion.json").write_bytes(groups.encode(value))
-            completion.validate(self.root, "v0.1.99", SOURCE, "b" * 64, SOURCE, {})
-            with self.assertRaisesRegex(ValueError, "wrong index"):
-                completion.validate(self.root, "v0.1.99", SOURCE, "c" * 64, SOURCE, {})
-            (self.root / "darwin-arm64/worker-completion.json").unlink()
-            with self.assertRaisesRegex(ValueError, "missing"):
-                completion.validate(self.root, "v0.1.99", SOURCE, "b" * 64, SOURCE, {})
+    def test_signed_registry_cannot_add_or_change_historical_members(self):
+        dist, proofs, manifest = self.build_index()
+        path = dist / "mesh-workers.json"
+        original = json.loads(path.read_bytes())
+        extra = groups.member(selected(2)[1]) | {"version": "v0.1.0"}
+        path.write_bytes(groups.encode([extra] + original))
+        with self.assertRaises(ValueError):
+            index.validate_index(dist / "mesh-worker-groups.json", manifest, proofs)
+        path.write_bytes(groups.encode(original))
+        original[0]["commit"] = "f" * 40
+        path.write_bytes(groups.encode(original))
+        with self.assertRaises(ValueError):
+            index.validate_index(dist / "mesh-worker-groups.json", manifest, proofs)
+
+
+class CompletionTests(unittest.TestCase):
+    def setUp(self):
+        WorkerGroupTests.setUp(self)
+        inventory = {"firstPublishedUpdater": None, "hosts": [{"name": host, "platform": native, "daemon": "v0.1.1"}
+            for host, native in (("pc", "linux/amd64"), ("pi", "linux/arm64"), ("mac", "darwin/arm64"))]}
+        patcher = mock.patch.object(completion.fleet_baselines, "load", return_value=inventory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.release = {"version": "v0.1.99", "source": SOURCE, "manifest": "a" * 64, "metadata": "b" * 64,
+            "workerGroups": "d" * 64, "stateVersion": 2, "workerProtocol": 2,
+            "artifacts": [{"platform": native, "binarySha256": "c" * 64} for native in index.PLATFORMS]}
+        self.selection = {"workers": [groups.member(selected(1, platform)[0]) for platform in index.PLATFORMS]}
+        for platform in index.PLATFORMS:
+            self.write_completion(platform)
+
+    def write_completion(self, platform):
+        native = platform["os"] + "/" + platform["arch"]
+        output = self.root / native.replace("/", "-")
+        output.mkdir()
+        build = {"version": "v0.1.99", "commit": SOURCE, "platform": platform, "modified": False,
+                 "digest": "c" * 64, "stateVersion": 2, "workerProtocol": 2}
+        draft = completion.release_binding(self.release) | {"testTrustRoot": False, "build": build, "installedHarness": SOURCE}
+        (output / "real-draft.json").write_bytes(groups.encode(draft))
+        (output / "harness-source.json").write_bytes(groups.encode({"expected": SOURCE, "actual": SOURCE, "workerGrouping": {}}))
+        publication = {"release": completion.release_binding(self.release), "candidate": build, "harness": SOURCE}
+        refs = [self.write_case(output, name, completion.expected_case(name, native, publication, self.selection))
+                for name in completion.expected_pairs(native)]
+        value = {"schema": 1, "version": "v0.1.99", "releaseSource": SOURCE, "platform": native,
+                 "signedIndexSha256": self.release["workerGroups"], "firstPublishedUpdater": None, "installedHarness": SOURCE,
+                 "draft": completion.asset(output, output / "real-draft.json"),
+                 "harnessObservation": completion.asset(output, output / "harness-source.json"), "cases": refs, "routes": []}
+        (output / "worker-completion.json").write_bytes(groups.encode(value))
+
+    def write_case(self, output, name, publication):
+        candidate, original = publication["candidate"], publication["original"]
+        record = {"passed": True, "cleanup": {"servicesAbsent": True, "processesAbsent": True}, "realDraft": "v0.1.99",
+                  "testTrustRoot": False, "publication": publication}
+        if publication["scenario"] == "fresh":
+            record.update(running=candidate, initial={"helperBeforeDaemon": {"sha256": candidate["digest"]},
+                "firstNativeStart": {"mappedImage": {"sha256": candidate["digest"]}}})
+        else:
+            running = candidate if publication["scenario"] != "rollback" else {"version": original["version"],
+                "platform": original["platform"], "digest": original["digest"], "workerProtocol": original["protocol"], "modified": False}
+            record["result"] = {"running": running, "phase": "rolled-back" if publication["scenario"] == "rollback" else "adopted",
+                                "confirmed": True, "helper": {"sha256": candidate["digest"]}}
+            record["interruption"] = {"mappedImage": {"sha256": candidate["digest"]}}
+        path = output / name
+        path.write_bytes(groups.encode(record))
+        return completion.asset(output, path)
+
+    def validate(self):
+        completion.validate(self.root, self.release, SOURCE, self.selection)
+
+    def change_leaf(self, field, changes, name="pc-publication-native-pair.json"):
+        output = self.root / "linux-amd64"
+        path = output / name
+        original = path.read_bytes()
+        value = json.loads(original)
+        changes(value)
+        path.write_bytes(groups.encode(value))
+        header_path = output / "worker-completion.json"
+        header = json.loads(header_path.read_bytes())
+        if field == "cases":
+            header[field] = [completion.asset(output, path) if ref["name"] == name else ref for ref in header[field]]
+        else:
+            header[field] = completion.asset(output, path)
+        header_path.write_bytes(groups.encode(header))
+        return original
+
+    def test_complete_release_passes_but_wrong_index_and_missing_platform_fail(self):
+        self.validate()
+        with self.assertRaisesRegex(ValueError, "wrong index"):
+            completion.validate(self.root, self.release | {"workerGroups": "e" * 64}, SOURCE, self.selection)
+        (self.root / "darwin-arm64/worker-completion.json").unlink()
+        with self.assertRaisesRegex(ValueError, "missing"):
+            self.validate()
+
+    def test_stale_test_trust_or_missing_publication_never_completes(self):
+        path = self.root / "linux-amd64/pc-publication-native-pair.json"
+        baseline = path.read_bytes()
+        for changes in ({"realDraft": "v0.1.1", "testTrustRoot": True}, {"testTrustRoot": True}, {"publication": None}):
+            path.write_bytes(baseline)
+            self.change_leaf("cases", lambda value, changes=changes: value.update(changes))
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate()
+
+    def test_case_release_platform_host_scenario_and_harness_must_match(self):
+        baseline = json.loads((self.root / "linux-amd64/pc-publication-native-pair.json").read_bytes())
+        for changes in ({"case": "another"}, {"scenario": "fresh"}, {"harness": "e" * 40},
+                        {"release": completion.release_binding(self.release) | {"metadata": "f" * 64}},
+                        {"candidate": baseline["publication"]["candidate"] | {"platform": {"os": "darwin", "arch": "arm64"}}}):
+            replacement = copy.deepcopy(baseline)
+            replacement["publication"].update(changes)
+            self.change_leaf("cases", lambda value, replacement=replacement: value.update(replacement))
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.validate()
+
+    def test_authenticated_draft_and_actual_harness_are_required(self):
+        self.change_leaf("draft", lambda value: value.update(metadata="f" * 64), "real-draft.json")
+        with self.assertRaisesRegex(ValueError, "draft context"):
+            self.validate()
+        self.change_leaf("draft", lambda value: value.update(metadata=self.release["metadata"]), "real-draft.json")
+        self.change_leaf("harnessObservation", lambda value: value.update(actual="e" * 40), "harness-source.json")
+        with self.assertRaisesRegex(ValueError, "harness observation"):
+            self.validate()
+
+    def test_draft_loader_carries_verified_release_bytes_into_case_context(self):
+        directory = self.root / "draft"
+        directory.mkdir()
+        artifact = self.release["artifacts"][0] | {"archive": "native.tar.gz"}
+        manifest = {"version": self.release["version"], "commit": SOURCE, "artifacts": [artifact],
+                    "compatibility": {"stateWrite": 2, "workerWrite": 2}}
+        manifest_bytes = groups.encode(manifest)
+        (directory / "mesh-release.json").write_bytes(manifest_bytes)
+        (directory / "mesh-update.json").write_bytes(groups.encode({"version": manifest["version"], "manifest": groups.digest(manifest_bytes)}))
+        (directory / "mesh-worker-groups.json").write_bytes(b"{}")
+        (directory / "native.tar.gz").write_bytes(b"archive")
+        output = self.root / "linux-amd64"
+        build = json.loads((output / "real-draft.json").read_bytes())["build"]
+        with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=SOURCE), mock.patch.object(installed_publication, "verify_signature"), mock.patch.object(index, "validate_index"), mock.patch.object(installed_publication.published_releases, "archive_binary", return_value=b"image"), mock.patch.object(installed_publication.subprocess, "check_output", return_value=groups.encode(build)):
+            releases = installed_publication.load_draft(self.root, output, directory, "linux/amd64", manifest["version"], SOURCE, "owned-draft")
+        self.assertEqual(releases.verification["workerGroups"], groups.digest(b"{}"))
+        self.assertEqual(releases.verification["manifest"], groups.digest(manifest_bytes))
+        self.assertEqual(releases.verification["installedHarness"], SOURCE)
+        self.assertFalse(releases.verification["testTrustRoot"])
+
+    def test_native_image_confirmation_and_fresh_start_are_bound(self):
+        self.change_leaf("cases", lambda value: value["result"]["running"].update(digest="e" * 64))
+        with self.assertRaisesRegex(ValueError, "image"):
+            self.validate()
+        self.change_leaf("cases", lambda value: value["result"]["running"].update(digest="c" * 64))
+        self.change_leaf("cases", lambda value: value["initial"]["firstNativeStart"]["mappedImage"].update(sha256="e" * 64), "fresh-managed-native-pair.json")
+        with self.assertRaisesRegex(ValueError, "fresh installed"):
+            self.validate()
 
 
 if __name__ == "__main__":

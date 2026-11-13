@@ -73,10 +73,11 @@ def run_groups(root, output, host, pair, preparer, origin, releases, previous, f
         directory = output / "groups" / (host["name"] + "-chain-" + failure) / str(group["index"])
         directory.mkdir(parents=True)
         case_root = run_case(root, directory, host, pair, preparer, origin, releases, previous, failure, group)
-        installed_adoption.validate_installed_group(directory, group, expected)
+        installed_adoption.validate_installed_group(directory, group, expected, installed_adoption.original_source(pair["daemon"]))
         shutil.rmtree(case_root)
         releases.check_budget()
-    installed_adoption.complete_installed_groups(output / "groups" / (host["name"] + "-chain-" + failure), groups, expected)
+    installed_adoption.complete_installed_groups(output / "groups" / (host["name"] + "-chain-" + failure), groups, expected,
+                                                installed_adoption.original_source(pair["daemon"]))
 
 
 def await_chain(case, record, intermediate, final, fail_final):

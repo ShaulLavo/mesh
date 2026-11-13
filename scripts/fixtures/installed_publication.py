@@ -12,7 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index
+from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
 
 
 def require_main():
@@ -68,10 +68,16 @@ def load_draft(root, output, directory, native, version, source, url):
     build = json.loads(subprocess.check_output([str(binary), "version", "--json"], env=environment, timeout=10))
     if build["modified"] or build["commit"] != source or build["version"] != version or build["digest"] != artifact["binarySha256"] or build["platform"] != platform:
         raise RuntimeError("actual unmodified native draft image differs from its authenticated manifest")
-    (output / "real-draft.json").write_text(json.dumps({"url": url, "version": version, "source": source, "build": build,
+    harness = os.environ["MESH_HARNESS_SOURCE"]
+    release_worker_completion.validate_harness(json.loads((output / "harness-source.json").read_bytes()), harness)
+    verified = {"url": url, "version": version, "source": source, "build": build,
         "manifest": metadata["manifest"], "metadata": published_releases.digest((directory / "mesh-update.json").read_bytes()),
-        "testTrustRoot": False, "firstPublishedUpdater": fleet_baselines.load()["firstPublishedUpdater"]}, indent=2) + "\n")
-    return SimpleNamespace(root=root, directory=directory.parent, native=native, builds={version: build | {"path": str(binary)}})
+        "workerGroups": published_releases.digest((directory / "mesh-worker-groups.json").read_bytes()),
+        "installedHarness": harness, "testTrustRoot": False, "firstPublishedUpdater": fleet_baselines.load()["firstPublishedUpdater"]}
+    release_worker_completion.validate_draft(verified, release_worker_completion.release_context(directory), native, harness)
+    (output / "real-draft.json").write_text(json.dumps(verified, indent=2) + "\n")
+    return SimpleNamespace(root=root, directory=directory.parent, native=native, verification=verified,
+                           builds={version: build | {"path": str(binary)}})
 
 
 def verify_signature(root, output, envelope, subjects):
@@ -218,6 +224,9 @@ def run_pair(root, output, host, pair, preparer, releases, origin, previous, ver
         record["initial"] = case.prepare()
         case.seed_prior()
         case.seed()
+        original = {"version": host["daemon"], "platform": pair["daemon"]["artifact"]["platform"],
+                    "digest": pair["daemon"]["artifact"]["binarySha256"], "protocol": pair["daemon"]["manifest"]["compatibility"]["workerWrite"]}
+        record["publication"] = release_worker_completion.publication_case(case, releases, scenario, original)
         if scenario == "rollback":
             fault.start()
         started = case.start_adoption(version)
@@ -236,14 +245,17 @@ def run_pair(root, output, host, pair, preparer, releases, origin, previous, ver
 
 def run_fresh(root, output, version, releases, origin):
     case = installed_fresh.FreshCase(root, origin, releases, version=version, publication=True)
-    record = {"passed": False, "realDraft": version, "adoptionSeededPolicy": False}
+    record = {"passed": False, "realDraft": version, "testTrustRoot": False, "scenario": "fresh", "adoptionSeededPolicy": False}
     try:
         record["initial"] = case.prepare()
         case.seed()
+        original = release_worker_completion.source_identity(releases.verification["build"])
+        record["publication"] = release_worker_completion.publication_case(case, releases, "fresh", original)
         record["baselineInitialization"] = case.initialize_preserved_baseline()
         case.snapshots = case.retained()
         record["restart"] = case.restart_control()
         case.inspect_retained()
+        record["running"] = case.control("host.info")["host"]["build"]
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
@@ -286,7 +298,8 @@ def run_published_groups(root, output, first, target, releases, origin, registry
         required.append("real-published-final")
         if rollback:
             required.append("native-failed-edge-restart")
-        installed_adoption.validate_installed_group(directory, group, required)
+        installed_adoption.validate_installed_group(directory, group, required,
+            {"digest": releases.builds[first]["digest"], "protocol": releases.builds[first]["workerProtocol"]})
         shutil.rmtree(case_root)
     from fixtures import release_worker_completion
     release_worker_completion.route_companion(output, first, target, rollback, groups)
@@ -297,11 +310,13 @@ def published_route(root, output, first, target, releases, origin, registry, pro
     case = installed_fresh.FreshCase(root, origin, releases, version=first, publication=True, name=name)
     case.worker_group = group
     fault = PortFault(case, target)
-    record = {"passed": False, "firstPublishedUpdater": first, "realDraft": target, "rollback": rollback, "hops": []}
+    record = {"passed": False, "firstPublishedUpdater": first, "realDraft": target, "testTrustRoot": False, "rollback": rollback, "hops": []}
     origin.head(releases.directory, first)
     try:
         record["initial"] = case.prepare()
         case.seed()
+        original = release_worker_completion.source_identity(releases.builds[first])
+        record["publication"] = release_worker_completion.publication_case(case, releases, name, original)
         record["baselineInitialization"] = case.initialize_preserved_baseline()
         record["cohort"] = case.start_cohort(registry, probe)
         policy = subprocess.run([str(case.binary), "update", "policy", "set", "--expected-revision", "0", "--json"],

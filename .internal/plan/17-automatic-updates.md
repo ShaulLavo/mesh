@@ -1592,6 +1592,24 @@ claimed. Preserve the original job and the controls in
 `/work/reports/mesh-auto-update/prepolicy-deployment-race/REPORT.md`.
 Normal current-source green CI remains required before merge.
 
+### Native helper rollback health did not reproduce
+
+PR 435 caller `7db3d671` failed
+`TestOriginalInodeSurvivesRollbackRetryAndCommit` in its
+[normal Darwin helper recovery job](https://github.com/ShaulLavo/mesh/actions/runs/43327607816/job/131564070619).
+After the deliberately unhealthy candidate, the source health check reported
+unexpected end of JSON input and a context deadline after 1.46 seconds, yielding
+`rollback_failed` instead of rollback. No Go race warning was recorded.
+Two focused Go 1.27.4 Linux race attempts passed the unchanged inode, rollback,
+retry, commit and worker checks, including the real OpenSSL branch. The
+300-millisecond health deadline stayed unchanged. Source review identifies a
+possible empty-file window while the fixture writes its health JSON, but does
+not establish the Darwin deadline's cause. This observation is not reproducing;
+no runtime fix, deadline expansion or EOF suppression is justified. Preserve
+the original failure and both passes in
+`/work/reports/mesh-auto-update/helper-inode-fixture/REPORT.md`. Normal reviewed
+current-source CI remains required before merge.
+
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
 The graph analysis reads manifest claims and does not verify receipts.

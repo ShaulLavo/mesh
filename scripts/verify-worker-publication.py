@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 
-from fixtures import installed_publication, release_worker_completion, release_worker_groups, release_worker_index
+from fixtures import installed_publication, release_worker_completion, release_worker_index
 
 
 def verify(version, source, completions):
@@ -26,8 +26,7 @@ def verify(version, source, completions):
         pins = re.findall(r"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@([0-9a-f]{40})", workflow)
         if len(pins) != 1:
             raise ValueError("finalization cannot identify its immutable installed harness")
-        release_worker_completion.validate(Path(completions), version, source,
-            release_worker_groups.digest((root / "mesh-worker-groups.json").read_bytes()), pins[0], index["selection"])
+        release_worker_completion.validate(Path(completions), release_worker_completion.release_context(root), pins[0], index["selection"])
 
 
 if __name__ == "__main__":

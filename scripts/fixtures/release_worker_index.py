@@ -1,5 +1,6 @@
 """Exact native proof matrix and signed-release worker evidence closure."""
 import json
+from collections import Counter
 from pathlib import Path
 
 from fixtures import release_worker_groups as groups, release_workers
@@ -42,7 +43,10 @@ def authoritative_selection(selection, companion):
     context = companion["context"]
     selected = [groups.member(item) for item in selection["workers"] if item["artifact"]["platform"] == context["platform"]
                 and release_workers.version(item["version"]) <= release_workers.version(context["sourceVersion"])]
-    if not any(item["artifact"]["binarySha256"] == context["sourceDigest"] for item in selected):
+    source_members = [item for item in selected if item["artifact"]["binarySha256"] == context["sourceDigest"]]
+    if any(item["protocol"] != context["sourceProtocol"] for item in source_members):
+        raise ValueError("native original protocol differs from authoritative source")
+    if not source_members:
         selected.append({"version": context["sourceVersion"], "protocol": context["sourceProtocol"],
                          "artifact": {"platform": context["platform"], "binarySha256": context["sourceDigest"]}})
     actual = [item for entry in companion["groups"] for item in entry["group"]["members"]]
@@ -151,11 +155,32 @@ def stage(dist, proofs, frozen, source):
     if len(data) > groups.MAX_DOCUMENT:
         raise ValueError("worker index exceeds document bound")
     (dist / "mesh-worker-groups.json").write_bytes(data)
-    validate_index(dist / "mesh-worker-groups.json", manifest, proofs)
+    validate_index(dist / "mesh-worker-groups.json", manifest, proofs, frozen["selection"]["workers"])
     return value
 
 
-def validate_index(path, manifest, proofs=None):
+def published_workers(directory, manifest):
+    path = directory / "mesh-workers.json"
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("independently authenticated worker registry missing")
+    with path.open("rb") as stream:
+        raw = stream.read((8 << 20) + 1)
+    if len(raw) > 8 << 20:
+        raise ValueError("authenticated worker registry exceeds bound")
+    workers = [groups.member(item) for item in json.loads(raw)]
+    candidates = [{"version": manifest["version"], "commit": manifest["commit"],
+                   "protocol": manifest["compatibility"]["workerWrite"], "artifact": artifact}
+                  for artifact in manifest["artifacts"]]
+    current = [item for item in workers if item["version"] == manifest["version"]]
+    if Counter(map(groups.encode, current)) != Counter(map(groups.encode, candidates)):
+        raise ValueError("authenticated candidate workers differ from release manifest")
+    historical = [item for item in workers if item["version"] != manifest["version"]]
+    if any(release_workers.version(item["version"]) >= release_workers.version(manifest["version"]) for item in historical):
+        raise ValueError("authenticated registry contains workers beyond this release")
+    return historical
+
+
+def validate_index(path, manifest, proofs=None, expected_workers=None):
     path = Path(path)
     if not path.is_file() or path.stat().st_size > groups.MAX_DOCUMENT:
         raise ValueError("required signed worker index missing or oversized")
@@ -166,6 +191,11 @@ def validate_index(path, manifest, proofs=None):
                "registrySha256": {key: item["sha256"] for key, item in value["registries"].items()}}
     if value.get("schema") != 1 or value["context"] != context:
         raise ValueError("worker index has a wrong release, manifest or candidate context")
+    authoritative = published_workers(path.parent, manifest) if expected_workers is None else expected_workers
+    expected_members = Counter(groups.encode(groups.member(item)) for item in authoritative)
+    actual_members = Counter(groups.encode(groups.member(item)) for item in value["selection"]["workers"])
+    if actual_members != expected_members:
+        raise ValueError("index worker selection differs from independently authoritative registry")
     resolve = resolver(proofs) if proofs is not None else groups.file_resolver(path.parent)
     verified = validate_sources(value["selection"], value["sources"], resolve, manifest["commit"])
     contexts = [result["companion"]["context"] for _, result in verified]

@@ -396,13 +396,17 @@ def run_grouped_adoption(root, output, host, pair, previous, preparer, origin, r
         prior = None if scenario == "initial" else previous
         case_root = run_case(root, directory, host, pair, preparer, origin, releases, scenario, prior,
                              releases.registry, releases.probe, group)
-        validate_installed_group(directory, group, ["before-install", "after-" + scenario])
+        validate_installed_group(directory, group, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
         shutil.rmtree(case_root)
         releases.check_budget()
-    complete_installed_groups(destination, groups, ["before-install", "after-" + scenario])
+    complete_installed_groups(destination, groups, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
 
 
-def validate_installed_group(output, group, labels):
+def original_source(image):
+    return {"digest": image["artifact"]["binarySha256"], "protocol": image["manifest"]["compatibility"]["workerWrite"]}
+
+
+def validate_installed_group(output, group, labels, source):
     records = list(output.glob("*-native-pair.json"))
     cohorts = list(output.glob("*-cohort.json"))
     if len(records) != 1 or len(cohorts) != 1:
@@ -411,16 +415,16 @@ def validate_installed_group(output, group, labels):
     if result.get("passed") is not True or result.get("cleanup") != {"servicesAbsent": True, "processesAbsent": True}:
         raise RuntimeError("installed group failed or cleanup unconfirmed")
     observed = json.loads(cohorts[0].read_bytes())
-    release_worker_groups.validate_observations(observed, release_worker_groups.public_group(group), labels)
+    release_worker_groups.validate_observations(observed, release_worker_groups.public_group(group), labels, source)
     return observed
 
 
-def complete_installed_groups(destination, selected, labels):
+def complete_installed_groups(destination, selected, labels, source):
     from fixtures import release_worker_completion
     entries, states = [], set()
     for group in selected:
         directory = destination / str(group["index"])
-        observed = validate_installed_group(directory, group, labels)
+        observed = validate_installed_group(directory, group, labels, source)
         original = observed["observations"][0]["original"]
         if original["stateRun"] in states:
             raise RuntimeError("installed groups reused an independent state identity")

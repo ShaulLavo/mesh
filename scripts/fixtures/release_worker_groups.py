@@ -114,14 +114,22 @@ def typed_leaf(reference, kind, resolver):
     return value["value"]
 
 
-def validate_observations(record, group, expected_labels):
+def valid_identity(row):
+    return (isinstance(row.get("session"), str) and bool(row["session"].strip())
+            and all(type(row.get(key)) is int and row[key] > 0 for key in ("pid", "shellPid", "protocol"))
+            and row["pid"] != row["shellPid"])
+
+
+def validate_observations(record, group, expected_labels, source):
     workers = record["workers"]
     expected = [(item["version"], item["protocol"], item["artifact"]["binarySha256"]) for item in group["members"]]
     actual = [(row["version"], row["protocol"], row["digest"]) for row in workers]
     if actual != expected or any(row.get("startupFailure") for row in workers):
         raise ValueError("group worker identities differ from its exact selection")
     identities = [{key: row[key] for key in ("session", "pid", "shellPid", "digest", "protocol", "version")} for row in workers]
-    if len({row["pid"] for row in workers}) != len(workers) or any(row["pid"] <= 0 or row["shellPid"] <= 0 for row in workers):
+    process_ids = [row[key] for row in workers for key in ("pid", "shellPid")]
+    sessions = {row["session"] for row in workers}
+    if any(not valid_identity(row) for row in workers) or len(set(process_ids)) != len(process_ids) or len(sessions) != len(workers):
         raise ValueError("group worker process ownership is incomplete")
     observations = record["observations"]
     if sorted(row["label"] for row in observations) != sorted(expected_labels):
@@ -131,8 +139,12 @@ def validate_observations(record, group, expected_labels):
         if row["identities"] != identities or row["workers"] != len(workers) or row["processes"] != 2 * len(workers):
             raise ValueError("worker identity changed within an independent group state")
         attached = row["original"]
-        if not attached or attached["pid"] <= 0 or attached["shellPid"] <= 0 or attached["pid"] in {worker["pid"] for worker in workers}:
+        if not attached or not valid_identity(attached):
             raise ValueError("original attached worker identity missing")
+        if (attached["digest"] != source["digest"] or attached["protocol"] != source["protocol"]
+                or attached["session"] in sessions or any(attached[key] in process_ids for key in ("pid", "shellPid"))
+                or not isinstance(attached.get("stateRun"), str) or not attached["stateRun"].strip()):
+            raise ValueError("original attached source identity or ownership differs")
         if original is not None and attached != original:
             raise ValueError("original attached worker changed within group")
         original = attached
@@ -168,7 +180,8 @@ def validate_entry(entry, expected, context, resolver):
     if entry["group"] != expected:
         raise ValueError("worker group partition or exact member coverage differs")
     record = typed_leaf(entry["observations"], "observations", resolver)
-    original = validate_observations(record, expected, labels(context["profile"], context["firstState"], context["lastState"]))
+    original = validate_observations(record, expected, labels(context["profile"], context["firstState"], context["lastState"]),
+                                     {"digest": context["sourceDigest"], "protocol": context["sourceProtocol"]})
     if original["digest"] != context["sourceDigest"] or original["stateRun"] != entry["stateRun"]:
         raise ValueError("original attached worker belongs to another group or source")
     cleanup = typed_leaf(entry["cleanup"], "cleanup", resolver)
