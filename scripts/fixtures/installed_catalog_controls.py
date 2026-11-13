@@ -234,9 +234,10 @@ class CatalogEvidenceTests(unittest.TestCase):
         cohort.catalog, cohort.group = None, None
         cohort.config, cohort.registry = self.root / "config", self.root / "registry"
         cohort.version, cohort.binary = "v0.1.249", self.root / "never-executed"
-        workers = [{"session": "W004"}]
+        workers = self.publication_workers("W004")
         calls = []
-        messages = [self.snapshot(), {"type": "state.current", "stateCurrent": {"sections": {"sessions": {"ageMillis": 0}}}},
+        inactive = self.publication(state="interrupted")["stateEvent"]["payload"]["session"]
+        messages = [self.snapshot([inactive]), {"type": "state.current", "stateCurrent": {"sections": {"sessions": {"ageMillis": 0}}}},
                     self.publication("W004", "session.changed"), self.publication("ORIG")]
         failure = subprocess.CalledProcessError(1, ["original-verifier"], stderr="original graded I/O failed")
 
@@ -245,7 +246,7 @@ class CatalogEvidenceTests(unittest.TestCase):
             calls.append(value["type"])
             return value
 
-        def launch(_state, _config, _item, _index, _boot, _host, record, _path):
+        def launch(_state, _config, _item, _index, _host, record, _path):
             calls.append("direct-startup")
             record["workers"].extend(workers)
 
@@ -261,9 +262,7 @@ class CatalogEvidenceTests(unittest.TestCase):
             calls.append("original-verifier")
             raise failure
 
-        directory = self.state / "s/ORIG"
-        directory.mkdir(parents=True)
-        (directory / "meta.json").write_text('{"bootId":"boot"}')
+        self.publication_workers("ORIG")
         environment = {"MESH_GROUP_ORIGINAL": '{"session":"ORIG"}'}
         with patch.object(cohort, "environment", return_value=environment), patch.object(installed_cohort.subprocess, "run", side_effect=run) as command, patch.object(release_workers, "applicable", return_value=[{}]), patch.object(release_workers, "start_one", side_effect=launch), patch.object(release_workers, "control"), patch.object(release_workers.socket, "socket"), patch.object(evidence, "receive_control", side_effect=receive), patch("fixtures.release_worker_evidence.positive_control", return_value={"passed": True}):
             with self.assertRaises(subprocess.CalledProcessError) as caught:
@@ -280,7 +279,88 @@ class CatalogEvidenceTests(unittest.TestCase):
 
     def publication(self, session="W004", kind="session.added", host="local", state="detached"):
         return {"type": "state.event", "stateEvent": {"kind": kind, "payload": {
-            "session": {"id": session, "hostId": host, "state": state}}}}
+            "session": {"id": session, "hostId": host, "state": state, "createdAt": "2026-11-13T00:00:00.123Z"}}}}
+
+    def publication_workers(self, *sessions):
+        for session in sessions:
+            directory = self.state / "s" / session
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "meta.json").write_text(json.dumps({"id": session, "createdAt": "2026-11-13T00:00:00.123456789Z"}))
+        return [{"session": session} for session in sessions]
+
+    def test_inactive_snapshot_stays_pending_until_local_active_event(self):
+        inactive = self.publication(state="interrupted")["stateEvent"]["payload"]["session"]
+        messages = [self.snapshot([inactive]), self.publication(state="interrupted"), self.publication()]
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
+            actual = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
+        self.assertEqual(actual["sessions"], ["W004"])
+        self.assertEqual(read.call_count, 3)
+
+    def test_remote_same_id_stays_pending_until_local_active_event(self):
+        remote = self.publication(host="remote")["stateEvent"]["payload"]["session"]
+        messages = [self.snapshot([remote]), self.publication(host="remote"), self.publication()]
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
+            actual = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
+        self.assertEqual(actual["sessions"], ["W004"])
+        self.assertEqual(read.call_count, 3)
+
+    def test_never_active_local_or_remote_row_keeps_original_deadline(self):
+        for value in (self.publication(state="interrupted"), self.publication(state="exited"), self.publication(host="remote"), self.stale_publication()):
+            self.pending_publication(value)
+
+    def stale_publication(self):
+        value = self.publication()
+        value["stateEvent"]["payload"]["session"]["createdAt"] = "2026-11-12T00:00:00Z"
+        return value
+
+    def test_stale_active_same_id_cannot_satisfy_snapshot_or_event(self):
+        stale = self.stale_publication()
+        messages = [self.snapshot([stale["stateEvent"]["payload"]["session"]]), stale, self.publication()]
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
+            actual = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
+        self.assertEqual(actual["sessions"], ["W004"])
+        self.assertEqual(read.call_count, 3)
+
+    def test_published_worker_becoming_inactive_or_replaced_fails_before_complete_cohort(self):
+        for value in (self.publication(state="interrupted"), self.publication(state="exited"), self.stale_publication()):
+            self.reject_published_change(value)
+
+    def reject_published_change(self, value):
+        row = self.publication()["stateEvent"]["payload"]["session"]
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=[self.snapshot([row]), value]):
+            with self.assertRaises(RuntimeError):
+                release_workers.wait_publication(self.state, "local", self.publication_workers("W004", "W005"))
+
+    def test_original_session_is_required_even_when_all_selected_workers_are_published(self):
+        self.publication_workers("ORIG")
+        row = self.publication()["stateEvent"]["payload"]["session"]
+        messages = [self.snapshot([row]), self.publication("ORIG", state="interrupted"), self.publication("ORIG")]
+        with patch.dict(os.environ, {"MESH_GROUP_ORIGINAL": '{"session":"ORIG"}'}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
+            actual = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
+        self.assertEqual(actual["sessions"], ["ORIG", "W004"])
+        self.assertEqual(read.call_count, 3)
+
+    def test_publication_metadata_identity_mismatch_fails_before_watch(self):
+        workers = self.publication_workers("W004")
+        (self.state / "s/W004/meta.json").write_text('{"id":"OTHER","createdAt":"2026-11-13T00:00:00Z"}')
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket") as connect:
+            with self.assertRaisesRegex(RuntimeError, "another session identity"):
+                release_workers.wait_publication(self.state, "local", workers)
+        connect.assert_not_called()
+
+    def pending_publication(self, value):
+        deadline = TimeoutError("existing startup deadline")
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=connection), patch.object(release_workers, "control"), patch.object(release_workers, "session_io") as io, patch.object(evidence, "receive_control", side_effect=[self.snapshot(), value, deadline]) as read:
+            with self.assertRaises(TimeoutError) as caught:
+                release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
+        self.assertIs(caught.exception, deadline)
+        self.assertEqual(read.call_count, 3)
+        connection.settimeout.assert_not_called()
+        connection.__exit__.assert_called_once()
+        io.assert_not_called()
 
     def test_initial_snapshot_publication_avoids_wait_and_closes_watch(self):
         row = self.publication()["stateEvent"]["payload"]["session"]
@@ -289,7 +369,7 @@ class CatalogEvidenceTests(unittest.TestCase):
         socket_context.__enter__ = Mock(return_value=connection)
         socket_context.__exit__ = Mock(return_value=False)
         with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=socket_context), patch.object(release_workers, "control") as control, patch.object(evidence, "receive_control", return_value=self.snapshot([row])) as read:
-            actual = release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+            actual = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
         self.assertEqual(actual["sessions"], ["W004"])
         read.assert_called_once()
         connection.settimeout.assert_not_called()
@@ -297,7 +377,8 @@ class CatalogEvidenceTests(unittest.TestCase):
         control.assert_called_once_with(connection, {"type": "state.watch", "requestId": "cohort-publication", "watch": {"topics": ["host", "sessions"]}})
 
     def test_publication_uses_bounded_real_control_frames_and_sends_no_attach(self):
-        messages = (self.snapshot(), self.publication())
+        inactive = self.publication(state="interrupted")["stateEvent"]["payload"]["session"]
+        messages = (self.snapshot([inactive]), self.publication(state="interrupted"), self.publication())
         payloads = [json.dumps(message).encode() for message in messages]
         stream = io.BytesIO(b"".join(b"\x01" + struct.pack(">I", len(payload)) + payload for payload in payloads))
         connection = Mock()
@@ -305,7 +386,7 @@ class CatalogEvidenceTests(unittest.TestCase):
         connection.__enter__ = Mock(return_value=connection)
         connection.__exit__ = Mock(return_value=False)
         with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=connection):
-            result = release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+            result = release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
         self.assertEqual(result["sessions"], ["W004"])
         connection.sendall.assert_called_once()
         sent = connection.sendall.call_args.args[0]
@@ -313,9 +394,9 @@ class CatalogEvidenceTests(unittest.TestCase):
         self.assertEqual(json.loads(sent[5:])["type"], "state.watch")
         self.assertEqual(stream.read(), b"")
 
-    def test_publication_refusal_stream_loss_and_inactive_rows_never_satisfy_boundary(self):
+    def test_publication_refusal_stream_loss_and_removal_fail_boundary(self):
         values = [{"type": "error"}, {"type": "state.resync"}, self.snapshot() | {"more": True},
-                  self.snapshot() | {"page": 1}, self.publication(host="other"), self.publication(state="interrupted"),
+                  self.snapshot() | {"page": 1},
                   {"type": "state.event", "stateEvent": {"kind": "session.removed", "payload": {"sessionId": "W004"}}}]
         for value in values:
             self.reject_publication(value)
@@ -326,19 +407,19 @@ class CatalogEvidenceTests(unittest.TestCase):
         connection.__exit__ = Mock(return_value=False)
         with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=connection), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=[self.snapshot(), value]):
             with self.assertRaises(RuntimeError):
-                release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+                release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
         connection.__exit__.assert_called_once()
 
     def test_missing_publication_propagates_deadline_without_graded_io_or_new_timeout(self):
         deadline = TimeoutError("existing startup deadline")
         with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(release_workers, "session_io") as io, patch.object(evidence, "receive_control", side_effect=[self.snapshot(), deadline]):
             with self.assertRaises(TimeoutError) as caught:
-                release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+                release_workers.wait_publication(self.state, "local", self.publication_workers("W004"))
         self.assertIs(caught.exception, deadline)
         io.assert_not_called()
 
     def test_complete_cohort_waits_for_missing_w004_despite_other_rows_and_current_age(self):
-        workers = [{"session": "W" + format(index, "03X")} for index in range(9)]
+        workers = self.publication_workers(*("W" + format(index, "03X") for index in range(9)))
         rows = [self.publication(item["session"])["stateEvent"]["payload"]["session"] for item in workers if item["session"] != "W004"]
         messages = [self.snapshot(rows), {"type": "state.current", "stateCurrent": {"sections": {"sessions": {"ageMillis": 0}}}}, self.publication()]
         with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
@@ -392,13 +473,10 @@ class CatalogEvidenceTests(unittest.TestCase):
         self.assertEqual(retained["workers"], partial_workers)
 
     def test_publication_error_preserves_saved_worker_ownership_and_stops_owned_cohort(self):
-        directory = self.state / "s/ORIG"
-        directory.mkdir(parents=True)
-        (directory / "meta.json").write_text('{"bootId":"boot"}')
         path = self.root / "owned-cohort.json"
         failure = RuntimeError("publication refused")
 
-        def launch(_state, _config, _item, _index, _boot, _host, record, _path):
+        def launch(_state, _config, _item, _index, _host, record, _path):
             record["workers"].append({"session": "W004", "pid": 7, "shellPid": 42})
             release_workers.save(path, record)
 

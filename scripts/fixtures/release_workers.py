@@ -1,5 +1,6 @@
 """Exact archived worker cohorts shared by release proofs and installed catch-up."""
 from contextlib import closing
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -133,7 +134,7 @@ def worker_arguments(binary, reservation, directory):
     return args + ["--", "/bin/sh"]
 
 
-def start_one(state, config, item, index, boot, host, record, path):
+def start_one(state, config, item, index, host, record, path):
     binary = Path(item["binary"])
     binary.chmod(0o755)
     environment = dict(os.environ, MESH_STATE_DIR=str(state), MESH_CONFIG_DIR=str(config), MESH_HOST_ID=host)
@@ -182,8 +183,6 @@ def wait_worker(directory, process):
 def start(state, config, selected, path, publish=False):
     from fixtures import release_worker_evidence
     state, config, path = Path(state), Path(config), Path(path)
-    primary = next((state / "s").glob("*/meta.json"))
-    boot = json.loads(primary.read_bytes()).get("bootId", "")
     with closing(sqlite3.connect(state / "mesh.db")) as database:
         host = database.execute("SELECT id FROM hosts ORDER BY id LIMIT 1").fetchone()[0]
     record = {"schema": 1, "workers": [], "observations": [],
@@ -191,7 +190,7 @@ def start(state, config, selected, path, publish=False):
     save(path, record)
     try:
         for index, item in enumerate(selected):
-            start_one(state, config, item, index, boot, host, record, path)
+            start_one(state, config, item, index, host, record, path)
         if publish:
             record["initialPublication"] = wait_publication(state, host, record["workers"])
             save(path, record)
@@ -201,11 +200,28 @@ def start(state, config, selected, path, publish=False):
     return record
 
 
-def wait_publication(state, host, workers):
-    expected = {worker["session"] for worker in workers}
+def publication_time(value):
+    # The catalog stores creation time at millisecond precision.
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def publication_members(state, workers):
+    members = list(workers)
     original = os.environ.get("MESH_GROUP_ORIGINAL")
     if original:
-        expected.add(json.loads(original)["session"])
+        members.append(json.loads(original))
+    expected = {}
+    for member in members:
+        session = member["session"]
+        meta = json.loads((state / "s" / session / "meta.json").read_bytes())
+        if meta["id"] != session:
+            raise RuntimeError("cohort publication metadata has another session identity")
+        expected[session] = publication_time(meta["createdAt"])
+    return expected
+
+
+def wait_publication(state, host, workers):
+    expected = publication_members(state, workers)
     visible = set()
     # The installed caller's existing 90-second startup subprocess owns this
     # blocking watch too. Receiving a frame never renews that absolute bound.
@@ -217,7 +233,7 @@ def wait_publication(state, host, workers):
             raise RuntimeError("cohort publication snapshot has another type or host")
         for row in initial["stateSnapshot"].get("sessions", []):
             published_session(row, host, expected, visible)
-        while expected - visible:
+        while expected.keys() - visible:
             publication_event(publication_message(connection), host, expected, visible)
     return {"method": "state.watch", "host": host, "sessions": sorted(visible)}
 
@@ -231,10 +247,18 @@ def publication_message(connection):
 
 
 def published_session(row, host, expected, visible):
-    if row["id"] not in expected:
+    if row["id"] not in expected or row["hostId"] != host:
         return
-    if row["hostId"] != host or row["state"] not in ("running", "detached"):
-        raise RuntimeError("cohort publication has wrong host or inactive session " + row["id"])
+    if publication_time(row["createdAt"]) != expected[row["id"]]:
+        if row["id"] in visible:
+            raise RuntimeError("cohort publication identity changed: " + row["id"])
+        return
+    if row["state"] not in ("running", "detached"):
+        if row["id"] in visible:
+            raise RuntimeError("cohort session became inactive before publication completed: " + row["id"])
+        # A committed scan may predate worker readiness. Only a subsequent
+        # local active observation satisfies publication, under the same deadline.
+        return
     visible.add(row["id"])
 
 
