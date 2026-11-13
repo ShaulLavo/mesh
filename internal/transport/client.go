@@ -188,7 +188,7 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 				return protocol.Frame{}, err
 			}
 			if _, reconnectErr := c.connection(ref); reconnectErr != nil {
-				return protocol.Frame{}, reconnectErr
+				return protocol.Frame{}, fmt.Errorf("transport: reconnect: %w", reconnectErr)
 			}
 			continue
 		}

@@ -421,7 +421,10 @@ func (s *attachmentOutput) readError(ctx context.Context, err error, detached <-
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+	// A terminal transport failure may wrap EOF from its handshake or decoder.
+	// Preserve that failure before considering an ordinary stream closure.
+	if errors.Is(err, transport.ErrAuthentication) || errors.Is(err, transport.ErrInvalidFrame) ||
+		!errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 		return presentError("session "+s.opts.SessionID, err)
 	}
 	if s.opts.IfDetached && !s.acknowledged {

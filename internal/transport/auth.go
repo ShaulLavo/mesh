@@ -232,7 +232,7 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	if err := secure.HandshakeContext(handshakeCtx); err != nil {
 		_ = ws.CloseNow()
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
+		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: TLS handshake: %w", ErrAuthentication, err)
 	}
 	key := secure.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	peer := AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}
@@ -241,7 +241,7 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	if err := confirmAuthentication(secure, auth, server, peer); err != nil {
 		_ = ws.CloseNow()
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
+		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: peer acceptance: %w", ErrAuthentication, err)
 	}
 	if err := secure.SetDeadline(time.Time{}); err != nil {
 		_ = ws.CloseNow()

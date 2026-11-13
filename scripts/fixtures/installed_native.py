@@ -18,7 +18,7 @@ import uuid
 from xml.sax.saxutils import escape
 from pathlib import Path
 
-from fixtures import native_services, installed_routes, installed_listener_evidence, installed_clock
+from fixtures import native_services, installed_routes, installed_listener_evidence, installed_attachment_evidence, installed_clock
 
 REPO = Path(__file__).resolve().parents[2]
 HELPERS = REPO / "integration" / "helpers"
@@ -415,7 +415,7 @@ class Installation:
         temporary.write_text(token)
         start = len(self.terminal.drain())
         temporary.replace(self.challenge)
-        self.terminal.expect("__RESUMED__" + token + "__", since=start)
+        installed_attachment_evidence.expect(self, token, start)
 
     def require_stream_closed(self):
         for _ in range(256):
@@ -556,6 +556,7 @@ def retain_logs(root, output, name):
     if route.exists():
         shutil.copy2(route, output / (name + "-route-observation.json"))
     installed_listener_evidence.retain(root, output, name)
+    installed_attachment_evidence.retain(root, output, name)
     for filename in ("daemon.log", "daemon.err"):
         path = root / filename
         if path.is_file():
