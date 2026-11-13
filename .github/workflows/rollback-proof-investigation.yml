@@ -1,106 +1,26 @@
-name: Installed clock calibration
+name: ARM64 chain-none recovery
 
 on:
   workflow_dispatch:
     inputs:
-      producer_run:
-        description: 'Existing complete reviewed native preparation run'
+      harness_source:
+        description: 'Exact reviewed harness source SHA'
         required: true
         type: string
-      producer_source:
-        description: 'Exact recorded preparation source SHA'
-        required: true
-        type: string
-      producer_prefix:
-        description: 'Exact native preparation artifact prefix'
-        required: true
-        type: string
-      measurement_scope:
-        description: 'Measure full cohorts/support, or only the four missing consumer recovery slots'
-        default: all
-        type: choice
-        options: [all, cohort, prepared, support, consumer-recovery]
-      catalog_evidence:
-        description: 'Enable only after composing the reviewed passive catalog source'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
   actions: read
 
-concurrency:
-  group: installed-clock-calibration-${{ github.run_id }}
-  cancel-in-progress: false
-
 jobs:
-  measure:
-    if: inputs.measurement_scope != 'support' && inputs.measurement_scope != 'consumer-recovery'
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
-      calibration_only: true
-      calibration_scope: ${{ inputs.measurement_scope == 'prepared' && 'prepared' || 'cohort' }}
-      catalog_evidence: ${{ inputs.catalog_evidence }}
-
-  support:
-    if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [adoption-all, adoption-interrupt, fresh]
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      calibration_only: true
-      calibration_support: ${{ matrix.profile }}
-
-  recovery-inputs:
-    if: inputs.measurement_scope == 'consumer-recovery'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    steps:
-      - name: Require the original complete producer identity for recovery
-        env:
-          PRODUCER_RUN: ${{ inputs.producer_run }}
-          PRODUCER_SOURCE: ${{ inputs.producer_source }}
-          PRODUCER_PREFIX: ${{ inputs.producer_prefix }}
-        run: |
-          set -euo pipefail
-          test "$PRODUCER_RUN" = 43356291036
-          test "$PRODUCER_SOURCE" = 3097dc167bcdcadc8a561fb0f443253b74bfd025
-          test "$PRODUCER_PREFIX" = update-native
-
   recovery:
-    needs: recovery-inputs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            mode: chain
-            profile: final
-          - platform: linux/arm64
-            mode: chain
-            profile: none
-          - platform: linux/arm64
-            mode: waypoint
-            profile: final
-          - platform: darwin/arm64
-            mode: chain
-            profile: none
     uses: ./.github/workflows/installed-prepared.yml
     with:
-      native_platform: ${{ matrix.platform }}
-      mode: ${{ matrix.mode }}
-      measurement_profile: ${{ matrix.profile }}
-      harness_source: ${{ github.sha }}
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
+      native_platform: linux/arm64
+      mode: chain
+      measurement_profile: none
+      harness_source: ${{ inputs.harness_source }}
+      worker_artifact_prefix: update-native
+      worker_artifact_run: 43356291036
+      worker_artifact_source: 3097dc167bcdcadc8a561fb0f443253b74bfd025
       calibration_only: true
