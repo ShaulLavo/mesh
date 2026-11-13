@@ -1,0 +1,505 @@
+{
+  "group": {
+    "imageBytes": 934547328,
+    "index": 1,
+    "members": [
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "afd4aa7e5fb3c28a7b7cf66538a16f4333c86f25bc0c9f0b9023059ffa72c5ce",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "6d673155192fe1d8b63596f893a056f65adafc1d47e840f9e297f21f0a0fd378"
+        },
+        "binary": "release-v0.1.210/mesh",
+        "commit": "ef208d8d73db9d70d4bc63901a0a99e0b4385fd6",
+        "imageBytes": 29339772,
+        "protocol": 1,
+        "version": "v0.1.210"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "2c91334eae167b91c1b66ed6725121c75b162f0b0090c21ff1a75f5f5b4fc741",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "e16200c409a2a8a8e68fe96e4642fb086592a0da68ad6adaf32043b1ab7f990b"
+        },
+        "binary": "release-v0.1.211/mesh",
+        "commit": "a6a76bb9f09e137b35470ad79112b128d69bab76",
+        "imageBytes": 29433980,
+        "protocol": 1,
+        "version": "v0.1.211"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "9b8d946702cf6f2dadfa31d7f42162a703aabd204374023f513031cb9b4edb2a",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "e353ba527ebc2d91fd5db51aaecfd1587a0e1ee2c15b3bd6df5f6a8dbf1a678d"
+        },
+        "binary": "release-v0.1.212/mesh",
+        "commit": "a352b6616c6f852c16c1117fc48d5496b26db9b2",
+        "imageBytes": 29466748,
+        "protocol": 1,
+        "version": "v0.1.212"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "26d8a38015d3121f5677dcca566ea14d464caa14e97cf41dcfc40b67bc93f953",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "a66c437dfff722ca2a187e146772fa9b2f2b47686726114cea6def6589ea5bec"
+        },
+        "binary": "release-v0.1.213/mesh",
+        "commit": "e43b330d623f7272861c225c7a2d708d8580a574",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.213"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "cc17931ca9cc90c832e505333c36a595d3966d0baee3d9ad2e64ba57bb7b48b7",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "c715b55de776f24808b5d6861e216dbcdfb8a7d3b433ebf7375ecc475196d909"
+        },
+        "binary": "release-v0.1.214/mesh",
+        "commit": "c809b78f642ca0adb0db54fde5be16bf942c32ad",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.214"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "16005deec6fd1249ac54d6fa667fdd3a5d446faa62c3f09c429919beadf774b7",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "4a579bd718e7c2ba2bc3a77a287a042588e941d919ef6e643a06e229bd732903"
+        },
+        "binary": "release-v0.1.215/mesh",
+        "commit": "7201b53b45282d3f765dd64f40a189770b23b327",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.215"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "714d8897e1e9234cebb529a5da2eaa8a00ab7cbe6670649164327824c4210c6d",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "a866d31e4a66922135734ff1eb791e2227d2f5ad2f2dff7d4d5f526ff1f832c8"
+        },
+        "binary": "release-v0.1.216/mesh",
+        "commit": "47436481bb19637460cb291a19ff4dbb8f505441",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.216"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "682b42118ab7f22704cc4d7f301a2fec04bd606835e6c9dd6bf49a425044dca3",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "2f2d0386543c30a27f8d3e30d8e8dcd80b81dfb28884dfe5627b8131e884b977"
+        },
+        "binary": "release-v0.1.217/mesh",
+        "commit": "f1a7af184c9fc3124a556de3be83c6d78abad038",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.217"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "54e8baea5adcdda2357692227bba72d337c45e8c7ab9d078342140bcd3264c1d",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "627e141ae54e3008ebd4637babbffb580b5675401307d65f57ab2342c516f07c"
+        },
+        "binary": "release-v0.1.218/mesh",
+        "commit": "8694302a3e82aef07991c9b6cb6cdec1c4b94044",
+        "imageBytes": 29479036,
+        "protocol": 1,
+        "version": "v0.1.218"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "eb3d8b8a6ca19eee7a3e5fa2faac7dbd5774b0dec942313696ef42dc31bb9cd8",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "4884da74c53a7681cae29251dc0ee1924a76076e520c698d6684bededb2652db"
+        },
+        "binary": "release-v0.1.219/mesh",
+        "commit": "6ecbfc7a604061826b78d851ff7d6b445ba74db9",
+        "imageBytes": 29479036,
+        "protocol": 1,
+        "version": "v0.1.219"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "1b304d421365201cbc61371e1c95558f0411c05a73ea812f1955559557dd4031",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "94298ce5de4d438bf910f4c63aab768327fabb2027c6bd394becd284cb983d65"
+        },
+        "binary": "release-v0.1.220/mesh",
+        "commit": "c325583963c368dea27440153284519b47b671d8",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.220"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "ccfedfc24cffcfcc74b0a32096860d859ef204af3ee2f85e44ac0aea79430b24",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "09f5684179da1c3c0e8059566c97cffeb3de2c9600f60191d582f7af8bafc9a0"
+        },
+        "binary": "release-v0.1.221/mesh",
+        "commit": "f29fce16d1f1907a896f0f3eccc747e455ff1229",
+        "imageBytes": 29474940,
+        "protocol": 1,
+        "version": "v0.1.221"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "04024bb8cbe965c6a833ce9706faf6d4eef57caf412f35b2540bc760b54294d1",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "62ab1669efc05e39ed388c77c4143a3b61b2879be18064f025e865767d979cf2"
+        },
+        "binary": "release-v0.1.222/mesh",
+        "commit": "122e3e16c3dced13fb6675fe550f52692de4d8dc",
+        "imageBytes": 29491324,
+        "protocol": 1,
+        "version": "v0.1.222"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "a6490289b3411d02459a8359d1b59550aabe346f2b2c4d01eb98e6d54fafbc43",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "14da33e474e3dde351ad4c9e2e91f527681682eb733691c4eff7686a11948528"
+        },
+        "binary": "release-v0.1.223/mesh",
+        "commit": "ea3c27c77346f0ee6e9e0c06f21c905879d3c61c",
+        "imageBytes": 29491324,
+        "protocol": 1,
+        "version": "v0.1.223"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "6108b98d519a3580aa795ce09225dd2b9b3ffce28669906a17c3ec7f041cc773",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "7ceb7e5ab6cab00d0a441eb5bddade7db900d942632ba602d9d7c9a375b4e546"
+        },
+        "binary": "release-v0.1.224/mesh",
+        "commit": "eee0b882a94457b400a4b207e4a7be5ccbdfeb98",
+        "imageBytes": 29491324,
+        "protocol": 1,
+        "version": "v0.1.224"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "d409303e23267ef428c6da58d60a7ae749f8c4012f7e061ce8e7427abe232b42",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "b5cd046dd2cb6f028614da0e542b83155a88b575a312e4b87048ffe658caf88c"
+        },
+        "binary": "release-v0.1.225/mesh",
+        "commit": "e515c87f6b898151e1dca2785b6fd9dbf5675820",
+        "imageBytes": 29491324,
+        "protocol": 1,
+        "version": "v0.1.225"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "ef42e545cdec2e292b257a609016267213dd517cb75f73d64f3e486bbb952ef5",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "07e59b7868333cc082e0156e39aabafc57d55fdb98002ef7650148226cc8b31d"
+        },
+        "binary": "release-v0.1.226/mesh",
+        "commit": "4d9551447bb8356ea96923582c6a7fc9a27fdccf",
+        "imageBytes": 29507708,
+        "protocol": 1,
+        "version": "v0.1.226"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "d18e8606607f16895274daf7cf86062d900d01228bcd66e792bec74ba8965026",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "b4eb6ec06f7b3c924f618462a49c64fd29b769743b612e858652ef63467beefe"
+        },
+        "binary": "release-v0.1.227/mesh",
+        "commit": "e4519be45c05e11e6202788e7ac5e947e83d7959",
+        "imageBytes": 29180028,
+        "protocol": 1,
+        "version": "v0.1.227"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "9e25b598fd027fc5383fb0e2c42bfd12e6753d4fdd8a96d7ccdb1cc1c903ad62",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "a3ccb32b9446edc80138831c6a776193784e13105d8625aa685c380e41d3e177"
+        },
+        "binary": "release-v0.1.228/mesh",
+        "commit": "4bd1d2b09dcb9849856783c2be8f04fa00d42a5a",
+        "imageBytes": 29180028,
+        "protocol": 1,
+        "version": "v0.1.228"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "ffcc7c8d1d379684f52bead622ab7c95014247f7d8a8fd77f4aae84bb820daaf",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "c26817a788fc54e0e2a960ea1c130701a7a11ccf2b0dcb3fa460faba1bfbca15"
+        },
+        "binary": "release-v0.1.229/mesh",
+        "commit": "99d06899902d932e240c0e5b153e7964028d5b62",
+        "imageBytes": 29208700,
+        "protocol": 1,
+        "version": "v0.1.229"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "8f05c18ef5e87108cb466b9c23dc9b335887c7befaa430df5e9d0cb78cf220dd",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "64cac9ce31031dd88c1fa35660e501de965f3e82c4bec9fdff4bf9415725b8e3"
+        },
+        "binary": "release-v0.1.230/mesh",
+        "commit": "03d95203a207154f14709250f0210e6b0ba93b0a",
+        "imageBytes": 29208700,
+        "protocol": 1,
+        "version": "v0.1.230"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "18d1cb5206e48f04018838971234c652c909114503326f26d66f220349c03b16",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "c64b4ab04fb3bde772083affaa9c78e4af08f72ac9f89d96a84a0cb5b01b5f47"
+        },
+        "binary": "release-v0.1.231/mesh",
+        "commit": "95cd86e7e89c89a06b2a33a80edaeb6dd8ea9650",
+        "imageBytes": 29208700,
+        "protocol": 1,
+        "version": "v0.1.231"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "a218e84a4635b26b6731bd4ab778306463e2e4116af3d783e921878a5c33daf8",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "eefe3660f7892c8c2e3a1c84df2b1192e14ea2e28a919e8a95b8c9f04863cf36"
+        },
+        "binary": "release-v0.1.232/mesh",
+        "commit": "ac27ef7ba7a7b7f003f3a510f212bd8f505dafb1",
+        "imageBytes": 28704892,
+        "protocol": 1,
+        "version": "v0.1.232"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "da8b1bc07b82bc9908bf3219dbb6d5a8590e8efe5889fdf22fbd6f4d090d78a2",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "2bf1a5e747da067aac196c9cd88161276dcaf1e03383a22d2a5692e334a6de7d"
+        },
+        "binary": "release-v0.1.233/mesh",
+        "commit": "42fb870037702659ca9a8c3c5045b9b501154dc3",
+        "imageBytes": 28704892,
+        "protocol": 1,
+        "version": "v0.1.233"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "ded47cbabd240d21a64e7319c815fe0d9d837e53cd129cc63db62f978abc683c",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "c06644f67d33216c3f68e59e17e4e31737d9963cdafd0ae925a2e85874b585d5"
+        },
+        "binary": "release-v0.1.234/mesh",
+        "commit": "cd256f08aedb50f1a08a6b3438665d4699512464",
+        "imageBytes": 28704892,
+        "protocol": 1,
+        "version": "v0.1.234"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "6c8b4a3ce73494e4933921d764b2e6441bd1d09b2ed2c988a157dab33ec6b7a2",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "d5b1438764373d5de44abd3ba4be9936462f647479c1da3053692e7659ce6a0f"
+        },
+        "binary": "release-v0.1.235/mesh",
+        "commit": "10d6f5de235c96de1bd29f65287ab5d51969ce66",
+        "imageBytes": 28704892,
+        "protocol": 1,
+        "version": "v0.1.235"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "708ac630d9f45ffef21d3dee32bc8254c650cd953f6afcb909138dbe9c6bcc91",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "6c9f78485cec99cedb81beef5c3184a86d6760ad682472b974c91c03a7a3d6dd"
+        },
+        "binary": "release-v0.1.236/mesh",
+        "commit": "d9e3aa2a86e47377a6e2de9ee41961aeb38926ec",
+        "imageBytes": 28721276,
+        "protocol": 1,
+        "version": "v0.1.236"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "d3c6eb25562d00ccacdfdace412fcfc43429557c910ca5fef50833bdf517b315",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "a890520c245f005d17f6d5b43be729b13f6d84b1b7c0b1ea6738acce67778968"
+        },
+        "binary": "release-v0.1.237/mesh",
+        "commit": "bfa4697f0f688d22daa6bb44160fc06119d87b8b",
+        "imageBytes": 28721276,
+        "protocol": 1,
+        "version": "v0.1.237"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "8cd530272ec30b7a2f53818f7c1c63b7aa7abb65e1cbd4a10b85ad5a101364b7",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "5e6bcc96966b7ae460d958cbacf8d40aadaa55db321f9ea5138d5c4bae16dde9"
+        },
+        "binary": "release-v0.1.238/mesh",
+        "commit": "613b14064585282f4b7e06ae286906d3efc2959a",
+        "imageBytes": 28721276,
+        "protocol": 1,
+        "version": "v0.1.238"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "7709496ef4ee5d3b4ba17e6d11b02016312872c2143c5fe83a5dfeeec10499f4",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "bbdb4efe2f252061652cfbe3494129a27e353bb27e9358efbd8c0e842f223e19"
+        },
+        "binary": "release-v0.1.239/mesh",
+        "commit": "755622ee3098b34be6a3de997d710958f0b9d2ed",
+        "imageBytes": 28721276,
+        "protocol": 1,
+        "version": "v0.1.239"
+      },
+      {
+        "artifact": {
+          "archive": "mesh_linux_amd64.tar.gz",
+          "binarySha256": "51aaa562c882a0613d2c4c8c20d56e1297f42528c9439d0dd5b57782ae4363e1",
+          "platform": {
+            "arch": "amd64",
+            "os": "linux"
+          },
+          "sha256": "3f21f3c02631cc9802cf04791c4bc1930ccf9d62b66e8042da48bfdd8c11979a"
+        },
+        "binary": "release-v0.1.240/mesh",
+        "commit": "e83c7ad111da671186ab4161000d0ce694d2b706",
+        "imageBytes": 28745852,
+        "protocol": 1,
+        "version": "v0.1.240"
+      }
+    ]
+  },
+  "originalBytes": 29114492
+}

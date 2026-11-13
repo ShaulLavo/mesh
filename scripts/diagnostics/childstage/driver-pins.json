@@ -1,0 +1,32 @@
+{
+  "archiveBytes": 1448365115,
+  "archiveSha256": "d08006359a0aba92ec3997a7183e6118d2008b8afb10a594453cb0bbb3123aad",
+  "artifactId": 13998787721,
+  "artifactName": "update-native-linux-amd64",
+  "caller": "e3dc8899a4aa58b32cf69ebfcb5e19209759498b",
+  "candidateDigest": "342a9c0b3f921cc459d1dbf08268c8977e05c654b65a1408dba207f8dcc362b1",
+  "files": {
+    "candidate-reader.json": {
+      "bytes": 319,
+      "sha256": "22fde0075eb2e621d80b80cbb7fc14f81279e1a1cbfc801bd5db4c945420e55b"
+    },
+    "preparation.json": {
+      "bytes": 493,
+      "sha256": "779fd5a61aa90f9d0746d09c5f6bda8b268f39e35ce8b40db88931ad948a9ca8"
+    },
+    "worker-registry.json": {
+      "bytes": 48309,
+      "sha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5"
+    }
+  },
+  "maxEntries": 4096,
+  "maxExpandedBytes": 5368709120,
+  "nativeSource": "df0bb8df8e1bcb7d6eafe91b2906707529c390b4",
+  "observerSource": "3ff0ec60521bac39d022e230dee95682fdb6b6e8",
+  "originalSelectionSha256": "a9afd4ac03f9c30a01d0cd949f3e252a2124a37e42ffb42590f2f830a37b01fa",
+  "producerRun": 43338129669,
+  "selectionSha256": "e136b856458bc07c3df9e925550fe1f8f3b6c8dce4d5e36c38f9fc785043f530",
+  "sourceDigest": "ebe0a9046e92f2a4aa39afb89c6b7ab3e0315e9be3e408a441e87f9ab0858a9c",
+  "sourceVersion": "v0.1.259",
+  "workerDigest": "d409303e23267ef428c6da58d60a7ae749f8c4012f7e061ce8e7427abe232b42"
+}
