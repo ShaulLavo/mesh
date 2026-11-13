@@ -313,7 +313,7 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
     if (signed_chain or ordered_hosts) and registry is None:
         raise RuntimeError("signed chain requires the authoritative exact worker cohort")
-    releases = installed_releases.Releases(root, native, output)
+    releases = installed_releases.Releases(root, native, output, manifest_schemas=(1, 2) if format_waypoint else (1,))
     if registry:
         releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
         releases.probe = probe

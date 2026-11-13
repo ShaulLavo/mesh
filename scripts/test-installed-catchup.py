@@ -19,11 +19,12 @@ import threading
 import subprocess
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
 from fixtures import installed_review_controls, installed_listener_controls
 from fixtures import installed_releases, release_transition
+from fixtures import installed_adoption
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -37,6 +38,101 @@ def maximum_depth(node, depth):
     elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.AsyncWith, ast.AsyncFor)):
         depth += 1
     return max((maximum_depth(child, depth) for child in ast.iter_child_nodes(node)), default=depth)
+
+
+class ExporterFormatTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="exporter-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def test_future_overlay_changes_only_manifest_schema_guard(self):
+        replacements = installed_releases.future_manifest_overlay(self.root)
+        source = installed_releases.REPO / "internal/release/release.go"
+        expected = source.read_text().replace("if m.Schema != ManifestSchema {",
+            "if m.Schema != ManifestSchema && m.Schema != 2 {", 1)
+        self.assertEqual(list(replacements), [str(source)])
+        self.assertEqual(Path(replacements[str(source)]).read_text(), expected)
+        self.assertFalse((self.root / "reader-types.go").exists())
+
+    def test_future_overlay_source_drift_fails_closed(self):
+        with patch.object(Path, "read_text", return_value="changed validator"):
+            with self.assertRaisesRegex(RuntimeError, "exactly one"):
+                installed_releases.future_manifest_overlay(self.root)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_explicit_exporter_selection_precedes_launch(self):
+        for waypoint, schemas in ((False, (1,)), (True, (1, 2))):
+            self.check_selection(waypoint, schemas)
+
+    def check_selection(self, waypoint, schemas):
+        with patch.object(installed_releases, "Releases") as factory, patch.object(installed_adoption, "run_prepared"), \
+                patch.object(installed_adoption, "retain_producer_logs"):
+            installed_adoption.run(self.root, self.root, "linux/amd64", None, format_waypoint=waypoint)
+        factory.assert_called_once_with(self.root, "linux/amd64", self.root, manifest_schemas=schemas)
+        factory.return_value.start_signer.assert_called_once_with()
+        factory.return_value.close.assert_called_once_with()
+
+    def test_unknown_exporter_capability_fails_before_build(self):
+        with self.assertRaisesRegex(ValueError, "manifest capability"):
+            installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(2,))
+
+    def test_exporter_build_selects_only_manifest_overlay_and_records_identity(self):
+        for schemas in ((1,), (1, 2)):
+            self.check_exporter_build(schemas)
+
+    def check_exporter_build(self, schemas):
+        root = self.root / str(len(schemas))
+        root.mkdir()
+        releases = installed_releases.Releases(root, "linux/amd64", root, manifest_schemas=schemas)
+        self.addCleanup(releases.close)
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=installed_releases.REPO, text=True).strip()
+        with patch.object(installed_releases.subprocess, "run") as run, \
+                patch.object(installed_releases.subprocess, "check_output", return_value=source), \
+                patch.object(installed_releases.subprocess, "Popen") as launch, \
+                patch.object(native_services, "wait_for"):
+            releases.start_signer()
+        command = run.call_args_list[0].args[0]
+        self.assertEqual("-overlay" in command, schemas == (1, 2))
+        replacements = json.loads((root / "exporter-overlay.json").read_text())["Replace"]
+        self.assertEqual(len(replacements), len(schemas) - 1)
+        record = json.loads((root / "fixture-exporter.json").read_text())
+        self.assertEqual(record["manifestSchemas"], list(schemas))
+        self.assertEqual(record["harnessSource"], source)
+        self.assertEqual(record["overlaySha256"], installed_releases.digest((root / "exporter-overlay.json").read_bytes()))
+        launch.assert_called_once()
+        self.assertIn("-test.timeout=600s", launch.call_args.args[0])
+        with self.assertRaisesRegex(RuntimeError, "already launched"):
+            releases.start_signer()
+
+    def test_exporter_build_failure_never_launches_or_falls_back(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(1, 2))
+        self.addCleanup(releases.close)
+        with patch.object(installed_releases.subprocess, "run", side_effect=RuntimeError("build failed")) as run, \
+                patch.object(installed_releases.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(RuntimeError, "build failed"):
+                releases.start_signer()
+        run.assert_called_once()
+        launch.assert_not_called()
+
+    def test_waypoint_exporter_failure_still_closes_without_preparation(self):
+        with patch.object(installed_releases, "Releases") as factory, \
+                patch.object(installed_adoption, "run_prepared") as prepare, \
+                patch.object(installed_adoption, "retain_producer_logs"):
+            factory.return_value.start_signer.side_effect = RuntimeError("exporter failed")
+            with self.assertRaisesRegex(RuntimeError, "exporter failed"):
+                installed_adoption.run(self.root, self.root, "linux/amd64", None, format_waypoint=True)
+        factory.return_value.start_signer.assert_called_once_with()
+        factory.return_value.close.assert_called_once_with()
+        prepare.assert_not_called()
+
+    def test_failed_export_never_reads_stale_ledger(self):
+        case = SimpleNamespace(root=self.root, state=self.root / "state", origin=SimpleNamespace())
+        (self.root / "chain-ledger.json").write_text('{"entries":[]}')
+        case.origin.ledger = Mock(side_effect=RuntimeError("empty exporter reply"))
+        with patch.object(Path, "read_text", side_effect=AssertionError("stale ledger consumed")):
+            with self.assertRaisesRegex(RuntimeError, "empty exporter reply"):
+                installed_chain.read_ledger(case)
 
 
 class SocketPathsTest(unittest.TestCase):
