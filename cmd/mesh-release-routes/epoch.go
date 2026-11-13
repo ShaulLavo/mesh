@@ -27,7 +27,7 @@ func validateEpoch(directory string, input publicationInput, history []published
 	if err != nil {
 		return fmt.Errorf("publisher: prior epoch root: %w", err)
 	}
-	if root.Epoch != input.Epoch-1 || root.Head.Tag != input.Waypoint {
+	if root.Epoch != input.Epoch-1 || root.Head.Tag != input.Waypoint || root.Head.Tag != input.PreviousRoot.Tag {
 		return errors.New("publisher: previous root does not name the prior epoch waypoint")
 	}
 	return validateWaypoint(input, history, root)
