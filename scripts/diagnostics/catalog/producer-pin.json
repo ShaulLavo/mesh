@@ -1,0 +1,25 @@
+{
+  "run": 43356291036,
+  "source": "3097dc167bcdcadc8a561fb0f443253b74bfd025",
+  "runHead": "c0c899eea10a9c4f5916b0b629b736455d1d5a92",
+  "artifacts": {
+    "linux-amd64": {
+      "id": 14006886865,
+      "name": "update-native-linux-amd64",
+      "size": 1448365133,
+      "digest": "sha256:f3746b7787bc3578ffebbbac404c2c58fff10dd83e4706e84a6285734d814d49"
+    },
+    "linux-arm64": {
+      "id": 14005854064,
+      "name": "update-native-linux-arm64",
+      "size": 1339057840,
+      "digest": "sha256:ab7e3201e31ca0e8953e0e693a428b4b7673ea6dd17d4a98427adca210f331b9"
+    },
+    "darwin-arm64": {
+      "id": 14006572137,
+      "name": "update-native-darwin-arm64",
+      "size": 1393707796,
+      "digest": "sha256:849acbd439c3da44f1bde72738f6b76d1c68e2225204bb56c264bc2438fc7e5b"
+    }
+  }
+}
