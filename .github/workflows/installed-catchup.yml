@@ -43,6 +43,10 @@ on:
         type: boolean
         default: false
         description: 'Measurement-only full cohort; never installed acceptance'
+      calibration_support:
+        type: string
+        default: ''
+        description: 'Explicit diagnostic support selection: adoption-all, adoption-interrupt or fresh; requires calibration_only'
       catalog_evidence:
         type: boolean
         default: false
@@ -79,6 +83,10 @@ on:
       - 'scripts/fixtures/installed_fresh.py'
       - 'scripts/fixtures/installed_routes.py'
       - 'scripts/fixtures/installed_storage.py'
+      - 'scripts/fixtures/installed_clock.py'
+      - 'scripts/fixtures/installed_budgets.py'
+      - 'scripts/test-installed-budgets.py'
+      - '.internal/fixtures/installed-clock/**'
       - 'scripts/fixtures/installed_publication.py'
       - 'scripts/fixtures/publication_origin.py'
       - 'internal/update/installed_fixture_test.go'
@@ -102,6 +110,46 @@ defaults:
     shell: bash
 
 jobs:
+  frozen-budgets:
+    if: github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft
+    name: Require independently approved fixture budgets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      minutes: ${{ steps.budgets.outputs.minutes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Select reviewed per-platform and profile job admissions
+        id: budgets
+        env:
+          CALIBRATION_ONLY: ${{ inputs.calibration_only }}
+          CALIBRATION_SUPPORT: ${{ inputs.calibration_support }}
+          PUBLICATION_ONLY: ${{ inputs.publication_only }}
+          HAS_COHORT: ${{ inputs.worker_artifact_prefix != '' }}
+          CATALOG_EVIDENCE: ${{ inputs.catalog_evidence || !inputs.calibration_only }}
+          PAIRED_SCENARIO: ${{ github.workflow == 'Installed catch-up' && 'interrupt' || '' }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          if [[ -n $CALIBRATION_SUPPORT ]]; then
+            test "$CALIBRATION_ONLY" = true
+            case "$CALIBRATION_SUPPORT" in
+              adoption-all|adoption-interrupt|fresh) ;;
+              *) echo 'Unknown diagnostic support profile' >&2; exit 2 ;;
+            esac
+          fi
+          profiles=()
+          if [[ $CALIBRATION_ONLY != true && $PUBLICATION_ONLY != true ]]; then
+            profiles+=(--support)
+            if [[ $HAS_COHORT == true ]]; then profiles+=(--cohort); fi
+            if [[ -n $PAIRED_SCENARIO ]]; then profiles+=(--adoption-scenario "$PAIRED_SCENARIO"); fi
+            if [[ $CATALOG_EVIDENCE == true ]]; then profiles+=(--catalog-evidence); fi
+          fi
+          minutes=$(PYTHONPATH=scripts python3 scripts/fixtures/installed_budgets.py workflow-budgets "${profiles[@]}")
+          printf 'minutes=%s\n' "$minutes" >> "$GITHUB_OUTPUT"
+
   ordered-manager-domains:
     if: inputs.calibration_only != true && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Real managers for three disposable hosts
@@ -233,21 +281,30 @@ jobs:
           retention-days: 7
 
   native-adoption:
-    if: inputs.calibration_only != true && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    needs: frozen-budgets
+    if: (inputs.calibration_only != true || startsWith(inputs.calibration_support, 'adoption-')) && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Installed native adoption (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-adoption-{1}', matrix.key, github.workflow == 'Installed catch-up' && 'interrupt' || 'all')] }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
+            key: linux-amd64
             runner: ubuntu-24.04
           - platform: linux/arm64
+            key: linux-arm64
             runner: ubuntu-24.04-arm
           - platform: darwin/arm64
+            key: darwin-arm64
             runner: macos-15
     steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-adoption-{1}', matrix.key, github.workflow == 'Installed catch-up' && 'interrupt' || 'all')] }}
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
@@ -275,12 +332,19 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
-          PAIRED_SCENARIO: ${{ github.workflow == 'Installed catch-up' && 'interrupt' || '' }}
+          PAIRED_SCENARIO: ${{ (inputs.calibration_support == 'adoption-interrupt' || (inputs.calibration_only != true && github.workflow == 'Installed catch-up')) && 'interrupt' || '' }}
+          CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
         run: |
           extra=()
           if [[ -n $PAIRED_SCENARIO ]]; then extra=(--scenario "$PAIRED_SCENARIO"); fi
+          clock=(--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
+          if [[ $CLOCK_CALIBRATION == true ]]; then
+            clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
+              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+          fi
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-catchup/pairs" \
-            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" "${extra[@]}"
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" \
+            "${clock[@]}" "${extra[@]}"
       - name: Remove the owned helper preparation tool after installed teardown
         if: always()
         run: |
@@ -294,23 +358,35 @@ jobs:
           name: installed-catchup-${{ strategy.job-index }}
           path: ${{ runner.temp }}/installed-catchup
           retention-days: 7
+      - name: Record external overhead through upload without claiming acceptance
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/installed-catchup/pairs/fixture-clock.json"
 
   fresh-managed:
-    if: inputs.calibration_only != true && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    needs: frozen-budgets
+    if: (inputs.calibration_only != true || inputs.calibration_support == 'fresh') && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Fresh native automatic first start (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux/amd64
+            key: linux-amd64
             runner: ubuntu-24.04
           - platform: linux/arm64
+            key: linux-arm64
             runner: ubuntu-24.04-arm
           - platform: darwin/arm64
+            key: darwin-arm64
             runner: macos-15
     steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
@@ -326,7 +402,15 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed
+          CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
+        run: |
+          clock=(--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
+          if [[ $CLOCK_CALIBRATION == true ]]; then
+            clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
+              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+          fi
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed \
+            "${clock[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -335,12 +419,16 @@ jobs:
             ${{ runner.temp }}/fresh-control
             ${{ runner.temp }}/fresh-proof
           retention-days: 7
+      - name: Record external overhead through upload without claiming acceptance
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/fresh-proof/fixture-clock.json"
 
   signed-cohort-chain:
-    if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    needs: frozen-budgets
+    if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only && inputs.calibration_support == '' && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Signed native cohort (${{ matrix.platform }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.calibration_only && 30 || 15 }}
+    timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-{1}{2}', matrix.key, matrix.mode, (inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '-catalog' || '')] }}
     strategy:
       fail-fast: false
       matrix:
@@ -367,9 +455,9 @@ jobs:
     steps:
       - name: Record original job clock before checkout and setup
         env:
-          FIXTURE_JOB_SECONDS: ${{ inputs.calibration_only && '1800' || '900' }}
+          FIXTURE_JOB_MINUTES: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-{1}{2}', matrix.key, matrix.mode, (inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '-catalog' || '')] }}
         run: |
-          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_SECONDS"])*1000000000},open(p,"x"))'
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
@@ -424,7 +512,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
           MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input.noindex
           CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
-          MESH_CATALOG_EVIDENCE: ${{ inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '1' || '0' }}
+          MESH_CATALOG_EVIDENCE: ${{ (inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '1' || '0' }}
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/native-worker-input.noindex"
@@ -437,7 +525,7 @@ jobs:
           if [[ $PROOF_MODE == oldest ]]; then mode=(); fi
           if [[ $PROOF_MODE == waypoint ]]; then mode=(--format-waypoint); fi
           if [[ $PROOF_MODE == order ]]; then mode=(--ordered-hosts); fi
-          clock=()
+          clock=(--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
           if [[ $CLOCK_CALIBRATION == true ]]; then
             clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
               --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)

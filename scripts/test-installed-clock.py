@@ -432,8 +432,8 @@ class ClockTest(unittest.TestCase):
         self.assertIn("mode: [oldest, chain, waypoint, order]", reusable)
         self.assertIn("timeout-minutes: 15", reusable)
         self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
-        self.assertIn("timeout-minutes: ${{ inputs.calibration_only && 30 || 15 }}", reusable)
-        self.assertIn("inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
+        self.assertIn("timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)", reusable)
+        self.assertIn("(inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
 
     def test_cleanup_alarm_cannot_launch_another_action_after_absolute_expiry(self):
         deadline = self.now() + clocks.SECOND

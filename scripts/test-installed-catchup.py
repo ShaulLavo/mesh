@@ -864,7 +864,7 @@ class PublicationModeTest(unittest.TestCase):
     def arguments(self, version, source):
         return SimpleNamespace(publication_version=version, publication_source=source, native_helper=None,
                                fresh_managed=False, installed_adoption=False, acquire_baselines=False,
-                               worker_registry=None, worker_probe=None)
+                               worker_registry=None, worker_probe=None, export_prepared=None, prepared_releases=None)
 
     def test_explicit_empty_publication_inputs_fail_without_consumption(self):
         for version, source in (("", ""), ("v0.1.1", ""), ("", "a" * 40), (None, "a" * 40)):

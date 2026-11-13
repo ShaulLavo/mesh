@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from fixtures import fleet_baselines, installed_paths, native_services, installed_clock
+from fixtures import fleet_baselines, installed_paths, native_services, installed_clock, installed_budgets
 
 
 def interrupted(number, _frame):
@@ -31,11 +31,17 @@ def main():
     parser.add_argument("--format-waypoint", action="store_true", help="cross an actual incompatible manifest schema through an old-format waypoint")
     parser.add_argument("--ordered-hosts", action="store_true", help="three disposable native-manager hosts with real predecessor policy")
     parser.add_argument("--fresh-managed", action="store_true", help="actual fresh helper preparation and missing-policy automatic first start")
+    parser.add_argument("--export-prepared", type=Path, help="export immutable chain/waypoint releases after complete preparation")
+    parser.add_argument("--prepared-releases", type=Path, help="consume a verified immutable prepared-release bundle")
+    parser.add_argument("--installed-slice", type=Path, help="exact reviewed profile/group and reader selection for a prepared consumer")
     parser.add_argument("--scenario", choices=("adopt", "rollback", "helper", "initial", "interrupt"), help="one adoption profile; the default requires all profiles")
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
     installed_clock.arguments(parser)
+    parser.add_argument("--clock-plan-index", type=Path, default=installed_budgets.INDEX,
+                        help="index of independently approved per-platform/profile frozen plans")
     arguments = parser.parse_args()
+    validate_prepared_arguments(parser, arguments)
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get("MESH_HARNESS_SOURCE"):
@@ -47,12 +53,29 @@ def main():
         raise RuntimeError(f"native platform is {native}; required {required}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    clock = installed_clock.from_arguments(arguments, native) if arguments.installed_adoption or arguments.fresh_managed else None
+    installed_budgets.bind(arguments, native)
+    clocked = arguments.installed_adoption or arguments.fresh_managed or arguments.export_prepared or arguments.prepared_releases
+    clock = installed_clock.from_arguments(arguments, native) if clocked else None
     if clock:
         with clock.activate(watchdog=True):
             run_owned(arguments, output, native, clock)
         return
     run_owned(arguments, output, native, None)
+
+
+def validate_prepared_arguments(parser, args):
+    if not (args.export_prepared or args.prepared_releases or args.installed_slice):
+        return
+    if bool(args.prepared_releases) != bool(args.installed_slice) or args.export_prepared and args.prepared_releases:
+        parser.error("prepared consumer needs --prepared-releases and --installed-slice; export is a separate invocation")
+    if not (args.signed_chain or args.format_waypoint) or args.ordered_hosts or args.fresh_managed or args.scenario or args.prepare_only:
+        parser.error("prepared releases require an explicit chain or waypoint invocation without other profiles")
+    if args.publication_version or args.publication_source:
+        parser.error("prepared supplemental releases cannot select real signed publication")
+    if args.export_prepared and not (args.worker_registry and args.worker_probe and args.source_host):
+        parser.error("prepared export needs its authoritative worker registry, probe and source host")
+    if args.prepared_releases and not args.native_helper:
+        parser.error("prepared installed consumer requires the production helper preparer")
 
 
 def run_owned(arguments, output, native, clock):
@@ -107,6 +130,9 @@ def finish_owned(root, output, clock):
 
 
 def run_requested(arguments, root, output, native, *, clock_plan=None):
+    if arguments.export_prepared or arguments.prepared_releases:
+        run_prepared_requested(arguments, root, output, native, clock_plan)
+        return
     if arguments.publication_version is not None or arguments.publication_source is not None:
         if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
             raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
@@ -129,6 +155,19 @@ def run_requested(arguments, root, output, native, *, clock_plan=None):
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
+
+
+def run_prepared_requested(args, root, output, native, clock_plan):
+    from fixtures import installed_prepared
+    if args.export_prepared:
+        hosts = [host for host in fleet_baselines.load()["hosts"] if host["platform"] == native and host["name"] == args.source_host]
+        if len(hosts) != 1:
+            raise ValueError("prepared export needs one exact inventory source host on this platform")
+        installed_prepared.run_prepare(root, output, native, hosts[0], args.worker_registry, args.worker_probe,
+                                       args.export_prepared, clock_plan=clock_plan)
+        return
+    installed_prepared.run_slice(root, output, native, args.native_helper.resolve(strict=True), args.prepared_releases,
+                                args.installed_slice, clock_plan=clock_plan)
 
 
 def clean_scratch(root, output):

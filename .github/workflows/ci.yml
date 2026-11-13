@@ -59,6 +59,7 @@ jobs:
               - 'go.sum'
               - 'scripts/**'
               - '.github/workflows/*'
+              - '.internal/fixtures/installed-clock/**'
 
   app-pill:
     needs: changes
@@ -340,7 +341,9 @@ jobs:
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
       - name: Verify installed release gate wiring
-        run: python3 scripts/test-installed-gate-wiring.py
+        run: |
+          python3 scripts/test-installed-gate-wiring.py
+          python3 scripts/test-installed-budgets.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
         timeout-minutes: 8
         run: |
