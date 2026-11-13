@@ -95,13 +95,30 @@ class Cohort:
 
     def verify(self, label):
         environment = self.environment()
-        result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
-            env=environment, capture_output=True, text=True, check=True, timeout=90)
+        try:
+            result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
+                env=environment, capture_output=True, text=True, check=True, timeout=90)
+        except subprocess.CalledProcessError as error:
+            self.retain_verification_failure(label, error)
+            raise
         observed = json.loads(result.stdout)
         expected = sorted({item["artifact"]["binarySha256"] for item in self.selected})
         if observed != expected:
             raise RuntimeError("native observed worker digests differ from the exact selected source cohort")
         return observed
+
+    def retain_verification_failure(self, label, error):
+        def tail(value):
+            raw = (value or "").encode("utf-8")
+            return {"tail": raw[-32768:].decode("utf-8", "replace"), "bytes": len(raw), "truncated": len(raw) > 32768}
+
+        try:
+            record = json.loads(self.record.read_bytes())
+            record["verificationFailure"] = {"label": label, "returncode": error.returncode,
+                                              "stdout": tail(error.stdout), "stderr": tail(error.stderr)}
+            release_workers.save(self.record, record)
+        except (OSError, ValueError) as capture_error:
+            error.add_note("cohort verification evidence unavailable: " + type(capture_error).__name__)
 
     def close(self):
         release_workers.stop(self.record)

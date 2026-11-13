@@ -13,6 +13,7 @@ import http.client
 import zipfile
 import tempfile
 import tarfile
+import textwrap
 import unittest
 import threading
 import subprocess
@@ -178,7 +179,56 @@ class FleetBaselinesTest(unittest.TestCase):
             fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
 
 
+class InstalledModeShellTest(unittest.TestCase):
+    def test_workflow_modes_pass_exact_arguments_under_nounset(self):
+        source = (PROOF_PATH.parent.parent / ".github/workflows/installed-catchup.yml").read_text()
+        start = source.index("          mode=(--signed-chain)")
+        command = textwrap.dedent(source[start:].split("\n      - name:", 1)[0])
+        command = command.replace("python3 scripts/prove-installed-catchup.py", "capture_args")
+        prefix = 'set -euo pipefail\ninput="$RUNNER_TEMP/native-worker-input.noindex"\ncapture_args() { printf "%s\\0" "$@"; }\n'
+        for mode, flags in (("oldest", []), ("chain", ["--signed-chain"]), ("waypoint", ["--format-waypoint"]), ("order", ["--ordered-hosts"])):
+            environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": "/owned-unit"}
+            result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, (mode, result.stderr))
+            arguments = result.stdout.decode().split("\0")[:-1]
+            position = arguments.index("--source-host")
+            self.assertEqual(arguments[position:], ["--source-host", "mac"] + flags)
+            self.assertIn("--worker-registry", arguments)
+
+
 class ExactCohortInputTest(unittest.TestCase):
+    def test_failed_verification_retains_streams_and_original_exception(self):
+        cohort = object.__new__(installed_cohort.Cohort)
+        cohort.record, cohort.state = self.root / "cohort.json", self.root / "state"
+        cohort.record.write_text(json.dumps({"workers": [], "observations": []}))
+        failure = subprocess.CalledProcessError(1, ["verify"], output="outcome", stderr="inner traceback\n" + "x" * 40000)
+        with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                cohort.verify("before-install")
+        self.assertIs(caught.exception, failure)
+        retained = json.loads(cohort.record.read_text())["verificationFailure"]
+        self.assertEqual((retained["label"], retained["returncode"]), ("before-install", 1))
+        self.assertEqual(retained["stdout"], {"tail": "outcome", "bytes": 7, "truncated": False})
+        self.assertEqual(len(retained["stderr"]["tail"].encode()), 32768)
+        self.assertTrue(retained["stderr"]["truncated"])
+        output = self.root / "export"
+        output.mkdir()
+        case = SimpleNamespace(root=self.root, host={"name": "owned"}, cohort=cohort, close=lambda: None)
+        from fixtures import installed_adoption
+        with patch.object(installed_adoption, "collect_service_snapshot"), patch.object(installed_native, "retain_logs"):
+            installed_adoption.finish_case(case, {"passed": False}, output)
+        self.assertEqual(json.loads((output / "owned-cohort.json").read_text())["verificationFailure"], retained)
+
+    def test_failed_verification_export_keeps_exception_when_record_unavailable(self):
+        cohort = object.__new__(installed_cohort.Cohort)
+        cohort.record, cohort.state = self.root / "absent/cohort.json", self.root / "state"
+        failure = subprocess.CalledProcessError(1, ["verify"], output="", stderr="inner failure")
+        with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                cohort.verify("before-install")
+        self.assertIs(caught.exception, failure)
+        self.assertIn("FileNotFoundError", caught.exception.__notes__[0])
+
     def test_copy_controls_obey_darwin_exclusion(self):
         with patch("fixtures.noindex_paths.platform.system", return_value="Darwin"):
             self.test_owned_copy_preserves_exact_digest_and_borrowed_permissions()

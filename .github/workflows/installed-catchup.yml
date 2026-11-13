@@ -425,7 +425,7 @@ jobs:
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
             --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" \
             --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
-            --source-host "$SOURCE_HOST" "${mode[@]}"
+            --source-host "$SOURCE_HOST" ${mode[@]+"${mode[@]}"}
       - name: Remove owned downloaded native inputs and helper tool
         if: always()
         run: |
