@@ -16,12 +16,13 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-from fixtures import installed_clock, installed_slices, installed_span_controls, installed_workflow as workflow
+from fixtures import installed_clock, installed_releases, installed_slices, installed_span_controls, installed_workflow as workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
 PREPARED = (WORKFLOWS / "installed-prepared.yml").read_text()
 CATCHUP = (WORKFLOWS / "installed-catchup.yml").read_text()
+CACHE = (ROOT / ".github/actions/installed-go/action.yml").read_text()
 
 
 def job(source, name):
@@ -61,6 +62,93 @@ class WorkflowControls(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="prepared-workflow-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+
+    def test_fixture_cache_domain_covers_lockfiles_source_imports_and_recipe(self):
+        self.assertIn("go-version-file: go.mod", CACHE)
+        self.assertIn("cache: true", CACHE)
+        for pattern in ("**/go.mod", "**/go.sum", "**/*.go", "scripts/fixtures/installed_fresh.py", "scripts/fixtures/installed_releases.py",
+                        "scripts/fixtures/release_transition.py", ".github/actions/installed-go/action.yml"):
+            self.assertIn("          " + pattern + "\n", CACHE)
+        self.assertEqual(CACHE.count("uses: actions/setup-go@"), 1)
+        self.assertEqual(CACHE.count("uses: actions/cache/restore@"), 1)
+        self.assertEqual(CACHE.count("if: steps.fixture.outputs.cache-hit != 'true'"), 2)
+        self.assertNotIn("restore-keys:", CACHE)
+        self.assertNotIn("actions/cache/save", CACHE)
+        self.assertIn("hashFiles('go.mod')", CACHE)
+        self.assertIn("${{ steps.seed.outputs.modules }}", CACHE)
+        self.assertIn("${{ steps.seed.outputs.build }}", CACHE)
+        self.assertNotIn("runner.temp", CACHE)
+        self.assertNotIn("go build", CACHE)
+        self.assertEqual(job(CATCHUP, "fresh-managed").count("uses: ./.github/actions/installed-go"), 1)
+        for name in ("native-adoption", "signed-cohort-chain", "publication-native"):
+            self.assertNotIn("installed-go", job(CATCHUP, name))
+        self.assertNotIn("installed-go", job(PREPARED, "prepare"))
+        self.assertNotIn("installed-go", job(PREPARED, "consume"))
+        self.assertIn("'.github/actions/installed-go/**'", CATCHUP)
+        self.assertIn("'.github/actions/installed-go/**'", (WORKFLOWS / "ci.yml").read_text())
+
+    def test_actual_seed_command_matches_pinned_setup_go_identity_on_three_hosts(self):
+        body = CACHE.split("      run: |\n", 1)[1].split("    - name:", 1)[0]
+        script = "\n".join(line[8:] for line in body.splitlines())
+        mock = '''go() {
+          test "$1" = env || return 73
+          case "$2" in
+            GOHOSTARCH) echo "$HOST_ARCH" ;;
+            GOVERSION) echo go1.27.4 ;;
+            GOMODCACHE) echo '/public modules' ;;
+            GOCACHE) echo '/public build' ;;
+            *) return 74 ;;
+          esac
+        }
+        '''
+        for system, arch, image, expected in (("Linux", "amd64", "ubuntu24", "Linux-x64-ubuntu24-"),
+                                             ("Linux", "arm64", "ubuntu24", "Linux-arm64-ubuntu24-"),
+                                             ("macOS", "arm64", "", "macOS-arm64-")):
+            output = self.root / "outputs"
+            output.unlink(missing_ok=True)
+            env = os.environ | {"RUNNER_OS": system, "HOST_ARCH": arch, "ImageOS": image,
+                                "MODULE_HASH": "a" * 64, "GITHUB_OUTPUT": str(output)}
+            result = subprocess.run(["bash", "-e", "-c", mock + script], env=env,
+                                    capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(output.read_text().splitlines(), ["key=setup-go-" + expected + "go-1.27.4-" + "a" * 64,
+                                                             "modules=/public modules", "build=/public build"])
+
+    def test_registered_fresh_cache_vehicle_is_current_source_diagnostic_and_bounded(self):
+        source = (WORKFLOWS / "installed-clock-calibration.yml").read_text()
+        vehicle = job(source, "fresh-cache")
+        self.assertIn("workflow_dispatch:", source)
+        self.assertIn("fresh-cache]", source)
+        self.assertIn("if: inputs.measurement_scope == 'fresh-cache'", vehicle)
+        self.assertIn("inputs.measurement_scope != 'fresh-cache'", job(source, "measure"))
+        self.assertEqual(source, (WORKFLOWS / "rollback-proof-investigation.yml").read_text())
+        self.assertNotIn("pull_request:", vehicle)
+        self.assertIn("uses: ./.github/workflows/installed-catchup.yml", vehicle)
+        self.assertIn("harness_source: ${{ github.sha }}", vehicle)
+        self.assertIn("calibration_only: true", vehicle)
+        self.assertIn("calibration_support: fresh", vehicle)
+        self.assertNotIn("worker_artifact", vehicle)
+        self.assertNotIn("release_", vehicle)
+        fresh = job(CATCHUP, "fresh-managed")
+        self.assertEqual(re.findall(r"platform: ([^\n]+)", fresh), ["linux/amd64", "linux/arm64", "darwin/arm64"])
+        self.assertEqual(fresh.count("inputs.calibration_only && 15"), 2)
+        self.assertIn('--clock-job-seconds 900 --clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60', fresh)
+        self.assertLess(fresh.index("Record original job clock"), fresh.index("uses: actions/checkout"))
+        self.assertLess(fresh.index('test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"'), fresh.index("uses: ./.github/actions/installed-go"))
+
+    def test_actual_signer_build_keeps_tagged_test_graph_and_180_second_guard(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root)
+        self.addCleanup(releases.close)
+        with patch.object(releases, "exporter_overlay", return_value=[]) as overlay, \
+                patch.object(installed_releases.subprocess, "run") as run, \
+                patch.object(installed_clock, "timeout", side_effect=lambda seconds: seconds) as timeout:
+            releases.prepare_signer.__wrapped__(releases)
+        overlay.assert_called_once_with()
+        command = run.call_args_list[0]
+        self.assertEqual(command.args[0], ["go", "test", "-c", "-tags", "mesh_installed_fixture",
+                                          "-o", str(self.root / "signer-test"), "./internal/update"])
+        self.assertEqual(command.kwargs["timeout"], 180)
+        self.assertEqual([call.args[0] for call in timeout.call_args_list], [180, 15])
 
     def test_three_profiles_cover_actual_partition_and_waypoint_readers_once(self):
         for mode, count in (("chain", 2), ("waypoint", 7)):

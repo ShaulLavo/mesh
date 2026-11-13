@@ -247,10 +247,11 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertEqual(re.findall(r"platform: ([^\n]+)", SMOKE), ["linux/amd64"])
         self.assertIn("runner: ubuntu-24.04", SMOKE)
         self.assertIn("timeout-minutes: 15", SMOKE)
-        self.assertIn("go-version: '1.27.4'", SMOKE)
+        self.assertIn("uses: ./.github/actions/installed-go", SMOKE)
+        self.assertIn("go 1.27.4", (ROOT / "go.mod").read_text())
         self.assertLess(SMOKE.index("Record original job clock"), SMOKE.index("uses: actions/checkout"))
         self.assertLess(SMOKE.index("reviewed fresh workload"), SMOKE.index("Require the actual native manager"))
-        self.assertLess(SMOKE.index("Require the actual native manager"), SMOKE.index("uses: actions/setup-go"))
+        self.assertLess(SMOKE.index("Require the actual native manager"), SMOKE.index("uses: ./.github/actions/installed-go"))
         self.assertEqual(SMOKE.count('open(p,"x")'), 1)
         self.assertNotIn("diagnostic", SMOKE)
         self.assertNotIn("MESH_TRANSPORT_LIFECYCLE", SMOKE)
@@ -313,14 +314,14 @@ class WorkflowWiringTests(unittest.TestCase):
                 result = subprocess.run(["bash", "-c", script], env=environment, capture_output=True, text=True, timeout=5)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 args = result.stdout.splitlines()
-                self.check_support_args(args, calibration)
+                self.check_support_args(args, calibration, "600" if name == "fresh-managed" else "1500")
 
-    def check_support_args(self, args, calibration):
+    def check_support_args(self, args, calibration, command="1500"):
         self.assertIn("/unused/installed-job-clock.json", args)
         self.assertEqual(args[args.index("--clock-mode") + 1], "diagnostic" if calibration == "true" else "frozen")
         self.assertEqual("--clock-command-seconds" in args, calibration == "true")
         if calibration == "true":
-            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "1500")
+            self.assertEqual(args[args.index("--clock-command-seconds") + 1], command)
     def test_every_frozen_caller_records_origin_first_and_passes_it(self):
         for name in ("signed-cohort-chain", "native-adoption", "fresh-managed"):
             source = job(name)

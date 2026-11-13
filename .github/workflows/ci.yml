@@ -59,6 +59,7 @@ jobs:
               - 'go.sum'
               - 'scripts/**'
               - '.github/workflows/*'
+              - '.github/actions/installed-go/**'
               - '.internal/fixtures/installed-clock/**'
 
   app-pill:

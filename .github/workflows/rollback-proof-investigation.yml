@@ -16,10 +16,10 @@ on:
         required: true
         type: string
       measurement_scope:
-        description: 'Measure full cohorts/support, or only the four missing consumer recovery slots'
+        description: 'Measure cohorts/support, four consumer recovery slots, or only fresh cache population'
         default: all
         type: choice
-        options: [all, cohort, prepared, support, consumer-recovery]
+        options: [all, cohort, prepared, support, consumer-recovery, fresh-cache]
       catalog_evidence:
         description: 'Enable only after composing the reviewed passive catalog source'
         default: false
@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   measure:
-    if: inputs.measurement_scope != 'support' && inputs.measurement_scope != 'consumer-recovery'
+    if: inputs.measurement_scope != 'support' && inputs.measurement_scope != 'consumer-recovery' && inputs.measurement_scope != 'fresh-cache'
     uses: ./.github/workflows/installed-catchup.yml
     with:
       harness_source: ${{ github.sha }}
@@ -59,6 +59,15 @@ jobs:
       reusable_call: true
       calibration_only: true
       calibration_support: ${{ matrix.profile }}
+
+  fresh-cache:
+    if: inputs.measurement_scope == 'fresh-cache'
+    uses: ./.github/workflows/installed-catchup.yml
+    with:
+      harness_source: ${{ github.sha }}
+      reusable_call: true
+      calibration_only: true
+      calibration_support: fresh
 
   recovery-inputs:
     if: inputs.measurement_scope == 'consumer-recovery'

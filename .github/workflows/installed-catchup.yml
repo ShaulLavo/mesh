@@ -60,6 +60,7 @@ on:
     paths:
       - '.github/workflows/installed-catchup.yml'
       - '.github/workflows/installed-prepared.yml'
+      - '.github/actions/installed-go/**'
       - 'scripts/fixtures/installed_workflow.py'
       - 'scripts/fixtures/installed_prepared.py'
       - 'scripts/fixtures/installed_slices.py'
@@ -456,7 +457,7 @@ jobs:
     if: (inputs.calibration_only != true || inputs.calibration_support == 'fresh') && inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Fresh native automatic first start (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
+    timeout-minutes: ${{ inputs.calibration_only && 15 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
     strategy:
       fail-fast: false
       matrix:
@@ -473,7 +474,7 @@ jobs:
     steps:
       - name: Record original job clock before checkout and setup
         env:
-          FIXTURE_JOB_MINUTES: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
+          FIXTURE_JOB_MINUTES: ${{ inputs.calibration_only && 15 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-fresh', matrix.key)] }}
         run: |
           python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -482,11 +483,11 @@ jobs:
       - name: Require the actual native manager before fresh builds or downloads
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
-        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+        run: |
+          [[ $MESH_HARNESS_SOURCE =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
+          bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
+      - uses: ./.github/actions/installed-go
       - name: Prepare the real helper before the first managed daemon activation
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
@@ -496,7 +497,7 @@ jobs:
           clock=(--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
           if [[ $CLOCK_CALIBRATION == true ]]; then
             clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
-              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+              --clock-job-seconds 900 --clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60)
           fi
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed \
             "${clock[@]}"

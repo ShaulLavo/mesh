@@ -65,10 +65,7 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
         run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.4'
-          cache: true
+      - uses: ./.github/actions/installed-go
       - name: Prepare the real helper before the first managed daemon activation
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
