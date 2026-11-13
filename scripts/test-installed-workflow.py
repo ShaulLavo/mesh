@@ -86,7 +86,7 @@ class WorkflowControls(unittest.TestCase):
         transfer = self.root / "transfer"
         workflow.pack(directory, transfer)
         outer = self.root / "artifact.zip"
-        with zipfile.ZipFile(outer, "w") as archive:
+        with zipfile.ZipFile(outer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
             archive.write(transfer / "bundle.tar", "bundle.tar")
         downloaded = self.root / "download.noindex"
         downloaded.mkdir()
@@ -226,13 +226,13 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(select.call_count, 10)
 
     def test_job_graph_and_consumer_commands_preserve_original_clock_and_no_builds(self):
-        for name in ("prepare", "consume"):
+        for name, command, external in (("prepare", 1380, 360), ("consume", 900, 840)):
             source = job(PREPARED, name)
             self.assertLess(source.index("Record original job clock"), source.index("uses: actions/checkout"))
             self.assertEqual(source.count('open(p,"x")'), 1)
             self.assertIn("needs.plans.outputs.minutes", source)
             self.assertIn("--clock-plan", source)
-            self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1380 --clock-external-seconds 360 --clock-emergency-seconds 60", source)
+            self.assertIn(f"--clock-job-seconds 1800 --clock-command-seconds {command} --clock-external-seconds {external} --clock-emergency-seconds 60", source)
         consumer = job(PREPARED, "consume")
         self.assertIn("needs: [plans, prepare]", consumer)
         self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", consumer)
@@ -261,11 +261,24 @@ class WorkflowControls(unittest.TestCase):
             self.assertIn("--installed-adoption", args)
             self.assertIn("--prepared-releases", args)
             self.assertIn("--installed-slice", args)
-            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "1380")
-            self.assertEqual(args[args.index("--clock-external-seconds") + 1], "360")
+            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "900")
+            self.assertEqual(args[args.index("--clock-external-seconds") + 1], "840")
             self.assertEqual(sum(int(args[args.index(flag) + 1]) for flag in
                 ("--clock-command-seconds", "--clock-external-seconds", "--clock-emergency-seconds")), 1800)
             self.assertNotIn("--clock-plan", args)
+
+    def test_diagnostic_consumer_admits_measured_transfer_without_extending_job(self):
+        common = {"mode": "diagnostic", "workload": {"platform": "linux/arm64", "mode": "chain"},
+                  "emergency_ns": 60 * installed_clock.SECOND, "admission_ns": 1800 * installed_clock.SECOND}
+        previous = installed_clock.ClockPlan(**common, command_ns=1380 * installed_clock.SECOND,
+                                             external_ns=360 * installed_clock.SECOND)
+        with self.assertRaisesRegex(installed_clock.ClockExpired, "insufficient live job admission"):
+            installed_clock.Clock(previous, origin_ns=451 * installed_clock.SECOND, job_origin_ns=installed_clock.SECOND)
+        current = installed_clock.ClockPlan(**common, command_ns=900 * installed_clock.SECOND,
+                                            external_ns=840 * installed_clock.SECOND)
+        clock = installed_clock.Clock(current, origin_ns=451 * installed_clock.SECOND, job_origin_ns=installed_clock.SECOND)
+        self.assertEqual(clock.deadline_ns, 1351 * installed_clock.SECOND)
+        self.assertLessEqual(clock.deadline_ns + current.emergency_ns, clock.job_deadline_ns)
 
     def test_calibration_alias_and_all_nine_support_profiles_are_preserved(self):
         source = (WORKFLOWS / "installed-clock-calibration.yml").read_text()

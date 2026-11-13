@@ -152,7 +152,7 @@ jobs:
           name: installed-prepared-${{ matrix.key }}-${{ matrix.mode }}
           path: ${{ runner.temp }}/prepared-transfer.noindex/bundle.tar
           if-no-files-found: error
-          compression-level: 0
+          compression-level: 1
           retention-days: 7
       - name: Remove uploaded public payload after verified runtime cleanup
         run: python3 scripts/fixtures/installed_workflow.py cleanup "$RUNNER_TEMP" --bundle
@@ -219,7 +219,7 @@ jobs:
           clock=(--clock-mode frozen --clock-plan "$CLOCK_PLAN" --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
           if [[ $CLOCK_CALIBRATION == true ]]; then
             clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
-              --clock-job-seconds 1800 --clock-command-seconds 1380 --clock-external-seconds 360 --clock-emergency-seconds 60)
+              --clock-job-seconds 1800 --clock-command-seconds 900 --clock-external-seconds 840 --clock-emergency-seconds 60)
           fi
           printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" --native-preflight --installed-adoption \
