@@ -48,7 +48,7 @@ class OrderDriver:
         model.drivers[role] = self
         self.online, self.fault = True, []
         self.value = {"build": {"version": model.latest}, "state": {"phase": "waiting"}, "journal": {},
-                      "entries": [], "failed": [], "peers": [], "dependents": [{}], "peerFailures": {}, "stateWrittenAt": 0,
+                      "entries": [], "failed": [], "peers": [], "dependents": [], "peerFailures": {}, "stateWrittenAt": 0,
                       "helper": {}, "route": {}, "ready": True}
 
     def call(self, operation, **fields):
@@ -79,6 +79,8 @@ class OrderDriver:
         if predecessor is None:
             return True
         peer = self.model.drivers[predecessor]
+        peer.value["dependents"] = [{"id": self.account["id"], "settled": self.value["build"]["version"],
+                                    "updatedAt": self.model.clock.stamp()}]
         self.value["peers"] = [{"id": predecessor, "state": "verified", "readAt": self.model.clock.stamp()}]
         self.value["peerFailures"][predecessor] = copy.deepcopy(peer.value["failed"])
         self.value["stateWrittenAt"] = self.model.clock.now().timestamp()
@@ -121,6 +123,30 @@ class SlowInspectionDriver(OrderDriver):
         return value
 
 
+class ConsumerObservationDriver(OrderDriver):
+    def call(self, operation, **fields):
+        value = super().call(operation, **fields)
+        snapshot = operation == "inspect" and fields.get("active", True) and self.account["role"] == "burst"
+        if snapshot and value["build"]["version"] == installed_releases.VERSIONS[-1] and not self.model.direct_snapshot.is_set():
+            self.model.preconsumer_snapshot = value
+            self.model.direct_snapshot.set()
+        return value
+
+    def permitted(self):
+        if self.account["role"] == "sleep" and self.model.latest == installed_releases.VERSIONS[-1]:
+            if not self.model.direct_snapshot.wait(2):
+                raise AssertionError("predecessor commit snapshot did not complete")
+        return super().permitted()
+
+
+class MissingConsumerDriver(ConsumerObservationDriver):
+    def permitted(self):
+        result = super().permitted()
+        if self.account["role"] == "sleep":
+            self.model.drivers["burst"].value["dependents"] = []
+        return result
+
+
 class LiveOrderClock:
     def __init__(self):
         self.base = datetime.now(timezone.utc)
@@ -145,7 +171,7 @@ class TrackedOrderDriver(OrderDriver):
         role, owner = self.account["role"], threading.get_ident()
         latest = self.model.latest == installed_releases.VERSIONS[-1]
         if latest and self.model.owners.setdefault(role, owner) != owner:
-            raise RuntimeError("host protocol stream changed controller")
+            self.check_final_reader(owner, operation, fields)
         arming = not latest and owner != self.model.main
         stage = "validate" if operation == "inspect" and fields.get("active", True) else operation
         if (latest or arming) and self.model.failure == (role, "arming" if arming else stage):
@@ -157,15 +183,53 @@ class TrackedOrderDriver(OrderDriver):
             self.model.validated.add(role)
         return result
 
+    def check_final_reader(self, owner, operation, fields):
+        if owner != self.model.main or operation != "inspect" or fields.get("active", True):
+            raise RuntimeError("host protocol stream changed controller")
+        if any(thread.name.startswith("ordered-opportunity") for thread in threading.enumerate()):
+            raise RuntimeError("final reader overlaps a host controller")
+        self.model.final_readers.add(self.account["role"])
+
 
 def tracked_order_model(failure=None):
     model = OrderModel()
     model.main, model.failure = threading.get_ident(), failure
     model.owners, model.armed, model.validated = {}, set(), set()
+    model.final_readers = set()
     return model
 
 
 class OrderReviewTest(unittest.TestCase):
+    def test_final_order_reads_follow_consumer_authentication_after_commit_snapshot(self):
+        model = OrderModel()
+        model.direct_snapshot = threading.Event()
+        record = exercise_model(model, ConsumerObservationDriver)
+        self.assertTrue(model.direct_snapshot.is_set())
+        self.assertEqual(model.preconsumer_snapshot["dependents"], [])
+        self.assertIn("sleepLatest", record["observations"][1])
+        self.assertEqual(model.drivers["burst"].value["dependents"][0]["id"], "sleep")
+        with self.assertRaisesRegex(RuntimeError, "lack actual authenticated predecessor/consumer observations"):
+            installed_order.verify_order(model.drivers["canary"].value, model.preconsumer_snapshot,
+                                         model.drivers["sleep"].value, model.latest)
+
+    def test_final_order_still_rejects_an_absent_consumer_record(self):
+        model = OrderModel()
+        model.direct_snapshot = threading.Event()
+        with self.assertRaisesRegex(RuntimeError, "lack actual authenticated predecessor/consumer observations"):
+            exercise_model(model, MissingConsumerDriver)
+        self.assertEqual(model.drivers["burst"].value["dependents"], [])
+
+    def test_final_order_still_requires_each_predecessor_and_consumer_collection(self):
+        model = OrderModel()
+        model.direct_snapshot = threading.Event()
+        exercise_model(model, ConsumerObservationDriver)
+        values = [model.drivers[role].value for role in ("canary", "burst", "sleep")]
+        for index, collection in ((0, "dependents"), (1, "peers"), (1, "dependents"), (2, "peers")):
+            missing = copy.deepcopy(values)
+            missing[index][collection] = []
+            with self.assertRaisesRegex(RuntimeError, "lack actual authenticated predecessor/consumer observations"):
+                installed_order.verify_order(*missing, model.latest)
+
     def test_slow_full_inspections_do_not_consume_either_preexpiry_opportunity(self):
         model = OrderModel()
         model.clock = LiveOrderClock()
@@ -186,6 +250,7 @@ class OrderReviewTest(unittest.TestCase):
         model.head = release
         record = exercise_model(model, TrackedOrderDriver)
         self.assertEqual(len(set(model.owners.values())), 3)
+        self.assertEqual(model.final_readers, {"burst"})
         self.assertEqual(model.validated, {"canary", "burst", "sleep"})
         self.assertEqual({row["host"] for row in record["opportunityControllers"]}, {"burst", "sleep"})
         self.assertTrue(all(row["armedAt"] <= record["latestReleaseStartedAt"] for row in record["opportunityControllers"]))

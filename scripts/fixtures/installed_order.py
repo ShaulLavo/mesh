@@ -218,6 +218,10 @@ def scenarios(root, drivers, descriptor, record):
     require_failed_canary_read(held, failed_state, canary.account["id"])
     record["observations"].append({"canaryFailure": bounded(failed_state), "awakeDirectHold": bounded(held)})
     canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold = release_latest(origin, directory, drivers, record)
+    # A successor can authenticate after its predecessor's commit snapshot.
+    # Both controller streams have drained before these final ledger reads.
+    canary_latest = canary.call("inspect", active=False)
+    direct_latest = direct.call("inspect", active=False)
     verify_order(canary_latest, direct_latest, sleeper_latest, latest)
     record["observations"].append({"canaryLatest": bounded(canary_latest), "directBeforeSoak": bounded(direct_hold),
         "directLatest": bounded(direct_latest), "sleepBeforeSoak": bounded(sleeper_hold), "sleepLatest": bounded(sleeper_latest)})
