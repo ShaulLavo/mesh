@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 from fixtures import noindex_paths, release_worker_groups as groups, release_worker_index as index, installed_adoption
 from fixtures import release_worker_completion as completion, installed_paths, installed_publication
@@ -224,9 +225,14 @@ class WorkerGroupTests(unittest.TestCase):
 
     def test_unavailable_published_updater_has_no_invented_route(self):
         with mock.patch.object(completion.fleet_baselines, "load", return_value={"firstPublishedUpdater": None}):
-            completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": []}, {}, {})
+            contract = completion.route_contract(None, "v0.1.1", [])
+            observation = self.root / "first-published-updater.json"
+            observation.write_bytes(groups.encode(contract))
+            value = {"firstPublishedUpdater": None, "routes": [], "routeContract": contract,
+                     "routeObservation": completion.asset(self.root, observation)}
+            completion.validate_routes(self.root, value, {}, {})
             with self.assertRaisesRegex(ValueError, "invented"):
-                completion.validate_routes(self.root, {"firstPublishedUpdater": None, "routes": [{}]}, {}, {})
+                completion.validate_routes(self.root, value | {"routes": [{}]}, {}, {})
 
     def test_installed_original_uses_actual_baseline_after_daemon_bootstrap(self):
         bundle = Bundle(self.root, selected(1))
@@ -349,6 +355,7 @@ class CompletionTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.release = {"version": "v0.1.99", "source": SOURCE, "manifest": "a" * 64, "metadata": "b" * 64,
             "workerGroups": "d" * 64, "stateVersion": 2, "workerProtocol": 2,
+            "routeContract": completion.route_contract(None, "v0.1.99", []),
             "artifacts": [{"platform": native, "binarySha256": "c" * 64} for native in index.PLATFORMS]}
         self.selection = {"workers": [groups.member(selected(1, platform)[0]) for platform in index.PLATFORMS]}
         for platform in index.PLATFORMS:
@@ -357,17 +364,21 @@ class CompletionTests(unittest.TestCase):
     def write_completion(self, platform):
         native = platform["os"] + "/" + platform["arch"]
         output = self.root / native.replace("/", "-")
-        output.mkdir()
+        output.mkdir(exist_ok=True)
         build = {"version": "v0.1.99", "commit": SOURCE, "platform": platform, "modified": False,
                  "digest": "c" * 64, "stateVersion": 2, "workerProtocol": 2}
-        draft = completion.release_binding(self.release) | {"testTrustRoot": False, "build": build, "installedHarness": SOURCE}
+        draft = completion.release_binding(self.release) | {"testTrustRoot": False, "build": build, "installedHarness": SOURCE,
+                                                          "routeContract": self.release["routeContract"]}
         (output / "real-draft.json").write_bytes(groups.encode(draft))
         (output / "harness-source.json").write_bytes(groups.encode({"expected": SOURCE, "actual": SOURCE, "workerGrouping": {}}))
         publication = {"release": completion.release_binding(self.release), "candidate": build, "harness": SOURCE}
         refs = [self.write_case(output, name, completion.expected_case(name, native, publication, self.selection))
                 for name in completion.expected_pairs(native)]
-        value = {"schema": 1, "version": "v0.1.99", "releaseSource": SOURCE, "platform": native,
+        observation = output / "first-published-updater.json"
+        observation.write_bytes(groups.encode(self.release["routeContract"]))
+        value = {"schema": 2, "version": "v0.1.99", "releaseSource": SOURCE, "platform": native,
                  "signedIndexSha256": self.release["workerGroups"], "firstPublishedUpdater": None, "installedHarness": SOURCE,
+                 "routeContract": self.release["routeContract"], "routeObservation": completion.asset(output, observation),
                  "draft": completion.asset(output, output / "real-draft.json"),
                  "harnessObservation": completion.asset(output, output / "harness-source.json"), "cases": refs, "routes": []}
         (output / "worker-completion.json").write_bytes(groups.encode(value))
@@ -455,15 +466,42 @@ class CompletionTests(unittest.TestCase):
         (directory / "mesh-release.json").write_bytes(manifest_bytes)
         (directory / "mesh-update.json").write_bytes(groups.encode({"version": manifest["version"], "manifest": groups.digest(manifest_bytes)}))
         (directory / "mesh-worker-groups.json").write_bytes(b"{}")
+        (directory / "mesh-retention.json").write_bytes(b"[]")
         (directory / "native.tar.gz").write_bytes(b"archive")
         output = self.root / "linux-amd64"
         build = json.loads((output / "real-draft.json").read_bytes())["build"]
-        with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=SOURCE), mock.patch.object(installed_publication, "verify_signature"), mock.patch.object(index, "validate_index"), mock.patch.object(installed_publication.published_releases, "archive_binary", return_value=b"image"), mock.patch.object(installed_publication.subprocess, "check_output", return_value=groups.encode(build)):
+        with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=SOURCE), mock.patch.object(installed_publication, "verify_signature") as signature, mock.patch.object(index, "validate_index"), mock.patch.object(installed_publication.published_releases, "archive_binary", return_value=b"image"), mock.patch.object(installed_publication.subprocess, "check_output", return_value=groups.encode(build)):
             releases = installed_publication.load_draft(self.root, output, directory, "linux/amd64", manifest["version"], SOURCE, "owned-draft")
+        self.assertIn(directory / "mesh-retention.json", signature.call_args.args[3])
         self.assertEqual(releases.verification["workerGroups"], groups.digest(b"{}"))
         self.assertEqual(releases.verification["manifest"], groups.digest(manifest_bytes))
         self.assertEqual(releases.verification["installedHarness"], SOURCE)
         self.assertFalse(releases.verification["testTrustRoot"])
+        self.assertEqual(releases.verification["routeContract"], self.release["routeContract"])
+
+    def test_record_writer_and_finalizer_share_the_exact_retained_history_contract(self):
+        staging = self.root / "staging"
+        directory = staging / "releases" / self.release["version"]
+        directory.mkdir(parents=True)
+        manifest = {"version": self.release["version"], "commit": SOURCE, "artifacts": self.release["artifacts"],
+                    "compatibility": {"stateWrite": 2, "workerWrite": 2}}
+        (directory / "mesh-release.json").write_bytes(groups.encode(manifest))
+        (directory / "mesh-update.json").write_bytes(b"metadata control bytes")
+        (directory / "mesh-worker-groups.json").write_bytes(groups.encode({"selection": self.selection}))
+        (directory / "mesh-retention.json").write_bytes(b"[]")
+        self.release = completion.release_context(directory)
+        with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=SOURCE):
+            for platform in index.PLATFORMS:
+                self.record_platform(staging, platform)
+        self.validate()
+
+    def record_platform(self, staging, platform):
+        self.write_completion(platform)
+        native = platform["os"] + "/" + platform["arch"]
+        output = self.root / native.replace("/", "-")
+        expected = (output / "worker-completion.json").read_bytes()
+        completion.record(staging, output, native, self.release["version"], SOURCE)
+        self.assertEqual((output / "worker-completion.json").read_bytes(), expected)
 
     def test_native_image_confirmation_and_fresh_start_are_bound(self):
         self.change_leaf("cases", lambda value: value["result"]["running"].update(digest="e" * 64))
@@ -472,6 +510,305 @@ class CompletionTests(unittest.TestCase):
         self.change_leaf("cases", lambda value: value["result"]["running"].update(digest="c" * 64))
         self.change_leaf("cases", lambda value: value["initial"]["firstNativeStart"]["mappedImage"].update(sha256="e" * 64), "fresh-managed-native-pair.json")
         with self.assertRaisesRegex(ValueError, "fresh installed"):
+            self.validate()
+
+
+def retained_updater(number):
+    return {"tag": "v0.1." + str(number), "assets": [{"name": name, "sha256": groups.digest((str(number) + name).encode())}
+        for name in ("mesh-release.json", "mesh-update.json", "mesh-update.sig.json", "mesh-update-root.json")]}
+
+
+class PublishedContractTests(unittest.TestCase):
+    def test_first_successor_accepts_only_direct_obligation_and_records_unavailable_multihop(self):
+        contract = completion.route_contract("v0.1.1", "v0.1.2", [retained_updater(1)])
+        self.assertEqual(contract["multihop"], "unavailable-first-successor")
+        self.assertIsNone(contract["intermediate"])
+        self.assertEqual(completion.route_scenarios(contract), [("published", False, None), ("published-rollback", True, None)])
+
+    def test_third_release_requires_distinct_authentic_staged_heads(self):
+        contract = completion.route_contract("v0.1.1", "v0.1.4", [retained_updater(3), retained_updater(1), retained_updater(2)])
+        self.assertEqual(contract["multihop"], "required-staged-heads")
+        self.assertEqual(contract["intermediate"]["version"], "v0.1.2")
+        self.assertEqual(completion.route_scenarios(contract)[2:], [("published-chain", False, "v0.1.2"), ("published-chain-rb", True, "v0.1.2")])
+
+    def test_null_wrong_first_or_incomplete_signed_assets_never_suppress_obligation(self):
+        for first, history in ((None, [retained_updater(1)]), ("v0.1.2", [retained_updater(1), retained_updater(2)]),
+                               ("v0.1.1", []), ("v0.1.1", [retained_updater(1) | {"assets": retained_updater(1)["assets"][:2]}])):
+            with self.subTest(first=first, history=history), self.assertRaises(ValueError):
+                completion.route_contract(first, "v0.1.3", history)
+
+    def test_unsigned_legacy_release_does_not_become_an_intermediate(self):
+        history = [retained_updater(1), {"tag": "v0.1.2", "assets": [{"name": "mesh-release.json", "sha256": "a" * 64}]}]
+        self.assertIsNone(completion.route_contract("v0.1.1", "v0.1.3", history)["intermediate"])
+
+
+class PublishedExecutionTests(unittest.TestCase):
+    setUp = WorkerGroupTests.setUp
+
+    def case(self, rollback):
+        source = {"version": "v0.1.1", "digest": "1" * 64, "commit": SOURCE, "platform": PLATFORM,
+                  "workerProtocol": 1, "modified": False}
+        target = source | {"version": "v0.1.2", "digest": "2" * 64}
+        manifest = groups.encode({"version": target["version"], "commit": SOURCE,
+                                  "artifacts": [{"platform": PLATFORM, "binarySha256": target["digest"]}]})
+        metadata = groups.encode({"version": target["version"], "manifest": groups.digest(manifest)})
+        (self.root / "mesh-release.json").write_bytes(manifest)
+        (self.root / "mesh-update.json").write_bytes(metadata)
+        identity = {"version": target["version"], "binary": target["digest"], "metadata": groups.digest(metadata), "manifest": groups.digest(manifest)}
+        plan = {"currentDigest": source["digest"], "target": identity, "next": identity}
+        build = source if rollback else target
+        case = SimpleNamespace(binary=self.root / "original", environment={}, expected_workers=2, ready=lambda: True,
+            control=mock.Mock(side_effect=[{"host": {"build": value}} for value in (source, source, build, build)]),
+            units=mock.Mock(), mapped_helper=lambda: {"sha256": build["digest"]}, inspect_retained=mock.Mock(),
+            cohort=mock.Mock(), route_observer=mock.Mock(),
+            origin=SimpleNamespace(head=mock.Mock(), asset=lambda path: self.root / Path(path).name),
+            releases=SimpleNamespace(directory=self.root, native="linux/amd64", builds={
+                source["version"]: source | {"path": "original"}, target["version"]: target | {"path": "candidate"}}))
+        journal = {"phase": "rolled_back" if rollback else "committed", "request": {"current": source, "manifest": {"version": target["version"]}}}
+        failure = {"edge": {"from": source["digest"], "to": target["digest"], "platform": PLATFORM}, "version": target["version"], "phase": "rolled_back"}
+        ledger = {"state": {}, "failed": [failure] if rollback else [], "entries": [
+            {"version": target["version"], "metadata": identity["metadata"], "workersPreserved": 2}]}
+        return case, plan, journal, ledger
+
+    def run_update(self, rollback, corrupt=None):
+        case, plan, journal, ledger = self.case(rollback)
+        fault = SimpleNamespace(start=mock.Mock(), bound=True, released=True, error="")
+        if corrupt:
+            corrupt(case, fault, ledger)
+        with mock.patch.object(installed_publication.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(plan))), \
+                mock.patch.object(installed_publication.installed_chain, "read_journal", return_value=journal), \
+                mock.patch.object(installed_publication.installed_chain, "read_ledger", return_value=ledger):
+            result = installed_publication.run_published_update(case, "v0.1.2", fault, rollback, installed_publication.time.monotonic() + 150)
+        self.assertEqual(result["routeKind"], "direct")
+        self.assertEqual(result["expectedHops"], [])
+        self.assertEqual(result["hops"], [])
+        case.inspect_retained.assert_called_once()
+        case.cohort.verify.assert_called_once_with("real-published-v0.1.2-final")
+        self.assertEqual(case.releases.builds["v0.1.1"]["path"], "original")
+        return result
+
+    def test_first_successor_direct_success_uses_exact_manifest_and_metadata_bytes(self):
+        self.assertEqual(self.run_update(False)["final"]["build"]["version"], "v0.1.2")
+
+    def test_first_successor_direct_rollback_restores_original_with_durable_failed_edge(self):
+        self.assertEqual(self.run_update(True)["final"]["build"]["version"], "v0.1.1")
+
+    def test_direct_success_keeps_final_helper_and_preserved_count_checks(self):
+        with self.assertRaisesRegex(RuntimeError, "authenticated expected"):
+            self.run_update(False, lambda case, _fault, _ledger: setattr(case, "mapped_helper", lambda: {"sha256": "wrong"}))
+        with self.assertRaisesRegex(RuntimeError, "preserved-worker commit"):
+            self.run_update(False, lambda _case, _fault, ledger: ledger["entries"][0].update(workersPreserved=1))
+
+    def test_direct_rollback_keeps_fault_and_durable_failed_edge_checks(self):
+        with self.assertRaisesRegex(RuntimeError, "exact native image"):
+            self.run_update(True, lambda _case, fault, _ledger: setattr(fault, "released", False))
+        with self.assertRaisesRegex(RuntimeError, "durable failed edge"):
+            self.run_update(True, lambda _case, _fault, ledger: ledger.update(failed=[]))
+
+    def staged_case(self, rollback, failure=False):
+        contract = completion.route_contract("v0.1.1", "v0.1.3", [retained_updater(1), retained_updater(2)])
+        source = {"version": "v0.1.1", "digest": "1" * 64, "platform": PLATFORM, "workerProtocol": 1}
+        verified = {"version": "v0.1.3", "source": SOURCE, "manifest": "a" * 64, "metadata": "b" * 64,
+            "workerGroups": "c" * 64, "build": source | {"version": "v0.1.3"}, "installedHarness": SOURCE, "routeContract": contract}
+        releases = SimpleNamespace(directory=self.root, verification=verified, builds={"v0.1.1": source})
+        name = "published-chain-rb" if rollback else "published-chain"
+        case = mock.Mock(root=self.root, host={"name": name + "-managed"})
+        case.prepare.return_value = case.initialize_preserved_baseline.return_value = case.retained.return_value = {}
+        updates = mock.Mock(side_effect=RuntimeError("stage failed") if failure else lambda _case, target, *_args: {"head": target})
+        journal = {"request": {"current": {"version": "v0.1.2"}}}
+        with mock.patch.object(installed_publication.installed_fresh, "FreshCase", return_value=case), \
+                mock.patch.object(installed_publication.subprocess, "run", return_value=SimpleNamespace(stdout='{"mode":"automatic","revision":1}')), \
+                mock.patch.object(installed_publication, "PortFault"), mock.patch.object(installed_publication, "run_published_update", updates), \
+                mock.patch.object(installed_publication, "finish_fault_case") as finish, \
+                mock.patch.object(installed_publication.installed_chain, "read_journal", return_value=journal), \
+                mock.patch.object(installed_publication.installed_chain, "verify_failed_restart"), \
+                mock.patch.object(installed_publication, "verify_restarted_published_helper"):
+            self.invoke_staged(releases, rollback, name, failure)
+        finish.assert_called_once()
+        self.assertEqual(finish.call_args.args[1]["passed"], not failure)
+        return updates.call_args_list
+
+    def invoke_staged(self, releases, rollback, name, failure):
+        if failure:
+            with self.assertRaisesRegex(RuntimeError, "stage failed"):
+                installed_publication.published_route(self.root, self.root, "v0.1.1", "v0.1.3", releases,
+                    mock.Mock(), "registry", "probe", rollback, {}, name, "v0.1.2")
+            return
+        installed_publication.published_route(self.root, self.root, "v0.1.1", "v0.1.3", releases,
+            mock.Mock(), "registry", "probe", rollback, {}, name, "v0.1.2")
+
+    def test_staged_updates_share_existing_deadline_and_fault_only_the_final_head(self):
+        for rollback in (False, True):
+            calls = self.staged_case(rollback)
+            self.assertEqual([call.args[1] for call in calls], ["v0.1.2", "v0.1.3"])
+            self.assertEqual([call.args[3] for call in calls], [False, rollback])
+            self.assertEqual(calls[0].args[4], calls[1].args[4])
+
+    def test_failed_intermediate_stops_before_final_head_and_reaches_teardown(self):
+        self.assertEqual(len(self.staged_case(False, True)), 1)
+
+    def test_group_runner_keeps_every_group_and_removes_each_finished_case(self):
+        contract = completion.route_contract("v0.1.1", "v0.1.2", [retained_updater(1)])
+        releases = SimpleNamespace(verification={"routeContract": contract}, builds={"v0.1.1": {"digest": "a" * 64, "workerProtocol": 1}})
+        selected_groups = groups.partition(selected(32), 5)
+        def run(_root, output, *_args):
+            (output / "case-native-pair.json").write_bytes(groups.encode({"updates": [], "rollback": False}))
+            (output / "case-cohort.json").write_bytes(b"{}")
+            owned = self.root / ("owned-" + output.name)
+            owned.mkdir()
+            return owned
+        with mock.patch.object(installed_publication, "published_route", side_effect=run) as execute, \
+                mock.patch.object(installed_publication.installed_adoption, "validate_installed_group") as validate:
+            installed_publication.run_published_groups(self.root, self.root, "v0.1.1", "v0.1.2", releases,
+                mock.Mock(), "registry", "probe", False, selected_groups, "published", None)
+        self.assertEqual(execute.call_count, 2)
+        self.assertEqual(validate.call_count, 2)
+        self.assertEqual(list(self.root.glob("owned-*")), [])
+        companion = json.loads((self.root / "published-groups.json").read_bytes())
+        self.assertEqual([item["group"] for item in companion["groups"]], [groups.public_group(group) for group in selected_groups])
+
+
+class PublishedCompletionTests(unittest.TestCase):
+    setUp = CompletionTests.setUp
+    write_completion = CompletionTests.write_completion
+    write_case = CompletionTests.write_case
+    validate = CompletionTests.validate
+
+    def install_routes(self, intermediate=False):
+        completion.fleet_baselines.load()["firstPublishedUpdater"] = "v0.1.1"
+        history = [retained_updater(1), retained_updater(2)] if intermediate else [retained_updater(1)]
+        contract = completion.route_contract("v0.1.1", self.release["version"], history)
+        self.release["routeContract"] = contract
+        self.selection = {"workers": [groups.member(worker) for platform in index.PLATFORMS for worker in selected(2, platform)]}
+        for platform in index.PLATFORMS:
+            self.install_platform_routes(platform, contract)
+
+    def install_platform_routes(self, platform, contract):
+        output = self.root / (platform["os"] + "-" + platform["arch"])
+        path = output / "real-draft.json"
+        draft = json.loads(path.read_bytes()) | {"routeContract": contract}
+        path.write_bytes(groups.encode(draft))
+        observation = output / "first-published-updater.json"
+        observation.write_bytes(groups.encode(contract))
+        refs = [self.write_route(output, draft["build"], contract, scenario) for scenario in completion.route_scenarios(contract)]
+        header = output / "worker-completion.json"
+        value = json.loads(header.read_bytes()) | {"routeContract": contract, "firstPublishedUpdater": contract["first"], "routes": refs,
+            "draft": completion.asset(output, path), "routeObservation": completion.asset(output, observation)}
+        header.write_bytes(groups.encode(value))
+
+    def write_route(self, output, candidate, contract, scenario):
+        name, rollback, via = scenario
+        workers = selected(1, candidate["platform"])
+        group = groups.partition(workers, 5)[0]
+        publication = {"release": completion.release_binding(self.release), "candidate": candidate, "harness": SOURCE,
+            "case": name + "-managed", "scenario": name,
+            "original": completion.baseline_source(self.selection, candidate["platform"]["os"] + "/" + candidate["platform"]["arch"], contract["first"])}
+        original = candidate | {"version": contract["first"], "digest": workers[0]["artifact"]["binarySha256"], "workerProtocol": 1}
+        updates = []
+        if via is not None:
+            middle = candidate | {"version": via, "digest": format(2, "064x"), "workerProtocol": 1}
+            updates.append(self.update(original, middle, contract["intermediate"], False))
+            original = middle
+        updates.append(self.update(original, candidate, self.release, rollback))
+        result = {"passed": True, "testTrustRoot": False, "cleanup": {"servicesAbsent": True, "processesAbsent": True},
+            "publication": publication, "firstPublishedUpdater": contract["first"], "realDraft": contract["target"],
+            "routeContract": contract, "via": via, "rollback": rollback, "updates": updates}
+        directory = output / "groups" / name / "0"
+        directory.mkdir(parents=True)
+        (directory / "case-native-pair.json").write_bytes(groups.encode(result))
+        bundle = Bundle(directory, workers)
+        record = groups.typed_leaf(bundle.value["groups"][0]["observations"], "observations", groups.file_resolver(directory))
+        before = record["observations"][0]
+        before["original"]["stateRun"] = name + ":0"
+        before["original"]["imageBytes"] = 5
+        record["observations"] = [before | {"label": label} for label in completion.route_labels(result)]
+        (directory / "case-cohort.json").write_bytes(groups.encode(record))
+        return completion.route_companion(output, contract, name, rollback, via, [group])
+
+    def update(self, source, build, binding, rollback):
+        target = {key: binding[key] for key in ("version", "metadata", "manifest")} | {"binary": build["digest"]}
+        failure = {"edge": {"from": source["digest"], "to": build["digest"], "platform": build["platform"]},
+                   "version": build["version"], "phase": "rolled_back"}
+        final_build = source if rollback else build
+        ledger = {"state": {}, "failed": [failure] if rollback else [], "entries": [] if rollback else
+            [{"version": build["version"], "metadata": binding["metadata"], "workersPreserved": 2}]}
+        return {"sourceBuild": source, "rollback": rollback, "routeKind": "direct", "expectedHops": [], "hops": [],
+            "authenticatedTarget": target, "routePlans": [{"target": target, "next": target, "currentDigest": source["digest"]}],
+            "activationFault": {"bound": True, "released": True, "error": ""},
+            "failedRestart": {"failed": failure, "helper": {"sha256": final_build["digest"]}},
+            "final": {"build": final_build, "helper": {"sha256": final_build["digest"]}, "ledger": ledger,
+                "journal": {"phase": "rolled_back" if rollback else "committed", "request": {"current": source, "manifest": {"version": build["version"]}}}}}
+
+    def mutate_route(self, scenario, action):
+        output = self.root / "linux-amd64"
+        result = output / "groups" / scenario / "0/case-native-pair.json"
+        value = json.loads(result.read_bytes())
+        action(value)
+        result.write_bytes(groups.encode(value))
+        companion = output / (scenario + "-groups.json")
+        route = json.loads(companion.read_bytes())
+        route["groups"][0]["result"] = completion.asset(output, result)
+        companion.write_bytes(groups.encode(route))
+        header = output / "worker-completion.json"
+        completion_value = json.loads(header.read_bytes())
+        completion_value["routes"] = [completion.asset(output, companion) if ref["name"] == companion.name else ref
+                                      for ref in completion_value["routes"]]
+        header.write_bytes(groups.encode(completion_value))
+
+    def test_first_successor_direct_success_and_rollback_complete_all_platforms(self):
+        self.install_routes()
+        self.validate()
+
+    def test_third_release_direct_and_distinct_staged_success_and_rollback_complete(self):
+        self.install_routes(True)
+        self.validate()
+
+    def test_available_intermediate_groups_cannot_be_skipped(self):
+        self.install_routes(True)
+        header = self.root / "linux-amd64/worker-completion.json"
+        value = json.loads(header.read_bytes())
+        value["routes"] = value["routes"][:2]
+        header.write_bytes(groups.encode(value))
+        with self.assertRaisesRegex(ValueError, "intermediate grouped routes"):
+            self.validate()
+
+    def test_staged_head_cannot_be_claimed_without_its_actual_commit(self):
+        self.install_routes(True)
+        self.mutate_route("published-chain", lambda value: value["updates"].pop(0))
+        with self.assertRaisesRegex(ValueError, "required authentic head"):
+            self.validate()
+
+    def test_direct_outcome_cannot_hide_a_required_waypoint(self):
+        self.install_routes()
+        self.mutate_route("published", lambda value: value["updates"][0].update(routeKind="multihop"))
+        with self.assertRaisesRegex(ValueError, "authenticated planned route"):
+            self.validate()
+
+    def test_final_helper_failed_edge_and_preserved_worker_count_are_checked(self):
+        self.install_routes()
+        self.mutate_route("published-rollback", lambda value: value["updates"][0]["final"]["ledger"].update(failed=[]))
+        with self.assertRaisesRegex(ValueError, "durable failed edge"):
+            self.validate()
+
+    def test_old_completion_shape_cannot_pass_as_direct_evidence(self):
+        self.install_routes()
+        path = self.root / "linux-amd64/worker-completion.json"
+        value = json.loads(path.read_bytes()) | {"schema": 1}
+        path.write_bytes(groups.encode(value))
+        with self.assertRaisesRegex(ValueError, "wrong index"):
+            self.validate()
+
+    def test_missing_original_worker_group_cannot_pass(self):
+        self.install_routes()
+        output = self.root / "linux-amd64"
+        path = output / "published-groups.json"
+        value = json.loads(path.read_bytes()) | {"groups": []}
+        path.write_bytes(groups.encode(value))
+        header_path = output / "worker-completion.json"
+        header = json.loads(header_path.read_bytes())
+        header["routes"][0] = completion.asset(output, path)
+        header_path.write_bytes(groups.encode(header))
+        with self.assertRaisesRegex(ValueError, "authoritative worker coverage"):
             self.validate()
 
 

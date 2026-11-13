@@ -518,7 +518,9 @@ class PublishedRouteReviewTest(unittest.TestCase):
     def record(self):
         expected = self.expected()
         hop = {"expected": expected, "build": {"digest": "middle-image"}, "helper": {"sha256": "middle-image"}}
-        return {"expectedHops": [expected], "authenticatedTarget": {"binary": "target-image"}, "hops": [hop]}
+        target = {"version": "target", "binary": "target-image", "metadata": "target-metadata", "manifest": "target-manifest"}
+        plans = [{"target": target, "next": expected}, {"target": target, "next": target, "currentDigest": "middle-image"}]
+        return {"expectedHops": [expected], "authenticatedTarget": target, "hops": [hop], "routeKind": "multihop", "routePlans": plans}
 
     def test_terminal_without_required_hop_is_rejected(self):
         record = self.record()
