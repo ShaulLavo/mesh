@@ -162,6 +162,16 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(value["failures"][0]["type"], "ClockExpired")
         self.assertFalse(value["measurement_completed"])
 
+    def test_operation_sample_uses_one_end_observation(self):
+        def ticks():
+            self.now.advance(101)
+            return self.now()
+        clock = clocks.Clock(diagnostic(), now=ticks)
+        with clock.operation("observed"):
+            self.now.advance(1000)
+        row = clock.samples[-1]
+        self.assertEqual(row["elapsed_ns"], row["end_ns"] - row["start_ns"])
+
     def test_clean_local_sample_survives_later_failure(self):
         clock = self.clock()
         with clock.operation("installed-group:0") as key:
@@ -637,6 +647,54 @@ class NativeOwnershipTest(unittest.TestCase):
         self.assertEqual(ownership.correlated, {20, 30})
         with patch.object(clocks, "process_snapshot", return_value={}):
             ownership.verify(clocks.time.monotonic_ns() + clocks.SECOND)
+
+    def test_vanished_native_records_preserve_retained_identity_checks(self):
+        for name in ("cohort.json", "state/s/W000/meta.json"):
+            self.check_vanished_record(name)
+
+    def check_vanished_record(self, name):
+        state = self.root / ("mesh-transition." + name.replace("/", "-").replace(".", "-"))
+        path = state / name
+        path.parent.mkdir(parents=True)
+        value = {"pid": 30} if path.name == "meta.json" else {"workers": [{"pid": 20, "shellPid": 30}]}
+        path.write_text(json.dumps(value))
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        expected = ownership.expected.copy()
+        original = Path.read_text
+        def remove_before_read(candidate, *args, **kwargs):
+            if candidate == path:
+                path.unlink()
+                raise FileNotFoundError(str(path))
+            return original(candidate, *args, **kwargs)
+        with patch.object(clocks, "process_snapshot", return_value={}), patch.object(Path, "read_text", remove_before_read):
+            ownership.observe(deadline)
+            ownership.verify(deadline)
+        self.assertEqual(ownership.expected, expected)
+        self.assertEqual(ownership.correlated, expected)
+        self.assertTrue(ownership.verified)
+        self.assertEqual(ownership.vanished_record_reads, 1)
+
+    def test_unobserved_vanished_record_cannot_establish_coverage(self):
+        state = self.root / "mesh-transition.unobserved"
+        state.mkdir()
+        path = state / "cohort.json"
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()), patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        path.unlink()
+        with patch.object(clocks, "process_snapshot", return_value={}), self.assertRaisesRegex(RuntimeError, "coverage/absence unconfirmed"):
+            ownership.verify(deadline)
+        self.assertFalse(ownership.verified)
+
+    def test_native_record_permission_error_is_not_treated_as_removal(self):
+        state = self.root / "mesh-transition.denied"
+        state.mkdir()
+        (state / "cohort.json").write_text("{}")
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()), patch.object(Path, "read_text", side_effect=PermissionError), self.assertRaises(PermissionError):
+            clocks.NativeOwnership(Mock(pid=10), self.root, self.root, clocks.time.monotonic_ns() + clocks.SECOND)
 
     def test_missing_detached_identity_never_uses_a_late_root_scan(self):
         rows = self.rows()

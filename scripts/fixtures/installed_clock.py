@@ -221,8 +221,9 @@ class Clock:
             self.finish_operation(key, start, previous)
 
     def finish_operation(self, key, start, previous):
-        self.samples.append({"key": key, "start_ns": start, "end_ns": self.now(),
-                             "elapsed_ns": self.now() - start, "completed": not self.failures,
+        ended = self.now()
+        self.samples.append({"key": key, "start_ns": start, "end_ns": ended,
+                             "elapsed_ns": ended - start, "completed": not self.failures,
                              "cleanup_verified": False})
         self.stack.pop()
         self.switch(previous)
@@ -624,6 +625,7 @@ class NativeOwnership:
         self.process, self.root, self.output = process, Path(root), Path(output)
         self.owned, self.expected, self.pending, self.correlated = {}, set(), set(), set()
         self.unresolved, self.scans, self.observation_ns, self.verification_ns = [], 0, 0, 0
+        self.vanished_record_reads = 0
         self.launch_birth = None
         self.verified = False
         self.observe(deadline_ns, launching=True)
@@ -663,7 +665,11 @@ class NativeOwnership:
             paths.extend(directory.glob("cohort.json"))
             paths.extend(directory.glob("state/s/*/meta.json"))
         for path in paths:
-            value = json.loads(path.read_text())
+            try:
+                value = json.loads(path.read_text())
+            except FileNotFoundError:
+                self.vanished_record_reads += 1
+                continue
             if path.name == "meta.json":
                 self.note_shell(value.get("pid"), rows)
                 continue
@@ -732,6 +738,7 @@ class NativeOwnership:
                  "pendingWorkers": sorted(self.pending), "unresolved": self.unresolved,
                  "correlatedPids": sorted(self.correlated),
                  "scans": self.scans, "observation_ns": self.observation_ns, "verification_ns": self.verification_ns,
+                  "vanished_record_reads": self.vanished_record_reads,
                  "absenceVerified": self.verified,
                  "coverage": "launch ancestry reconciled with native worker/shell records"}
         (self.output / "fixture-native-ownership.json").write_text(json.dumps(value, indent=2) + "\n")
