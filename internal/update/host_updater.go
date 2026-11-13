@@ -178,6 +178,9 @@ func (u *HostUpdater) save(ctx context.Context, state HostUpdate) error {
 	if err != nil {
 		return err
 	}
+	if !sameHostFinalization(prior, state) {
+		return nil
+	}
 	state.ProblemSince = hostProblemSince(prior, state, u.now())
 	return u.Store.writeAuthority("host-update.json", state)
 }

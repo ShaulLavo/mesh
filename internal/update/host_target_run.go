@@ -151,14 +151,24 @@ func (u *HostUpdater) recoverTargetReservation(ctx context.Context, state HostUp
 }
 
 func (u *HostUpdater) retireLocalTarget(ctx context.Context, state HostUpdate, owned OwnedRequest) error {
-	if owned.IntentRevision == 0 {
-		return u.save(ctx, state)
-	}
 	unlock, err := u.Store.lockContext(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	prior, err := u.Store.hostUpdate()
+	if err != nil {
+		return err
+	}
+	expected := state
+	expected.Owned = &owned
+	if !sameHostFinalization(prior, expected) {
+		return nil
+	}
+	state.ProblemSince = hostProblemSince(prior, state, u.now())
+	if owned.IntentRevision == 0 {
+		return u.Store.writeAuthority("host-update.json", state)
+	}
 	intent, err := u.Store.localTargetWork(owned)
 	if err != nil {
 		return err
