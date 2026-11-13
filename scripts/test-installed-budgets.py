@@ -17,7 +17,7 @@ from fixtures import installed_budgets as budgets, installed_clock as clocks
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = (ROOT / ".github/workflows/installed-catchup.yml").read_text()
-SMOKE = (ROOT / ".github/workflows/installed-frozen-smoke.yml").read_text()
+SMOKE = (ROOT / "scripts/fixtures/installed-frozen-smoke.yml").read_text()
 
 
 def job(name):
@@ -236,6 +236,8 @@ class WorkflowWiringTests(unittest.TestCase):
         return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
 
     def test_frozen_smoke_reuses_one_native_fresh_job_without_diagnostic_mode(self):
+        self.assertFalse((ROOT / ".github/workflows/installed-frozen-smoke.yml").exists())
+        self.assertTrue((ROOT / ".github/workflows/rollback-proof-investigation.yml").exists())
         self.assertIn("workflow_dispatch:", SMOKE)
         self.assertNotIn("pull_request:", SMOKE)
         self.assertEqual(re.findall(r"^  ([\w-]+):$", SMOKE.split("jobs:\n", 1)[1], re.M), ["native-fresh"])

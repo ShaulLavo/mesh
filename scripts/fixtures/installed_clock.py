@@ -359,35 +359,43 @@ def parent_deadline(maximum):
     return min(end, HANDOFF.get()) if HANDOFF.get() is not None else end
 
 
+@dataclass
+class HandoffAlarm:
+    previous: tuple | None = None
+
+
 @contextmanager
 def handoff(deadline_ns, *, watchdog=False):
     positive(deadline_ns)
     remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
     token = HANDOFF.set(min(deadline_ns, HANDOFF.get() or deadline_ns))
-    previous = None
+    alarm = HandoffAlarm()
     try:
-        previous = start_handoff_alarm(HANDOFF.get()) if watchdog else None
+        if watchdog:
+            start_handoff_alarm(HANDOFF.get(), alarm)
         yield
     finally:
-        if previous is not None:
-            restore_handoff_alarm(previous)
         HANDOFF.reset(token)
+        if alarm.previous is not None:
+            restore_handoff_alarm(alarm.previous)
 
 
-def start_handoff_alarm(deadline_ns):
+def start_handoff_alarm(deadline_ns, alarm):
     previous = (signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL)[0], time.monotonic_ns())
     remaining = remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
+    alarm.previous = previous
     signal.signal(signal.SIGALRM, handoff_expired)
     signal.setitimer(signal.ITIMER_REAL, remaining)
-    return previous
 
 
 def restore_handoff_alarm(previous):
-    signal.setitimer(signal.ITIMER_REAL, 0)
-    signal.signal(signal.SIGALRM, previous[0])
-    if previous[1]:
-        remaining = previous[1] - (time.monotonic_ns() - previous[2]) / SECOND
-        signal.setitimer(signal.ITIMER_REAL, max(0.000001, remaining))
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    finally:
+        signal.signal(signal.SIGALRM, previous[0])
+        if previous[1]:
+            remaining = previous[1] - (time.monotonic_ns() - previous[2]) / SECOND
+            signal.setitimer(signal.ITIMER_REAL, max(0.000001, remaining))
 
 
 def handoff_expired(_number, _frame):

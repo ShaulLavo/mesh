@@ -109,11 +109,7 @@ func testShutdownHandshake(t *testing.T, approved, current bool) {
 			Auth: &transport.Authentication{Key: clientKey, ExpectedIdentity: serverID}, HTTPClient: fixture.client,
 		})
 		if conn != nil {
-			_, readErr := conn.ReadFrame()
-			if readErr == nil {
-				t.Error("retiring daemon left the authenticated connection open")
-			}
-			_ = conn.Close()
+			assertRetiringHandshakeClosed(t, conn)
 		}
 		dialed <- err
 	}()
@@ -139,6 +135,14 @@ func testShutdownHandshake(t *testing.T, approved, current bool) {
 	if err := waitRuntime(t, fixture.done); err != nil {
 		t.Fatalf("daemon shutdown: %v", err)
 	}
+}
+
+func assertRetiringHandshakeClosed(t *testing.T, conn transport.Conn) {
+	t.Helper()
+	if _, err := conn.ReadFrame(); err == nil {
+		t.Error("retiring daemon left the authenticated connection open")
+	}
+	_ = conn.Close()
 }
 
 type shutdownHandshakeFixture struct {

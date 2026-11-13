@@ -441,6 +441,21 @@ class ClockTest(unittest.TestCase):
                          [(signal.SIGALRM, clocks.handoff_expired), (signal.SIGALRM, signal.SIG_IGN)])
         self.assertIsNone(clocks.HANDOFF.get())
 
+    def test_watchdog_expiring_after_timer_install_restores_previous_handler(self):
+        error = clocks.ClockExpired("timer fired before installation returned")
+        end = self.now() + clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(clocks.signal, "getsignal", return_value=signal.SIG_IGN), \
+                patch.object(clocks.signal, "getitimer", return_value=(0, 0)), \
+                patch.object(clocks.signal, "signal") as handler, \
+                patch.object(clocks.signal, "setitimer", side_effect=[error, None]) as timer:
+            with self.assertRaises(clocks.ClockExpired) as raised, clocks.handoff(end, watchdog=True):
+                self.fail("expired handoff entered its child")
+        self.assertIs(raised.exception, error)
+        self.assertIsNone(clocks.HANDOFF.get())
+        self.assertEqual(handler.call_args_list[-1].args, (signal.SIGALRM, signal.SIG_IGN))
+        self.assertEqual(timer.call_args_list[-1].args, (signal.ITIMER_REAL, 0))
+
     def test_native_partial_export_and_clean_completion(self):
         handoff = self.root / "handoff.json"
         handoff.write_text(json.dumps({"deadline_ns": self.now() + 10 * clocks.SECOND, "mode": "diagnostic", "prefix": "proof#1"}))
