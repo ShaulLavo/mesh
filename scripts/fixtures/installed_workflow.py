@@ -6,10 +6,21 @@ from pathlib import Path
 import shutil
 import tarfile
 
-from fixtures import installed_artifacts, installed_budgets, installed_clock, installed_storage
+from fixtures import fleet_baselines, installed_artifacts, installed_budgets, installed_clock, installed_storage
 
 PROFILES = ("none", "first", "final")
 MODES = ("chain", "waypoint")
+RUNNERS = {"linux/amd64": "ubuntu-24.04", "linux/arm64": "ubuntu-24.04-arm", "darwin/arm64": "macos-15"}
+
+
+def case_matrix(platform, mode):
+    if platform not in RUNNERS or mode not in MODES:
+        raise ValueError("prepared workflow needs one supported native platform and mode")
+    key, host = installed_budgets.PLATFORMS[platform]
+    hosts = [row for row in fleet_baselines.load()["hosts"] if row["name"] == host and row["platform"] == platform]
+    if len(hosts) != 1:
+        raise ValueError("prepared workflow host mapping differs from the actual native inventory")
+    return {"include": [{"platform": platform, "key": key, "host": host, "runner": RUNNERS[platform], "mode": mode}]}
 
 
 def physical_key(platform, mode, role, profile=None):
@@ -17,12 +28,11 @@ def physical_key(platform, mode, role, profile=None):
     return key + "-" + profile if profile else key
 
 
-def physical_plans(index, diagnostic):
+def physical_plans(index, diagnostic, platform, mode):
+    matrix = case_matrix(platform, mode)
     values, paths = {}, {}
-    for platform in installed_budgets.PLATFORMS:
-        for mode in MODES:
-            add_physical_plans(values, paths, index, diagnostic, platform, mode)
-    return {"minutes": values, "plans": paths}
+    add_physical_plans(values, paths, index, diagnostic, platform, mode)
+    return {"minutes": values, "plans": paths, "case": matrix}
 
 
 def add_physical_plans(values, paths, index, diagnostic, platform, mode):
@@ -166,6 +176,8 @@ def main():
     plans = commands.add_parser("plans")
     plans.add_argument("--index", type=Path, default=installed_budgets.INDEX)
     plans.add_argument("--diagnostic", action="store_true")
+    plans.add_argument("--platform", choices=tuple(RUNNERS), required=True)
+    plans.add_argument("--mode", choices=MODES, required=True)
     unsplit = commands.add_parser("unsplit")
     unsplit.add_argument("--index", type=Path, default=installed_budgets.INDEX)
     unsplit.add_argument("--diagnostic", action="store_true")
@@ -193,7 +205,7 @@ def main():
     if args.command == "select":
         args.output.write_text(json.dumps(selection(args.bundle, args.profile)) + "\n")
     elif args.command == "plans":
-        write_plans_output(physical_plans(args.index, args.diagnostic))
+        write_plans_output(physical_plans(args.index, args.diagnostic, args.platform, args.mode))
     elif args.command == "unsplit":
         print(json.dumps(unsplit_plans(args), separators=(",", ":")))
     elif args.command == "fetch":

@@ -3,6 +3,14 @@ name: Prepared installed cohort
 on:
   workflow_call:
     inputs:
+      native_platform:
+        required: true
+        type: string
+        description: 'One native platform for this independent preparation and profile pipeline'
+      mode:
+        required: true
+        type: string
+        description: 'One complete chain or waypoint case'
       harness_source:
         required: true
         type: string
@@ -30,7 +38,7 @@ env:
   PYTHONPATH: ${{ github.workspace }}/scripts
 
 concurrency:
-  group: prepared-cohort-${{ github.run_id }}-${{ github.workflow }}-${{ inputs.worker_artifact_run }}-${{ inputs.worker_artifact_source }}
+  group: prepared-cohort-${{ inputs.native_platform }}-${{ inputs.mode }}-${{ github.run_id }}-${{ github.workflow }}-${{ inputs.worker_artifact_run }}-${{ inputs.worker_artifact_source }}
   cancel-in-progress: false
 
 defaults:
@@ -44,6 +52,7 @@ jobs:
     outputs:
       minutes: ${{ steps.plans.outputs.minutes }}
       plans: ${{ steps.plans.outputs.plans }}
+      case: ${{ steps.plans.outputs.case }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,11 +61,13 @@ jobs:
         id: plans
         env:
           DIAGNOSTIC: ${{ inputs.calibration_only }}
+          NATIVE_PLATFORM: ${{ inputs.native_platform }}
+          PROOF_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           args=()
           if [[ $DIAGNOSTIC == true ]]; then args+=(--diagnostic); fi
-          python3 scripts/fixtures/installed_workflow.py plans "${args[@]}"
+          python3 scripts/fixtures/installed_workflow.py plans --platform "$NATIVE_PLATFORM" --mode "$PROOF_MODE" "${args[@]}"
 
   prepare:
     needs: plans
@@ -65,22 +76,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(needs.plans.outputs.minutes)[format('{0}-{1}-prepare', matrix.key, matrix.mode)] }}
     strategy:
       fail-fast: false
-      matrix:
-        platform: [linux/amd64, linux/arm64, darwin/arm64]
-        mode: [chain, waypoint]
-        include:
-          - platform: linux/amd64
-            key: linux-amd64
-            host: pc
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            key: linux-arm64
-            host: pi
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            key: darwin-arm64
-            host: mac
-            runner: macos-15
+      matrix: ${{ fromJSON(needs.plans.outputs.case) }}
     steps:
       - name: Record original job clock before checkout and setup
         env:
@@ -177,22 +173,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [linux/amd64, linux/arm64, darwin/arm64]
-        mode: [chain, waypoint]
         profile: [none, first, final]
-        include:
-          - platform: linux/amd64
-            key: linux-amd64
-            host: pc
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            key: linux-arm64
-            host: pi
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            key: darwin-arm64
-            host: mac
-            runner: macos-15
+        include: ${{ fromJSON(needs.plans.outputs.case).include }}
     steps:
       - name: Record original job clock before checkout and setup
         env:
@@ -263,9 +245,7 @@ jobs:
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      matrix:
-        key: [linux-amd64, linux-arm64, darwin-arm64]
-        mode: [chain, waypoint]
+      matrix: ${{ fromJSON(needs.plans.outputs.case) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

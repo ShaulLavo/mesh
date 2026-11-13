@@ -580,8 +580,15 @@ jobs:
   prepared-cohort:
     needs: frozen-budgets
     if: inputs.worker_artifact_prefix != '' && !inputs.publication_only && inputs.calibration_support == '' && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        mode: [chain, waypoint]
     uses: ./.github/workflows/installed-prepared.yml
     with:
+      native_platform: ${{ matrix.platform }}
+      mode: ${{ matrix.mode }}
       harness_source: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
       worker_artifact_prefix: ${{ inputs.worker_artifact_prefix }}
       worker_artifact_run: ${{ inputs.worker_artifact_run }}

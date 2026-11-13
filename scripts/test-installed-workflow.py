@@ -4,6 +4,7 @@ from dataclasses import asdict
 import hashlib
 import io
 import importlib.util
+import itertools
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,16 @@ def job(source, name):
 def step(source, name):
     value = source.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
     return "\n".join(line[10:] for line in value.split("        run: |\n", 1)[1].splitlines())
+
+
+def matrix_values(source, name):
+    values = re.search(rf"^        {name}: \[(.+)\]$", source, re.M).group(1)
+    return [value.strip() for value in values.split(",")]
+
+
+def outer_cases():
+    source = job(CATCHUP, "prepared-cohort")
+    return list(itertools.product(matrix_values(source, "platform"), matrix_values(source, "mode")))
 
 
 def bundle(root, count=7, mode="waypoint"):
@@ -164,13 +175,13 @@ class WorkflowControls(unittest.TestCase):
 
     def test_diagnostic_physical_planning_never_reads_an_index(self):
         with patch.object(workflow.installed_budgets, "select_plan") as select:
-            result = workflow.physical_plans(self.root / "absent.json", True)
+            result = workflow.physical_plans(self.root / "absent.json", True, "linux/amd64", "chain")
         select.assert_not_called()
-        self.assertEqual(len(result["minutes"]), 24)
+        self.assertEqual(len(result["minutes"]), 4)
         self.assertEqual(set(result["minutes"].values()), {30})
         self.assertEqual(set(result["plans"].values()), {""})
         with self.assertRaisesRegex(ValueError, "inactive"):
-            workflow.physical_plans(self.root / "absent.json", False)
+            workflow.physical_plans(self.root / "absent.json", False, "linux/amd64", "chain")
 
     def test_frozen_physical_roles_require_independent_plans_and_round_admission(self):
         phase = installed_clock.PhaseBudget("setup#1", installed_clock.bound(installed_clock.SECOND), {"x": 1},
@@ -180,19 +191,18 @@ class WorkflowControls(unittest.TestCase):
             eligibility_review="offline test", external_budget=phase, admission_ns=1175 * installed_clock.SECOND)
         index = self.root / "index.json"
         entries = {}
-        for platform, mode in ((platform, mode) for platform in workflow.installed_budgets.PLATFORMS for mode in workflow.MODES):
-            self.write_physical_plans(index, entries, base, platform, mode)
+        self.write_physical_plans(index, entries, base, "linux/amd64", "chain")
         index.write_text(json.dumps({"schema": 1, "plans": entries}))
         with patch.object(workflow.installed_budgets, "ROOT", self.root):
-            result = workflow.physical_plans(index, False)
-        self.assertEqual(len(result["plans"]), 24)
+            result = workflow.physical_plans(index, False, "linux/amd64", "chain")
+        self.assertEqual(len(result["plans"]), 4)
         self.assertEqual(set(result["minutes"].values()), {20})
         path = self.root / result["plans"]["linux-amd64-chain-consume-first"]
         value = json.loads(path.read_bytes())
         value["workload"]["installedSlice"]["select"][0]["profile"] = "chain-final"
         path.write_text(json.dumps(value))
         with patch.object(workflow.installed_budgets, "ROOT", self.root), self.assertRaisesRegex(ValueError, "another profile"):
-            workflow.physical_plans(index, False)
+            workflow.physical_plans(index, False, "linux/amd64", "chain")
 
     def write_physical_plans(self, index, entries, base, platform, mode):
         for role, profile in (("prepare", None), ("consume", "none"), ("consume", "first"), ("consume", "final")):
@@ -277,6 +287,76 @@ class WorkflowControls(unittest.TestCase):
         self.assertIn("PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}", producer)
         for name in ("prepare", "consume"):
             self.assertIn("ref: ${{ inputs.harness_source }}", job(PREPARED, name))
+
+    def test_one_case_mapping_rejects_unknown_context_and_inventory_mismatch(self):
+        for platform, mode in (("linux/386", "chain"), ("linux/amd64", "oldest"), ("", "waypoint")):
+            with self.assertRaisesRegex(ValueError, "supported native platform and mode"):
+                workflow.case_matrix(platform, mode)
+        with patch.object(workflow.fleet_baselines, "load", return_value={"hosts": [{"name": "pc", "platform": "darwin/arm64"}]}):
+            with self.assertRaisesRegex(ValueError, "actual native inventory"):
+                workflow.case_matrix("linux/amd64", "chain")
+
+    def test_six_outer_cases_have_single_prepares_and_complete_consumer_union(self):
+        cases = outer_cases()
+        self.assertEqual(set(cases), set(itertools.product(workflow.RUNNERS, workflow.MODES)))
+        self.assertEqual(len(cases), 6)
+        rows = [workflow.case_matrix(platform, mode)["include"][0] for platform, mode in cases]
+        self.assertEqual({row["host"] for row in rows}, {"pc", "pi", "mac"})
+        for name in ("prepare", "aggregate"):
+            source = job(PREPARED, name)
+            self.assertIn("matrix: ${{ fromJSON(needs.plans.outputs.case) }}", source)
+            self.assertNotIn("platform: [", source)
+            self.assertNotIn("mode: [", source)
+        consumers = job(PREPARED, "consume")
+        self.assertIn("include: ${{ fromJSON(needs.plans.outputs.case).include }}", consumers)
+        profiles = matrix_values(consumers, "profile")
+        self.assertEqual(profiles, ["none", "first", "final"])
+        actual = {(row["platform"], row["mode"], profile) for row in rows for profile in profiles}
+        self.assertEqual(actual, set(itertools.product(workflow.RUNNERS, workflow.MODES, workflow.PROFILES)))
+        self.assertEqual(len(actual), 18)
+        self.assertIn("needs: [plans, prepare]", consumers)
+        self.assertIn("needs: [plans, prepare, consume]", job(PREPARED, "aggregate"))
+        self.assertIn("needs: plans", job(PREPARED, "prepare"))
+        self.assertIn("fail-fast: false", job(CATCHUP, "prepared-cohort"))
+        self.assertIn("mode: [oldest, order]", job(CATCHUP, "signed-cohort-chain"))
+        self.assertEqual(job(CATCHUP, "signed-cohort-chain").count("            mode: order"), 2)
+
+    def test_linux_consumers_are_ready_when_mac_preparations_are_cancelled(self):
+        cases = outer_cases()
+        completed = {(case, "plans") for case in cases} | {(case, "prepare") for case in cases if case[0].startswith("linux/")}
+        needs = re.search(r"^    needs: \[(.+)\]$", job(PREPARED, "consume"), re.M).group(1).split(", ")
+        ready = [case for case in cases if all((case, dependency) in completed for dependency in needs)]
+        self.assertEqual(set(ready), {case for case in cases if case[0].startswith("linux/")})
+        self.assertEqual(len(ready) * len(matrix_values(job(PREPARED, "consume"), "profile")), 12)
+
+    def test_required_reusable_inputs_and_case_concurrency_are_distinct(self):
+        header = PREPARED.split("\npermissions:", 1)[0]
+        caller = job(CATCHUP, "prepared-cohort")
+        for name, expression in (("native_platform", "matrix.platform"), ("mode", "matrix.mode")):
+            self.assertIn(name + ":\n        required: true\n        type: string", header)
+            self.assertIn(name + ": ${{ " + expression + " }}", caller)
+        group = re.search(r"^  group: (.+)$", PREPARED, re.M).group(1)
+        self.assertIn("${{ inputs.native_platform }}", group)
+        self.assertIn("${{ inputs.mode }}", group)
+        groups = {group.replace("${{ inputs.native_platform }}", platform).replace("${{ inputs.mode }}", mode)
+                  for platform, mode in outer_cases()}
+        self.assertEqual(len(groups), 6)
+        self.assertIn("cancel-in-progress: false", PREPARED)
+
+    def test_actual_plan_step_selects_only_its_case_without_loading_diagnostic_budgets(self):
+        command = step(job(PREPARED, "plans"), "Require independently reviewed physical job plans or explicit measurement")
+        for platform, mode in outer_cases():
+            output = self.root / (platform.replace("/", "-") + "-" + mode)
+            environment = os.environ | {"GITHUB_OUTPUT": str(output), "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": str(ROOT / "scripts"), "DIAGNOSTIC": "true", "NATIVE_PLATFORM": platform, "PROOF_MODE": mode}
+            result = subprocess.run(["bash", "-c", command], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            self.assertEqual(json.loads(observed["case"]), workflow.case_matrix(platform, mode))
+            self.assertEqual(len(json.loads(observed["minutes"])), 4)
+            key = workflow.installed_budgets.PLATFORMS[platform][0] + "-" + mode + "-"
+            self.assertTrue(all(name.startswith(key) for name in json.loads(observed["plans"])))
+            self.assertEqual(set(json.loads(observed["plans"]).values()), {""})
 
     def test_cli_bundled_preparer_is_optional_and_waypoint_is_forwarded(self):
         spec = importlib.util.spec_from_file_location("prepared_workflow_cli", ROOT / "scripts/prove-installed-catchup.py")
