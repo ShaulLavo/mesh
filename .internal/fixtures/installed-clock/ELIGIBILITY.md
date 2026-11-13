@@ -64,6 +64,16 @@ Darwin chain preparation 1200, and Darwin waypoint preparation 1500. Every total
 is derived from complete clean measurements with the same 1.125 rule and explicit
 aggregate external conditions. The review is `split-budget-reducer/recovery-final/REVIEW.md`.
 
-Five slots remain unactivated: Linux AMD64 order, Linux AMD64 chain final,
-Linux ARM64 chain none, Linux ARM64 waypoint final, and Darwin chain none.
-Their failed or missing records provide no successful command plan.
+The ordered-host workload was independently approved from successful run
+43500072280, attempt 1, measured harness `ba56cc36`, distinct from vehicle
+`e60c2536`. Its 43 clean leaves and eleven guards give a 490.186-second command,
+138.719-second aggregate external bound and unchanged 60-second reserve,
+totaling 688.905 seconds within a 900-second admission. The full successful
+provider interval includes post actions and cache work; raw external completeness
+remains false. Its review is `split-budget-reducer/order-43500072280/REVIEW.md`.
+
+Four slots remain unactivated: Linux AMD64 chain final, Linux ARM64 chain none,
+Linux ARM64 waypoint final, and Darwin chain none. Their failed or missing
+records provide no successful command plan. These numerical approvals do not
+establish successful frozen execution; the separate frozen smoke setup overrun
+remains recorded and under phase-contract review.

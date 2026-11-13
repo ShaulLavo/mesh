@@ -208,15 +208,23 @@ class FrozenBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, MESH_CATALOG_EVIDENCE="1"), self.assertRaisesRegex(ValueError, "workload differs from actual invocation"):
             clocks.from_arguments(self.args, "linux/amd64")
 
-    def test_unreviewed_five_slots_stay_absent(self):
+    def test_unreviewed_four_consumer_slots_stay_absent(self):
         plans = budgets.read_index(budgets.INDEX)
-        self.assertEqual(len(plans), 32)
-        missing = ("linux-amd64-order", "linux-amd64-chain-consume-final", "linux-arm64-chain-consume-none",
+        self.assertEqual(len(plans), 33)
+        missing = ("linux-amd64-chain-consume-final", "linux-arm64-chain-consume-none",
                    "linux-arm64-waypoint-consume-final", "darwin-arm64-chain-consume-none")
         for key in missing:
             self.assertNotIn(key, plans)
             with self.assertRaisesRegex(ValueError, "no independently approved frozen plan"):
                 budgets.select_plan(budgets.INDEX, key, {})
+
+    def test_reviewed_order_plan_preserves_its_complete_admission(self):
+        key, workload = budgets.selection("linux/amd64", "order")
+        _path, plan = budgets.select_plan(budgets.INDEX, key, workload)
+        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_905_000_000)
+        self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
+        self.assertEqual(budgets.workflow_minutes(plan), 15)
+        self.assertEqual((len(plan.phases), len(plan.guards)), (43, 11))
 
     def test_all_ten_cohort_cells_and_six_support_cells_are_required(self):
         profiles = budgets.required_profiles(True, True, None, False)

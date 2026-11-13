@@ -96,6 +96,9 @@
     },
     "darwin-arm64-waypoint-consume-none": {
       "path": "darwin-arm64-waypoint-consume-none.json"
+    },
+    "linux-amd64-order": {
+      "path": "linux-amd64-order.json"
     }
   }
 }
