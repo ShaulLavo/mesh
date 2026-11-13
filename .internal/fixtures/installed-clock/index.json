@@ -45,6 +45,57 @@
     },
     "darwin-arm64-fresh": {
       "path": "darwin-arm64-fresh.json"
+    },
+    "linux-amd64-chain-consume-none": {
+      "path": "linux-amd64-chain-consume-none.json"
+    },
+    "linux-amd64-chain-consume-first": {
+      "path": "linux-amd64-chain-consume-first.json"
+    },
+    "linux-amd64-waypoint-consume-none": {
+      "path": "linux-amd64-waypoint-consume-none.json"
+    },
+    "linux-amd64-waypoint-consume-first": {
+      "path": "linux-amd64-waypoint-consume-first.json"
+    },
+    "linux-amd64-waypoint-consume-final": {
+      "path": "linux-amd64-waypoint-consume-final.json"
+    },
+    "linux-arm64-chain-consume-first": {
+      "path": "linux-arm64-chain-consume-first.json"
+    },
+    "linux-arm64-chain-consume-final": {
+      "path": "linux-arm64-chain-consume-final.json"
+    },
+    "linux-arm64-waypoint-consume-none": {
+      "path": "linux-arm64-waypoint-consume-none.json"
+    },
+    "linux-arm64-waypoint-consume-first": {
+      "path": "linux-arm64-waypoint-consume-first.json"
+    },
+    "darwin-arm64-chain-prepare": {
+      "path": "darwin-arm64-chain-prepare.json"
+    },
+    "darwin-arm64-chain-consume-first": {
+      "path": "darwin-arm64-chain-consume-first.json"
+    },
+    "darwin-arm64-waypoint-prepare": {
+      "path": "darwin-arm64-waypoint-prepare.json"
+    },
+    "darwin-arm64-waypoint-consume-first": {
+      "path": "darwin-arm64-waypoint-consume-first.json"
+    },
+    "darwin-arm64-waypoint-consume-final": {
+      "path": "darwin-arm64-waypoint-consume-final.json"
+    },
+    "darwin-arm64-adoption-all": {
+      "path": "darwin-arm64-adoption-all.json"
+    },
+    "darwin-arm64-chain-consume-final": {
+      "path": "darwin-arm64-chain-consume-final.json"
+    },
+    "darwin-arm64-waypoint-consume-none": {
+      "path": "darwin-arm64-waypoint-consume-none.json"
     }
   }
 }

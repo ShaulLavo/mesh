@@ -54,3 +54,16 @@ Darwin fresh was independently approved from the final retained packet of run
 43451015125. Its command, aggregate external and reserve total 463.898 seconds,
 with a 900-second admission. The same arithmetic, cleanup and provider-boundary
 conditions apply. Its review is `split-budget-reducer/terminal/DARWIN-FRESH-REVIEW.md`.
+
+The final recovery review approved seventeen more exact sidecars: fourteen
+complete-profile consumers and both Darwin preparations from run 43462713405,
+plus Darwin adoption-all from its separate successful retry in run 43451015125.
+Their source/run/attempt packets remain separate. Existing fifteen plans are
+unchanged. Most admissions are 900 seconds; Darwin waypoint final uses 1020,
+Darwin chain preparation 1200, and Darwin waypoint preparation 1500. Every total
+is derived from complete clean measurements with the same 1.125 rule and explicit
+aggregate external conditions. The review is `split-budget-reducer/recovery-final/REVIEW.md`.
+
+Five slots remain unactivated: Linux AMD64 order, Linux AMD64 chain final,
+Linux ARM64 chain none, Linux ARM64 waypoint final, and Darwin chain none.
+Their failed or missing records provide no successful command plan.
