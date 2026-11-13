@@ -12,6 +12,13 @@ from fixtures import installed_chain, installed_clock, installed_native
 from fixtures import installed_transport_lifecycle as lifecycle
 
 
+def finish_unwinding(case, record, output, primary):
+    try:
+        raise primary
+    finally:
+        installed_chain.finish(case, record, output)
+
+
 class LifecycleControls(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="mesh-lifecycle-control-")
@@ -38,6 +45,39 @@ class LifecycleControls(unittest.TestCase):
 
     def write_rows(self):
         self.path.write_text("".join(json.dumps(row) + "\n" for row in self.rows))
+
+    def test_finalizer_keeps_exact_cleanup_error_with_incomplete_coverage(self):
+        primary = RuntimeError("exact cleanup primary")
+        case = SimpleNamespace(root=self.root, host={"name": "cleanup"}, close=Mock(side_effect=primary))
+        record = {"passed": True}
+        with patch.object(installed_native, "retain_logs"), patch.object(installed_chain, "retain_chain_result"), \
+                patch.object(lifecycle, "retain", return_value={"status": "incomplete", "accepted": False}):
+            with self.assertRaises(RuntimeError) as caught:
+                installed_chain.finish(case, record, self.root)
+        self.assertIs(caught.exception, primary)
+        self.assertEqual(record["cleanupError"], str(primary))
+        self.assertEqual(record["transportLifecycle"]["status"], "incomplete")
+        self.assertFalse(record["passed"])
+        self.assertTrue((self.root / "cleanup-native-pair.json").is_file())
+
+    def test_finalizer_rejects_incomplete_coverage_after_successful_cleanup(self):
+        case = SimpleNamespace(root=self.root, host={"name": "covered"}, close=Mock())
+        record = {"passed": True}
+        with patch.object(installed_native, "retain_logs"), patch.object(installed_chain, "retain_chain_result"), \
+                patch.object(lifecycle, "retain", return_value={"status": "incomplete", "accepted": False}):
+            with self.assertRaises(lifecycle.CoverageIncomplete):
+                installed_chain.finish(case, record, self.root)
+        self.assertEqual(record["cleanup"], {"servicesAbsent": True, "processesAbsent": True})
+
+    def test_finalizer_does_not_replace_unwinding_product_error(self):
+        primary = RuntimeError("exact product primary")
+        case = SimpleNamespace(root=self.root, host={"name": "product"}, close=Mock())
+        record = {"passed": False, "error": str(primary)}
+        with patch.object(installed_native, "retain_logs"), patch.object(installed_chain, "retain_chain_result"), \
+                patch.object(lifecycle, "retain", return_value={"status": "incomplete", "accepted": False}):
+            with self.assertRaises(RuntimeError) as caught:
+                finish_unwinding(case, record, self.root, primary)
+        self.assertIs(caught.exception, primary)
 
     def test_positive_gate_binds_original_client_daemon_and_tcp_tuple(self):
         image = {"pid": 88, "sha256": self.running["digest"], "inode": 7, "device": 8}

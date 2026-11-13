@@ -284,7 +284,7 @@ def finish(case, record, output):
         retain_chain_result(case, output)
         installed_transport_lifecycle.finish(case, record, output)
         (output / (case.host["name"] + "-native-pair.json")).write_text(json.dumps(record, indent=2) + "\n")
-        if record.get("transportLifecycle", {}).get("status") == "incomplete" and "error" not in record:
+        if record.get("transportLifecycle", {}).get("status") == "incomplete" and "error" not in record and "cleanupError" not in record:
             raise installed_transport_lifecycle.CoverageIncomplete("transport observer coverage incomplete; nonreproduction is not established")
 
 
