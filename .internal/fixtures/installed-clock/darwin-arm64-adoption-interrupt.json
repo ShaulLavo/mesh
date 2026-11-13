@@ -1,0 +1,1451 @@
+{
+  "mode": "frozen",
+  "workload": {
+    "platform": "darwin/arm64",
+    "host": null,
+    "mode": "adoption",
+    "scenario": "interrupt",
+    "grouped": false,
+    "publishedRegistrySha256": null,
+    "catalogEvidence": false,
+    "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+    "manifestSchemas": [
+      1
+    ]
+  },
+  "phases": [
+    {
+      "key": "setup#1",
+      "limit_ns": 442000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 392086084,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "signer-build:#1",
+      "limit_ns": 36552000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 32490378000,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#2",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 223500,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "signer-start#1",
+      "limit_ns": 81000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 71405125,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#3",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 677458,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "build:v0.1.9001:epoch=1#1",
+      "limit_ns": 165946000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 147507529625,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#4",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 645583,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "acquire:v0.1.257#1",
+      "limit_ns": 1809000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 1607168042,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#5",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 500542,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "acquire:v0.1.196#1",
+      "limit_ns": 1489000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 1322751333,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#6",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 116417,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "acquire:v0.1.256#1",
+      "limit_ns": 1726000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 1533983250,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#7",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 102375,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "proof:v0.1.257:v0.1.9001#1",
+      "limit_ns": 88000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 77739750,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "native-transition:v0.1.257:v0.1.9001#1",
+      "limit_ns": 67425000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 59933307041,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "proof:v0.1.257:v0.1.9001#2",
+      "limit_ns": 5000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 4387917,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#8",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 151875,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "publish:v0.1.9001#1",
+      "limit_ns": 200000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 177263042,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#9",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 114458,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "serve:releases#1",
+      "limit_ns": 35000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 30808292,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#10",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 184208,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "serve:public#1",
+      "limit_ns": 36000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 31892708,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#11",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 49584,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "head:v0.1.9001#1",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 250708,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#12",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 55458,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "installed-case:mac:interrupt#1",
+      "limit_ns": 16308000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 14495708834,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "case-cleanup:mac-interrupt#1",
+      "limit_ns": 968000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 860001250,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "installed-case:mac:interrupt#2",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 337833,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "setup#13",
+      "limit_ns": 1000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 288958,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "completion#1",
+      "limit_ns": 152000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 134943292,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "completion#2",
+      "limit_ns": 236000000,
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/pairs/fixture-clock.json",
+              "sha256": "e9818db6801de7f969eb130da892079d9489504453543efa349994596dfa38cd"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "elapsed_ns": 209043875,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    }
+  ],
+  "guards": [],
+  "command_ns": 293512000000,
+  "external_ns": 128381000000,
+  "external_budget": {
+    "key": "external",
+    "limit_ns": 128381000000,
+    "workload": {
+      "workload": {
+        "platform": "darwin/arm64",
+        "host": null,
+        "mode": "adoption",
+        "scenario": "interrupt",
+        "grouped": false,
+        "publishedRegistrySha256": null,
+        "catalogEvidence": false,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ]
+      },
+      "kind": "external-job-overhead",
+      "basis": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+    },
+    "samples": [
+      {
+        "provenance": {
+          "sources": {
+            "metadata": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/provider-job.json",
+              "sha256": "d163fcdb022a2af878097795bf88f024948d9694658d0313c476aa3550bc8675"
+            },
+            "job_interval": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/darwin-arm64-adoption-interrupt/job-interval.json",
+              "sha256": "db21665e7b3eb73d0b31ace71231772e14a12b8d93c454f24478e5b4c29b57ae"
+            },
+            "log": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-current-2-evidence/131972959756.log",
+              "sha256": "01945a663483f5b620f517b2ddaee6af534ab3ae45f7d494277ad5cc912581d0"
+            }
+          },
+          "job_id": 131972959756,
+          "method": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+        },
+        "workload": {
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ]
+          },
+          "kind": "external-job-overhead",
+          "basis": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+        },
+        "elapsed_ns": 114115903583,
+        "completed": true,
+        "cleanup_verified": true
+      }
+    ]
+  },
+  "emergency_ns": 60000000000,
+  "admission_ns": 900000000000,
+  "eligibility_review": "Independent GPT review, 2026-11-13, run 43451015125 snapshot 2; see ELIGIBILITY.md"
+}

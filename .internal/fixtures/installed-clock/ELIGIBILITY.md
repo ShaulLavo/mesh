@@ -40,3 +40,12 @@ method apply. Raw external completeness flags remain false. These plans do not
 cover adoption-all, Darwin support or prepared producer/consumer workloads.
 Their review and raw evidence references are under
 `/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/`.
+
+Snapshot 2 from the same run independently approved seven more workloads:
+Linux AMD64/ARM64 adoption-all, Darwin interrupt adoption, and all four Linux
+chain/waypoint preparations. These use 900-second admissions and 15-minute
+provider timeouts, with exact derived totals of 559.552, 408.782, 481.893,
+865.535, 882.409, 811.530 and 784.534 seconds respectively. Their clocks,
+groups, descriptor identities, cleanup and terminal provider overhead were
+checked independently. Existing oldest and support plans remain unchanged.
+The review is in `split-budget-reducer/snapshot-2/REVIEW.md` in that report tree.
