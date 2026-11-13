@@ -1,6 +1,7 @@
 """Offline prepared release transport, exact slices and consumer routing controls."""
 import ast
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -58,9 +59,11 @@ class PreparedTest(unittest.TestCase):
         self.output.mkdir()
         self.bundle = self.base / "bundle"
         self.pin = "a" * 40
+        self.preparation_pin = "c" * 40
         self.host = {"name": "fixture", "platform": "linux/amd64"}
         self.releases, self.pair, self.previous, self.groups = self.fixture()
         self.addCleanup(patch.stopall)
+        patch.dict(os.environ, MESH_PREPARATION_SOURCE=self.preparation_pin).start()
         patch.object(prepared, "source_pin", return_value=self.pin).start()
         patch.object(prepared.installed_origin, "request", side_effect=self.export_origin).start()
 
@@ -69,7 +72,9 @@ class PreparedTest(unittest.TestCase):
         for version in installed_releases.VERSIONS:
             path = self.root / "build" / version / "linux-amd64" / "mesh"
             self.write(path, version.encode(), executable=True)
-            builds[version] = {"path": str(path), "digest": prepared.file_digest(path)}
+            builds[version] = {"path": str(path), "digest": prepared.file_digest(path), "version": version,
+                "commit": self.pin, "platform": {"os": "linux", "arch": "amd64"}, "modified": False,
+                "stateVersion": 1, "workerProtocol": 1, "updateProtocol": 1}
             self.write(self.root / "releases" / version / "mesh-update.json", b"signed metadata")
         for name in ("signer-test", "fixture-ca.pem", "bootstrap-root.json", "trusted-root.json", "provenance.json", "worker-probe"):
             self.write(self.root / name, name.encode(), executable=name in ("signer-test", "worker-probe"))
@@ -87,8 +92,10 @@ class PreparedTest(unittest.TestCase):
                     "manifest": {"compatibility": {"workerWrite": 1}}}
         group = {"index": 0, "members": [record | {"binary": worker["path"], "imageBytes": Path(worker["path"]).stat().st_size}],
                  "imageBytes": image.stat().st_size + Path(worker["path"]).stat().st_size}
+        metadata = {version: {"updater": {"epoch": 1 if index == 0 else 2, "position": {"anchor": True, "ordinal": 0}}}
+                    for index, version in enumerate(installed_releases.VERSIONS)}
         releases = SimpleNamespace(root=self.root, output=self.output, native="linux/amd64", directory=self.root / "releases",
-            builds=builds, manifests={}, metadata={}, registry=registry, probe=self.root / "worker-probe", published_registry_sha256="b" * 64)
+            builds=builds, manifests={}, metadata=metadata, registry=registry, probe=self.root / "worker-probe", published_registry_sha256="b" * 64)
         return releases, {"daemon": baseline, "helper": baseline}, baseline, [group]
 
     def write(self, path, data, executable=False):
@@ -212,9 +219,11 @@ class PreparedTest(unittest.TestCase):
     def aggregate_inputs(self, *, diagnostic=False, waypoint=False):
         self.export(waypoint=waypoint)
         descriptor, identity = prepared.read_descriptor(self.bundle)
-        common = {"platform": descriptor["native"], "host": self.host["name"], "mode": descriptor["mode"]}
+        common = {"platform": descriptor["native"], "host": self.host["name"], "mode": descriptor["mode"],
+                  "publishedRegistrySha256": descriptor["publishedRegistrySha256"]}
         clock = {"mode": "diagnostic" if diagnostic else "frozen", "accepted": not diagnostic,
-                 "measurement_completed": True, "failures": [], "provenance": {"preparedId": identity}}
+                 "measurement_completed": True, "failures": [], "provenance": {"preparedId": identity,
+                 "harness": self.pin, "preparation": self.preparation_pin, "exporter": descriptor["exporter"]}}
         producer = self.base / "preparation-output"
         producer.mkdir()
         installed_releases.write_json(producer / "prepared-export.json", {"preparedId": identity,
@@ -234,8 +243,18 @@ class PreparedTest(unittest.TestCase):
         installed_releases.write_json(output / "fixture-clock.json", clock | {
             "workload": common | {"preparedRole": "consume", "installedSlice": selected}})
         if selected["readers"]:
+            descriptor, _identity = prepared.read_descriptor(self.bundle)
+            first, waypoint, future = installed_releases.VERSIONS
             installed_releases.write_json(output / "original-format-readers-group-0.json",
-                                          {"oldRejectedManifestSchema2": "manifest schema 2 is unsupported"})
+                {"oldToWaypoint": self.reader_result(descriptor, first, waypoint),
+                 "waypointToFuture": self.reader_result(descriptor, waypoint, future),
+                 "oldRejectedManifestSchema2": "manifest schema 2 is unsupported"})
+
+    def reader_result(self, descriptor, source, target):
+        return {"schema": 1, "source": {key: value for key, value in descriptor["builds"][source].items() if key != "path"},
+                "target": target, "metadata": descriptor["files"]["releases/" + target + "/mesh-update.json"]["sha256"],
+                "binary": descriptor["builds"][target]["digest"], "epoch": descriptor["metadata"][source]["updater"]["epoch"],
+                "position": descriptor["metadata"][source]["updater"]["position"]}
 
     def observed(self, directory, *_args):
         return {"observations": [{"original": {"stateRun": str(directory)}}]}
@@ -264,6 +283,56 @@ class PreparedTest(unittest.TestCase):
             installed_releases.write_json(path, report | {"preparedId": "d" * 64})
             with self.assertRaisesRegex(ValueError, "identity"):
                 slices.aggregate(self.bundle, outputs, producer)
+
+    def test_aggregate_rejects_conflicting_or_missing_execution_pins(self):
+        producer, outputs = self.aggregate_inputs()
+        changes = (("provenance", "harness", "d" * 40), ("provenance", "preparation", "e" * 40),
+                   ("provenance", "exporter", {"harnessSource": "f" * 40}),
+                   ("workload", "publishedRegistrySha256", "d" * 64),
+                   ("provenance", "harness", None), ("provenance", "preparation", None),
+                   ("provenance", "exporter", None), ("workload", "publishedRegistrySha256", None))
+        for output in (producer, outputs[0]):
+            for section, key, value in changes:
+                self.reject_clock_context(output / "fixture-clock.json", section, key, value, producer, outputs)
+
+    def reject_clock_context(self, path, section, key, value, producer, outputs):
+        original = path.read_bytes()
+        changed = json.loads(original)
+        changed[section][key] = value
+        path.write_text(json.dumps(changed))
+        try:
+            with patch.object(prepared.installed_adoption, "validate_installed_group", side_effect=self.observed), self.assertRaises(ValueError):
+                slices.aggregate(self.bundle, outputs, producer)
+        finally:
+            path.write_bytes(original)
+
+    def test_export_requires_preparation_source_before_creating_payload(self):
+        with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(ValueError, "preparation source"):
+            self.export()
+        self.assertFalse(self.bundle.exists())
+
+    def test_waypoint_requires_both_positive_hops_and_exact_reader_pins(self):
+        with patch.object(installed_waypoint, "prepare_negative_packet", return_value={}):
+            producer, outputs = self.aggregate_inputs(waypoint=True)
+        path = outputs[0] / "original-format-readers-group-0.json"
+        for hop in ("oldToWaypoint", "waypointToFuture"):
+            for field, value in ((None, None), ("source", {}), ("target", "other"), ("metadata", "f" * 64),
+                                 ("binary", "e" * 64), ("epoch", 999), ("position", {})):
+                self.reject_reader_change(path, hop, field, value, producer, outputs)
+
+    def reject_reader_change(self, path, hop, field, value, producer, outputs):
+        original = path.read_bytes()
+        changed = json.loads(original)
+        if field is None:
+            del changed[hop]
+        else:
+            changed[hop][field] = value
+        path.write_text(json.dumps(changed))
+        try:
+            with patch.object(prepared.installed_adoption, "validate_installed_group", side_effect=self.observed), self.assertRaises(ValueError):
+                slices.aggregate(self.bundle, outputs, producer)
+        finally:
+            path.write_bytes(original)
 
     def test_incomplete_cleanup_and_missing_reader_cannot_aggregate(self):
         with patch.object(installed_waypoint, "prepare_negative_packet", return_value={}):

@@ -1,6 +1,7 @@
 """Prepare signed releases once; consume complete installed groups independently."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -45,7 +46,23 @@ def read_descriptor(bundle):
         raise ValueError("prepared assets exceed their count bound")
     if not isinstance(value.get("groups"), list) or not 0 < len(value["groups"]) <= installed_slices.MAX_GROUPS:
         raise ValueError("prepared partition exceeds its group bound")
+    for field in ("harnessSource", "preparationSource"):
+        if not hex_identity(value.get(field), 40):
+            raise ValueError("prepared source identity is missing or invalid: " + field)
+    if not hex_identity(value.get("publishedRegistrySha256"), 64):
+        raise ValueError("prepared authoritative registry identity is invalid")
     return value, hashlib.sha256(raw).hexdigest()
+
+
+def hex_identity(value, length):
+    return isinstance(value, str) and len(value) == length and all(letter in "0123456789abcdef" for letter in value)
+
+
+def preparation_source():
+    value = os.environ.get("MESH_PREPARATION_SOURCE")
+    if not hex_identity(value, 40):
+        raise ValueError("prepared export needs its verified native preparation source")
+    return value
 
 
 def clock_workload(bundle_path, slice_path):
@@ -57,6 +74,7 @@ def clock_workload(bundle_path, slice_path):
 
 @installed_clock.timed("prepared-export")
 def export(releases, host, pair, previous, groups, destination, *, waypoint=False, preparer=None):
+    preparation = preparation_source()
     destination = Path(destination)
     if destination.resolve().is_relative_to(releases.root.resolve()):
         raise ValueError("prepared export must survive outside disposable preparation scratch")
@@ -75,7 +93,7 @@ def export(releases, host, pair, previous, groups, destination, *, waypoint=Fals
     helper = copy_external(preparer, "native-helper", destination, files) if preparer is not None else None
     for name in packets.values():
         copy_asset(releases.root, Path(name), destination, files)
-    value = {"schema": 1, "harnessSource": source_pin(), "native": releases.native, "host": host,
+    value = {"schema": 1, "harnessSource": source_pin(), "preparationSource": preparation, "native": releases.native, "host": host,
         "mode": "waypoint" if waypoint else "chain", "builds": builds, "manifests": releases.manifests,
         "metadata": releases.metadata, "registry": registry, "probe": probe, "preparer": helper, "readerPackets": packets,
         "pair": encode_pair(pair, releases.root), "previous": encode_image(previous, releases.root),

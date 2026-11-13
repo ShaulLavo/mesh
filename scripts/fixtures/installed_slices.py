@@ -119,8 +119,7 @@ def verify_output(output, descriptor, identity, states, adoption):
         verify_profile(output, descriptor, row, states, adoption)
     for index in selection["readers"]:
         reader = json.loads((output / ("original-format-readers-group-" + str(index) + ".json")).read_bytes())
-        if "manifest schema 2 is unsupported" not in reader.get("oldRejectedManifestSchema2", ""):
-            raise ValueError("prepared slice lacks its original negative reader proof")
+        validate_readers(reader, descriptor)
     return selection, clock.get("accepted") is True and clock.get("mode") == "frozen"
 
 
@@ -137,9 +136,36 @@ def verify_preparation(output, descriptor, identity):
 
 
 def validate_clock_context(clock, descriptor):
-    expected = {"platform": descriptor["native"], "host": descriptor["host"]["name"], "mode": descriptor["mode"]}
+    expected = {"platform": descriptor["native"], "host": descriptor["host"]["name"], "mode": descriptor["mode"],
+                "publishedRegistrySha256": descriptor["publishedRegistrySha256"]}
     if any(clock["workload"].get(key) != value for key, value in expected.items()):
-        raise ValueError("prepared clock platform, host or proof mode differs")
+        raise ValueError("prepared clock platform, host, proof mode or registry differs")
+    provenance = clock.get("provenance", {})
+    execution = {"harness": descriptor["harnessSource"], "preparation": descriptor["preparationSource"],
+                 "exporter": descriptor["exporter"]}
+    if any(provenance.get(key) != value for key, value in execution.items()):
+        raise ValueError("prepared clock execution source context differs")
+
+
+def validate_readers(reader, descriptor):
+    from fixtures import installed_releases
+    first, waypoint, future = installed_releases.VERSIONS
+    validate_reader_hop(reader.get("oldToWaypoint"), descriptor, first, waypoint)
+    validate_reader_hop(reader.get("waypointToFuture"), descriptor, waypoint, future)
+    if "manifest schema 2 is unsupported" not in reader.get("oldRejectedManifestSchema2", ""):
+        raise ValueError("prepared slice lacks its original negative reader proof")
+
+
+def validate_reader_hop(observed, descriptor, source, target):
+    if not isinstance(observed, dict) or type(observed.get("schema")) is not int or observed["schema"] != 1:
+        raise ValueError("prepared slice lacks its positive original reader proof")
+    build = {key: value for key, value in descriptor["builds"][source].items() if key != "path"}
+    updater = descriptor["metadata"][source]["updater"]
+    metadata = descriptor["files"]["releases/" + target + "/mesh-update.json"]["sha256"]
+    expected = {"source": build, "target": target, "metadata": metadata, "binary": descriptor["builds"][target]["digest"],
+                "epoch": updater["epoch"], "position": updater["position"]}
+    if any(observed.get(key) != value for key, value in expected.items()):
+        raise ValueError("prepared original reader source, target or signed metadata identity differs")
 
 
 def verify_profile(output, descriptor, row, states, adoption):

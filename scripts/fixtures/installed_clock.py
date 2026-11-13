@@ -463,6 +463,8 @@ def from_arguments(args, native):
     prepared = prepared_workload(args)
     prepared_id = prepared.pop("preparedId", None)
     workload.update(prepared)
+    if prepared_id is not None:
+        bind_prepared_registry(args, workload)
     mode = args.clock_mode
     if mode == "frozen":
         plan = load_plan(args.clock_plan)
@@ -500,6 +502,21 @@ def prepared_workload(args):
         raise ValueError("prepared consumer needs its bundle and exact slice")
     from fixtures import installed_prepared
     return installed_prepared.clock_workload(bundle, selected)
+
+
+def bind_prepared_registry(args, workload):
+    from fixtures import installed_prepared
+    descriptor, _identity = installed_prepared.read_descriptor(args.prepared_releases)
+    expected = {"platform": descriptor["native"], "host": descriptor["host"]["name"], "mode": descriptor["mode"]}
+    if any(workload.get(key) != value for key, value in expected.items()):
+        raise ValueError("prepared clock platform, host or mode differs")
+    registry = descriptor["publishedRegistrySha256"]
+    if not isinstance(registry, str) or len(registry) != 64 or any(letter not in "0123456789abcdef" for letter in registry):
+        raise ValueError("prepared authoritative registry digest is invalid")
+    if workload["publishedRegistrySha256"] not in (None, registry):
+        raise ValueError("prepared authoritative registry differs from supplied registry")
+    workload.update(grouped=True, publishedRegistrySha256=registry,
+                    buildRecipe="mesh_installed_fixture/prepared-native/complete-installed-slice")
 
 
 def scenario(args):

@@ -1,5 +1,6 @@
 """Pure/mocked fixture clock, handoff, cleanup and calibration controls."""
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -155,20 +156,45 @@ class ClockTest(unittest.TestCase):
                 clocks.prepared_workload(SimpleNamespace(**values))
 
     def test_prepared_bundle_identity_binds_execution_not_reusable_timing(self):
-        origin = self.root / "job-origin.json"
-        origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "run", "job": "job",
-                                      "admission_ns": 900 * clocks.SECOND}))
-        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
-            clock_command_seconds=600, clock_job_seconds=900, clock_external_seconds=240, clock_emergency_seconds=60,
-            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=True)
-        selection = {"select": [{"profile": "chain-none", "group_indices": [0]}], "readers": []}
-        fields = {"preparedRole": "consume", "preparedId": "a" * 64, "installedSlice": selection}
-        with patch.dict(os.environ, GITHUB_RUN_ID="run", GITHUB_JOB="job"), patch.object(clocks, "prepared_workload", return_value=fields):
+        args, selection = self.prepared_arguments()
+        with patch.dict(os.environ, GITHUB_RUN_ID="run", GITHUB_JOB="job"):
             clock = clocks.from_arguments(args, "linux/amd64")
-        self.assertEqual(clock.provenance["preparedId"], "a" * 64)
+        identity = hashlib.sha256((args.prepared_releases / "prepared.json").read_bytes()).hexdigest()
+        self.assertEqual(clock.provenance["preparedId"], identity)
         self.assertNotIn("preparedId", clock.plan.workload)
         self.assertEqual(clock.plan.workload["preparedRole"], "consume")
         self.assertEqual(clock.plan.workload["installedSlice"], selection)
+        self.assertTrue(clock.plan.workload["grouped"])
+        self.assertEqual(clock.plan.workload["publishedRegistrySha256"], "a" * 64)
+
+    def prepared_arguments(self):
+        origin = self.root / "job-origin.json"
+        origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "run", "job": "job",
+                                      "admission_ns": 900 * clocks.SECOND}))
+        bundle = self.root / "bundle"
+        bundle.mkdir()
+        (bundle / "prepared.json").write_text(json.dumps({"schema": 1, "native": "linux/amd64", "host": {"name": "pc"},
+            "mode": "chain", "files": {"placeholder": {}}, "groups": [{"index": 0}], "publishedRegistrySha256": "a" * 64,
+            "harnessSource": "b" * 40, "preparationSource": "c" * 40}))
+        selection = {"schema": 1, "select": [{"profile": "chain-none", "group_indices": [0]}], "readers": []}
+        selected = self.root / "slice.json"
+        selected.write_text(json.dumps(selection))
+        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
+            clock_command_seconds=600, clock_job_seconds=900, clock_external_seconds=240, clock_emergency_seconds=60,
+            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=True,
+            export_prepared=None, prepared_releases=bundle, installed_slice=selected)
+        return args, selection
+
+    def test_prepared_consumer_rejects_other_registry_or_context(self):
+        args, _selection = self.prepared_arguments()
+        args.worker_registry = self.root / "other-registry.json"
+        args.worker_registry.write_text("{}")
+        with self.assertRaisesRegex(ValueError, "supplied registry"):
+            clocks.from_arguments(args, "linux/amd64")
+        args.worker_registry = None
+        args.source_host = "other-host"
+        with self.assertRaisesRegex(ValueError, "host or mode"):
+            clocks.from_arguments(args, "linux/amd64")
 
     def test_job_finish_uses_explicit_support_fixture_clock(self):
         origin = self.root / "job-origin.json"
