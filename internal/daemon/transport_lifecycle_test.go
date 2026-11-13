@@ -40,6 +40,7 @@ func TestDaemonLifecycleRecordsShutdownOrderingWithoutNativeServices(t *testing.
 	if err := waitRuntime(t, done); err != nil {
 		t.Fatal(err)
 	}
+	waitSignal(t, recorder.Done(), "lifecycle writer completion")
 	files, _ := filepath.Glob(filepath.Join(directory, "*.jsonl"))
 	data, err := os.ReadFile(files[0])
 	if err != nil {

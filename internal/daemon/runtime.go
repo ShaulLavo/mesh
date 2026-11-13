@@ -577,10 +577,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 				return transport.ErrAuthentication
 			}
 			handlerCtx, cancel := context.WithCancel(connectionCtx)
-			stop := context.AfterFunc(ctx, func() {
-				transporttrace.Emit(connectionCtx, transporttrace.RequestCanceled, ctx.Err())
-				cancel()
-			})
+			stop := observeHandlerCancellation(ctx, connectionCtx, cancel)
 			defer func() {
 				stop()
 				cancel()
@@ -595,6 +592,13 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 	}
 	trackNewHTTPConnections(server.Server)
 	return server
+}
+
+func observeHandlerCancellation(parent, connection context.Context, cancel context.CancelFunc) func() bool {
+	return context.AfterFunc(parent, func() {
+		transporttrace.Emit(connection, transporttrace.RequestCanceled, parent.Err())
+		cancel()
+	})
 }
 
 func shutdownHTTPServer(server *http.Server, timeout time.Duration) error {

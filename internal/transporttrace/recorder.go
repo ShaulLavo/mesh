@@ -186,3 +186,6 @@ func (r *Recorder) Close() {
 	case <-timer.C:
 	}
 }
+
+// Done closes after the owned file has stopped writing.
+func (r *Recorder) Done() <-chan struct{} { return r.done }

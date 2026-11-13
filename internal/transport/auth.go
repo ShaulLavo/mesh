@@ -245,8 +245,9 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	peer := AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}
 	if server {
 		peer.grant = auth.bind(peer.Identity)
+		observeGrant(ctx, peer.grant.Class)
 	}
-	err = confirmAuthentication(secure, auth, server, peer)
+	err = confirmAuthentication(ctx, secure, auth, server, peer)
 	transporttrace.Emit(ctx, transporttrace.AcceptanceDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
@@ -278,17 +279,41 @@ func observedAuthentication(ctx context.Context, auth *Authentication, server bo
 	return &observed
 }
 
+func observeGrant(ctx context.Context, class access.Class) {
+	stage := transporttrace.GrantNone
+	switch class {
+	case access.FullDevice:
+		stage = transporttrace.GrantFull
+	case access.UpdateCarrier:
+		stage = transporttrace.GrantUpdate
+	case access.Scoped:
+		stage = transporttrace.GrantScoped
+	case access.Unauthenticated, access.LocalAccount:
+	}
+	transporttrace.Emit(ctx, stage, nil)
+}
+
 func closeObservedHandshake(ctx context.Context, ws *websocket.Conn) {
 	transporttrace.Emit(ctx, transporttrace.HandshakeClose, nil)
 	err := ws.CloseNow()
 	transporttrace.Emit(ctx, transporttrace.HandshakeClosed, err)
 }
 
+func observeGrantCurrent(ctx context.Context, current bool) {
+	stage := transporttrace.GrantRevoked
+	if current {
+		stage = transporttrace.GrantCurrent
+	}
+	transporttrace.Emit(ctx, stage, nil)
+}
+
 // TLS 1.3 can return to a client before the server checks its certificate.
 // An encrypted acceptance byte makes denial permanent before Dial returns.
-func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
+func confirmAuthentication(ctx context.Context, secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
 	if server {
-		if peer.grant.Current == nil || !peer.grant.Current() {
+		current := peer.grant.Current != nil && peer.grant.Current()
+		observeGrantCurrent(ctx, current)
+		if !current {
 			return errors.New("transport: device grant removed during authentication")
 		}
 		var acceptance byte

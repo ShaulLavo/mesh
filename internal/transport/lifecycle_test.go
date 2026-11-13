@@ -51,13 +51,13 @@ func TestServerLifecycleObservesApprovedOriginalAttachment(t *testing.T) {
 	}
 	_ = conn.Close()
 	<-done
-	recorder.Close()
+	closeLifecycleRecorder(t, recorder)
 	files, _ := filepath.Glob(filepath.Join(directory, "*.jsonl"))
 	data, err := os.ReadFile(files[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stage := range []string{"request.begin", "upgrade.done", "authorize.allow", "handshake.begin", "handshake.done", "acceptance.done", "stream.begin", "attach.read", "attached.write", "handler.end", "stream.close_begin", "stream.close_end", "request.end", "process.end"} {
+	for _, stage := range []string{"request.begin", "upgrade.done", "authorize.allow", "handshake.begin", "handshake.done", "grant.full", "grant.current", "acceptance.done", "stream.begin", "attach.read", "attached.write", "handler.end", "stream.close_begin", "stream.close_end", "request.end", "process.end"} {
 		if !strings.Contains(string(data), `"stage":"`+stage+`"`) {
 			t.Fatalf("missing lifecycle stage %s in %s", stage, data)
 		}
@@ -120,7 +120,7 @@ func testLifecycleAuthenticationEnd(t *testing.T, interrupt bool) {
 	if !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("authentication result changed: %v", err)
 	}
-	recorder.Close()
+	closeLifecycleRecorder(t, recorder)
 	files, _ := filepath.Glob(filepath.Join(directory, "*.jsonl"))
 	data, _ := os.ReadFile(files[0])
 	expected := `"stage":"authorize.deny"`
@@ -129,6 +129,16 @@ func testLifecycleAuthenticationEnd(t *testing.T, interrupt bool) {
 	}
 	if !strings.Contains(string(data), expected) || strings.Contains(string(data), `"stage":"stream.begin"`) {
 		t.Fatalf("missing failed authentication coverage: %s", data)
+	}
+}
+
+func closeLifecycleRecorder(t *testing.T, recorder *transporttrace.Recorder) {
+	t.Helper()
+	recorder.Close()
+	select {
+	case <-recorder.Done():
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle writer did not stop")
 	}
 }
 
@@ -154,4 +164,13 @@ func lifecycleAttachHandler(_ context.Context, conn Conn) error {
 		return fmt.Errorf("lifecycle test wait for close: %w", err)
 	}
 	return nil
+}
+
+func TestServerLifecycleKeepsBoundGrantRejectionTerminal(t *testing.T) {
+	calls := 0
+	peer := AuthenticatedPeer{grant: Authorization{Current: func() bool { calls++; return false }}}
+	err := confirmAuthentication(t.Context(), nil, nil, true, peer)
+	if calls != 1 || err == nil || err.Error() != "transport: device grant removed during authentication" {
+		t.Fatalf("grant rejection changed: calls=%d, error=%v", calls, err)
+	}
 }

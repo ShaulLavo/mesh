@@ -15,7 +15,7 @@ MAXIMUM_FILE = 2 << 20
 MAXIMUM_TOTAL = 64 << 20
 MAXIMUM_PROCESSES = 32
 REQUIRED = ("request.begin", "upgrade.done", "handshake.begin", "authorize.allow", "handshake.done",
-            "acceptance.done", "stream.begin", "attach.read", "attached.write")
+            "grant.full", "grant.current", "acceptance.done", "stream.begin", "attach.read", "attached.write")
 
 
 class CoverageIncomplete(RuntimeError):

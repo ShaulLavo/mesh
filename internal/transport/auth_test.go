@@ -147,7 +147,7 @@ func TestAuthenticatedRecordsRejectReplayAndTampering(t *testing.T) {
 			if err := secure.HandshakeContext(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if err := confirmAuthentication(secure, &Authentication{}, false, AuthenticatedPeer{}); err != nil {
+			if err := confirmAuthentication(ctx, secure, &Authentication{}, false, AuthenticatedPeer{}); err != nil {
 				t.Fatal(err)
 			}
 			payload, _ := (protocol.Control{Type: protocol.TypeHostInfo}).Encode()

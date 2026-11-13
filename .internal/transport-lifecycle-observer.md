@@ -17,7 +17,9 @@ wall and monotonic observation times, fixed lifecycle stages, four-character
 session IDs and allowlisted error classes. No raw errors, peer keys, certificates,
 headers, addresses containing hostnames, payloads or terminal input are recorded.
 The existing authorization callback executes exactly as before, with its result
-observed once during TLS verification. No retries or admission rules change.
+observed once during TLS verification. The bound access class and the existing
+pre-acceptance grant-current check are observed without another callback.
+No retries or admission rules change.
 
 The recorder has a 256-event nonblocking queue, 4096 records and 2 MiB per process.
 At most 32 files are admitted in an owned case directory. Queue loss, missing or

@@ -89,6 +89,13 @@ class LifecycleControls(unittest.TestCase):
         self.assertIs(self.case.terminal, terminal)
         self.assertEqual(self.case.transport_original["worker"], 43)
 
+    def test_gate_rejects_update_only_or_revoked_grants(self):
+        for before, after in (("grant.full", "grant.update"), ("grant.current", "grant.revoked")):
+            rows = json.loads(json.dumps(self.rows))
+            next(row for row in rows if row["stage"] == before)["stage"] = after
+            with self.assertRaises(lifecycle.CoverageIncomplete):
+                lifecycle.matching_original({"owned": rows}, 88, self.running, "AB12")
+
     def test_disabled_observation_is_noop(self):
         with patch.dict(os.environ, {lifecycle.FLAG: "0"}):
             lifecycle.configure(SimpleNamespace())
