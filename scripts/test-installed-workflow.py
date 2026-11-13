@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Offline controls for hosted prepared selections, intake and fail-closed cleanup."""
-from dataclasses import asdict
 import hashlib
 import io
 import importlib.util
@@ -17,7 +16,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-from fixtures import installed_clock, installed_slices, installed_workflow as workflow
+from fixtures import installed_clock, installed_slices, installed_span_controls, installed_workflow as workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -184,14 +183,9 @@ class WorkflowControls(unittest.TestCase):
             workflow.physical_plans(self.root / "absent.json", False, "linux/amd64", "chain")
 
     def test_frozen_physical_roles_require_independent_plans_and_round_admission(self):
-        phase = installed_clock.PhaseBudget("setup#1", installed_clock.bound(installed_clock.SECOND), {"x": 1},
-            (installed_clock.SampleRef({"test": True}, {"x": 1}, installed_clock.SECOND, True, True),))
-        base = installed_clock.ClockPlan(mode="frozen", workload={"placeholder": True}, phases=(phase,),
-            command_ns=phase.limit_ns, external_ns=phase.limit_ns, emergency_ns=installed_clock.SECOND,
-            eligibility_review="offline test", external_budget=phase, admission_ns=1175 * installed_clock.SECOND)
         index = self.root / "index.json"
         entries = {}
-        self.write_physical_plans(index, entries, base, "linux/amd64", "chain")
+        self.write_physical_plans(index, entries, "linux/amd64", "chain")
         index.write_text(json.dumps({"schema": 1, "plans": entries}))
         with patch.object(workflow.installed_budgets, "ROOT", self.root):
             result = workflow.physical_plans(index, False, "linux/amd64", "chain")
@@ -199,22 +193,26 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(set(result["minutes"].values()), {20})
         self.assertEqual(result["profiles"], list(workflow.PROFILES))
         path = self.root / result["plans"]["linux-amd64-chain-consume-first"]
-        value = json.loads(path.read_bytes())
-        value["workload"]["installedSlice"]["select"][0]["profile"] = "chain-final"
-        path.write_text(json.dumps(value))
+        wrong_profile = self.physical_plan("linux/amd64", "chain", "consume", "final")
+        installed_span_controls.write_plan(path, wrong_profile)
         with patch.object(workflow.installed_budgets, "ROOT", self.root), self.assertRaisesRegex(ValueError, "another profile"):
             workflow.physical_plans(index, False, "linux/amd64", "chain")
 
-    def write_physical_plans(self, index, entries, base, platform, mode):
+    def write_physical_plans(self, index, entries, platform, mode):
         for role, profile in (("prepare", None), ("consume", "none"), ("consume", "first"), ("consume", "final")):
             key = workflow.physical_key(platform, mode, role, profile)
-            workload = {"platform": platform, "host": workflow.installed_budgets.PLATFORMS[platform][1], "mode": mode,
-                        "preparedRole": role, "grouped": True, "scenario": None, "catalogEvidence": False}
-            if profile:
-                workload["installedSlice"] = {"schema": 1, "select": [{"profile": "chain-" + profile, "group_indices": [0]}], "readers": []}
-            value = asdict(base) | {"workload": workload}
-            (index.parent / (key + ".json")).write_text(json.dumps(value))
+            installed_span_controls.write_plan(index.parent / (key + ".json"), self.physical_plan(platform, mode, role, profile))
             entries[key] = {"path": key + ".json"}
+
+    def physical_plan(self, platform, mode, role, profile):
+        template = installed_span_controls.reviewed_for_test(workflow.physical_key(platform, mode, role, "first" if profile else None))
+        workload = dict(template.workload)
+        if profile:
+            workload["installedSlice"] = {"schema": 1, "select": [{"profile": "chain-" + profile,
+                "group_indices": list(range(5))}], "readers": list(range(5)) if mode == "waypoint" and profile == "none" else []}
+        external = installed_clock.PhaseBudget("external", installed_clock.bound(installed_clock.SECOND), workload,
+            (installed_clock.SampleRef({"testOnly": True}, workload, installed_clock.SECOND, True, True),))
+        return installed_span_controls.synthetic_plan(workload, external)
 
     def test_unsplit_selection_preserves_three_oldest_order_and_support(self):
         args = SimpleNamespace(diagnostic=False, publication=False, cohort=True, adoption_scenario=None,

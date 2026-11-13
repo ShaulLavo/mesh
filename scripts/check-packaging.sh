@@ -192,6 +192,7 @@ check_source_contract() {
   python3 scripts/test-release-workers.py
   python3 scripts/test-release-worker-groups.py
   python3 scripts/test-installed-clock.py
+  python3 scripts/test-installed-spans.py
   python3 scripts/test-release-worker-evidence.py
   python3 scripts/test-rollback-context.py
 
