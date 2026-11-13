@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -161,31 +162,39 @@ func TestInstalledHostRead(t *testing.T) {
 
 func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) {
 	t.Helper()
-	store, err := OpenStore(request.Ledger)
+	value, err := installedReadLedger(t.Context(), request.Ledger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries, more, err := store.HostLedger(t.Context(), 0, 64)
+	installedWrite(t, root, request.Output, mustHostJSON(value))
+}
+
+func installedReadLedger(ctx context.Context, directory string) (map[string]any, error) {
+	store, err := OpenStore(directory)
+	if err != nil {
+		return nil, err
+	}
+	entries, more, err := store.HostLedger(ctx, 0, 64)
 	if err != nil || more {
-		t.Fatalf("bounded installed ledger: %v more=%v", err, more)
+		return nil, fmt.Errorf("bounded installed ledger: %v more=%v", err, more)
 	}
-	state, err := store.HostState(t.Context())
+	state, err := store.HostState(ctx)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	failed, next, err := store.hostFailedPage("", 64)
 	if err != nil || next != "" {
-		t.Fatalf("bounded installed failed edges: %v next=%q", err, next)
+		return nil, fmt.Errorf("bounded installed failed edges: %v next=%q", err, next)
 	}
-	peers, err := store.HostPeers(t.Context())
+	peers, err := store.HostPeers(ctx)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	dependents, err := store.HostDependents(t.Context())
+	dependents, err := store.HostDependents(ctx)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	installedWrite(t, root, request.Output, mustHostJSON(map[string]any{"entries": entries, "state": state, "failed": failed, "peers": peers, "dependents": dependents}))
+	return map[string]any{"observer": "fixture-exporter", "entries": entries, "state": state, "failed": failed, "peers": peers, "dependents": dependents}, nil
 }
 
 func TestInstalledEmptyLedgerBoundary(t *testing.T) {

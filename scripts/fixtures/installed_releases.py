@@ -28,6 +28,17 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def future_manifest_overlay(root):
+    source = REPO / "internal/release/release.go"
+    original = source.read_text()
+    guard = "if m.Schema != ManifestSchema {"
+    if original.count(guard) != 1:
+        raise RuntimeError("future-format fixture requires exactly one manifest schema guard")
+    path = Path(root) / "future-release.go"
+    path.write_text(original.replace(guard, "if m.Schema != ManifestSchema && m.Schema != 2 {", 1))
+    return {str(source): str(path)}
+
+
 def source_build(source, environment, native):
     source = Path(source)
     result = subprocess.run([str(source), "version", "--json"], env=environment,
@@ -50,7 +61,10 @@ def rollback_context(manifest, source):
 
 
 class Releases:
-    def __init__(self, root, native, output):
+    def __init__(self, root, native, output, *, manifest_schemas=(1,)):
+        if manifest_schemas not in ((1,), (1, 2)):
+            raise ValueError("unsupported fixture exporter manifest capability")
+        self.manifest_schemas = manifest_schemas
         self.root, self.native, self.output = Path(root), native, Path(output)
         self.directory = self.root / "releases"
         self.directory.mkdir()
@@ -66,10 +80,13 @@ class Releases:
             "MESH_UPDATE_CACHE_DIR": str(self.root / "build-cache")}
 
     def start_signer(self):
+        if self.signer_started is not None:
+            raise RuntimeError("installed fixture exporter was already launched")
+        flags = self.exporter_overlay()
         self.signer_log = (self.root / "signer.log").open("wb")
         binary = self.root / "signer-test"
         with (self.root / "signer-build.log").open("wb") as output:
-            subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(binary), "./internal/update"],
+            subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture"] + flags + ["-o", str(binary), "./internal/update"],
                 cwd=REPO, env=self.environment(), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
         environment = self.environment() | {"MESH_INSTALLED_FIXTURE_DIR": str(self.root)}
         subprocess.run([str(binary), "-test.run=^TestInstalledEmptyLedgerBoundary$"], env=environment,
@@ -78,6 +95,17 @@ class Releases:
         self.signer = subprocess.Popen([str(binary), "-test.run", "^TestInstalledFixtureExport$", "-test.timeout=600s"], cwd=REPO, env=environment,
             stdout=self.signer_log, stderr=subprocess.STDOUT)
         native_services.wait_for(self.signer_ready, "installed signature exporter did not start")
+
+    def exporter_overlay(self):
+        replacements = future_manifest_overlay(self.root) if self.manifest_schemas == (1, 2) else {}
+        overlay = self.root / "exporter-overlay.json"
+        data = write_json(overlay, {"Replace": replacements})
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
+        write_json(self.output / "fixture-exporter.json", {"observer": "fixture-exporter",
+            "manifestSchemas": self.manifest_schemas, "harnessSource": source, "overlaySha256": digest(data),
+            "manifestSourceSha256": digest((REPO / "internal/release/release.go").read_bytes()),
+            "overlaySourceSha256": {name: digest(Path(path).read_bytes()) for name, path in replacements.items()}})
+        return ["-overlay", str(overlay)] if replacements else []
 
     def signer_ready(self):
         if self.signer.poll() is not None:
@@ -137,14 +165,7 @@ class Releases:
                 raise RuntimeError("epoch fixture did not change compiled reader")
             path.write_text(updated)
             replacements[str(source)] = str(path)
-            manifest_source = REPO / "internal/release/release.go"
-            original = manifest_source.read_text()
-            updated = original.replace("if m.Schema != ManifestSchema {", "if m.Schema != ManifestSchema && m.Schema != 2 {", 1)
-            if updated == original:
-                raise RuntimeError("future-format fixture did not change the manifest decoder")
-            manifest_overlay = self.root / "future-release.go"
-            manifest_overlay.write_text(updated)
-            replacements[str(manifest_source)] = str(manifest_overlay)
+            replacements.update(future_manifest_overlay(self.root))
         path = self.root / ("overlay-" + str(epoch) + ".json")
         write_json(path, {"Replace": replacements})
         return path
