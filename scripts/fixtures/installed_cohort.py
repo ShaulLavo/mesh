@@ -91,9 +91,14 @@ class Cohort:
             path = self.record.with_name("selected-group.json")
             path.write_bytes(release_worker_groups.encode({"group": self.group, "originalBytes": self.original["imageBytes"]}))
             environment["MESH_WORKER_GROUP"] = str(path)
-        subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start-published", str(self.state), str(self.config),
-            str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
-            capture_output=True, text=True, check=True, timeout=90)
+        try:
+            subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start-published", str(self.state), str(self.config),
+                str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
+                capture_output=True, text=True, check=True, timeout=90)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            self.retain_verification_failure("startup-publication", error)
+            self.finish_catalog("startup-publication", error)
+            raise
         return self.verify("before-install")
 
     def verify(self, label):
@@ -138,10 +143,11 @@ class Cohort:
             error.add_note("cohort verification evidence unavailable: " + type(capture_error).__name__)
 
     def finish_catalog(self, label, primary=None):
-        if not self.catalog or label != "before-install":
+        if not self.catalog or label not in ("before-install", "startup-publication"):
             return
         try:
-            self.catalog.stop("after-failed-io" if primary else "after-original-verification")
+            phase = "after-failed-startup-publication" if label == "startup-publication" else "after-failed-io" if primary else "after-original-verification"
+            self.catalog.stop(phase)
         except Exception as error:
             if primary is None:
                 raise

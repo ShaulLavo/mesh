@@ -359,6 +359,38 @@ class CatalogEvidenceTests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["timeout"], 90)
         verify.assert_not_called()
 
+    def test_startup_refusal_and_timeout_export_full_streams_and_original_exception(self):
+        failures = (subprocess.CalledProcessError(1, ["start-published"], output="startup output", stderr="original startup traceback"),
+                    subprocess.TimeoutExpired(["start-published"], 90, output=b"partial stdout\x00", stderr=b"partial stderr\xff"))
+        for failure in failures:
+            self.check_startup_stream_export(failure)
+
+    def check_startup_stream_export(self, failure):
+        cohort = self.cohort()
+        partial_workers = [{"session": "W004", "pid": 73, "shellPid": 74}]
+        cohort.record.write_text(json.dumps({"workers": partial_workers, "observations": []}))
+        cohort.group, cohort.config, cohort.registry = None, "unused", "unused"
+        cohort.version, cohort.binary = "v0.1.249", "unused"
+        with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure) as run, patch.object(cohort, "verify") as verify:
+            with self.assertRaises(type(failure)) as caught:
+                cohort.start()
+        self.assertIs(caught.exception, failure)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        verify.assert_not_called()
+        output = self.root / ("startup-" + type(failure).__name__)
+        output.mkdir()
+        case = Mock(root=self.root, host={"name": "pc"}, cohort=cohort)
+        with patch.object(installed_adoption, "collect_service_snapshot"), patch.object(installed_adoption.installed_native, "retain_logs"):
+            installed_adoption.finish_case(case, {"passed": False}, output)
+        stdout = failure.stdout if isinstance(failure.stdout, bytes) else failure.stdout.encode()
+        stderr = failure.stderr if isinstance(failure.stderr, bytes) else failure.stderr.encode()
+        self.assertEqual((output / "pc-cohort.failure.stdout").read_bytes(), stdout)
+        self.assertEqual((output / "pc-cohort.failure.stderr").read_bytes(), stderr)
+        retained = json.loads((output / "pc-cohort.json").read_text())
+        self.assertEqual(retained["verificationFailure"]["label"], "startup-publication")
+        self.assertEqual(retained["workers"], partial_workers)
+
     def test_publication_error_preserves_saved_worker_ownership_and_stops_owned_cohort(self):
         directory = self.state / "s/ORIG"
         directory.mkdir(parents=True)
