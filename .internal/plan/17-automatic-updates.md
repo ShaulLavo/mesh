@@ -1577,6 +1577,21 @@ this closed observation. If normal CI reproduces it, retain that artifact and
 bring it back to managing. This decision changes no timeout, assertion,
 authentication requirement or release gate.
 
+Managing subsequently reviewed the delayed normal-CI recurrence on PR 458
+`2616d085`, before the `session.logs` fix. Its
+[Darwin cutover job](https://github.com/ShaulLavo/mesh/actions/runs/43303952240/job/131484452725)
+and [retained artifact](https://github.com/ShaulLavo/mesh/actions/runs/43303952240/artifacts/13983302466)
+show CLI exit 1 and `stopped: true`, with one failed target reporting
+`phase=build-identity: hash executable image: read executable image: context canceled`.
+The actual candidate source is `039036a86f31ac517ed9371fdc9f5fe8174eee3f`.
+This is probably the same Mac hashing-pressure family addressed by the reviewed
+`session.logs` and grouped-cohort work, but that attribution is unconfirmed.
+Do not start a separate unit for this older-source observation. Read the normal
+reviewed PR 435 cycle containing both changes first. If current-source cutover
+fails the same way, retain its artifact and return it to managing for a bounded
+unit. The verified small archive and summary remain in
+`/work/reports/mesh-auto-update/current-cutover-first-stop/`.
+
 ### Pre-policy deployment startup did not reproduce
 
 PR 457 head `c4b729ef` failed the replacement mode of
