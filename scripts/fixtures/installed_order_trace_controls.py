@@ -300,6 +300,33 @@ class OrderTraceTest(unittest.TestCase):
         self.assertIn("handoff", summary["reserved"])
         self.assertFalse(summary["complete"])
 
+    def test_unicode_failures_fit_encoded_budget_and_survive_account_export(self):
+        owner = trace.Trace("canary")
+        failures = [RuntimeError("\U0001f680" * 4096) for _ in range(8)]
+        for failure in failures:
+            owner.failure(failure, "dispatch", "operation")
+        owner.events["forced-overflow"] = {"payload": "x" * trace.HISTORY_LIMIT}
+        summary = owner.summary()
+        self.assertLessEqual(len(trace.encoded(summary)), trace.HISTORY_LIMIT)
+        self.assertFalse(summary["complete"])
+        self.assertTrue(summary["historyOmitted"])
+        self.check_exported_unicode(owner, failures)
+
+    def check_exported_unicode(self, owner, failures):
+        with tempfile.TemporaryDirectory() as directory:
+            root, files = Path(directory), {}
+            owner.write(root / trace.TIMELINE)
+            trace.account_export(root, files)
+        payload = bytes.fromhex(files[trace.TIMELINE])
+        self.assertLessEqual(len(payload), trace.HISTORY_LIMIT)
+        retained = json.loads(payload)["failures"]
+        self.assertEqual([row["exceptionId"] for row in retained], [id(error) for error in failures])
+        self.assertEqual(len(retained), 8)
+        self.assertTrue(all(row["textTruncated"] for row in retained))
+        self.assertTrue(all(len(trace.encoded(row["message"])) <= 512 for row in retained))
+        self.assertTrue(all(len(trace.encoded(row["traceback"])) <= 2048 for row in retained))
+        self.assertFalse(json.loads(bytes.fromhex(files[trace.STATUS]))["complete"])
+
     def test_reserved_carrier_is_observed_without_rebasing_or_semantics(self):
         with tempfile.TemporaryDirectory() as directory:
             class Endpoint:

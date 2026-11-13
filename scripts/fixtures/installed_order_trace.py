@@ -24,9 +24,26 @@ def encoded(value):
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True).encode()
 
 
+def bounded_text(value, limit, tail=False):
+    value = value[-limit:] if tail else value[:limit]
+    low, high = 0, len(value)
+    while low < high:
+        middle = (low + high + 1) // 2
+        candidate = value[-middle:] if tail else value[:middle]
+        if len(encoded(candidate)) <= limit:
+            low = middle
+            continue
+        high = middle - 1
+    return value[-low:] if tail and low else value[:low]
+
+
 def error_record(error, phase, kind):
-    return {"kind": kind, "phase": phase, "exceptionId": id(error), "type": type(error).__name__, "message": str(error)[:512],
-        "traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__))[-2048:], "at": stamp()}
+    message = str(error)
+    stack = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+    retained_message, retained_stack = bounded_text(message, 512), bounded_text(stack, 2048, tail=True)
+    return {"kind": bounded_text(kind, 64), "phase": bounded_text(phase, 128), "exceptionId": id(error),
+        "type": bounded_text(type(error).__name__, 128), "message": retained_message, "traceback": retained_stack,
+        "textTruncated": retained_message != message or retained_stack != stack, "at": stamp()}
 
 
 def diagnostic(method):
@@ -80,7 +97,10 @@ class Trace:
         if len(self.failures) == 8:
             self.complete = False
             return
-        self.failures.append(error_record(error, phase, kind))
+        record = error_record(error, phase, kind)
+        self.failures.append(record)
+        if record["textTruncated"]:
+            self.complete = False
 
     @diagnostic
     def handoff(self, value):
@@ -120,7 +140,7 @@ class Trace:
         Path(path).unlink(missing_ok=True)
 
     def summary(self):
-        value = {"schema": 1, "owner": self.owner, "complete": self.complete,
+        value = {"schema": 1, "owner": bounded_text(self.owner, 512), "complete": self.complete,
             "sampling": "first and last boundary per phase/operation; counts include coalesced calls",
             "eligibilityDefinition": "current journal-phase/unowned predicate; matching ledger is diagnostic only",
             "writerBoundary": "unobserved; journal updatedAt precedes durable save completion",
@@ -129,6 +149,10 @@ class Trace:
         if len(encoded(value)) > HISTORY_LIMIT:
             self.complete = False
             value.update(complete=False, events={}, historyOmitted=True)
+        if len(encoded(value)) > HISTORY_LIMIT:
+            value.update(reserved={}, diagnosticErrors=[], reservationsOmitted=True)
+        if len(encoded(value)) > HISTORY_LIMIT:
+            raise ValueError("bounded failure summary exceeds file limit")
         return value
 
     @diagnostic
