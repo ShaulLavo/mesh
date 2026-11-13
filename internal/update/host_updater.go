@@ -256,6 +256,19 @@ func (u *HostUpdater) recordFinal(ctx context.Context, state HostUpdate, journal
 		return state, true, err
 	}
 	defer unlock()
+	current, err := u.Store.hostUpdate()
+	if err != nil {
+		return state, true, err
+	}
+	// The helper may have published this result or the next ownership while this
+	// tick was reading the journal. A stale tick must not restore its old state.
+	if !sameHostFinalization(current, state) {
+		return current, true, nil
+	}
+	return u.recordFinalLocked(state, journal)
+}
+
+func (u *HostUpdater) recordFinalLocked(state HostUpdate, journal updateinstall.Status) (HostUpdate, bool, error) {
 	if journal.Phase == updateinstall.Committed {
 		held, err := u.Store.adoptionOwnsCommit(journal)
 		if err != nil {
