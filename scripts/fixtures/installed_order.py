@@ -1,10 +1,11 @@
 """Three native installed hosts using real authenticated predecessor evidence."""
 import json
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import partial
 import os
 from pathlib import Path
+import re
 import select
 import signal
 import shutil
@@ -14,6 +15,10 @@ import time
 
 from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence, installed_clock
 from fixtures import installed_order_trace as order_trace
+
+SOAK_NS = 5_000_000_000
+EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+RFC3339 = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})\Z")
 
 
 class Driver:
@@ -315,14 +320,14 @@ def await_opportunity(driver, source, target, started, timeout, cutoff=None):
         assert_held(value, source, target)
         if fresh_opportunity(value, started):
             return require_preexpiry_read(value, cutoff) | {"opportunityStartedAt": started.isoformat()}
-        if cutoff is not None and datetime.now(timezone.utc) >= cutoff:
+        if cutoff is not None and time.time_ns() >= cutoff:
             raise RuntimeError("dependent did not demonstrate a completed update opportunity before its configured soak expired")
         time.sleep(0.05)
     raise RuntimeError("awake dependent did not complete a fresh predecessor-gated update opportunity")
 
 
 def require_preexpiry_read(value, cutoff):
-    if cutoff is not None and datetime.now(timezone.utc) >= cutoff:
+    if cutoff is not None and time.time_ns() >= cutoff:
         raise RuntimeError("soak hold was only observed after expiry")
     return value
 
@@ -335,9 +340,9 @@ def require_failed_canary_read(held, canary, canary_id):
 
 
 def exercise_soak(driver, predecessor, source, target, committed=None):
-    cutoff = commit_time(predecessor, target) + timedelta(seconds=5)
+    cutoff = commit_time_ns(predecessor, target) + SOAK_NS
     order_trace.cutoff(driver, predecessor, target, cutoff)
-    if datetime.now(timezone.utc) >= cutoff:
+    if time.time_ns() >= cutoff:
         order_trace.event(driver, "guard.expired")
         raise RuntimeError("fixture missed the pre-expiry opportunity; no soak proof recorded")
     order_trace.event(driver, "guard.open")
@@ -347,7 +352,7 @@ def exercise_soak(driver, predecessor, source, target, committed=None):
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
-        if datetime.now(timezone.utc) < cutoff:
+        if time.time_ns() < cutoff:
             assert_held(value, source, target)
         if target_committed(value, target):
             publish_soaked_commit(value, target, cutoff, committed)
@@ -358,15 +363,26 @@ def exercise_soak(driver, predecessor, source, target, committed=None):
 
 
 def publish_soaked_commit(value, target, cutoff, committed):
-    if commit_time(value, target) < cutoff:
+    if commit_time_ns(value, target) < cutoff:
         raise RuntimeError("dependent ignored the configured predecessor soak")
     if committed is not None:
         committed(value)
 
 
 def target_committed(value, target):
+    return committed_entry(value, target) is not None
+
+
+def committed_entry(value, target):
     journal = value.get("journal") or {}
-    return journal.get("phase") == "committed" and journal.get("request", {}).get("manifest", {}).get("version") == target and not value["state"].get("owned")
+    request = journal.get("request") or {}
+    if journal.get("phase") != "committed" or request.get("manifest", {}).get("version") != target or value["state"].get("owned"):
+        return None
+    if not request.get("id") or type(request.get("generation")) is not int or request["generation"] <= 0:
+        return None
+    matches = [entry for entry in value["entries"] if entry.get("version") == target
+        and entry.get("request") == request["id"] and entry.get("generation") == request["generation"]]
+    return matches[0] if len(matches) == 1 else None
 
 
 def repeat_opportunity(driver, value, started):
@@ -377,7 +393,7 @@ def repeat_opportunity(driver, value, started):
 
 def validated_soaked_commit(driver, target, cutoff):
     observed = inspect_full(driver)
-    if commit_time(observed, target) < cutoff:
+    if commit_time_ns(observed, target) < cutoff:
         raise RuntimeError("dependent ignored the configured predecessor soak")
     return observed
 
@@ -390,8 +406,11 @@ def await_version(driver, version, phase, timeout, committed=None):
         current = journal.get("request", {}).get("manifest", {}).get("version")
         ready = current == version if phase == "committed" else current == installed_releases.VERSIONS[1]
         settled = ready and journal.get("phase") == phase and not value["state"].get("owned")
+        if settled and phase == "committed":
+            settled = target_committed(value, version)
         order_trace.sample(driver, value, settled, version, phase)
         if settled and committed is not None:
+            commit_time_ns(value, version)
             committed(value)
             committed = None
         observed = inspect_full(driver) if settled else {}
@@ -422,19 +441,32 @@ def bounded(value):
     return {key: value[key] for key in ("state", "entries", "failed", "peers", "peerFailures", "stateWrittenAt")}
 
 
-def commit_time(value, version):
-    entry = next(entry for entry in value["entries"] if entry["version"] == version)
-    return datetime.fromisoformat(entry["committedAt"].replace("Z", "+00:00"))
+def commit_time_ns(value, version):
+    entry = committed_entry(value, version)
+    if entry is None:
+        raise RuntimeError("committed journal lacks one matching native ledger entry")
+    return timestamp_ns(entry["committedAt"])
+
+
+def timestamp_ns(value):
+    match = RFC3339.fullmatch(value)
+    if match is None:
+        raise ValueError("native commit time is not RFC3339 with nanosecond precision")
+    instant = datetime.fromisoformat(match[1] + match[3].replace("Z", "+00:00"))
+    delta = instant - EPOCH
+    return (delta.days * 86400 + delta.seconds) * 1_000_000_000 + int((match[2] or "").ljust(9, "0"))
 
 
 def verify_order(canary, sleeper, burst, version):
-    entries = [next(entry for entry in value["entries"] if entry["version"] == version) for value in (canary, sleeper, burst)]
+    entries = [committed_entry(value, version) for value in (canary, sleeper, burst)]
+    if any(entry is None for entry in entries):
+        raise RuntimeError("ordered host journal does not match its native commit ledger")
     if len({entry["metadata"] for entry in entries}) != 1 or any(entry["workersPreserved"] != entry["workers"] for entry in entries):
         raise RuntimeError("ordered native hosts disagree on their exact pinned release or preserved workers")
-    times = [commit_time(value, version) for value in (canary, sleeper, burst)]
+    times = [commit_time_ns(value, version) for value in (canary, sleeper, burst)]
     if times != sorted(times) or len(set(times)) != 3:
         raise RuntimeError("native predecessor commits did not occur in policy order")
-    if any((times[index + 1] - times[index]).total_seconds() < 5 for index in range(2)):
+    if any(times[index + 1] - times[index] < SOAK_NS for index in range(2)):
         raise RuntimeError("native dependent committed before its actual predecessor soak")
     if any(entry["version"] == installed_releases.VERSIONS[1] for value in (sleeper, burst) for entry in value["entries"]):
         raise RuntimeError("dependent adopted the failed canary release")

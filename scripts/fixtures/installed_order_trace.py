@@ -113,7 +113,7 @@ class Trace:
     @diagnostic
     def handoff(self, value):
         payload = encoded({"observedAt": stamp(), "observation": value,
-            "correlation": correlation(value), "precision": "raw native strings; policy parser uses microseconds"})
+            "correlation": correlation(value), "precision": "integer nanoseconds from raw native strings"})
         if len(payload) > HANDOFF_LIMIT:
             self.complete = False
             self.reserve("handoff", retained=False, reason="full observation exceeds file bound")
@@ -150,7 +150,7 @@ class Trace:
     def summary(self):
         value = {"schema": 1, "owner": bounded_text(self.owner, 512), "complete": self.complete,
             "sampling": "first and last boundary per phase/operation; counts include coalesced calls",
-            "eligibilityDefinition": "current journal-phase/unowned predicate; matching ledger is diagnostic only",
+            "eligibilityDefinition": "committed journal/unowned state and one matching ledger request/generation/version",
             "writerBoundary": "unobserved; journal updatedAt precedes durable save completion",
             "reserved": self.reserved, "failures": self.failures, "diagnosticErrors": self.diagnostic_errors,
             "events": self.events}
@@ -278,8 +278,8 @@ def publish(driver, future, value):
 def cutoff(driver, predecessor, target, parsed):
     owner = trace(driver)
     if owner is not None:
-        entry = next((item for item in predecessor.get("entries", []) if item.get("version") == target), None)
-        owner.reserve("cutoff", rawPredecessor=entry, parsedCutoff=parsed.isoformat(), parserResolutionNs=1000,
+        entry = next((item for item in correlation(predecessor)["matchingLedger"] if item.get("version") == target), None)
+        owner.reserve("cutoff", rawPredecessor=entry, parsedCutoffNs=parsed, parserResolutionNs=1,
             preGuardWallNs=time.time_ns(), policySoakNs=5_000_000_000)
 
 
