@@ -191,20 +191,52 @@ class DraftCase(installed_adoption.AdoptionCase):
         return {"killedNativePID": pid, "mappedImage": image, "confirmedBeforeInterruption": False}
 
 
-def prove(root, output, native, version, source, preparer, registry=None, probe=None):
+def prove(root, output, native, version, source, preparer, registry=None, probe=None, *, task_id=None):
     releases = stage(root, output, native, version, source)
+    directory = releases.directory / version
+    inventory = release_worker_completion.task_inventory(directory, native, os.environ["MESH_HARNESS_SOURCE"]) if task_id is not None else None
+    task = release_worker_completion.select_task(inventory, task_id) if inventory else None
     inspector = root / "publication-reader"
     subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(inspector), "./internal/update"], check=True, timeout=180)
     origin = publication_origin.Origin(root, releases.directory, inspector)
     try:
         origin.start()
         origin.head(releases.directory, version)
-        run_pairs(root, output, native, version, preparer, releases, origin)
-        run_fresh(root, output, version, releases, origin)
-        run_first_published(root, output, version, releases, origin, registry, probe)
+        if task is None:
+            run_pairs(root, output, native, version, preparer, releases, origin)
+            run_fresh(root, output, version, releases, origin)
+            run_first_published(root, output, version, releases, origin, registry, probe)
+        else:
+            run_task(root, output, version, preparer, releases, origin, registry, probe, task)
     finally:
         (output / "publication-transport-cleanup.json").write_text(json.dumps(origin.close(), indent=2) + "\n")
-    release_worker_completion.record(root, output, native, version, source)
+    if task is None:
+        release_worker_completion.record(root, output, native, version, source)
+        return
+    context = release_worker_completion.release_context(directory)
+    selection = json.loads((directory / "mesh-worker-groups.json").read_bytes())["selection"]
+    release_worker_completion.record_task(output, inventory, task, context, selection)
+
+
+def run_task(root, output, version, preparer, releases, origin, registry, probe, task):
+    contract = releases.verification["routeContract"]
+    (output / "first-published-updater.json").write_text(json.dumps(contract, indent=2) + "\n")
+    if task.get("case") == "fresh-managed-native-pair.json":
+        run_fresh(root, output, version, releases, origin)
+        return
+    if "case" not in task:
+        run_first_published(root, output, version, releases, origin, registry, probe, task=task)
+        return
+    matches = [(host, scenario) for host in fleet_baselines.load()["hosts"] for scenario in
+               ("publication", "rollback", "publication-interrupt") if host["platform"] == releases.native
+               and host["name"] + "-" + scenario + "-native-pair.json" == task["case"]]
+    if len(matches) != 1:
+        raise ValueError("publication task does not select one exact native legacy case")
+    host, scenario = matches[0]
+    pair = fleet_baselines.acquire_pair(root / "public", host)
+    prior_version = "v0.1." + str(int(host["daemon"].split(".")[-1]) - 1)
+    previous = fleet_baselines.acquire(root / "public", prior_version, pair["daemon"]["artifact"]["platform"])
+    run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario)
 
 
 def run_pairs(root, output, native, version, preparer, releases, origin):
@@ -265,7 +297,7 @@ def run_fresh(root, output, version, releases, origin):
         installed_fresh.finish(case, output, record)
 
 
-def run_first_published(root, output, version, releases, origin, registry, probe):
+def run_first_published(root, output, version, releases, origin, registry, probe, *, task=None):
     contract = releases.verification["routeContract"]
     first = contract["first"]
     (output / "first-published-updater.json").write_text(json.dumps(contract, indent=2) + "\n")
@@ -282,11 +314,18 @@ def run_first_published(root, output, version, releases, origin, registry, probe
     releases.builds[first] = build | {"path": str(baseline["executable"])}
     owned_registry = installed_cohort.stage(registry, root / "published-workers", platform)
     groups = installed_adoption.installed_groups(owned_registry, first, baseline["executable"], baseline["executable"])
+    if task is not None:
+        selected = [group for group in groups if group["index"] == task["group"]["index"]]
+        if len(selected) != 1 or release_worker_completion.groups.public_group(selected[0]) != task["group"]:
+            raise ValueError("native publication group differs from its signed inventory")
+        run_published_groups(root, output, first, version, releases, origin, owned_registry, probe,
+                             task["rollback"], selected, task["scenario"], task["via"], complete=False)
+        return
     for name, rollback, via in release_worker_completion.route_scenarios(contract):
         run_published_groups(root, output, first, version, releases, origin, owned_registry, probe, rollback, groups, name, via)
 
 
-def run_published_groups(root, output, first, target, releases, origin, registry, probe, rollback, groups, name, via):
+def run_published_groups(root, output, first, target, releases, origin, registry, probe, rollback, groups, name, via, *, complete=True):
     for group in groups:
         directory = output / "groups" / name / str(group["index"])
         directory.mkdir(parents=True)
@@ -299,7 +338,8 @@ def run_published_groups(root, output, first, target, releases, origin, registry
         installed_adoption.validate_installed_group(directory, group, required,
             {"digest": releases.builds[first]["digest"], "protocol": releases.builds[first]["workerProtocol"]})
         shutil.rmtree(case_root)
-    release_worker_completion.route_companion(output, releases.verification["routeContract"], name, rollback, via, groups)
+    if complete:
+        release_worker_completion.route_companion(output, releases.verification["routeContract"], name, rollback, via, groups)
 
 
 def published_route(root, output, first, target, releases, origin, registry, probe, rollback, group, name, via):

@@ -37,10 +37,15 @@ def main():
     parser.add_argument("--scenario", choices=("adopt", "rollback", "helper", "initial", "interrupt"), help="one adoption profile; the default requires all profiles")
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
+    parser.add_argument("--publication-task", help="one complete task ID from publication-jobs.py inventory")
     installed_clock.arguments(parser)
     parser.add_argument("--clock-plan-index", type=Path, default=installed_budgets.INDEX,
                         help="index of independently approved per-platform/profile frozen plans")
     arguments = parser.parse_args()
+    if arguments.publication_task is not None and (not arguments.publication_version or not arguments.publication_source
+            or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only or arguments.clock_mode == "diagnostic"
+            or arguments.signed_chain or arguments.format_waypoint or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
+        parser.error("publication task requires real draft mode without supplemental or diagnostic execution")
     validate_prepared_arguments(parser, arguments)
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -135,8 +140,9 @@ def run_requested(arguments, root, output, native, *, clock_plan=None):
         if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
             raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
         from fixtures import installed_publication
+        selection = {"task_id": arguments.publication_task} if getattr(arguments, "publication_task", None) is not None else {}
         installed_publication.prove(root, output, native, arguments.publication_version, arguments.publication_source,
-            arguments.native_helper.resolve(strict=True), arguments.worker_registry, arguments.worker_probe)
+            arguments.native_helper.resolve(strict=True), arguments.worker_registry, arguments.worker_probe, **selection)
         return
     if arguments.fresh_managed:
         from fixtures import installed_fresh

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import tempfile
 
 from fixtures import fleet_baselines, release_worker_groups as groups, release_workers
 
@@ -171,13 +172,15 @@ def record(root, output, native, version, source):
     context = release_context(path.parent)
     if (context["version"], context["source"]) != (version, source):
         raise ValueError("installed completion release inputs differ")
+    record_context(output, native, context, json.loads(path.read_bytes())["selection"], os.environ["MESH_HARNESS_SOURCE"])
+
+
+def record_context(output, native, context, selection, harness):
     draft_ref = asset(output, output / "real-draft.json")
     harness_ref = asset(output, output / "harness-source.json")
-    harness = os.environ["MESH_HARNESS_SOURCE"]
     draft = validate_draft(resolve(output, draft_ref), context, native, harness)
     validate_harness(resolve(output, harness_ref), harness)
     publication = {"release": release_binding(context), "candidate": draft["build"], "harness": harness}
-    selection = json.loads(path.read_bytes())["selection"]
     refs = []
     for name in expected_pairs(native):
         data = (output / name).read_bytes()
@@ -186,8 +189,8 @@ def record(root, output, native, version, source):
     contract = context["routeContract"]
     routes = [asset(output, output / (name + "-groups.json")) for name, _rollback, _via in route_scenarios(contract)]
     observation = asset(output, output / "first-published-updater.json")
-    value = {"schema": 2, "version": version, "releaseSource": source, "platform": native,
-             "signedIndexSha256": groups.digest(path.read_bytes()), "firstPublishedUpdater": contract["first"],
+    value = {"schema": 2, "version": context["version"], "releaseSource": context["source"], "platform": native,
+             "signedIndexSha256": context["workerGroups"], "firstPublishedUpdater": contract["first"],
              "routeContract": contract, "routeObservation": observation,
              "installedHarness": harness, "draft": draft_ref, "harnessObservation": harness_ref, "cases": refs, "routes": routes}
     validate_routes(output, value, selection, publication)
@@ -276,7 +279,7 @@ def validate_routes(root, completion, selection, publication):
 
 
 def validate_route_groups(root, value, selected, publication, selection):
-    first, target = value["routeContract"]["first"], value["routeContract"]["target"]
+    first = value["routeContract"]["first"]
     observed = [item for entry in value["groups"] for item in entry["group"]["members"]]
     if [groups.member(item) for item in observed] != selected:
         raise ValueError("published grouped route has incomplete authoritative worker coverage")
@@ -285,23 +288,187 @@ def validate_route_groups(root, value, selected, publication, selection):
         raise ValueError("published route lacks its exact original source image")
     states = set()
     for entry in value["groups"]:
-        result = resolve(root, entry["result"])
-        name = value["scenario"]
-        original_source = {"version": first, "platform": sources[0]["artifact"]["platform"],
-                           "digest": sources[0]["artifact"]["binarySha256"], "protocol": sources[0]["protocol"]}
-        validate_case(result, publication | {"case": name + "-managed", "scenario": name, "original": original_source})
-        if (result["firstPublishedUpdater"], result["realDraft"], result["rollback"], result["routeContract"], result["via"]) != (first, target, value["rollback"], value["routeContract"], value["via"]):
-            raise ValueError("installed group result has another published scenario")
-        validate_route_updates(result, publication, selection, len(entry["group"]["members"]) + 1)
-        record = resolve(root, entry["observations"])
-        original = groups.validate_observations(record, entry["group"], route_labels(result),
-            {"digest": sources[0]["artifact"]["binarySha256"], "protocol": sources[0]["protocol"]})
+        original = validate_route_entry(root, value, entry, publication, selection, sources[0])
         if original["stateRun"] in states:
             raise ValueError("published groups reused a state identity")
         states.add(original["stateRun"])
     first = resolve(root, value["groups"][0]["observations"])["observations"][0]["original"]
     if [entry["group"] for entry in value["groups"]] != groups.partition(observed, first["imageBytes"]):
         raise ValueError("published route has another bounded deterministic partition")
+
+
+def validate_route_entry(root, value, entry, publication, selection, source):
+    first, target = value["routeContract"]["first"], value["routeContract"]["target"]
+    result = resolve(root, entry["result"])
+    name = value["scenario"]
+    original_source = {"version": first, "platform": source["artifact"]["platform"],
+                       "digest": source["artifact"]["binarySha256"], "protocol": source["protocol"]}
+    validate_case(result, publication | {"case": name + "-managed", "scenario": name, "original": original_source})
+    if (result["firstPublishedUpdater"], result["realDraft"], result["rollback"], result["routeContract"], result["via"]) != (first, target, value["rollback"], value["routeContract"], value["via"]):
+        raise ValueError("installed group result has another published scenario")
+    validate_route_updates(result, publication, selection, len(entry["group"]["members"]) + 1)
+    record = resolve(root, entry["observations"])
+    return groups.validate_observations(record, entry["group"], route_labels(result),
+        {"digest": source["artifact"]["binarySha256"], "protocol": source["protocol"]})
+
+
+def publication_groups(directory, native, context, index):
+    first = context["routeContract"]["first"]
+    if first is None:
+        return []
+    platform = dict(zip(("os", "arch"), native.split("/")))
+    selected = [groups.member(item) for item in index["selection"]["workers"] if item["artifact"]["platform"] == platform
+                and release_workers.version(item["version"]) <= release_workers.version(first)]
+    sizes = {}
+    for reference in index["sources"]:
+        companion = groups.resolve_asset(reference, groups.file_resolver(directory), "worker-groups")
+        collect_image_sizes(companion, platform, sizes)
+    workers = [item | {"imageBytes": sizes[groups.encode(item)]} for item in selected]
+    originals = [item for item in workers if item["version"] == first]
+    if len(originals) != 1:
+        raise ValueError("publication inventory lacks the authoritative first updater image")
+    return groups.partition(workers, originals[0]["imageBytes"])
+
+
+def collect_image_sizes(companion, platform, sizes):
+    if companion["context"]["platform"] != platform:
+        return
+    for item in (item for entry in companion["groups"] for item in entry["group"]["members"]):
+        key = groups.encode(groups.member(item))
+        if key in sizes and sizes[key] != item["imageBytes"]:
+            raise ValueError("publication inventory has conflicting signed image sizes")
+        sizes[key] = item["imageBytes"]
+
+
+def task_inventory(directory, native, harness):
+    if native not in ("linux/amd64", "linux/arm64", "darwin/arm64"):
+        raise ValueError("publication inventory has another native platform")
+    context = release_context(directory)
+    index = json.loads((directory / "mesh-worker-groups.json").read_bytes())
+    tasks = [{"id": name.removesuffix("-native-pair.json"), "case": name} for name in expected_pairs(native)]
+    selected = publication_groups(directory, native, context, index)
+    for name, rollback, via in route_scenarios(context["routeContract"]):
+        tasks.extend({"id": name + ":" + str(group["index"]), "scenario": name, "rollback": rollback,
+                      "via": via, "group": group} for group in selected)
+    return {"schema": 1, "release": release_binding(context), "platform": native, "harness": harness,
+            "routeContract": context["routeContract"], "baselineSha256": groups.digest(groups.encode(fleet_baselines.load())),
+            "retentionSha256": groups.digest((directory / "mesh-retention.json").read_bytes()),
+            "signatureSha256": groups.digest((directory / "mesh-update.sig.json").read_bytes()), "tasks": tasks}
+
+
+def select_task(inventory, task_id):
+    tasks = [task for task in inventory["tasks"] if task["id"] == task_id]
+    if len(tasks) != 1:
+        raise ValueError("publication task is not in the complete deterministic inventory")
+    return tasks[0]
+
+
+def task_evidence(output, inventory, task):
+    if "case" in task:
+        return {"case": asset(output, output / task["case"])}
+    directory = output / "groups" / task["scenario"] / str(task["group"]["index"])
+    results, observations = list(directory.glob("*-native-pair.json")), list(directory.glob("*-cohort.json"))
+    if len(results) != 1 or len(observations) != 1:
+        raise ValueError("publication task lacks its complete group evidence")
+    return {"route": {"routeContract": inventory["routeContract"], "scenario": task["scenario"],
+            "rollback": task["rollback"], "via": task["via"], "groups": [{"group": task["group"],
+            "result": asset(output, results[0]), "observations": asset(output, observations[0])}]}}
+
+
+def record_task(output, inventory, task, context, selection):
+    value = {"schema": 1, "inventorySha256": groups.digest(groups.encode(inventory)), "task": task,
+             "draft": asset(output, output / "real-draft.json"),
+             "harnessObservation": asset(output, output / "harness-source.json"),
+             "routeObservation": asset(output, output / "first-published-updater.json"),
+             **task_evidence(output, inventory, task)}
+    validate_task(output, value, inventory, context, selection)
+    (output / "publication-task.json").write_bytes(groups.encode(value))
+
+
+def validate_task(root, value, inventory, context, selection):
+    task = select_task(inventory, value["task"]["id"])
+    keys = {"schema", "inventorySha256", "task", "draft", "harnessObservation", "routeObservation", "case" if "case" in task else "route"}
+    if (set(value) != keys or value["schema"] != 1 or value["task"] != task
+            or value["inventorySha256"] != groups.digest(groups.encode(inventory))):
+        raise ValueError("publication task has another inventory, selection or diagnostic shape")
+    native, harness = inventory["platform"], inventory["harness"]
+    draft = validate_draft(resolve(root, value["draft"]), context, native, harness)
+    validate_harness(resolve(root, value["harnessObservation"]), harness)
+    if resolve(root, value["routeObservation"]) != inventory["routeContract"]:
+        raise ValueError("publication task has another retained route observation")
+    publication = {"release": release_binding(context), "candidate": draft["build"], "harness": harness}
+    if "case" in task:
+        if value["case"]["name"] != task["case"]:
+            raise ValueError("publication task selected another case")
+        validate_case(resolve(root, value["case"]), expected_case(task["case"], native, publication, selection))
+        return
+    route = value["route"]
+    expected = {"routeContract": inventory["routeContract"], "scenario": task["scenario"], "rollback": task["rollback"],
+                "via": task["via"], "groups": route["groups"]}
+    if route != expected or len(route["groups"]) != 1 or route["groups"][0]["group"] != task["group"]:
+        raise ValueError("publication task selected another route or bounded group")
+    source = baseline_source(selection, native, inventory["routeContract"]["first"])
+    validate_route_entry(root, route, route["groups"][0], publication, selection,
+                         {"artifact": {"platform": source["platform"], "binarySha256": source["digest"]}, "protocol": source["protocol"]})
+
+
+def task_references(value):
+    refs = [value[key] for key in ("draft", "harnessObservation", "routeObservation")]
+    if "case" in value:
+        return refs + [value["case"]]
+    entry = value["route"]["groups"][0]
+    return refs + [entry["result"], entry["observations"]]
+
+
+def copy_task(root, value, destination):
+    for reference in task_references(value):
+        resolve(root, reference)
+        path = destination / reference["name"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = (root / reference["name"]).read_bytes()
+        if path.exists() and path.read_bytes() != data:
+            raise ValueError("publication tasks disagree on shared evidence")
+        path.write_bytes(data)
+
+
+def aggregate_tasks(directory, native, harness, inputs, output):
+    inventory = task_inventory(directory, native, harness)
+    context = release_context(directory)
+    selection = json.loads((directory / "mesh-worker-groups.json").read_bytes())["selection"]
+    if output.exists():
+        raise ValueError("publication aggregation needs a new output directory")
+    paths = sorted(inputs.rglob("publication-task.json"))
+    if len(paths) != len(inventory["tasks"]):
+        raise ValueError("publication task inventory is incomplete or extra")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="publication-aggregate-", dir=output.parent) as temporary:
+        staging = Path(temporary)
+        routes = collect_tasks(paths, staging, inventory, context, selection)
+        for name, rollback, via in route_scenarios(context["routeContract"]):
+            value = {"routeContract": context["routeContract"], "scenario": name, "rollback": rollback, "via": via,
+                     "groups": sorted(routes[name], key=lambda entry: entry["group"]["index"])}
+            (staging / (name + "-groups.json")).write_bytes(groups.encode(value))
+        record_context(staging, native, context, selection, harness)
+        staging.rename(output)
+
+
+def collect_tasks(paths, staging, inventory, context, selection):
+    seen, routes = set(), {name: [] for name, _rollback, _via in route_scenarios(context["routeContract"])}
+    for path in paths:
+        if path.is_symlink() or path.stat().st_size > groups.MAX_DOCUMENT:
+            raise ValueError("publication task receipt is nonlocal or oversized")
+        value = json.loads(path.read_bytes())
+        validate_task(path.parent, value, inventory, context, selection)
+        task = value["task"]
+        if task["id"] in seen:
+            raise ValueError("publication task inventory duplicates a task")
+        seen.add(task["id"])
+        copy_task(path.parent, value, staging)
+        if "route" in value:
+            routes[task["scenario"]].extend(value["route"]["groups"])
+    if seen != {task["id"] for task in inventory["tasks"]}:
+        raise ValueError("publication task inventory is incomplete")
+    return routes
 
 
 def identity(value):
