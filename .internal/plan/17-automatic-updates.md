@@ -1625,6 +1625,50 @@ the original failure and both passes in
 `/work/reports/mesh-auto-update/helper-inode-fixture/REPORT.md`. Normal reviewed
 current-source CI remains required before merge.
 
+### Linux shell startup remains blocked on EPERM
+
+Current caller C2 `e3dc8899` failed
+[Linux AMD64 native shard 1](https://github.com/ShaulLavo/mesh/actions/runs/43338129669/job/131604867814).
+The [small proof artifact](https://github.com/ShaulLavo/mesh/actions/runs/43338129669/artifacts/13997974744)
+matches its published length and digest. Native preparation and candidate
+reader independently identify source `df0bb8df8e1bcb7d6eafe91b2906707529c390b4`.
+During v0.1.259 forward-only group 1, selected v0.1.225 worker W00F failed
+starting `/bin/sh` with errno 1 and `stage=unavailable`. Fifteen preceding
+worker entries survive. The held failed-worker image matches its selected
+artifact digest; its later process fields are already unavailable.
+
+The cheap observer supplied actual image binding and initial process context,
+but not the failed syscall. Its passed Python launcher control does not cover
+a denied clone in a Go worker or the historical child's pre-exec calls. The
+initial observed worker task has ordinary credentials, Seccomp zero and an
+unconfined label; that snapshot is not a measurement of every thread or the
+later failure event. Neither the old nor current evidence establishes the
+underlying cause or a concrete runtime correction. This is a recurring real
+blocker, not a flake or a successful startup proof.
+
+Offline source/context review stopped because the missing observation cannot
+be recovered from exited-process metadata. Preserve
+`/work/reports/mesh-auto-update/linux-shell-eperm-current-context/REPORT.md`
+and `cycle2-native-collection/LINUX-SHARD1-FOLLOWUP.md`, including exact source,
+compiler, image and cleanup limits. A separate diagnostic would need the
+actual errno-1 syscall return and both parent clone and pre-exec child coverage,
+with executable positive controls in the same launch context. The retained
+old tracer misses parent clone failures and must not be deployed unchanged.
+Tracing changes scheduling and visible process context; any traced result is
+diagnostic evidence, not native acceptance. No further capture, local seed
+loop, retry, deadline expansion or policy change follows without managing's
+bounded next-step decision. The approved setup-only repair remains separate.
+
+Managing authorized one observer repair and diagnostic capture unit, about two
+agent hours, in parallel with the setup repair. Prefer a suitable lower-overhead
+hosted hook when available; use ptrace if necessary and retain its timing and
+context caveats. Require same-context controls for denied parent clone and
+pre-exec child returns, then quick independent review before one bounded
+capture. Keep deadlines unchanged and label every traced result diagnostic
+only. If the capture still does not identify the failing call, stop and report.
+This does not add a normal acceptance cycle or make the setup repair wait for
+the observer unit.
+
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
 The graph analysis reads manifest claims and does not verify receipts.
