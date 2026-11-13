@@ -321,6 +321,8 @@ class ClockTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("pull_request:", workflow)
         self.assertIn("calibration_only: true", workflow)
+        self.assertIn("worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}", workflow)
+        self.assertIn("required: true\n        type: string", workflow.split("producer_run:", 1)[1].split("producer_source:", 1)[0])
         self.assertIn("platform: [linux/amd64, linux/arm64, darwin/arm64]", reusable)
         self.assertIn("mode: [oldest, chain, waypoint, order]", reusable)
         self.assertIn("timeout-minutes: 15", reusable)

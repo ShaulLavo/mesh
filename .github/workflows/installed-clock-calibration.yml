@@ -6,7 +6,7 @@ on:
       producer_run:
         description: 'Existing complete reviewed native preparation run'
         required: true
-        type: number
+        type: string
       producer_source:
         description: 'Exact recorded preparation source SHA'
         required: true
@@ -35,7 +35,7 @@ jobs:
       harness_source: ${{ github.sha }}
       reusable_call: true
       worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ inputs.producer_run }}
+      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
       worker_artifact_source: ${{ inputs.producer_source }}
       calibration_only: true
       catalog_evidence: ${{ inputs.catalog_evidence }}
