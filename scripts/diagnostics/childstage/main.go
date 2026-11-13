@@ -236,7 +236,9 @@ func (o *observer) event(pid int, t *task, cause int) {
 		return
 	}
 	if cause == unix.PTRACE_EVENT_EXIT {
-		t.GroupExit = endingGroup(pid, t, message)
+		if endingGroup(pid, t, message) {
+			o.markGroupExit(t.TGID)
+		}
 		o.emit(map[string]any{eventKey: "exiting", tidKey: pid, tgidKey: t.TGID, statusKey: message, "pendingCall": t.Call, "groupExit": t.GroupExit})
 		return
 	}

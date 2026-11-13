@@ -25,7 +25,8 @@ func (o *observer) parkUnidentified(pid int, t *task, stop syscall.WaitStatus) {
 }
 
 // An unresumed automatically traced thread can outlive its creator's clone
-// notification during group exit. Require the leader's exit_group or SIGKILL
+// notification during group exit. Require an owned thread's exit_group or
+// the leader's SIGKILL
 // and wait until every identified thread is exiting: no creator can still
 // deliver that notification then. This path
 // never resumes the unidentified thread into user code or another syscall.
@@ -72,10 +73,18 @@ func (o *observer) releaseUnstarted(pid int, t *task) {
 }
 
 func endingGroup(pid int, t *task, result uint) bool {
-	if pid != t.TGID {
+	if !t.Known {
 		return false
 	}
-	return result == uint(unix.SIGKILL) || t.Call != nil && t.Call.Number == unix.SYS_EXIT_GROUP
+	return pid == t.TGID && result == uint(unix.SIGKILL) || t.Call != nil && t.Call.Number == unix.SYS_EXIT_GROUP
+}
+
+func (o *observer) markGroupExit(tgid int) {
+	for _, t := range o.tasks {
+		if t.Known && t.TGID == tgid {
+			t.GroupExit = true
+		}
+	}
 }
 
 func (o *observer) groupExiting(tgid int) bool {

@@ -54,6 +54,28 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(handles, {})
         closed.assert_called_once_with(456)
 
+    def test_death_cleanup_attempts_every_handle_and_reaps_after_error(self):
+        first = os.open("/dev/null", os.O_RDONLY)
+        second = os.open("/dev/null", os.O_RDONLY)
+        handles = {123: first, 124: second}
+        with patch.object(backend, "kill_owned", side_effect=[RuntimeError("first kill failed"), None]) as killed, \
+                patch.object(backend, "reap_adopted") as reaped:
+            with self.assertRaisesRegex(RuntimeError, "first kill failed"):
+                remove_test_tasks(None, handles)
+        self.assertEqual([call.args[0] for call in killed.call_args_list], [first, second])
+        reaped.assert_called_once()
+        self.assertEqual(handles, {})
+        for descriptor in (first, second):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_death_cleanup_failure_still_restores_subreaper(self):
+        with patch.object(sys.modules[__name__], "remove_test_tasks", side_effect=RuntimeError("cleanup failed")), \
+                patch.object(backend, "subreaper") as restored:
+            with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+                finish_test_tasks(None, {}, 0)
+        restored.assert_called_once_with(0)
+
     def test_kernel_rows_have_backend_neutral_sequences(self):
         run = backend.KernelRun(Path("/unused"), "offline")
         first = {"event": "exec", "device": 0, "inode": 1, "bytes": 2}
@@ -299,18 +321,28 @@ def hold_test_tasks(pids, handles):
 
 
 def remove_test_tasks(controller, handles):
-    if controller is not None and controller.poll() is None:
-        controller.kill()
-        controller.wait(timeout=3)
-    for descriptor in handles.values():
-        try:
-            backend.kill_owned(descriptor)
-        finally:
-            os.close(descriptor)
-    backend.reap_adopted()
+    errors = []
     if controller is not None:
-        controller.stdin.close()
-        controller.stdout.close()
+        backend.attempt(errors, controller.kill)
+        backend.attempt(errors, lambda: controller.wait(timeout=3))
+    for descriptor in handles.values():
+        backend.attempt(errors, lambda descriptor=descriptor: backend.kill_owned(descriptor))
+        backend.attempt(errors, lambda descriptor=descriptor: os.close(descriptor))
+    handles.clear()
+    backend.attempt(errors, backend.reap_adopted)
+    if controller is not None:
+        backend.attempt(errors, controller.stdin.close)
+        backend.attempt(errors, controller.stdout.close)
+    if errors:
+        raise RuntimeError("death-control cleanup failed: " + "; ".join(errors))
+
+
+def finish_test_tasks(controller, handles, previous):
+    errors = []
+    backend.attempt(errors, lambda: remove_test_tasks(controller, handles))
+    backend.attempt(errors, lambda: backend.subreaper(previous))
+    if errors:
+        raise RuntimeError("death-control finalization failed: " + "; ".join(errors))
 
 
 def wait_guardian(pid, descriptor):
@@ -348,8 +380,7 @@ def exercise_ptrace_death(root, observer, victim):
         return {"victim": victim, "pids": pids, "remainingOwnedTasks": remaining,
                 "controllerExit": controller.returncode, "passed": True}
     finally:
-        remove_test_tasks(controller, handles)
-        backend.subreaper(previous)
+        finish_test_tasks(controller, handles, previous)
 
 
 def exercise_controller_death(root, outer=False):
@@ -371,8 +402,7 @@ def exercise_controller_death(root, outer=False):
         return {"guardianGone": not Path(f"/proc/{pids[0]}").exists(), "rootGone": not Path(f"/proc/{pids[1]}").exists(),
                 "detachedDescendantGone": not Path(f"/proc/{pids[2]}").exists()}
     finally:
-        remove_test_tasks(controller, handles)
-        backend.subreaper(previous)
+        finish_test_tasks(controller, handles, previous)
 
 
 def controller_identity(controller, root, outer):

@@ -82,16 +82,32 @@ func TestRootExitStillWaitsForUnstartedTerminalProof(t *testing.T) {
 }
 
 func TestOrdinaryThreadExitCannotAuthorizeUnstartedThreadKill(t *testing.T) {
-	task := &task{TGID: 123, Call: &call{Number: unix.SYS_EXIT}}
-	if endingGroup(123, task, 0) {
+	task := &task{Known: true, TGID: 123, Call: &call{Number: unix.SYS_EXIT}}
+	if endingGroup(123, task, 0) || endingGroup(124, task, 0) {
 		t.Fatal("leader's thread-only exit was treated as group termination")
 	}
 	if !endingGroup(123, task, uint(unix.SIGKILL)) {
 		t.Fatal("leader's fatal group signal was not recognized")
 	}
 	task.Call.Number = unix.SYS_EXIT_GROUP
-	if !endingGroup(123, task, 0) || endingGroup(124, task, 0) {
-		t.Fatal("exit_group proof did not require the leader identity")
+	if !endingGroup(123, task, 0) || !endingGroup(124, task, 0) {
+		t.Fatal("owned nonleader exit_group did not terminate the group")
+	}
+	task.Known = false
+	if endingGroup(124, task, 0) {
+		t.Fatal("unidentified task authorized group-exit recovery")
+	}
+}
+
+func TestNonleaderGroupExitProofSurvivesItsTerminalWait(t *testing.T) {
+	o, _ := testObserver()
+	o.tasks[123].TGID = 123
+	o.tasks[124] = &task{Known: true, TGID: 123, Exiting: true}
+	o.tasks[125] = &task{Known: true, TGID: 125}
+	o.markGroupExit(123)
+	delete(o.tasks, 124)
+	if !o.tasks[123].GroupExit || o.tasks[125].GroupExit {
+		t.Fatal("group proof was lost with the initiator or crossed group identity")
 	}
 }
 
