@@ -308,7 +308,9 @@ class WorkflowWiringTests(unittest.TestCase):
         args = SimpleNamespace(export_prepared=Path("/export"), prepared_releases=None, source_host="pc",
             worker_registry=Path("/registry"), worker_probe=Path("/probe"), installed_slice=Path("/slice"),
             native_helper=unittest.mock.Mock(), format_waypoint=True)
-        with patch.dict(sys.modules, {"fixtures.installed_prepared": worker}):
+        import fixtures
+        with patch.dict(sys.modules, {"fixtures.installed_prepared": worker}), \
+                patch.object(fixtures, "installed_prepared", worker, create=True):
             proof.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "test-plan")
             self.assertEqual(worker.run_prepare.call_args.args[3]["name"], "pc")
             self.assertTrue(worker.run_prepare.call_args.kwargs["format_waypoint"])
