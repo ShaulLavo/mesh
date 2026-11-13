@@ -60,7 +60,7 @@ class OrderTraceTest(unittest.TestCase):
         self.assertEqual((selected["kind"], selected["type"]), ("parent-selected", "ValueError"))
         self.assertFalse(any(thread.name.startswith("ordered-opportunity") for thread in threading.enumerate()))
 
-    def test_torn_multi_read_handoff_is_recorded_without_fixing_eligibility(self):
+    def test_torn_multi_read_waits_for_matching_commit_before_handoff(self):
         old_read, published = threading.Event(), threading.Event()
         latest = installed_releases.VERSIONS[-1]
         live = observation(installed_releases.VERSIONS[0])
@@ -90,28 +90,57 @@ class OrderTraceTest(unittest.TestCase):
         self.assertFalse(writer.is_alive())
         self.assertEqual(live["entries"][0]["version"], latest)
         captured = json.loads(driver.diagnostics.handoff_bytes)
-        self.assertFalse(captured["correlation"]["matchingLedgerObserved"])
+        self.assertTrue(captured["correlation"]["matchingLedgerObserved"])
+        self.assertFalse(driver.diagnostics.reserved["lastObservedIneligible"]["details"]["correlation"]["matchingLedgerObserved"])
         missing = copy.deepcopy(captured["observation"])
         missing["state"]["owned"] = {"request": "request", "generation": 2, "metadata": "pin"}
+        missing["state"]["owned"]["metadata"] = "another-pin"
         self.assertFalse(trace.correlation(missing)["ledgerMetadataMatchesOwned"])
         self.assertEqual(captured["observation"], handoff.result())
-        with self.assertRaises(StopIteration):
-            installed_order.exercise_soak(None, handoff.result(), installed_releases.VERSIONS[0], latest)
+        self.assertEqual(installed_order.commit_time_ns(handoff.result(), latest), installed_order.timestamp_ns(live["entries"][0]["committedAt"]))
 
-    def test_raw_nanosecond_gap_is_retained_while_current_comparison_stays(self):
+    def test_subfive_second_nanosecond_gap_is_rejected_before_handoff(self):
         predecessor = observation(installed_releases.VERSIONS[-1], "2026-01-01T00:00:00.000000999Z")
         dependent = observation(installed_releases.VERSIONS[-1], "2026-01-01T00:00:05.000000000Z")
         target = installed_releases.VERSIONS[-1]
         driver = SimpleNamespace(diagnostics=trace.Trace("burst"))
-        cutoff = installed_order.commit_time(predecessor, target) + timedelta(seconds=5)
+        cutoff = installed_order.commit_time_ns(predecessor, target) + installed_order.SOAK_NS
         trace.cutoff(driver, predecessor, target, cutoff)
         published = []
-        installed_order.publish_soaked_commit(dependent, target, cutoff, published.append)
-        self.assertEqual(published, [dependent])
+        with self.assertRaisesRegex(RuntimeError, "ignored the configured predecessor soak"):
+            installed_order.publish_soaked_commit(dependent, target, cutoff, published.append)
+        self.assertEqual(published, [])
         self.assertEqual(5_000_000_000 - 999, 4_999_999_001)
         raw = driver.diagnostics.reserved["cutoff"]["details"]["rawPredecessor"]["committedAt"]
         self.assertEqual(raw, "2026-01-01T00:00:00.000000999Z")
-        self.assertEqual(driver.diagnostics.reserved["cutoff"]["details"]["parserResolutionNs"], 1000)
+        self.assertEqual(driver.diagnostics.reserved["cutoff"]["details"]["parserResolutionNs"], 1)
+        dependent["entries"][0]["committedAt"] = "2026-01-01T00:00:05.000000999Z"
+        installed_order.publish_soaked_commit(dependent, target, cutoff, published.append)
+        self.assertEqual(published, [dependent])
+
+    def test_commit_handoff_rejects_stale_request_generation_and_duplicate_entries(self):
+        target = installed_releases.VERSIONS[-1]
+        for key, stale in (("request", "previous-request"), ("generation", 1), ("version", installed_releases.VERSIONS[0])):
+            value = observation(target)
+            value["entries"][0][key] = stale
+            self.assertFalse(installed_order.target_committed(value, target))
+        value = observation(target)
+        value["entries"].append(copy.deepcopy(value["entries"][0]))
+        self.assertFalse(installed_order.target_committed(value, target))
+
+    def test_native_timestamp_parser_preserves_offsets_and_nine_digit_fractions(self):
+        exact = installed_order.timestamp_ns("2026-01-01T00:00:00.000000999Z")
+        self.assertEqual(exact - installed_order.timestamp_ns("2026-01-01T00:00:00Z"), 999)
+        self.assertEqual(exact, installed_order.timestamp_ns("2026-01-01T01:00:00.000000999+01:00"))
+        with self.assertRaises(ValueError):
+            installed_order.timestamp_ns("2026-01-01T00:00:00.0000000001Z")
+
+    def test_completed_hold_at_exact_nanosecond_cutoff_is_rejected(self):
+        cutoff = installed_order.timestamp_ns("2026-01-01T00:00:00.000000999Z")
+        with patch.object(installed_order.time, "time_ns", return_value=cutoff), self.assertRaisesRegex(RuntimeError, "only observed after expiry"):
+            installed_order.require_preexpiry_read({}, cutoff)
+        with patch.object(installed_order.time, "time_ns", return_value=cutoff - 1):
+            self.assertEqual(installed_order.require_preexpiry_read({}, cutoff), {})
 
     def test_delayed_source_eligibility_is_distinct_from_delayed_read_completion(self):
         for cause in ("eligibility", "read-completion"):
@@ -359,7 +388,7 @@ class SyntheticClock:
 
     def api(self):
         return SimpleNamespace(monotonic=lambda: self.seconds, sleep=self.advance,
-            monotonic_ns=lambda: int(self.seconds * 1_000_000_000), time_ns=lambda: int(self.seconds * 1_000_000_000))
+            monotonic_ns=lambda: int(self.seconds * 1_000_000_000), time_ns=lambda: installed_order.timestamp_ns(self.now().isoformat()))
 
     def dates(self):
         return SimpleNamespace(now=lambda _: self.now(), fromisoformat=datetime.fromisoformat)

@@ -86,21 +86,23 @@ class OrderDriver:
             return True
         if not peer.online or peer.value["build"]["version"] != self.model.latest:
             return False
-        age = (self.model.clock.now() - installed_order.commit_time(peer.value, self.model.latest)).total_seconds()
-        return self.model.ignore_soak or age >= 5
+        age_ns = installed_order.timestamp_ns(self.model.clock.stamp()) - installed_order.commit_time_ns(peer.value, self.model.latest)
+        return self.model.ignore_soak or age_ns >= installed_order.SOAK_NS
 
     def commit(self):
         target = self.model.latest
         self.value["build"] = {"version": target}
-        self.value["journal"] = {"request": {"manifest": {"version": target}}, "phase": "committed"}
-        self.value["entries"].append({"version": target, "metadata": "same-pin", "workers": 1,
+        request, generation = self.account["role"] + ":" + target, len(self.value["entries"]) + 1
+        self.value["journal"] = {"request": {"id": request, "generation": generation, "manifest": {"version": target}}, "phase": "committed"}
+        self.value["entries"].append({"version": target, "request": request, "generation": generation, "metadata": "same-pin", "workers": 1,
                                       "workersPreserved": 1, "committedAt": self.model.clock.stamp()})
 
 
 def exercise_model(model, driver_type=OrderDriver):
     drivers = [driver_type(model, role) for role in ("canary", "sleep", "burst")]
     record = {"observations": []}
-    clock = SimpleNamespace(monotonic=lambda: model.clock.seconds, sleep=model.clock.advance)
+    clock = SimpleNamespace(monotonic=lambda: model.clock.seconds, sleep=model.clock.advance,
+        time_ns=lambda: installed_order.timestamp_ns(model.clock.stamp()))
     dates = SimpleNamespace(now=lambda _: model.clock.now(), fromisoformat=datetime.fromisoformat, fromtimestamp=datetime.fromtimestamp)
     with patch.object(installed_order.installed_origin, "Origin", return_value=model), patch.object(installed_order, "time", clock), patch.object(installed_order, "datetime", dates):
         installed_order.scenarios(Path("/unused"), drivers, {"releases": {"directory": "/unused"}}, record)
@@ -203,10 +205,11 @@ class OrderReviewTest(unittest.TestCase):
     def test_after_expiry_state_cannot_become_a_preexpiry_proof(self):
         model = OrderModel()
         latest = installed_releases.VERSIONS[-1]
-        predecessor = {"entries": [{"version": latest, "committedAt": model.clock.stamp()}]}
+        predecessor = {"state": {}, "journal": {"phase": "committed", "request": {"id": "canary", "generation": 1, "manifest": {"version": latest}}},
+            "entries": [{"version": latest, "request": "canary", "generation": 1, "committedAt": model.clock.stamp()}]}
         model.clock.advance(5)
         dates = SimpleNamespace(now=lambda _: model.clock.now(), fromisoformat=datetime.fromisoformat)
-        with patch.object(installed_order, "datetime", dates):
+        with patch.object(installed_order, "datetime", dates), patch.object(installed_order, "time", SimpleNamespace(time_ns=lambda: installed_order.timestamp_ns(model.clock.stamp()))):
             with self.assertRaisesRegex(RuntimeError, "fixture missed the pre-expiry opportunity"):
                 installed_order.exercise_soak(None, predecessor, installed_releases.VERSIONS[0], latest)
 
