@@ -1,5 +1,4 @@
 """Pure/mocked fixture clock, handoff, cleanup and calibration controls."""
-import ast
 import json
 import os
 from pathlib import Path
@@ -7,10 +6,11 @@ import signal
 import subprocess
 import tempfile
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order
+from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host
 
 
 class Time:
@@ -255,12 +255,58 @@ class ClockTest(unittest.TestCase):
         driver.process.poll.return_value = None
         driver.write_request = Mock()
         chunks = [b"x" * 65536] * 32 + [b"x\n"]
-        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_order.select, "select", return_value=([driver.process.stdout], [], [])), patch.object(installed_order.os, "read", side_effect=chunks), patch.object(installed_order.json, "loads") as decode:
+        decode = Mock()
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_order.select, "select", return_value=([driver.process.stdout], [], [])), patch.object(installed_order.os, "read", side_effect=chunks), patch.object(installed_order, "json", SimpleNamespace(dumps=json.dumps, loads=decode)):
             with self.assertRaisesRegex(RuntimeError, "response exceeds"):
                 driver.call("inspect")
         decode.assert_not_called()
         request = json.loads(driver.write_request.call_args.args[0])
         self.assertEqual(request["fixtureDeadlineNs"], self.now() + 30 * clocks.SECOND)
+
+    def test_order_trace_sends_once_at_first_ready_write_with_injected_deadline(self):
+        driver = installed_order.Driver.__new__(installed_order.Driver)
+        driver.fixture_deadline_ns = driver.cleanup_deadline_ns = self.now() + 90 * clocks.SECOND
+        driver.account, driver.process = {"role": "control"}, Mock()
+        driver.process.poll.return_value = None
+        driver.diagnostics = installed_order_trace.Trace("control")
+        delivered, writes, expected_deadline = bytearray(), [], self.now() + 30 * clocks.SECOND
+
+        def ready(reads, writes, errors, timeout):
+            self.now.advance(clocks.SECOND // 100)
+            return reads, writes, errors
+
+        def write(_descriptor, data):
+            sends = driver.diagnostics.events["request.send:inspect::"]
+            self.assertEqual(sends["count"], 1)
+            self.assertEqual(sends["first"]["details"]["fixtureDeadlineNs"], expected_deadline)
+            writes.append(self.now())
+            delivered.extend(data[:5])
+            return min(5, len(data))
+
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_order.select, "select", side_effect=ready), patch.object(installed_order.os, "write", side_effect=write), patch.object(installed_order.os, "read", return_value=b'{"ok":true}\n'):
+            self.assertEqual(driver.call("inspect", fixtureDeadlineNs=123), {"ok": True})
+        self.assertGreater(len(writes), 1)
+        send = driver.diagnostics.events["request.send:inspect::"]["first"]
+        self.assertEqual(send["end"]["monotonicNs"], writes[0])
+        self.assertEqual(json.loads(delivered)["fixtureDeadlineNs"], expected_deadline)
+
+    def test_order_reader_trace_keeps_handoff_timeout_and_dispatch_wrapper(self):
+        owner = installed_order_trace.Trace("control")
+        origin = installed_order_host.Origin.__new__(installed_order_host.Origin)
+        origin.root, origin.diagnostics = self.root, owner
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with clocks.handoff(deadline), patch.object(installed_order_host.subprocess, "run", return_value=Mock()) as run:
+            origin.read_process({"MESH_INSTALLED_READ_KIND": "ledger"})
+        self.assertGreater(run.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(run.call_args.kwargs["timeout"], 1)
+        self.assertIn("native.reader:ledger::", owner.events)
+        host = installed_order_host.Host.__new__(installed_order_host.Host)
+        host.diagnostics, host.case = owner, SimpleNamespace(root=self.root)
+        host.dispatch_operation = Mock(side_effect=lambda *_args: clocks.HANDOFF.get())
+        with patch.object(clocks, "start_handoff_alarm", return_value=None):
+            self.assertEqual(host.dispatch("inspect", {"fixtureDeadlineNs": deadline}), deadline)
+        self.assertIsNone(clocks.HANDOFF.get())
+        self.assertIn("dispatch:inspect:True:", owner.events)
 
     def test_calibration_vehicle_has_full_matrix_and_no_dispatch_on_change(self):
         workflow = Path(".github/workflows/installed-clock-calibration.yml").read_text()
@@ -272,6 +318,7 @@ class ClockTest(unittest.TestCase):
         self.assertIn("mode: [oldest, chain, waypoint, order]", reusable)
         self.assertIn("timeout-minutes: 15", reusable)
         self.assertIn("--clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
+        self.assertIn("inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,7 @@ func checkInstalledLedgerSchema(t *testing.T, schema int) {
 	t.Helper()
 	state := installedOwnedState(schema)
 	store := installedLedgerStore(t, state)
-	value, err := installedReadLedger(t.Context(), filepath.Dir(filepath.Dir(store.directory)))
+	value, err := installedReadLedger(t.Context(), filepath.Dir(filepath.Dir(store.directory)), newInstalledOrderReadTrace())
 	future := os.Getenv("MESH_INSTALLED_TEST_FUTURE_MANIFEST") == "1"
 	if schema == 2 && !future {
 		if err == nil || !strings.Contains(err.Error(), "manifest schema 2 is unsupported") || value != nil {
@@ -100,7 +100,7 @@ func checkInstalledLedgerOwnership(t *testing.T, schema int) {
 
 func assertInstalledLedgerError(t *testing.T, store *Store, name, want string) {
 	t.Helper()
-	value, err := installedReadLedger(t.Context(), filepath.Dir(filepath.Dir(store.directory)))
+	value, err := installedReadLedger(t.Context(), filepath.Dir(filepath.Dir(store.directory)), newInstalledOrderReadTrace())
 	if err == nil || !strings.Contains(err.Error(), want) || value != nil {
 		t.Fatalf("%s did not fail closed with %q: %v %v", name, want, value, err)
 	}

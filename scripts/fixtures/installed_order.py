@@ -2,6 +2,7 @@
 import json
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import os
 from pathlib import Path
 import select
@@ -12,11 +13,13 @@ import sys
 import time
 
 from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence, installed_clock
+from fixtures import installed_order_trace as order_trace
 
 
 class Driver:
     def __init__(self, accounts, account, descriptor):
         self.accounts, self.account = accounts, account
+        order_trace.attach(self)
         self.path = Path(account["home"]) / "driver.json"
         self.path.write_text(json.dumps(descriptor))
         os.chown(self.path, account["uid"], -1)
@@ -35,12 +38,13 @@ class Driver:
             self.log.close()
             raise
 
+    @order_trace.calls
     def call(self, operation, timeout=30, **fields):
         parent = self.cleanup_deadline_ns if operation == "close" else self.fixture_deadline_ns
         deadline_ns = min(parent, installed_clock.parent_deadline(timeout))
         installed_clock.remaining_until(deadline_ns, timeout)
         payload = json.dumps(fields | {"operation": operation, "fixtureDeadlineNs": deadline_ns}).encode() + b"\n"
-        self.write_request(payload, deadline_ns)
+        self.write_request(payload, deadline_ns, operation)
         data = b""
         while time.monotonic_ns() < deadline_ns:
             if self.process.poll() is not None:
@@ -53,11 +57,15 @@ class Driver:
                 return json.loads(data)
         raise RuntimeError("ordered native host operation exceeded its bound: " + operation)
 
-    def write_request(self, payload, deadline_ns):
+    def write_request(self, payload, deadline_ns, operation):
         pending = memoryview(payload)
+        first = True
         while pending:
             if not select.select([], [self.process.stdin], [], installed_clock.remaining_until(deadline_ns, 1))[1]:
                 continue
+            if first:
+                order_trace.event(self, "request.send", operation=operation, fixtureDeadlineNs=deadline_ns)
+                first = False
             pending = pending[os.write(self.process.stdin.fileno(), pending):]
 
     def close(self):
@@ -80,7 +88,7 @@ class Driver:
             capture_output=True, text=True, timeout=10, env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
         if result.returncode:
             raise RuntimeError("ordered account evidence export failed: " + account["role"] + ": " + result.stderr[-4096:])
-        publish_logs(result.stdout, accounts.output, account["role"] + "-ordered")
+        publish_logs(result.stdout, accounts.output, account["role"] + "-ordered", order_trace.trace(self))
 
     def stop_driver(self):
         if self.process is None or self.process.poll() is not None:
@@ -93,16 +101,20 @@ class Driver:
             self.process.wait(timeout=installed_clock.timeout(10))
 
 
-def publish_logs(payload, output, name):
+def publish_logs(payload, output, name, diagnostics=None):
     if len(payload) > 2 << 20:
         raise RuntimeError("ordered account evidence exceeds its transfer bound")
     files = json.loads(payload)
-    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err", installed_listener_evidence.FAILURE}
+    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err", installed_listener_evidence.FAILURE} | order_trace.ACCOUNT_FILES
     if not isinstance(files, dict) or not files.keys() <= allowed:
         raise RuntimeError("ordered account evidence contains an unexpected file")
     decoded = {filename: bytes.fromhex(data) for filename, data in files.items()}
     for filename, data in decoded.items():
+        if filename in order_trace.ACCOUNT_FILES:
+            order_trace.write_diagnostic(data, output / (name + "-" + filename), diagnostics)
+            continue
         (output / (name + "-" + filename)).write_bytes(data)
+    order_trace.export_status(decoded, diagnostics)
 
 
 def prepare(releases, origin, source):
@@ -136,6 +148,8 @@ def run(root, output, descriptor, operation):
         scenarios(root, drivers, descriptor, record)
         record["passed"] = True
     except BaseException as error:
+        for driver in drivers:
+            order_trace.failure(driver, error, "run", "parent-selected")
         record["error"] = str(error)
         deadline_ns = installed_account_run.owner_failure(root, error, descriptor["fixtureEmergencyNs"])
         installed_clock.failure_cleanup_handoff(deadline_ns)
@@ -199,6 +213,15 @@ def scenarios(root, drivers, descriptor, record):
 
 
 def release_latest(origin, directory, drivers, record):
+    for driver in drivers:
+        order_trace.attach(driver)
+    try:
+        return release_latest_owned(origin, directory, drivers, record)
+    finally:
+        order_trace.summaries(drivers, record)
+
+
+def release_latest_owned(origin, directory, drivers, record):
     first, _, latest = installed_releases.VERSIONS
     canary, sleeping, direct = drivers
     canary_commit, direct_commit = Future(), Future()
@@ -211,25 +234,38 @@ def release_latest(origin, directory, drivers, record):
             record["opportunityControllers"] = [direct_armed.result(), sleeper_armed.result()]
             record["latestReleaseStartedAt"] = datetime.now(timezone.utc).isoformat()
             origin.head(directory, latest)
+            order_trace.event(canary, "exposure.reply")
             canary.call("fault", versions=[])
             restart(canary)
-            canary_latest = await_version(canary, latest, "committed", 90, canary_commit.set_result)
+            canary_latest = await_version(canary, latest, "committed", 90, partial(order_trace.publish, canary, canary_commit))
+            order_trace.event(canary, "direct.collect.begin")
             direct_latest, direct_hold = direct_result.result()
+            order_trace.event(canary, "direct.collect.end")
+            order_trace.event(canary, "sleeper.collect.begin")
             sleeper_latest, sleeper_hold = sleeper_result.result()
+            order_trace.event(canary, "sleeper.collect.end")
             return canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold
         except BaseException as error:
+            order_trace.failure(canary, error, "release_latest", "parent-selected")
             fail_pending(canary_commit, error)
             raise
 
 
 def soak_controller(driver, predecessor, successor, armed, source, target):
+    phase = "arming"
     try:
         observed = driver.call("inspect", active=False)
         armed.set_result({"host": driver.account["role"], "id": driver.account["id"], "armedAt": datetime.now(timezone.utc).isoformat(),
                           "observation": bounded(observed)})
-        committed = successor.set_result if successor is not None else None
-        return exercise_soak(driver, predecessor.result(), source, target, committed)
+        committed = partial(order_trace.publish, driver, successor) if successor is not None else None
+        phase = "predecessor.wait"
+        observed = predecessor.result()
+        order_trace.event(driver, "future.wake")
+        phase = "soak"
+        return exercise_soak(driver, observed, source, target, committed)
     except BaseException as error:
+        kind = "propagated" if phase == "predecessor.wait" else "producer"
+        order_trace.failure(driver, error, phase, kind)
         fail_pending(armed, error)
         fail_pending(successor, error)
         raise
@@ -247,6 +283,7 @@ def restart(driver):
 
 def opportunity(driver):
     started = datetime.now(timezone.utc)
+    order_trace.event(driver, "opportunity.begin")
     driver.call("stop")
     driver.call("start", expectedOffline=False)
     return started
@@ -293,10 +330,14 @@ def require_failed_canary_read(held, canary, canary_id):
 
 def exercise_soak(driver, predecessor, source, target, committed=None):
     cutoff = commit_time(predecessor, target) + timedelta(seconds=5)
+    order_trace.cutoff(driver, predecessor, target, cutoff)
     if datetime.now(timezone.utc) >= cutoff:
+        order_trace.event(driver, "guard.expired")
         raise RuntimeError("fixture missed the pre-expiry opportunity; no soak proof recorded")
+    order_trace.event(driver, "guard.open")
     started = opportunity(driver)
     held = await_opportunity(driver, source, target, started, 45, cutoff)
+    order_trace.event(driver, "hold.completed", peers=held["peers"], stateWrittenAt=held["stateWrittenAt"])
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
@@ -329,7 +370,7 @@ def repeat_opportunity(driver, value, started):
 
 
 def validated_soaked_commit(driver, target, cutoff):
-    observed = driver.call("inspect")
+    observed = inspect_full(driver)
     if commit_time(observed, target) < cutoff:
         raise RuntimeError("dependent ignored the configured predecessor soak")
     return observed
@@ -343,14 +384,20 @@ def await_version(driver, version, phase, timeout, committed=None):
         current = journal.get("request", {}).get("manifest", {}).get("version")
         ready = current == version if phase == "committed" else current == installed_releases.VERSIONS[1]
         settled = ready and journal.get("phase") == phase and not value["state"].get("owned")
+        order_trace.sample(driver, value, settled, version, phase)
         if settled and committed is not None:
             committed(value)
             committed = None
-        observed = driver.call("inspect") if settled else {}
+        observed = inspect_full(driver) if settled else {}
         if observed.get("ready") and observed["build"]["version"] == version:
             return observed
         time.sleep(0.1)
     raise RuntimeError("ordered host did not reach its native image/journal bound: " + driver.account["role"])
+
+
+def inspect_full(driver):
+    with order_trace.span(order_trace.trace(driver), "inspection.full"):
+        return driver.call("inspect")
 
 
 def await_held(driver, version, timeout):
@@ -390,18 +437,27 @@ def verify_order(canary, sleeper, burst, version):
 
 
 def teardown(accounts, drivers, record, output):
+    order_trace.retain(drivers, record, output)
     actions = [driver.close for driver in reversed(drivers)]
     actions.append(accounts.close)
     try:
         installed_native.cleanup_all(actions)
         record["cleanup"] = {"accountsAbsent": True, "servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
+        for driver in drivers:
+            order_trace.failure(driver, error, "teardown", "cleanup")
         record["passed"] = False
         record["cleanupError"] = str(error)
         primary = record.get("error", "ordered native teardown failed")
         raise RuntimeError(primary + "; cleanup failed: " + str(error)) from error
     finally:
+        diagnostic_error = order_trace.retain(drivers, record, output)
+        fail_success = diagnostic_error is not None and record.get("passed", False)
+        if fail_success:
+            record["passed"], record["error"] = False, str(diagnostic_error)
         (output / "ordered-native.json").write_text(json.dumps(record, indent=2) + "\n")
+    if fail_success:
+        raise diagnostic_error
 
 
 def interrupted(number, _frame):

@@ -8,9 +8,14 @@ import sys
 from types import SimpleNamespace
 
 from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence, installed_clock
+from fixtures import installed_order_trace as order_trace
 
 
 class Origin(installed_origin.Origin):
+    def __init__(self, root, diagnostics):
+        super().__init__(root)
+        self.diagnostics = diagnostics
+
     def inspect(self, state, output):
         self.read_host("inspect", state, output)
 
@@ -18,23 +23,38 @@ class Origin(installed_origin.Origin):
         self.read_host("ledger", state, output)
 
     def read_host(self, kind, state, output):
+        sidecar = state.parent / order_trace.READER
+        if kind == "ledger":
+            self.diagnostics.clear_reader(sidecar)
         environment = os.environ | {"MESH_INSTALLED_READ_ROOT": str(state.parent), "MESH_INSTALLED_READ_STATE": str(state),
             "MESH_INSTALLED_READ_OUTPUT": str(output.relative_to(state.parent)), "MESH_INSTALLED_READ_KIND": kind}
-        result = subprocess.run([str(self.root / "signer-test"), "-test.run=^TestInstalledHostRead$"],
-                                env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(15), check=False)
+        if kind == "ledger":
+            environment["MESH_INSTALLED_ORDER_TRACE_OUTPUT"] = order_trace.READER
+        try:
+            result = self.read_process(environment)
+        finally:
+            if kind == "ledger":
+                self.diagnostics.load_reader(sidecar)
         if result.returncode:
             raise RuntimeError("native account product inspection failed: " + result.stdout[-4096:] + result.stderr[-4096:])
+
+    def read_process(self, environment):
+        with order_trace.span(self.diagnostics, "native.reader", operation=environment["MESH_INSTALLED_READ_KIND"]):
+            return subprocess.run([str(self.root / "signer-test"), "-test.run=^TestInstalledHostRead$"],
+                                env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(15), check=False)
 
 
 class Host:
     def __init__(self, value):
+        self.diagnostics = order_trace.Trace(value["host"]["name"])
         releases = SimpleNamespace(**value["releases"])
         releases.directory = Path(releases.directory)
-        origin = Origin(Path(value["origin"]))
+        origin = Origin(Path(value["origin"]), self.diagnostics)
         self.case = installed_adoption.AdoptionCase(Path(value["root"]), value["host"], value["pair"],
             Path(value["preparer"]), origin, releases, "ordered", value["previous"])
         self.closed = False
 
+    @order_trace.dispatched
     def dispatch(self, operation, value):
         with installed_clock.handoff(value["fixtureDeadlineNs"], watchdog=True):
             return self.dispatch_operation(operation, value)
@@ -83,13 +103,16 @@ class Host:
 
     def inspect(self, active):
         case = self.case
-        case.origin.ledger(case.state, case.root / "ordered-ledger.json")
+        owner = order_trace.trace(self)
+        order_trace.read(owner, "account.ledger", lambda: case.origin.ledger(case.state, case.root / "ordered-ledger.json"))
         result = installed_chain.normalize_ledger(json.loads((case.root / "ordered-ledger.json").read_text()))
         journal = case.state / "update/installation.json"
-        result["journal"] = json.loads(journal.read_text()) if journal.exists() else None
+        result["journal"] = order_trace.read(owner, "account.journal", lambda: json.loads(journal.read_text()) if journal.exists() else None)
         updated = case.state / "updates/host-update.json"
-        result["stateWrittenAt"] = updated.stat().st_mtime if updated.exists() else 0
-        result["peerFailures"] = peer_failures(case.state, result["peers"])
+        result["stateWrittenAt"] = order_trace.read(owner, "account.state-stat", lambda: updated.stat().st_mtime if updated.exists() else 0)
+        result["peerFailures"] = order_trace.read(owner, "account.peer-failures", lambda: peer_failures(case.state, result["peers"]))
+        if owner is not None:
+            result["orderRead"] = {"native": owner.reader, "account": dict(owner.reads)}
         if not active:
             return result
         if not case.ready():
@@ -108,7 +131,13 @@ class Host:
     def close(self):
         if self.closed:
             return
-        self.case.close()
+        try:
+            self.case.close()
+        except BaseException as error:
+            order_trace.failure(self, error, "host.close", "cleanup")
+            raise
+        finally:
+            order_trace.persist_host(self)
         self.closed = True
 
 
@@ -122,6 +151,7 @@ def export_logs(root):
             result[name] = read_log(stream, name).hex()
     if (root / installed_listener_evidence.FAILURE).exists():
         result[installed_listener_evidence.FAILURE] = installed_listener_evidence.failure_bytes(root).hex()
+    order_trace.account_export(root, result)
     print(json.dumps(result), flush=True)
 
 

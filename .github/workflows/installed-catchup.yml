@@ -422,7 +422,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
           MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input.noindex
           CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
-          MESH_CATALOG_EVIDENCE: ${{ inputs.catalog_evidence && '1' || '0' }}
+          MESH_CATALOG_EVIDENCE: ${{ inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '1' || '0' }}
         run: |
           set -euo pipefail
           input="$RUNNER_TEMP/native-worker-input.noindex"

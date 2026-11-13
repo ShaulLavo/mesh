@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -162,35 +163,55 @@ func TestInstalledHostRead(t *testing.T) {
 
 func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) {
 	t.Helper()
-	value, err := installedReadLedger(t.Context(), request.Ledger)
+	trace := newInstalledOrderReadTrace()
+	defer trace.write(t, root)
+	value, err := installedReadLedger(t.Context(), request.Ledger, trace)
 	if err != nil {
 		t.Fatal(err)
 	}
 	installedWrite(t, root, request.Output, mustHostJSON(value))
 }
 
-func installedReadLedger(ctx context.Context, directory string) (map[string]any, error) {
+func installedReadLedger(ctx context.Context, directory string, trace *installedOrderReadTrace) (map[string]any, error) {
+	finish := trace.begin("store.open")
 	store, err := OpenStore(directory)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
+	finish = trace.begin("ledger.read")
 	entries, more, err := store.HostLedger(ctx, 0, 64)
-	if err != nil || more {
-		return nil, fmt.Errorf("bounded installed ledger: %v more=%v", err, more)
+	finish(err)
+	if err != nil {
+		return nil, fmt.Errorf("read bounded installed ledger: %w", err)
 	}
+	if more {
+		return nil, errors.New("bounded installed ledger has more entries")
+	}
+	finish = trace.begin("state.read")
 	state, err := store.HostState(ctx)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
+	finish = trace.begin("failures.read")
 	failed, next, err := store.hostFailedPage("", 64)
-	if err != nil || next != "" {
-		return nil, fmt.Errorf("bounded installed failed edges: %v next=%q", err, next)
+	finish(err)
+	if err != nil {
+		return nil, fmt.Errorf("read bounded installed failed edges: %w", err)
 	}
+	if next != "" {
+		return nil, fmt.Errorf("bounded installed failed edges has next page %q", next)
+	}
+	finish = trace.begin("peers.read")
 	peers, err := store.HostPeers(ctx)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
+	finish = trace.begin("dependents.read")
 	dependents, err := store.HostDependents(ctx)
+	finish(err)
 	if err != nil {
 		return nil, err
 	}
