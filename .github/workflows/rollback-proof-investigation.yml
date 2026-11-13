@@ -1,61 +1,92 @@
-name: Installed clock calibration
+name: Frozen Linux AMD64 fresh smoke
 
 on:
   workflow_dispatch:
     inputs:
-      producer_run:
-        description: 'Existing complete reviewed native preparation run'
+      source_sha:
+        description: Exact independently reviewed source commit
         required: true
         type: string
-      producer_source:
-        description: 'Exact recorded preparation source SHA'
-        required: true
-        type: string
-      producer_prefix:
-        description: 'Exact native preparation artifact prefix'
-        required: true
-        type: string
-      measurement_scope:
-        description: 'Measure prepared cohorts and all nine support profiles together, or select a subset'
-        default: all
-        type: choice
-        options: [all, cohort, prepared, support]
-      catalog_evidence:
-        description: 'Enable only after composing the reviewed passive catalog source'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
-  actions: read
+
+env:
+  MESH_HARNESS_SOURCE: ${{ inputs.source_sha }}
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPATH: ${{ github.workspace }}/scripts
 
 concurrency:
-  group: installed-clock-calibration-${{ github.run_id }}
+  group: installed-frozen-fresh-smoke-${{ github.run_id }}
   cancel-in-progress: false
 
-jobs:
-  measure:
-    if: inputs.measurement_scope != 'support'
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
-      calibration_only: true
-      calibration_scope: ${{ inputs.measurement_scope == 'prepared' && 'prepared' || 'cohort' }}
-      catalog_evidence: ${{ inputs.catalog_evidence }}
+defaults:
+  run:
+    shell: bash
 
-  support:
-    if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'
+jobs:
+  native-fresh:
+    name: Fresh native automatic first start (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        profile: [adoption-all, adoption-interrupt, fresh]
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      calibration_only: true
-      calibration_support: ${{ matrix.profile }}
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+    steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: '15'
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Require the exact source and reviewed fresh workload before native execution
+        run: |
+          [[ $MESH_HARNESS_SOURCE =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from types import SimpleNamespace
+          from fixtures import installed_budgets as b, installed_clock as c
+          args = SimpleNamespace(source_host=None, scenario=None, worker_registry=None, fresh_managed=True,
+              ordered_hosts=False, format_waypoint=False, signed_chain=False, clock_mode="frozen",
+              clock_plan=None, clock_plan_index=b.INDEX,
+              clock_job_start=Path(os.environ["RUNNER_TEMP"]) / "installed-job-clock.json")
+          b.bind(args, "linux/amd64")
+          assert b.workflow_minutes(c.from_arguments(args, "linux/amd64").plan) == 15
+          PY
+      - name: Require the actual native manager before fresh builds or downloads
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Prepare the real helper before the first managed daemon activation
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          clock=(--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed \
+            "${clock[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-fresh-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/installed-job-clock.json
+            ${{ runner.temp }}/fresh-control
+            ${{ runner.temp }}/fresh-proof
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record external overhead through upload without claiming acceptance
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/fresh-proof/fixture-clock.json"
