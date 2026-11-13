@@ -10,4 +10,4 @@ os.close(ready)
 if os.read(descriptor, 1) != b"x":
     raise SystemExit("observer did not arm")
 os.close(descriptor)
-os.execv(sys.argv[3], sys.argv[3:])
+os.execvp(sys.argv[3], sys.argv[3:])

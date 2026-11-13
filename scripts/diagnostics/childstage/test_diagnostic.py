@@ -29,6 +29,14 @@ def load(name):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_guarded_target_preserves_subprocess_path_lookup(self):
+        driver = load("run-hosted")
+        with tempfile.TemporaryDirectory(prefix="childstage-path-", dir="/work/tmp") as temporary:
+            output = Path(temporary)
+            with (output / "target.log").open("wb") as log:
+                code = driver.execute_guarded(["true"], dict(os.environ), log, output)
+        self.assertEqual(code, 0)
+
     def test_death_cleanup_uses_retained_handles_without_reopening_pids(self):
         with patch.object(os, "pidfd_open") as opened, patch.object(os, "close") as closed, \
                 patch.object(backend, "kill_owned") as killed, patch.object(backend, "reap_adopted"):

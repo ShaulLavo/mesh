@@ -11,6 +11,9 @@ import (
 
 func (o *observer) checkUnresolved() {
 	for pid, t := range o.tasks {
+		if !t.Known {
+			o.err = errors.Join(o.err, fmt.Errorf("task %d has no confirmed creation or terminal wait", pid))
+		}
 		if t.Lost == nil {
 			continue
 		}
@@ -21,6 +24,18 @@ func (o *observer) checkUnresolved() {
 type lostStop struct {
 	Operation string
 	Critical  bool
+}
+
+func (o *observer) waitingForLifecycle() bool {
+	if !o.done {
+		return true
+	}
+	for _, t := range o.tasks {
+		if !t.Known || t.Lost != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // At an unread entry stop the task has not been resumed into that syscall.

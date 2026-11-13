@@ -12,7 +12,7 @@ import (
 )
 
 func (o *observer) bindImage(pid int) string {
-	file, err := os.Open(fmt.Sprintf("/proc/%d/exe", pid)) // #nosec G304 -- Only an owned task at its ptrace exec stop; retain its mapped inode before it can exit.
+	file, err := os.Open(fmt.Sprintf("/proc/%d/exe", pid)) // #nosec G304 G703 -- PID is a kernel-returned integer for an owned traced task, never path text; retain its mapped inode at the exec stop.
 	if err != nil {
 		o.err = fmt.Errorf("retain owned mapped image: %w", err)
 		return unavailable

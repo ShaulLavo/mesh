@@ -49,6 +49,10 @@ type task struct {
 	Image           string
 	InheritedReturn bool
 	Lost            *lostStop
+	PendingStop     syscall.WaitStatus
+	Exiting         bool
+	ExitOnly        bool
+	GroupExit       bool
 }
 
 type observer struct {
@@ -132,7 +136,7 @@ func (o *observer) arm(pid int) error {
 }
 
 func (o *observer) loop(bound time.Duration) {
-	for !o.done && o.err == nil && len(o.tasks) > 0 {
+	for o.waitingForLifecycle() && o.err == nil && len(o.tasks) > 0 {
 		if time.Since(o.started) > bound {
 			o.err = errors.New("diagnostic wall bound reached")
 			return
@@ -159,6 +163,7 @@ func (o *observer) wait() {
 }
 
 func (o *observer) handle(pid int, status syscall.WaitStatus) {
+	defer o.releaseUnstartedThreads()
 	if status.Exited() || status.Signaled() {
 		o.finished(pid, status)
 		return
@@ -175,11 +180,15 @@ func (o *observer) handle(pid int, status syscall.WaitStatus) {
 		return
 	}
 	if t == nil {
-		o.tasks[pid] = &task{Parked: true}
-		return
+		if len(o.tasks) >= 8192 {
+			o.err = errors.New("owned task bound reached")
+			return
+		}
+		t = &task{}
+		o.tasks[pid] = t
 	}
 	if !t.Known {
-		t.Parked = true
+		o.parkUnidentified(pid, t, status)
 		return
 	}
 	o.stopped(pid, t, status)
@@ -214,6 +223,9 @@ func (o *observer) stopped(pid int, t *task, status syscall.WaitStatus) {
 }
 
 func (o *observer) event(pid int, t *task, cause int) {
+	if cause == unix.PTRACE_EVENT_EXIT {
+		t.Exiting = true
+	}
 	message, err := unix.PtraceGetEventMsg(pid)
 	if err != nil {
 		if cause == unix.PTRACE_EVENT_EXIT && errors.Is(err, unix.ESRCH) {
@@ -224,7 +236,8 @@ func (o *observer) event(pid int, t *task, cause int) {
 		return
 	}
 	if cause == unix.PTRACE_EVENT_EXIT {
-		o.emit(map[string]any{eventKey: "exiting", tidKey: pid, tgidKey: t.TGID, statusKey: message, "pendingCall": t.Call})
+		t.GroupExit = endingGroup(pid, t, message)
+		o.emit(map[string]any{eventKey: "exiting", tidKey: pid, tgidKey: t.TGID, statusKey: message, "pendingCall": t.Call, "groupExit": t.GroupExit})
 		return
 	}
 	if cause == unix.PTRACE_EVENT_EXEC {
@@ -260,8 +273,9 @@ func (o *observer) created(parent, child int, p *task) {
 		"creatorTgid": p.TGID, ownerKey: t.Owner, "preExec": t.PreExec})
 	if t.Parked {
 		t.Parked = false
-		t.AwaitStop = false
-		o.resume(child, 0)
+		t.AwaitStop = true
+		o.stopped(child, t, t.PendingStop)
+		t.PendingStop = 0
 	}
 }
 
@@ -377,7 +391,7 @@ func (o *observer) resume(pid, signal int) {
 
 func (o *observer) finished(pid int, status syscall.WaitStatus) {
 	t := o.tasks[pid]
-	if t == nil || !t.Known {
+	if t == nil || !t.Known && !t.ExitOnly {
 		o.err = fmt.Errorf("terminal wait for task %d without owned creation identity", pid)
 		return
 	}

@@ -1,6 +1,7 @@
 """Build and exercise only owned synthetic processes through the heavy runner."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -58,8 +59,25 @@ def controls(root, scratch, report):
         if code:
             raise RuntimeError(f"synthetic {mode} failed with status {code}")
     command([sys.executable, str(here / "check-controls.py"), str(report), str(worker)], root, report / "controls.json")
+    clone_exit_control(root, scratch, report, worker, modern)
     capture.lifecycle_controls("ptrace", observer, worker, report)
     capture.death_controls(observer, report)
+
+
+def clone_exit_control(root, scratch, report, worker, modern):
+    tests = scratch / "clone-exit-control"
+    command([str(modern), "test", "-c", "-o", str(tests), "./scripts/diagnostics/childstage"], root, report / "clone-exit-build.log")
+    spec = importlib.util.spec_from_file_location("guarded_control", root / "scripts/diagnostics/childstage/run-hosted.py")
+    driver = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(driver)
+    output = report / "clone-exit"
+    output.mkdir()
+    environment = dict(os.environ, CHILDSTAGE_LIFECYCLE_WORKER=str(worker))
+    with (output / "regression.log").open("xb") as log:
+        code = driver.execute_guarded(["timeout", "--kill-after=3s", "20s", str(tests),
+            "-test.run=TestGroupExitCancelsCloneNotification", "-test.v", "-test.timeout=15s"], environment, log, output)
+    if code:
+        raise RuntimeError("deterministic clone/exit lifecycle control failed")
 
 
 def main():
@@ -71,7 +89,7 @@ def main():
     root = Path(__file__).resolve().parents[3]
     started = time.time()
     inventory = {"startedUtc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
-                 "existingReport": False, "resourcesCreated": ["scratch directory", "two compiled binaries",
+                 "existingReport": False, "resourcesCreated": ["scratch directory", "three compiled binaries",
                  "finite compiler processes", "observer and synthetic Python/Go descendants", "small report files"],
                  "sharedCachesPreserved": True, "hostedWork": False, "meshExecution": False}
     (args.report / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
