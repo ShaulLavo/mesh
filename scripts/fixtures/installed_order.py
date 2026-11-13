@@ -443,7 +443,9 @@ def verify_order(canary, sleeper, burst, version):
 
 
 def teardown(accounts, drivers, record, output, on_error=None):
-    order_trace.retain(drivers, record, output)
+    initial_diagnostic_error = order_trace.retain(drivers, record, output)
+    if initial_diagnostic_error is not None and record.get("passed") and on_error is not None:
+        on_error(initial_diagnostic_error)
     actions = [driver.close for driver in reversed(drivers)]
     actions.append(accounts.close)
     try:

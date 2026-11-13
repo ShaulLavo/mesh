@@ -43,6 +43,7 @@ def cleanup_all(actions, on_error=None):
         try:
             installed_clock.timeout(10)
         except installed_clock.ClockExpired as error:
+            cleanup_failure(error, on_error)
             failures.append(str(error))
             break
         try:

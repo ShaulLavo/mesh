@@ -347,6 +347,16 @@ class ClockTest(unittest.TestCase):
                 native_services.command(["not-started"])
         run.assert_called_once()
 
+    def test_expired_cleanup_start_is_latched_before_any_action(self):
+        deadline = self.now() + clocks.SECOND
+        action, latch = Mock(), Mock()
+        with patch.object(clocks.time, "monotonic_ns", self.now), clocks.handoff(deadline):
+            self.now.advance(2 * clocks.SECOND)
+            with self.assertRaises(RuntimeError):
+                installed_native.cleanup_all([action], on_error=latch)
+        action.assert_not_called()
+        latch.assert_called_once()
+
     def test_nested_order_teardown_latches_before_next_cleanup_action(self):
         first, events = RuntimeError("first nested cleanup failure"), []
         accounts = Mock(accounts=[])
