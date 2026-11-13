@@ -93,13 +93,20 @@ class GrammarTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(self.plan, guards=(phase,)).validate()
 
-    def test_all_migrated_files_remain_nonexecutable_until_fresh_review(self):
+    def test_reviewed_activated_files_load_and_unreviewed_copy_stays_blocked(self):
         index = json.loads((controls.ROOT / "index.json").read_text())["plans"]
-        self.assertEqual(len(index), 33)
+        self.assertEqual(len(index), 36)
         for name, entry in index.items():
-            with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
-                clocks.load_plan(controls.ROOT / entry["path"])
+            plan = clocks.load_plan(controls.ROOT / entry["path"])
+            self.assertNotIn("TEST ONLY", plan.eligibility_review)
             controls.reviewed_for_test(name).validate()
+        value = json.loads((controls.ROOT / index["linux-amd64-fresh"]["path"]).read_text())
+        value["eligibility_review"] = ""
+        with tempfile.TemporaryDirectory(prefix="unreviewed-span-") as directory:
+            path = Path(directory) / "candidate.json"
+            path.write_text(json.dumps(value))
+            with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
+                clocks.load_plan(path)
 
 
 class ReductionTest(unittest.TestCase):

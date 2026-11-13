@@ -99,6 +99,15 @@
     },
     "linux-amd64-order": {
       "path": "linux-amd64-order.json"
+    },
+    "linux-amd64-chain-consume-final": {
+      "path": "linux-amd64-chain-consume-final.json"
+    },
+    "linux-arm64-waypoint-consume-final": {
+      "path": "linux-arm64-waypoint-consume-final.json"
+    },
+    "darwin-arm64-chain-consume-none": {
+      "path": "darwin-arm64-chain-consume-none.json"
     }
   }
 }

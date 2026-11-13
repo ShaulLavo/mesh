@@ -186,13 +186,10 @@ class FrozenBudgetTests(unittest.TestCase):
         span_controls.write_plan(self.args.clock_plan, span_controls.reviewed_for_test("linux-amd64-chain-consume-first"))
         budgets.bind(self.args, "linux/amd64")
 
-    def test_actual_fresh_draft_requires_fresh_review_before_binding(self):
+    def test_actual_reviewed_fresh_plan_binds_its_exact_workload(self):
         self.args.clock_plan_index = budgets.INDEX
         self.args.source_host, self.args.worker_registry, self.args.fresh_managed = None, None, True
-        with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
-            budgets.bind(self.args, "linux/amd64")
-        self.args.clock_plan = self.root / "test-only-fresh.json"
-        span_controls.write_plan(self.args.clock_plan, span_controls.reviewed_for_test())
+        budgets.bind(self.args, "linux/amd64")
         plan = clocks.from_arguments(self.args, "linux/amd64").plan
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(plan.emergency_ns, 60 * clocks.SECOND)
@@ -204,11 +201,10 @@ class FrozenBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, MESH_CATALOG_EVIDENCE="1"), self.assertRaisesRegex(ValueError, "workload differs from actual invocation"):
             clocks.from_arguments(self.args, "linux/amd64")
 
-    def test_unreviewed_four_consumer_slots_stay_absent(self):
+    def test_unmeasured_arm64_chain_none_stays_absent(self):
         plans = budgets.read_index(budgets.INDEX)
-        self.assertEqual(len(plans), 33)
-        missing = ("linux-amd64-chain-consume-final", "linux-arm64-chain-consume-none",
-                   "linux-arm64-waypoint-consume-final", "darwin-arm64-chain-consume-none")
+        self.assertEqual(len(plans), 36)
+        missing = ("linux-arm64-chain-consume-none",)
         for key in missing:
             self.assertNotIn(key, plans)
             with self.assertRaisesRegex(ValueError, "no independently approved frozen plan"):
@@ -216,9 +212,7 @@ class FrozenBudgetTests(unittest.TestCase):
 
     def test_reviewed_order_plan_preserves_its_complete_admission(self):
         key, workload = budgets.selection("linux/amd64", "order")
-        with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
-            budgets.select_plan(budgets.INDEX, key, workload)
-        plan = span_controls.reviewed_for_test(key)
+        _path, plan = budgets.select_plan(budgets.INDEX, key, workload)
         self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_884_000_000)
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(budgets.workflow_minutes(plan), 15)
@@ -287,12 +281,11 @@ class WorkflowWiringTests(unittest.TestCase):
             "GITHUB_JOB": "native-fresh", "PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1",
             "MESH_CATALOG_EVIDENCE": "0"}
         accepted = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT, env=environment, capture_output=True, timeout=5)
-        self.assertNotEqual(accepted.returncode, 0)
-        self.assertIn(b"reviewed eligibility", accepted.stderr)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
         mismatch = subprocess.run(["bash", "-e", "-c", script.replace("source_host=None", 'source_host="pc"')], cwd=ROOT,
             env=environment, capture_output=True, timeout=5)
         self.assertNotEqual(mismatch.returncode, 0)
-        self.assertIn(b"reviewed eligibility", mismatch.stderr)
+        self.assertIn(b"workload differs", mismatch.stderr)
         self.assertEqual(list(root.iterdir()), [origin])
 
     def test_support_diagnostic_selection_is_explicit_and_cannot_enable_ordinary_fallback(self):

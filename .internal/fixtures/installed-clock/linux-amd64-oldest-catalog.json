@@ -5223,7 +5223,7 @@
   "external_ns": 107509000000,
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,
-  "eligibility_review": "",
+  "eligibility_review": "Independent GPT operation-span numerical and code review; original 33-plan packet; see ELIGIBILITY.md",
   "external_budget": {
     "key": "external",
     "limit_ns": 107509000000,
