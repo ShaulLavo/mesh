@@ -80,14 +80,15 @@ func probeWorkerResponse(t *testing.T, respond bool) {
 			return
 		}
 		request, err := protocol.DecodeControl(frame.Payload)
-		if err != nil || request.Type != protocol.TypeInspect || request.SessionID != "" {
+		// The request is pinned: a session inspection here would make every
+		// macOS worker start ps and lsof on each observation.
+		if err != nil || request.Type != protocol.TypeLogs || request.Tail != 1 || request.SessionID != "" {
 			done <- fmt.Errorf("unexpected fixture request: %+v %w", request, err)
 			return
 		}
 		if respond {
 			done <- protocol.NewWriter(conn).WriteControlMsg(protocol.Control{
-				Type: protocol.TypeInspected, RequestID: request.RequestID, SessionID: meta.ID,
-				Inspection: &protocol.SessionInspection{ObservedAt: time.Now()},
+				Type: protocol.TypeLogged, RequestID: request.RequestID, SessionID: meta.ID, Output: []byte("$"),
 			})
 			return
 		}

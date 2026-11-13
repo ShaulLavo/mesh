@@ -203,6 +203,9 @@ func writeManifest(path string, manifest release.Manifest) error {
 		return err
 	}
 	contents = append(contents, '\n')
+	if len(contents) > 512<<10 {
+		return errors.New("manifest: encoded schema 1 manifest exceeds 512 KiB")
+	}
 	directory := filepath.Dir(path)
 	if err := os.MkdirAll(directory, 0o750); err != nil {
 		return err

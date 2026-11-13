@@ -25,9 +25,15 @@ esac
 }
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+export PYTHONPATH="$repo_root/scripts${PYTHONPATH:+:$PYTHONPATH}"
+if [[ -n ${MESH_WORKER_REGISTRY:-} && -z ${MESH_WORKER_GROUP:-} ]]; then
+  export PYTHONPATH="$repo_root/scripts${PYTHONPATH:+:$PYTHONPATH}"
+  exec python3 -m fixtures.release_worker_groups "$old_binary" "$candidate_binary" "$platform" "$output_directory"
+fi
 fixture=$repo_root/scripts/fixtures/release_transition.py
 short_tmp=${MESH_SHORT_TMP:-${TMPDIR:-/tmp}}
 test_root=$(mktemp -d "$short_tmp/mesh-transition.XXXXXX")
+test_root=$(cd -- "$test_root" && pwd -P)
 state=$test_root/state
 config=$test_root/config
 old_daemon=''
@@ -37,8 +43,20 @@ session=''
 shell_pid=''
 worker_pid=''
 helper_pid=''
+cohort=$test_root/cohort.json
+cohort_tool=$repo_root/scripts/fixtures/release_workers.py
+original_identity=''
+original_worker=''
+original_shell=''
 
 cleanup() {
+  local status=$?
+  if (( status != 0 )) && [[ -f $cohort ]]; then
+    mkdir -p "$output_directory/failures" && cp "$cohort" "$output_directory/failures/${source_version:-unknown}.cohort.json" ||
+      echo 'transition proof: could not retain failed cohort startup evidence' >&2
+  fi
+  local cleanup_status=0
+  [[ ! -f $cohort ]] || python3 "$cohort_tool" stop "$cohort" || cleanup_status=1
   discover_owned_session_processes
   [[ ! -f $test_root/managed-daemon.pid ]] || old_daemon=$(cat "$test_root/managed-daemon.pid")
   [[ -z $helper_pid ]] || kill -9 "$helper_pid" 2>/dev/null || true
@@ -47,11 +65,60 @@ cleanup() {
   [[ -z $old_daemon ]] || kill -9 "$old_daemon" 2>/dev/null || true
   [[ -z $shell_pid ]] || kill -9 "$shell_pid" 2>/dev/null || true
   [[ -z $worker_pid ]] || kill -9 "$worker_pid" 2>/dev/null || true
+  [[ -z $original_shell ]] || kill -9 "$original_shell" 2>/dev/null || true
+  [[ -z $original_worker ]] || kill -9 "$original_worker" 2>/dev/null || true
+  python3 - "$test_root" "$helper_pid" "$client" "$candidate_daemon" "$old_daemon" "$shell_pid" "$worker_pid" "$original_worker" "$original_shell" <<'PYCLEAN' || cleanup_status=1
+import subprocess
+import sys
+import time
+
+root, *pids = sys.argv[1:]
+for _ in range(120):
+    result = subprocess.check_output(["ps", "-axww", "-o", "pid=,stat=,command="], text=True, timeout=5)
+    owned = [line for line in result.splitlines() if line.split()[0] in pids and not line.split()[1].startswith("Z")]
+    workers = [line for line in result.splitlines() if "session-worker" in line and root + "/state/s/" in line]
+    if not owned and not workers:
+        break
+    time.sleep(0.025)
+else:
+    raise RuntimeError("native group process cleanup unconfirmed")
+PYCLEAN
+  if (( cleanup_status != 0 )); then
+    echo "transition proof: cleanup unconfirmed; retained $test_root" >&2
+    exit 1
+  fi
   rm -rf -- "$test_root"
+  if [[ -n ${MESH_WORKER_GROUP:-} ]]; then
+    mkdir -p "$output_directory"
+    python3 - "$output_directory/cleanup.json" "$test_root" <<'PYCLEAN'
+import json
+from pathlib import Path
+import sys
+
+path, root = map(Path, sys.argv[1:])
+if root.exists():
+    raise RuntimeError("native group state cleanup unconfirmed")
+path.write_text(json.dumps({"stateRun": str(root), "processesAbsent": True, "stateAbsent": True}))
+PYCLEAN
+  fi
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+validate_socket_paths() {
+  python3 - "$test_root" <<'PYPATH'
+import os
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+maximum = 103 if sys.platform == "darwin" else 107
+longest = max(len(os.fsencode(path)) for path in (root / "state/daemon.sock", root / "state/s" / ("0" * 26) / "sock"))
+if longest > maximum:
+    raise ValueError(f"native physical socket requires {longest} bytes; maximum is {maximum}")
+PYPATH
+}
 
 discover_owned_session_processes() {
   local pid ppid command
@@ -76,6 +143,8 @@ dump_diagnostics() {
   for path in "$test_root/client.err" "$test_root/client.out" "$test_root/old-first.log" \
     "$test_root/candidate.err" "$test_root/candidate.out" "$test_root/candidate.log" \
     "$test_root/restart.err" "$test_root/restart.out" "$test_root/candidate-restart.log" \
+    "$test_root/managed-daemon.log" "$test_root"/helper-*.log \
+    "$test_root"/*.image-context.json \
     "$test_root"/*.inventory.out "$test_root"/*.inventory.err "$state"/s/*/worker.log; do
     [[ -s $path ]] || continue
     printf '%s (last 4096 bytes):\n' "$path" >&2
@@ -240,6 +309,10 @@ fixture() {
   python3 "$fixture" "$@"
 }
 
+verify_worker_cohort() {
+  [[ ! -f $cohort ]] || MESH_GROUP_ORIGINAL="$original_identity" python3 "$cohort_tool" verify "$state" "$cohort" "$1" >/dev/null || fail 'retained worker cohort changed or lost daemon I/O'
+}
+
 restore_test_database() {
   rm -f -- "$state/mesh.db" "$state/mesh.db-wal" "$state/mesh.db-shm"
   fixture snapshot "$test_root/source.db" "$state/mesh.db"
@@ -253,7 +326,7 @@ assert_saved_recovery() {
 rollback_source() {
   local label=$1 candidate_image=${2:-$candidate_binary}
   local retained_worker_pid=$worker_pid retained_shell_pid=$shell_pid
-  fixture prepare-rollback "$state" "$old_binary" "$candidate_image" "$label"
+  fixture prepare-rollback "$state" "$old_binary" "$candidate_binary" "$label" "$candidate_image"
   env PATH="$test_root/service-tools:$PATH" MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" \
     "$candidate_binary" update-helper --state-dir "$state" >"$test_root/helper-$label.log" 2>&1 &
   helper_pid=$!
@@ -277,6 +350,7 @@ rollback_source() {
   assert_session_processes
   assert_live_recovery || fail "source did not accept retained checkpoint at $label"
   assert_saved_recovery
+  verify_worker_cohort "rollback-$label"
   if [[ -f $test_root/$label.persist.json ]]; then
     fixture verify-persistent "$state" "$test_root/$label.persist.json" || fail "source rollback lost candidate writes at $label"
   fi
@@ -394,10 +468,15 @@ prove_startup_commit_side() {
   done
 }
 
+validate_socket_paths
 mkdir -p "$state" "$config"
 boundary_tool=${MESH_BOUNDARY_TOOL:-$test_root/boundary}
 if [[ -z ${MESH_BOUNDARY_TOOL:-} ]]; then
   (cd "$repo_root" && go build -o "$boundary_tool" ./internal/storage/cmd/boundary)
+fi
+if [[ $proof_mode == full ]]; then
+  [[ -n ${MESH_ROLLBACK_MANIFEST:-} && -f $MESH_ROLLBACK_MANIFEST ]] || fail 'full proof requires a complete MESH_ROLLBACK_MANIFEST'
+  fixture verify-manifest "$candidate_binary" "$old_binary" "$state" "$config" || fail 'rollback manifest does not bind the actual candidate and source'
 fi
 mkfifo "$test_root/input"
 env MESH_STATE_DIR="$state" MESH_CONFIG_DIR="$config" "$old_binary" daemon --tailnet-port=0 --ssh-port=0 >"$test_root/old-first.log" 2>&1 &
@@ -419,6 +498,20 @@ shell_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid
   fail 'could not identify retained shell'
 worker_pid=$(ps -o ppid= -p "$shell_pid" | tr -d '[:space:]') || fail 'could not identify retained worker server'
 [[ $worker_pid =~ ^[1-9][0-9]*$ ]] || fail 'could not identify retained worker server'
+original_worker=$worker_pid
+original_shell=$shell_pid
+original_identity=$(python3 - "$test_root" "$session" "$worker_pid" "$shell_pid" "$old_binary" <<'PYIDENTITY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+root, session, worker, shell, binary = sys.argv[1:]
+build = json.loads(__import__("subprocess").check_output([binary, "version", "--json"], timeout=10))
+print(json.dumps({"stateRun": root, "session": session, "pid": int(worker), "shellPid": int(shell),
+                  "digest": hashlib.sha256(Path(binary).read_bytes()).hexdigest(), "protocol": build["workerProtocol"]}))
+PYIDENTITY
+)
 send_shell_command 3 'PS1= PS2=; stty -echo'
 send_token 3 "RETAINED_INITIAL_$session"
 wait_for_token "$test_root/client.out" "RETAINED_INITIAL_$session" || fail 'retained worker did not answer'
@@ -432,6 +525,10 @@ stop_daemon "$old_daemon" "$old_binary"
 old_daemon=''
 old_state_version=$(read_state_version)
 old_worker_protocol=$(build_field "$old_binary" workerProtocol 1)
+if [[ -n ${MESH_WORKER_REGISTRY:-} ]]; then
+  source_version=$(build_field "$old_binary" version '')
+  python3 "$cohort_tool" start "$state" "$config" "$MESH_WORKER_REGISTRY" "$source_version" "$old_binary" "$cohort"
+fi
 
 # Live checkpoints belong to the worker and must remain free to change.
 saved_session=$(python3 - "$state" "$session" <<'PY'
@@ -509,6 +606,7 @@ send_token 4 "CANDIDATE_REATTACH_$session"
 wait_for_token "$test_root/candidate.out" "CANDIDATE_REATTACH_$session" || fail 'candidate could not exchange data with retained worker'
 assert_session_processes
 assert_live_recovery || fail 'candidate did not accept retained worker checkpoint'
+verify_worker_cohort candidate
 printf '\035' >&4
 wait_for_exit "$client" || fail 'candidate client did not detach'
 wait "$client" 2>/dev/null || true
@@ -534,6 +632,7 @@ send_token 5 "CANDIDATE_RESTART_$session"
 wait_for_token "$test_root/restart.out" "CANDIDATE_RESTART_$session" || fail 'candidate restart could not exchange data after restart'
 assert_session_processes
 assert_live_recovery || fail 'candidate restart did not accept worker checkpoint after restart'
+verify_worker_cohort restart
 recovery_after=$(sha256sum "$state/s/$saved_session/recovery.json" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$state/s/$saved_session/recovery.json" | awk '{print $1}')
 [[ $recovery_after == "$recovery_before" ]] || fail 'recovery record changed across candidate upgrade and restart'
 printf '\035' >&5
@@ -583,23 +682,37 @@ pathlib.Path(sys.argv[1]).write_text(json.dumps(receipt, separators=(",", ":"), 
 PY
 proof_digest=$(sha256sum "$temporary" 2>/dev/null | awk '{print $1}' || shasum -a 256 "$temporary" | awk '{print $1}')
 mv "$temporary" "$output_directory/$proof_digest.json"
+if [[ -f $cohort ]]; then
+  mkdir -p "$output_directory/observations"
+  cp "$cohort" "$output_directory/observations/$proof_digest.cohort.json"
+  mkdir -p "$output_directory/startup"
+  for path in "$test_root"/startup-*.image-context.json; do
+    [[ ! -f $path ]] || cp "$path" "$output_directory/startup/"
+  done
+fi
 if [[ $proof_mode == forward-only ]]; then
   printf '%s\n' "$proof_digest"
   exit 0
 fi
 mkdir -p "$output_directory/rollback"
-python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" <<'PYROLLBACK'
+python3 - "$output_directory" "$proof_digest" "$platform" "$from_digest" "$to_digest" "$old_state_version" "$candidate_state_version" "$cohort" <<'PYROLLBACK'
 import hashlib
 import json
 from pathlib import Path
 import sys
 
-output, forward, platform, source, target, first, last = sys.argv[1:]
+output, forward, platform, source, target, first, last, cohort = sys.argv[1:]
+workers = [source]
+if Path(cohort).is_file():
+    observed = json.loads(Path(cohort).read_bytes())
+    from fixtures.release_worker_groups import labels
+    assert sorted(row["label"] for row in observed["observations"]) == sorted(labels("full", int(first), int(last))), "missing full-profile cohort boundary observations"
+    workers = sorted(set(workers + [row["digest"] for row in observed["workers"]]))
 os_name, arch = platform.split("/")
 proof = {
     "schema": 1, "platform": {"os": os_name, "arch": arch},
     "fromDigest": source, "toDigest": target, "forward": forward,
-    "workers": [source],
+    "workers": workers,
     "boundaries": [{"state": state, "candidateWrote": True, "sourceStarted": True,
                     "sessionIO": True, "recoveryPreserved": True}
                    for state in range(int(first), int(last) + 1)],

@@ -175,7 +175,10 @@ func updateHelperStep(ctx context.Context, stateDir string) error {
 		return err
 	}
 	kind, domain := helperUpgradeService(status.Settings)
-	_, err = updateinstall.UpgradeHelper(ctx, updateinstall.HelperConfig{StateDir: stateDir, Executable: status.Settings.Executable, Kind: kind, Domain: domain})
+	helper := updateinstall.HelperConfig{StateDir: stateDir, Executable: status.Settings.Executable, Kind: kind, Domain: domain}
+	// The probe lets the replacement helper settle its own pending activation.
+	helper.Probe = updatebootstrap.HelperProcessProbe(helper)
+	_, err = updateinstall.UpgradeHelper(ctx, helper)
 	if err != nil {
 		return fmt.Errorf("upgrade committed update helper: %w", err)
 	}

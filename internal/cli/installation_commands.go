@@ -39,9 +39,13 @@ func printCommandCopies(output io.Writer, copies []updateinstall.CommandCopy, ma
 }
 
 func installationCheckCommand() *cobra.Command {
-	return &cobra.Command{
+	var kind, domain string
+	command := &cobra.Command{
 		Use: "installation-check", Hidden: true, Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkInstalledHelper(cmd.Context(), kind, domain); err != nil {
+				return err
+			}
 			executable, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("locate command for installation check: %w", err)
@@ -49,6 +53,9 @@ func installationCheckCommand() *cobra.Command {
 			return printInstallationCommands(cmd.OutOrStdout(), executable)
 		},
 	}
+	command.Flags().StringVar(&kind, "service-kind", "", "verify this daemon service manager's helper")
+	command.Flags().StringVar(&domain, "domain", "", "daemon launchd domain")
+	return command
 }
 
 func runManagedDaemon(ctx context.Context, cfg meshdaemon.Config) error {

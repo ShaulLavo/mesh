@@ -155,7 +155,7 @@ func TestWorkerCohortPreservesStaleAndUnknownDistinction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	workers, err := inspectWorkers(ctx, state, 7)
-	if len(workers) != 0 || err == nil || !strings.Contains(err.Error(), "cannot answer a read-only session inspection") {
+	if len(workers) != 0 || err == nil || !strings.Contains(err.Error(), "cannot answer a read-only session request") {
 		t.Fatalf("unrecognized modern worker = %+v, %v", workers, err)
 	}
 }
@@ -201,8 +201,7 @@ func cohortWorkerDir(t *testing.T, state, id string, build release.Build) string
 }
 
 func cohortResponse(id string) protocol.Control {
-	return protocol.Control{Type: protocol.TypeInspected, RequestID: "bootstrap-worker", SessionID: id,
-		Inspection: &protocol.SessionInspection{ObservedAt: time.Now()}}
+	return protocol.Control{Type: protocol.TypeLogged, RequestID: "bootstrap-worker", SessionID: id, Output: []byte("$")}
 }
 
 func serveProbeResponse(t *testing.T, socket string, response protocol.Control, delay time.Duration, active, peak *atomic.Int32) {
