@@ -572,6 +572,10 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			http.Error(w, "Mesh device authorization unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		// An admitted handshake must finish under its own authentication budget.
+		// Canceling it on shutdown turns an approved peer into a terminal
+		// authentication failure. The closed group refuses handler dispatch.
+		r = r.WithContext(context.WithoutCancel(r.Context())) //nolint:contextcheck // admitted authentication owns its deadline during shutdown
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: cfg.controlAuth}, func(connectionCtx context.Context, conn transport.Conn) error {
 			if _, authenticated := transport.Peer(connectionCtx); !authenticated {
 				return transport.ErrAuthentication
