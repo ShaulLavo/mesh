@@ -42,6 +42,9 @@
     },
     "linux-arm64-waypoint-prepare": {
       "path": "linux-arm64-waypoint-prepare.json"
+    },
+    "darwin-arm64-fresh": {
+      "path": "darwin-arm64-fresh.json"
     }
   }
 }

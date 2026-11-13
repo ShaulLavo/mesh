@@ -49,3 +49,8 @@ provider timeouts, with exact derived totals of 559.552, 408.782, 481.893,
 groups, descriptor identities, cleanup and terminal provider overhead were
 checked independently. Existing oldest and support plans remain unchanged.
 The review is in `split-budget-reducer/snapshot-2/REVIEW.md` in that report tree.
+
+Darwin fresh was independently approved from the final retained packet of run
+43451015125. Its command, aggregate external and reserve total 463.898 seconds,
+with a 900-second admission. The same arithmetic, cleanup and provider-boundary
+conditions apply. Its review is `split-budget-reducer/terminal/DARWIN-FRESH-REVIEW.md`.
