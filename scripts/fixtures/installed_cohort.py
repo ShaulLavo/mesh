@@ -63,10 +63,11 @@ def copy_image(source, target, owned_root):
 
 
 class Cohort:
-    def __init__(self, registry, probe, state, config, version, binary, record, group=None, original=None):
+    def __init__(self, registry, probe, state, config, version, binary, record, group=None, original=None, catalog=None):
         self.registry, self.probe, self.state, self.config = registry, probe, state, config
         self.version, self.binary, self.record = version, binary, record
         self.group, self.original = group, original
+        self.catalog = catalog
         if group is not None:
             self.selected = group["members"]
             return
@@ -79,6 +80,8 @@ class Cohort:
         environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
         if self.original is not None:
             environment["MESH_GROUP_ORIGINAL"] = json.dumps(self.original)
+        if self.catalog and not self.catalog.closed:
+            environment["MESH_CATALOG_IO_TIMELINE"] = str(self.record.with_suffix(".io.jsonl"))
         return environment
 
     def start(self):
@@ -95,12 +98,19 @@ class Cohort:
 
     def verify(self, label):
         environment = self.environment()
+        if self.catalog and label == "before-install":
+            self.catalog.checkpoint("before-original-verification")
         try:
             result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
                 env=environment, capture_output=True, text=True, check=True, timeout=90)
-        except subprocess.CalledProcessError as error:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             self.retain_verification_failure(label, error)
+            self.finish_catalog(label, error)
             raise
+        except BaseException as error:
+            self.finish_catalog(label, error)
+            raise
+        self.finish_catalog(label)
         observed = json.loads(result.stdout)
         expected = sorted({item["artifact"]["binarySha256"] for item in self.selected})
         if observed != expected:
@@ -108,17 +118,34 @@ class Cohort:
         return observed
 
     def retain_verification_failure(self, label, error):
+        def raw(value):
+            return value if isinstance(value, bytes) else (value or "").encode("utf-8")
+
         def tail(value):
-            raw = (value or "").encode("utf-8")
-            return {"tail": raw[-32768:].decode("utf-8", "replace"), "bytes": len(raw), "truncated": len(raw) > 32768}
+            return {"tail": value[-32768:].decode("utf-8", "replace"), "bytes": len(value), "truncated": len(value) > 32768}
 
         try:
+            stdout, stderr = raw(error.stdout), raw(error.stderr)
             record = json.loads(self.record.read_bytes())
-            record["verificationFailure"] = {"label": label, "returncode": error.returncode,
-                                              "stdout": tail(error.stdout), "stderr": tail(error.stderr)}
+            record["verificationFailure"] = {"label": label, "returncode": getattr(error, "returncode", None),
+                                              "stdout": tail(stdout), "stderr": tail(stderr)}
+            if isinstance(error, subprocess.TimeoutExpired):
+                record["verificationFailure"]["timeoutSeconds"] = error.timeout
             release_workers.save(self.record, record)
+            self.record.with_suffix(".failure.stdout").write_bytes(stdout)
+            self.record.with_suffix(".failure.stderr").write_bytes(stderr)
         except (OSError, ValueError) as capture_error:
             error.add_note("cohort verification evidence unavailable: " + type(capture_error).__name__)
+
+    def finish_catalog(self, label, primary=None):
+        if not self.catalog or label != "before-install":
+            return
+        try:
+            self.catalog.stop("after-failed-io" if primary else "after-original-verification")
+        except Exception as error:
+            if primary is None:
+                raise
+            primary.add_note("catalog evidence unavailable: " + type(error).__name__)
 
     def close(self):
         release_workers.stop(self.record)

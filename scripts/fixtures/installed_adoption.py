@@ -29,6 +29,7 @@ class AdoptionCase(installed_native.Installation):
         self.cohort = None
         self.expected_workers = 1
         self.worker_group = None
+        self.catalog = None
 
     def start_cohort(self, registry, probe):
         current = self.control("host.info")["host"]["build"]
@@ -36,7 +37,7 @@ class AdoptionCase(installed_native.Installation):
             current["version"], self.binary, self.root / "cohort.json", self.worker_group,
             {"stateRun": self.run_identity(), "session": self.session, "pid": self.worker, "shellPid": self.shell,
              "digest": self.pair["daemon"]["artifact"]["binarySha256"], "protocol": self.original_protocol(),
-             "imageBytes": Path(self.pair["daemon"]["executable"]).stat().st_size})
+             "imageBytes": Path(self.pair["daemon"]["executable"]).stat().st_size}, self.catalog)
         observed = self.cohort.start()
         self.expected_workers += len(self.cohort.selected)
         return observed
@@ -218,7 +219,25 @@ class AdoptionCase(installed_native.Installation):
         actions = [super().close_session]
         if self.cohort:
             actions.insert(0, self.cohort.close)
+        if self.catalog:
+            actions.insert(0, lambda: self.catalog.stop("before-teardown"))
         installed_native.cleanup_all(actions)
+
+    def arm_catalog(self):
+        if os.environ.get("MESH_CATALOG_EVIDENCE") != "1":
+            return
+        from fixtures import installed_catalog_evidence
+        if self.worker_group is None:
+            raise RuntimeError("passive catalog evidence requires an exact selected group")
+        self.catalog = installed_catalog_evidence.Observer(self.state, self.root / "catalog-evidence.json", len(self.worker_group["members"]),
+            identity_reader=lambda: installed_catalog_evidence.daemon_identity(self))
+        self.catalog.start(installed_catalog_evidence.daemon_identity(self))
+
+    def prove_catalog(self):
+        if self.catalog is None:
+            return
+        from fixtures import installed_catalog_evidence
+        self.catalog.prove(self.session, installed_catalog_evidence.daemon_identity(self), self.remote_id)
 
     def validate_helper(self, version):
         receipt = json.loads((self.state / "update/helper/installed.json").read_text())
@@ -254,7 +273,10 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         case.seed_prior()
         if case.prior:
             record["genuinePrior"] = {"version": host["daemon"], "phase": case.prior["phase"], "settings": case.prior["settings"]}
+        if registry:
+            case.arm_catalog()
         case.seed()
+        case.prove_catalog()
         if registry:
             record["initialCohort"] = case.start_cohort(registry, probe)
         target = installed_releases.VERSIONS[0]
@@ -294,9 +316,16 @@ def finish_case(case, record, output):
             installed_native.copy_log_tail(log, output / (case.host["name"] + "-adopt-cli.log"))
         if case.cohort and case.cohort.record.exists():
             shutil.copy2(case.cohort.record, output / (case.host["name"] + "-cohort.json"))
+        retain_catalog_files(case.root, output, case.host["name"])
         for path in case.root.glob("service-*.json"):
             shutil.copy2(path, output / (case.host["name"] + "-" + path.name))
         (output / (case.host["name"] + "-native-pair.json")).write_text(json.dumps(record, indent=2) + "\n")
+
+
+def retain_catalog_files(root, output, host):
+    for name in ("catalog-evidence.json", "cohort.failure.stdout", "cohort.failure.stderr", "cohort.io.jsonl"):
+        if (root / name).exists():
+            shutil.copy2(root / name, output / (host + "-" + name))
 
 
 def collect_service_snapshot(case):

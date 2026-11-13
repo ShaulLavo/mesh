@@ -242,7 +242,14 @@ def verify_one(state, worker, label, daemon):
     if parent != worker["pid"] or meta["pid"] != worker["shellPid"]:
         raise RuntimeError("retained cohort worker or shell identity changed")
     endpoint = state / "daemon.sock" if daemon else state / "s" / worker["session"] / "sock"
-    session_io(endpoint, worker["session"], "COHORT_" + label.replace("-", "_") + "_" + worker["session"])
+    from fixtures import installed_catalog_evidence
+    installed_catalog_evidence.io_boundary(worker["session"], "begin")
+    try:
+        session_io(endpoint, worker["session"], "COHORT_" + label.replace("-", "_") + "_" + worker["session"])
+    except BaseException:
+        installed_catalog_evidence.io_boundary(worker["session"], "failed")
+        raise
+    installed_catalog_evidence.io_boundary(worker["session"], "returned")
     return worker_rss + shell_rss
 
 
