@@ -99,7 +99,7 @@ def execute(control, evidence, payload, inputs, environment):
                  "--native-helper", str(payload / "native-helper"), "--c4-cohort", str(control / "amd64-cohort.json"),
                  "--output", str(evidence)]
     write(control / "invocation.json", arguments)
-    command(arguments, control / "diagnostic.log", environment, timeout=1200)
+    command(arguments, control / "diagnostic.log", environment, timeout=900)
 
 
 def cleanup(control, evidence, payload):
