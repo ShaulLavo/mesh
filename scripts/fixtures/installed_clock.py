@@ -165,8 +165,8 @@ class Clock:
         seconds = (self.effective_deadline() - self.now()) / SECOND
         return seconds if maximum is None else min(maximum, seconds)
 
-    def check(self):
-        if self.now() >= self.effective_deadline():
+    def check(self, now=None):
+        if (self.now() if now is None else now) >= self.effective_deadline():
             error = ClockExpired("installed fixture clock expired at " + self.active_key)
             self.fail(error)
             raise error
@@ -196,9 +196,9 @@ class Clock:
         self.counts[name] = self.counts.get(name, 0) + 1
         return name + "#" + str(self.counts[name])
 
-    def switch(self, name):
-        self.check()
-        now = self.now()
+    def switch(self, name, *, now=None):
+        now = self.now() if now is None else now
+        self.check(now)
         self.close_leaf(now)
         self.active_key, self.started_ns = self.next_key(name), now
         self.arm()
@@ -214,7 +214,7 @@ class Clock:
             raise ClockExpired("new fixture work refused after first failure")
         previous = self.active_key.rsplit("#", 1)[0]
         key = self.switch(name)
-        start = self.now()
+        start = self.started_ns
         guard_key = "guard:" + key
         deadline = min(self.deadline_ns, start + self.limit(guard_key)) if guard_key in self.budgets else self.deadline_ns
         self.stack.append({"key": key, "deadline_ns": deadline})
@@ -229,11 +229,17 @@ class Clock:
 
     def finish_operation(self, key, start, previous):
         ended = self.now()
+        try:
+            self.check(ended)
+        finally:
+            self.record_operation(key, start, previous, ended)
+
+    def record_operation(self, key, start, previous, ended):
         self.samples.append({"key": key, "start_ns": start, "end_ns": ended,
                              "elapsed_ns": ended - start, "completed": not self.failures,
                              "cleanup_verified": False})
         self.stack.pop()
-        self.switch(previous)
+        self.switch(previous, now=ended)
 
     def arm(self):
         if self.watchdog and not self.failures:
@@ -358,8 +364,9 @@ def handoff(deadline_ns, *, watchdog=False):
     positive(deadline_ns)
     remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
     token = HANDOFF.set(min(deadline_ns, HANDOFF.get() or deadline_ns))
-    previous = start_handoff_alarm(HANDOFF.get()) if watchdog else None
+    previous = None
     try:
+        previous = start_handoff_alarm(HANDOFF.get()) if watchdog else None
         yield
     finally:
         if previous is not None:
@@ -369,8 +376,9 @@ def handoff(deadline_ns, *, watchdog=False):
 
 def start_handoff_alarm(deadline_ns):
     previous = (signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL)[0], time.monotonic_ns())
+    remaining = remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
     signal.signal(signal.SIGALRM, handoff_expired)
-    signal.setitimer(signal.ITIMER_REAL, remaining_until(deadline_ns, MAX_JOB_NS / SECOND))
+    signal.setitimer(signal.ITIMER_REAL, remaining)
     return previous
 
 

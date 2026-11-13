@@ -228,6 +228,85 @@ class ClockTest(unittest.TestCase):
             self.now.advance(100_000_000)
         self.assertTrue(self.export(clock)["accepted"])
 
+    def fresh_plan(self):
+        return clocks.load_plan(Path(__file__).resolve().parents[1] / ".internal/fixtures/installed-clock/linux-amd64-fresh.json")
+
+    def test_frozen_switch_checks_the_timestamp_it_records(self):
+        clock = self.clock(self.fresh_plan())
+        deadline = clock.effective_deadline()
+        clock.now = Mock(side_effect=(deadline - 1, deadline + 1))
+        clock.switch("signer-build:")
+        self.assertEqual(clock.rows[-1]["end_ns"], deadline - 1)
+        self.assertLess(clock.rows[-1]["elapsed_ns"], clock.plan.phases[0].limit_ns)
+        clock.now.assert_called_once()
+
+    def test_reviewed_millisecond_setup_leaf_expires_without_a_floor(self):
+        clock = self.clock(self.fresh_plan())
+        clock.switch("signer-build:")
+        clock.switch("setup")
+        self.assertEqual(clock.limit("setup#2"), clocks.MILLISECOND)
+        self.now.advance(clocks.MILLISECOND)
+        with self.assertRaisesRegex(clocks.ClockExpired, "setup#2"):
+            clock.switch("signer-start")
+        self.assertEqual(clock.active_key, "setup#2")
+        self.assertEqual(clock.cleanup_deadline_ns, self.now() + clock.plan.emergency_ns)
+
+    def test_operation_finish_checks_guard_before_popping_it(self):
+        clock = self.clock()
+        clock.stack.append({"key": "nested#1", "deadline_ns": self.now() + clocks.SECOND})
+        start = self.now()
+        self.now.advance(clocks.SECOND)
+        with self.assertRaises(clocks.ClockExpired):
+            clock.finish_operation("nested#1", start, "setup")
+        self.assertEqual(clock.stack, [])
+        self.assertFalse(clock.samples[-1]["completed"])
+        self.assertFalse(self.export(clock)["measurement_completed"])
+
+    def test_operation_finish_before_guard_keeps_one_shared_boundary(self):
+        clock = self.clock()
+        start = self.now()
+        clock.stack.append({"key": "nested#1", "deadline_ns": start + clocks.SECOND})
+        self.now.advance(clocks.SECOND - 1)
+        clock.finish_operation("nested#1", start, "setup")
+        self.assertEqual(clock.samples[-1]["end_ns"], clock.rows[-1]["end_ns"])
+        self.assertEqual(clock.started_ns, clock.samples[-1]["end_ns"])
+        self.assertTrue(self.export(clock)["measurement_completed"])
+
+    def test_operation_sample_starts_at_its_leaf_boundary(self):
+        clock = self.clock()
+        def ticks():
+            self.now.advance(1)
+            return self.now()
+        clock.now = ticks
+        with clock.operation("observed"):
+            self.now.advance(100)
+        self.assertEqual(clock.samples[0]["start_ns"], clock.rows[1]["start_ns"])
+        self.assertEqual(clock.samples[0]["end_ns"], clock.rows[1]["end_ns"])
+
+    def test_reviewed_fresh_sequence_can_complete_with_controlled_time(self):
+        clock = self.clock(self.fresh_plan())
+        for phase in clock.plan.phases[1:]:
+            self.now.advance(1)
+            clock.switch(phase.key.rsplit("#", 1)[0])
+        value = self.export(clock)
+        self.assertTrue(value["accepted"])
+        self.assertEqual(value["disjoint_ns"], value["command_ns"])
+
+    def test_reviewed_completion_export_overrun_is_censored(self):
+        clock = self.clock(self.fresh_plan())
+        for phase in clock.plan.phases[1:]:
+            clock.switch(phase.key.rsplit("#", 1)[0])
+        write = Path.write_text
+        def slow(path, data, *args, **kwargs):
+            self.now.advance(clock.limit("completion#2"))
+            return write(path, data, *args, **kwargs)
+        with patch.object(Path, "write_text", slow):
+            value = self.export(clock)
+        persisted = json.loads((self.root / "clock.json").read_text())
+        self.assertFalse(value["accepted"])
+        self.assertFalse(persisted["measurement_completed"])
+        self.assertTrue(persisted["leaves"][-1]["censored"])
+
     def test_censored_wrong_workload_and_changed_bound_are_rejected(self):
         row = budget("setup#1")
         censored = clocks.SampleRef({"source": "same"}, row.workload, clocks.SECOND, False, True)
@@ -322,6 +401,45 @@ class ClockTest(unittest.TestCase):
             with clocks.handoff(self.now() + clocks.SECOND):
                 self.now.advance(750_000_000)
                 self.assertEqual(clocks.timeout(15), 0.25)
+
+    def test_nested_handoff_keeps_shorter_parent_and_restores_it(self):
+        end = self.now() + clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), clocks.handoff(end):
+            with clocks.handoff(end + clocks.SECOND):
+                self.assertEqual(clocks.HANDOFF.get(), end)
+                self.now.advance(clocks.SECOND // 2)
+                self.assertEqual(clocks.timeout(10), 0.5)
+            self.assertEqual(clocks.HANDOFF.get(), end)
+        self.assertIsNone(clocks.HANDOFF.get())
+
+    def test_handoff_expiring_during_alarm_setup_restores_context_and_signal(self):
+        token = clocks.HANDOFF.set(None)
+        self.addCleanup(clocks.HANDOFF.reset, token)
+        end = self.now() + clocks.SECOND
+        observations = (self.now(), self.now(), end)
+        with patch.object(clocks.time, "monotonic_ns", side_effect=observations), \
+                patch.object(clocks.signal, "getsignal", return_value=signal.SIG_DFL), \
+                patch.object(clocks.signal, "getitimer", return_value=(0, 0)), \
+                patch.object(clocks.signal, "signal") as handler, patch.object(clocks.signal, "setitimer") as timer:
+            with self.assertRaises(clocks.ClockExpired), clocks.handoff(end, watchdog=True):
+                self.fail("expired handoff entered its child")
+        self.assertIsNone(clocks.HANDOFF.get())
+        handler.assert_not_called()
+        timer.assert_not_called()
+
+    def test_watchdog_handoff_restores_previous_alarm_with_elapsed_time_removed(self):
+        end = self.now() + clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(clocks.signal, "getsignal", return_value=signal.SIG_IGN), \
+                patch.object(clocks.signal, "getitimer", return_value=(5, 0)), \
+                patch.object(clocks.signal, "signal") as handler, patch.object(clocks.signal, "setitimer") as timer:
+            with clocks.handoff(end, watchdog=True):
+                self.now.advance(clocks.SECOND // 2)
+        self.assertEqual([call.args for call in timer.call_args_list],
+                         [(signal.ITIMER_REAL, 1), (signal.ITIMER_REAL, 0), (signal.ITIMER_REAL, 4.5)])
+        self.assertEqual([call.args for call in handler.call_args_list],
+                         [(signal.SIGALRM, clocks.handoff_expired), (signal.SIGALRM, signal.SIG_IGN)])
+        self.assertIsNone(clocks.HANDOFF.get())
 
     def test_native_partial_export_and_clean_completion(self):
         handoff = self.root / "handoff.json"

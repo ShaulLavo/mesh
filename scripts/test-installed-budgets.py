@@ -17,6 +17,7 @@ from fixtures import installed_budgets as budgets, installed_clock as clocks
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = (ROOT / ".github/workflows/installed-catchup.yml").read_text()
+SMOKE = (ROOT / ".github/workflows/installed-frozen-smoke.yml").read_text()
 
 
 def job(name):
@@ -190,6 +191,33 @@ class FrozenBudgetTests(unittest.TestCase):
         self.args.clock_plan.write_text(json.dumps(value))
         budgets.bind(self.args, "linux/amd64")
 
+    def test_actual_fresh_plan_admits_only_its_exact_workload(self):
+        self.args.clock_plan_index = budgets.INDEX
+        self.args.source_host, self.args.worker_registry, self.args.fresh_managed = None, None, True
+        budgets.bind(self.args, "linux/amd64")
+        plan = clocks.from_arguments(self.args, "linux/amd64").plan
+        self.assertEqual(plan.workload["mode"], "fresh")
+        self.assertEqual(budgets.workflow_minutes(plan), 15)
+        self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
+        self.assertEqual(plan.emergency_ns, 60 * clocks.SECOND)
+        for field, value in (("source_host", "pc"), ("scenario", "initial")):
+            setattr(self.args, field, value)
+            with self.assertRaisesRegex(ValueError, "workload differs from actual invocation"):
+                clocks.from_arguments(self.args, "linux/amd64")
+            setattr(self.args, field, None)
+        with patch.dict(os.environ, MESH_CATALOG_EVIDENCE="1"), self.assertRaisesRegex(ValueError, "workload differs from actual invocation"):
+            clocks.from_arguments(self.args, "linux/amd64")
+
+    def test_unreviewed_five_slots_stay_absent(self):
+        plans = budgets.read_index(budgets.INDEX)
+        self.assertEqual(len(plans), 32)
+        missing = ("linux-amd64-order", "linux-amd64-chain-consume-final", "linux-arm64-chain-consume-none",
+                   "linux-arm64-waypoint-consume-final", "darwin-arm64-chain-consume-none")
+        for key in missing:
+            self.assertNotIn(key, plans)
+            with self.assertRaisesRegex(ValueError, "no independently approved frozen plan"):
+                budgets.select_plan(budgets.INDEX, key, {})
+
     def test_all_ten_cohort_cells_and_six_support_cells_are_required(self):
         profiles = budgets.required_profiles(True, True, None, False)
         self.assertEqual(len(profiles), 16)
@@ -206,6 +234,54 @@ class WorkflowWiringTests(unittest.TestCase):
     def script(self, source, step_name):
         step = source.split("      - name: " + step_name + "\n", 1)[1].split("      - ", 1)[0]
         return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+
+    def test_frozen_smoke_reuses_one_native_fresh_job_without_diagnostic_mode(self):
+        self.assertIn("workflow_dispatch:", SMOKE)
+        self.assertNotIn("pull_request:", SMOKE)
+        self.assertEqual(re.findall(r"^  ([\w-]+):$", SMOKE.split("jobs:\n", 1)[1], re.M), ["native-fresh"])
+        self.assertEqual(re.findall(r"platform: ([^\n]+)", SMOKE), ["linux/amd64"])
+        self.assertIn("runner: ubuntu-24.04", SMOKE)
+        self.assertIn("timeout-minutes: 15", SMOKE)
+        self.assertIn("go-version: '1.27.4'", SMOKE)
+        self.assertLess(SMOKE.index("Record original job clock"), SMOKE.index("uses: actions/checkout"))
+        self.assertLess(SMOKE.index("reviewed fresh workload"), SMOKE.index("Require the actual native manager"))
+        self.assertLess(SMOKE.index("Require the actual native manager"), SMOKE.index("uses: actions/setup-go"))
+        self.assertEqual(SMOKE.count('open(p,"x")'), 1)
+        self.assertNotIn("diagnostic", SMOKE)
+        self.assertNotIn("MESH_TRANSPORT_LIFECYCLE", SMOKE)
+        self.assertNotIn("continue-on-error", SMOKE)
+        self.assertIn('job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/fresh-proof/fixture-clock.json"', SMOKE)
+        name = "Prepare the real helper before the first managed daemon activation"
+        frozen = re.sub(r"^if \[\[ \$CLOCK_CALIBRATION.*?^fi\n", "", self.script(job("fresh-managed"), name), flags=re.M | re.S)
+        smoke = self.script(SMOKE, name)
+        self.assertEqual(smoke.strip(), frozen.strip())
+        self.assertIn('--native-preflight --fresh-managed', smoke)
+        self.assertIn('--clock-mode frozen --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"', frozen)
+        script = smoke.replace("python3 scripts/prove-installed-catchup.py", "printf '%s\\n'")
+        result = subprocess.run(["bash", "-e", "-c", script], env=os.environ | {"RUNNER_TEMP": "/unused"}, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.check_support_args(result.stdout.splitlines(), "false")
+
+    def test_smoke_exact_pre_admission_rejects_a_workload_mismatch(self):
+        script = self.script(SMOKE, "Require the exact source and reviewed fresh workload before native execution")
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        with tempfile.TemporaryDirectory(prefix="smoke-admission-") as temporary:
+            self.check_smoke_admission(script, source, Path(temporary))
+
+    def check_smoke_admission(self, script, source, root):
+        origin = root / "installed-job-clock.json"
+        origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "smoke-run", "job": "native-fresh",
+                                      "admission_ns": 900 * clocks.SECOND}))
+        environment = os.environ | {"MESH_HARNESS_SOURCE": source, "RUNNER_TEMP": str(root), "GITHUB_RUN_ID": "smoke-run",
+            "GITHUB_JOB": "native-fresh", "PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1",
+            "MESH_CATALOG_EVIDENCE": "0"}
+        accepted = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT, env=environment, capture_output=True, timeout=5)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        mismatch = subprocess.run(["bash", "-e", "-c", script.replace("source_host=None", 'source_host="pc"')], cwd=ROOT,
+            env=environment, capture_output=True, timeout=5)
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn(b"workload differs from actual invocation", mismatch.stderr)
+        self.assertEqual(list(root.iterdir()), [origin])
 
     def test_support_diagnostic_selection_is_explicit_and_cannot_enable_ordinary_fallback(self):
         script = self.script(job("frozen-budgets"), "Select reviewed per-platform and profile job admissions")
