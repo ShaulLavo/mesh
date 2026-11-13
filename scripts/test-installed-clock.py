@@ -44,6 +44,33 @@ class ClockTest(unittest.TestCase):
     def clock(self, plan=None, **kwargs):
         return clocks.Clock(plan or diagnostic(), now=self.now, **kwargs)
 
+    def test_native_control_child_entry_works_without_package_path(self):
+        marker = self.root / "native-child.json"
+        arguments = [str(Path(sys.executable).resolve()), str(Path(native_services.__file__).resolve()), "child", str(marker), "owned-control"]
+        environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
+        process = None
+        try:
+            process = subprocess.Popen(arguments, cwd=self.root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.wait_native_child(process, marker)
+            self.assertEqual(json.loads(marker.read_text()), {"pid": process.pid, "token": "owned-control"})
+            native_services.wait_for(lambda: native_services.control_image(process.pid, {}), "control child did not exec sleep")
+        finally:
+            self.stop_native_child(process)
+
+    def wait_native_child(self, process, marker):
+        end = clocks.time.monotonic_ns() + 10 * clocks.SECOND
+        while not marker.exists():
+            if process.poll() is not None:
+                self.fail(process.communicate(timeout=2)[1].decode("utf-8", "replace"))
+            clocks.time.sleep(clocks.remaining_until(end, 0.01))
+
+    def stop_native_child(self, process):
+        if process is None:
+            return
+        if process.poll() is None:
+            process.terminate()
+        process.communicate(timeout=2)
+
     def export(self, clock, cleaned=True):
         return clock.export(self.root / "clock.json", cleaned, {"source": "exact tested source"})
 

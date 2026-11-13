@@ -9,10 +9,10 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from fixtures import installed_clock
 
 
 def command(arguments, environment=None, check=True):
+    from fixtures import installed_clock
     result = subprocess.run(arguments, env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(10), check=False)
     if check and result.returncode:
         raise RuntimeError(f"native command {arguments!r} exited {result.returncode}: {result.stderr.strip()} {result.stdout.strip()}")
@@ -20,6 +20,7 @@ def command(arguments, environment=None, check=True):
 
 
 def wait_for(predicate, message):
+    from fixtures import installed_clock
     deadline = installed_clock.parent_deadline(10)
     while time.monotonic_ns() < deadline:
         value = predicate()
