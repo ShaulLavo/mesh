@@ -100,6 +100,10 @@ on:
       - 'scripts/test-installed-clock.py'
       - '.internal/fixtures/installed-clock/**'
       - 'scripts/fixtures/installed_publication.py'
+      - 'scripts/publication-jobs.py'
+      - 'scripts/publication-workflow.py'
+      - 'scripts/test-publication-jobs.py'
+      - 'scripts/test-publication-workflow.py'
       - 'scripts/fixtures/publication_origin.py'
       - 'internal/update/installed_fixture_test.go'
       - 'internal/update/installed_prepared_test.go'
@@ -193,24 +197,43 @@ jobs:
           path: ${{ runner.temp }}/ordered-managers
           retention-days: 7
 
+  publication-plan:
+    # Activation waits for the parent to repin the immutable installed-catchup callers.
+    if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
+    name: Inventory complete signed draft tasks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tasks: ${{ steps.inventory.outputs.tasks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Select every complete native case and route group
+        id: inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_SOURCE: ${{ inputs.release_source }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft"
+          tasks=$(python3 scripts/publication-workflow.py matrix "$RUNNER_TEMP/publication-draft" "$MESH_HARNESS_SOURCE")
+          printf 'tasks=%s\n' "$tasks" >> "$GITHUB_OUTPUT"
+      - name: Remove scheduling draft inputs
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/publication-draft"
+
   publication-native:
-    if: inputs.release_version != '' || inputs.publication_only
-    name: Actual signed draft installation (${{ matrix.platform }})
+    needs: publication-plan
+    if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
+    name: Actual signed draft installation (${{ matrix.platform }}, ${{ matrix.task }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Admission ceiling only. Each complete route keeps its existing 150-second bound.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            key: linux-amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            key: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            key: darwin-arm64
-            runner: macos-15
+      matrix: ${{ fromJSON(needs.publication-plan.outputs.tasks) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -268,6 +291,7 @@ jobs:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           RELEASE_SOURCE: ${{ inputs.release_source }}
+          PUBLICATION_TASK: ${{ matrix.task }}
           PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
           MESH_PREPARATION_SOURCE: ${{ inputs.worker_artifact_source }}
           HAS_BASELINE: ${{ steps.baseline.outputs.needed }}
@@ -283,22 +307,63 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/native-tools.noindex"
           go build -o "$RUNNER_TEMP/native-tools.noindex/native-helper" ./scripts/fixtures/native-helper
-          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/publication-proof" --native-preflight --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" --publication-version "$RELEASE_VERSION" --publication-source "$RELEASE_SOURCE" "${extra[@]}"
+          printf '{"started":true}\n' > "$RUNNER_TEMP/publication-control/fixture-launch.json"
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/publication-proof" --native-preflight --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" --publication-version "$RELEASE_VERSION" --publication-source "$RELEASE_SOURCE" --publication-task "$PUBLICATION_TASK" "${extra[@]}"
       - name: Remove owned publication consumer tools after installed teardown
         if: always()
-        run: |
-          rm -rf -- "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/native-tools.noindex" "$RUNNER_TEMP/publication-trust"
-          test ! -e "$RUNNER_TEMP/native-worker-input.noindex"
-          test ! -e "$RUNNER_TEMP/native-tools.noindex/native-helper"
-          test ! -e "$RUNNER_TEMP/publication-trust"
+        run: python3 scripts/publication-workflow.py cleanup "$RUNNER_TEMP"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: installed-publication-${{ matrix.key }}
+          name: ${{ matrix.artifact }}
           path: |
             ${{ runner.temp }}/publication-control
             ${{ runner.temp }}/publication-proof
           retention-days: 7
+
+  publication-aggregate:
+    needs: [publication-plan, publication-native]
+    if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
+    name: Complete signed draft evidence (${{ matrix.platform }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+          - platform: linux/arm64
+            key: linux-arm64
+          - platform: darwin/arm64
+            key: darwin-arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Acquire exact same-run child evidence and aggregate every task once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          RELEASE_SOURCE: ${{ inputs.release_source }}
+          PLATFORM: ${{ matrix.platform }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft"
+          python3 scripts/publication-workflow.py fetch "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$RUNNER_TEMP/publication-draft" "$PLATFORM" "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/publication-children.noindex"
+          python3 scripts/publication-jobs.py aggregate "$RUNNER_TEMP/publication-draft" "$PLATFORM" "$MESH_HARNESS_SOURCE" --inputs "$RUNNER_TEMP/publication-children.noindex" --output "$RUNNER_TEMP/publication-complete"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-publication-${{ matrix.key }}
+          path: ${{ runner.temp }}/publication-complete
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove owned child evidence and aggregation staging
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-children.noindex" "$RUNNER_TEMP/publication-complete"
+          test ! -e "$RUNNER_TEMP/publication-children.noindex"
+          test ! -e "$RUNNER_TEMP/publication-complete"
 
   native-adoption:
     needs: frozen-budgets

@@ -348,6 +348,8 @@ jobs:
           python3 scripts/test-installed-budgets.py
           python3 scripts/test-installed-prepared.py
           python3 scripts/test-installed-workflow.py
+          python3 scripts/test-publication-jobs.py
+          python3 scripts/test-publication-workflow.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
         timeout-minutes: 8
         run: |
