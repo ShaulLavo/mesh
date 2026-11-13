@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "plans": {
+    "linux-amd64-oldest-catalog": {
+      "path": "linux-amd64-oldest-catalog.json"
+    },
+    "linux-arm64-oldest-catalog": {
+      "path": "linux-arm64-oldest-catalog.json"
+    },
+    "darwin-arm64-oldest": {
+      "path": "darwin-arm64-oldest.json"
+    }
+  }
+}

@@ -460,6 +460,9 @@ def from_arguments(args, native):
                 "catalogEvidence": os.environ.get("MESH_CATALOG_EVIDENCE") == "1",
                 "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
                 "manifestSchemas": [1, 2] if args.format_waypoint else [1]}
+    prepared = prepared_workload(args)
+    prepared_id = prepared.pop("preparedId", None)
+    workload.update(prepared)
     mode = args.clock_mode
     if mode == "frozen":
         plan = load_plan(args.clock_plan)
@@ -477,7 +480,26 @@ def from_arguments(args, native):
         raise ValueError("fixture admission clock belongs to another job")
     if plan.admission_ns > positive(job["admission_ns"]):
         raise ValueError("fixture plan exceeds the original job's declared admission")
-    return Clock(plan, job_origin_ns=positive(job["origin_ns"]))
+    clock = Clock(plan, job_origin_ns=positive(job["origin_ns"]))
+    if prepared_id is not None:
+        clock.provenance["preparedId"] = prepared_id
+    return clock
+
+
+def prepared_workload(args):
+    export = getattr(args, "export_prepared", None)
+    bundle = getattr(args, "prepared_releases", None)
+    selected = getattr(args, "installed_slice", None)
+    if export and (bundle or selected):
+        raise ValueError("prepared producer and consumer roles are exclusive")
+    if export:
+        return {"preparedRole": "prepare"}
+    if bundle is None and selected is None:
+        return {}
+    if bundle is None or selected is None:
+        raise ValueError("prepared consumer needs its bundle and exact slice")
+    from fixtures import installed_prepared
+    return installed_prepared.clock_workload(bundle, selected)
 
 
 def scenario(args):
@@ -582,7 +604,7 @@ def native_selection(groups):
     (Path(path).parent / "fixture-group-clock.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
-def job_record(action, path):
+def job_record(action, path, fixture_path=None):
     path = Path(path)
     now = time.monotonic_ns()
     if action == "job-start":
@@ -596,7 +618,7 @@ def job_record(action, path):
         raise ValueError("job clock exceeds the 30-minute ceiling")
     value.update(end_ns=now, elapsed_ns=now - value["origin_ns"],
                  external_complete=False, unmeasured_tail="action post-job cleanup and cache-save work")
-    fixture = path.parent / "cohort-proof" / "fixture-clock.json"
+    fixture = Path(fixture_path) if fixture_path is not None else path.parent / "cohort-proof" / "fixture-clock.json"
     if fixture.exists():
         command = json.loads(fixture.read_text())
         value.update(external_before_ns=command["origin_ns"] - value["origin_ns"], external_after_ns=now - command["end_ns"],

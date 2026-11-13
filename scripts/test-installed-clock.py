@@ -1,4 +1,5 @@
 """Pure/mocked fixture clock, handoff, cleanup and calibration controls."""
+import io
 import json
 import os
 from pathlib import Path
@@ -144,6 +145,43 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(clock.plan.phases, ())
         self.assertEqual(value["disjoint_ns"], value["command_ns"])
         self.assertEqual(value["leaves"][0]["end_ns"], value["leaves"][1]["start_ns"])
+
+    def test_prepared_roles_are_explicit_and_nonprepared_workload_is_unchanged(self):
+        self.assertEqual(clocks.prepared_workload(SimpleNamespace()), {})
+        self.assertEqual(clocks.prepared_workload(SimpleNamespace(export_prepared=self.root)), {"preparedRole": "prepare"})
+        for values in ({"prepared_releases": self.root}, {"installed_slice": self.root},
+                       {"export_prepared": self.root, "prepared_releases": self.root}):
+            with self.assertRaises(ValueError):
+                clocks.prepared_workload(SimpleNamespace(**values))
+
+    def test_prepared_bundle_identity_binds_execution_not_reusable_timing(self):
+        origin = self.root / "job-origin.json"
+        origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "run", "job": "job",
+                                      "admission_ns": 900 * clocks.SECOND}))
+        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
+            clock_command_seconds=600, clock_job_seconds=900, clock_external_seconds=240, clock_emergency_seconds=60,
+            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=True)
+        selection = {"select": [{"profile": "chain-none", "group_indices": [0]}], "readers": []}
+        fields = {"preparedRole": "consume", "preparedId": "a" * 64, "installedSlice": selection}
+        with patch.dict(os.environ, GITHUB_RUN_ID="run", GITHUB_JOB="job"), patch.object(clocks, "prepared_workload", return_value=fields):
+            clock = clocks.from_arguments(args, "linux/amd64")
+        self.assertEqual(clock.provenance["preparedId"], "a" * 64)
+        self.assertNotIn("preparedId", clock.plan.workload)
+        self.assertEqual(clock.plan.workload["preparedRole"], "consume")
+        self.assertEqual(clock.plan.workload["installedSlice"], selection)
+
+    def test_job_finish_uses_explicit_support_fixture_clock(self):
+        origin = self.root / "job-origin.json"
+        origin.write_text(json.dumps({"origin_ns": clocks.SECOND, "admission_ns": 900 * clocks.SECOND}))
+        fixture = self.root / "fresh-clock.json"
+        fixture.write_text(json.dumps({"origin_ns": 2 * clocks.SECOND, "end_ns": 3 * clocks.SECOND,
+                                       "external_budget_ns": 3 * clocks.SECOND}))
+        output = io.StringIO()
+        with patch.object(clocks.time, "monotonic_ns", return_value=4 * clocks.SECOND), patch("sys.stdout", output):
+            clocks.job_record("job-finish", origin, fixture)
+        interval = json.loads(output.getvalue().split("CLOCK_JOB_INTERVAL ", 1)[1])
+        self.assertEqual(interval["external_observed_ns"], 2 * clocks.SECOND)
+        self.assertFalse(interval["external_complete"])
 
     def test_frozen_exact_sequence_and_derived_total(self):
         phases = tuple(budget(key) for key in ("setup#1", "work#1", "setup#2"))
