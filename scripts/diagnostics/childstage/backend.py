@@ -289,9 +289,10 @@ def cleanup_alive(errors, descriptor):
 
 class GuardedTarget:
     """An independent subreaper retains cleanup ownership after controller death."""
-    def __init__(self, argv, descriptors, log):
+    def __init__(self, argv, descriptors, log, environment=None, new_session=False):
         self.guardian = subprocess.Popen([sys.executable, str(HERE / "guardian.py"), str(log.fileno()),
-            str(descriptors[0]), str(descriptors[1])] + argv, pass_fds=descriptors + (log.fileno(),),
+            str(descriptors[0]), str(descriptors[1]), "new-session" if new_session else "inherit-session"] + argv,
+            pass_fds=descriptors + (log.fileno(),), env=environment,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0)
         self.returncode = None
         try:

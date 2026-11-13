@@ -33,9 +33,67 @@ func main() {
 	if len(os.Args) != 2 {
 		os.Exit(2)
 	}
-	if err := control(os.Args[1]); err != nil {
+	if err := runControl(os.Args[1]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+func runControl(mode string) error {
+	if strings.HasPrefix(mode, "lifecycle-") {
+		return lifecycleControl(mode)
+	}
+	if mode != "parent-thread" {
+		return control(mode)
+	}
+	// Keep the leader occupied so this refused clone must occur in a followed
+	// Go thread rather than accidentally repeating the leader-only control.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	result := make(chan error, 1)
+	go func() { result <- control(parentMode) }()
+	return <-result
+}
+
+func lifecycleControl(mode string) error {
+	runtime.GOMAXPROCS(2)
+	runtime.LockOSThread()
+	ready := make(chan struct{}, 8)
+	for range 8 {
+		go churnThread(ready, mode == "lifecycle-thread-exit")
+	}
+	for range 8 {
+		<-ready
+	}
+	switch mode {
+	case "lifecycle-thread-exit", "lifecycle-exit-group":
+		return nil
+	case "lifecycle-kill":
+		if err := unix.Kill(os.Getpid(), unix.SIGKILL); err != nil {
+			return fmt.Errorf("kill synthetic thread group: %w", err)
+		}
+		return nil
+	case "lifecycle-exec":
+		go func() {
+			runtime.LockOSThread()
+			err := syscall.Exec("/bin/true", []string{"true"}, os.Environ()) // #nosec G204 -- Fixed synthetic image and arguments, using only this owned control's inherited environment.
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}()
+		select {}
+	}
+	return errors.New("unknown lifecycle control")
+}
+
+func churnThread(ready chan<- struct{}, exit bool) {
+	runtime.LockOSThread()
+	ready <- struct{}{}
+	if exit {
+		return
+	}
+	for {
+		_, _, _ = unix.RawSyscall(unix.SYS_GETPID, 0, 0, 0)
+		runtime.Gosched()
 	}
 }
 

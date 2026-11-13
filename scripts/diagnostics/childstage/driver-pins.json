@@ -1,0 +1,17 @@
+{
+  "archiveBytes": 1448365133,
+  "archiveSha256": "f3746b7787bc3578ffebbbac404c2c58fff10dd83e4706e84a6285734d814d49",
+  "artifactId": 14006886865,
+  "artifactName": "update-native-linux-amd64",
+  "artifactPrefix": "update-native",
+  "caller": "c0c899eea10a9c4f5916b0b629b736455d1d5a92",
+  "maxEntries": 4096,
+  "maxExpandedBytes": 5368709120,
+  "nativeSource": "3097dc167bcdcadc8a561fb0f443253b74bfd025",
+  "originalSelectionSha256": "a9afd4ac03f9c30a01d0cd949f3e252a2124a37e42ffb42590f2f830a37b01fa",
+  "producerRun": 43356291036,
+  "selectionSha256": "e136b856458bc07c3df9e925550fe1f8f3b6c8dce4d5e36c38f9fc785043f530",
+  "sourceDigest": "ebe0a9046e92f2a4aa39afb89c6b7ab3e0315e9be3e408a441e87f9ab0858a9c",
+  "sourceVersion": "v0.1.259",
+  "workerDigest": "d409303e23267ef428c6da58d60a7ae749f8c4012f7e061ce8e7427abe232b42"
+}

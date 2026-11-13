@@ -27,7 +27,7 @@ func syscallInfo(pid int) (stopInfo, error) {
 	if errno != 0 {
 		return info, fmt.Errorf("PTRACE_GET_SYSCALL_INFO: %w", errno)
 	}
-	if n < 33 || info.Op == unix.PTRACE_SYSCALL_INFO_ENTRY && n < 80 {
+	if n < 24 || info.Op != unix.PTRACE_SYSCALL_INFO_NONE && n < 33 || info.Op == unix.PTRACE_SYSCALL_INFO_ENTRY && n < 80 {
 		return info, fmt.Errorf("short syscall info: %d bytes", n)
 	}
 	return info, nil

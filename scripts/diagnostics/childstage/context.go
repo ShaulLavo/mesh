@@ -55,7 +55,7 @@ func imageIdentity(pid int) string {
 
 func taskContext(pid int) map[string]any {
 	root := fmt.Sprintf("/proc/%d/", pid)
-	result := map[string]any{"status": status(pid), imageKey: imageIdentity(pid)}
+	result := map[string]any{statusKey: status(pid), imageKey: imageIdentity(pid)}
 	for _, field := range []string{"cgroup", "attr/current", "uid_map", "gid_map", "setgroups"} {
 		result[field] = boundedRead(root + field)
 	}

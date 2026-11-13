@@ -60,6 +60,13 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(result["rootGone"])
         self.assertTrue(result["detachedDescendantGone"])
 
+    def test_outer_guardian_preserves_new_session_after_controller_sigkill(self):
+        with tempfile.TemporaryDirectory(prefix="childstage-outer-", dir="/work/tmp") as directory:
+            result = exercise_controller_death(Path(directory), outer=True)
+        self.assertTrue(result["guardianGone"])
+        self.assertTrue(result["rootGone"])
+        self.assertTrue(result["detachedDescendantGone"])
+
     def test_preexisting_cohort_is_never_owned_or_stopped(self):
         with tempfile.TemporaryDirectory(prefix="childstage-preexisting-", dir="/work/tmp") as temporary:
             root = Path(temporary)
@@ -87,6 +94,63 @@ class DiagnosticTests(unittest.TestCase):
         checker = load("check-controls")
         self.assertFalse(checker.real_launch({"call": {"args": [0x5100]}}, "parent"))
         self.assertTrue(checker.real_launch({"call": {"args": [0x4111]}}, "parent"))
+
+    def test_unrelated_eperm_cannot_satisfy_startup_capture(self):
+        for number in (233, 54, 109):
+            row = {"call": {"number": number, "args": [17]}, "tgid": 123, "tid": 124}
+            self.assertFalse(capture.startup_call(row, 123, []))
+        row = {"call": {"number": 56, "args": [0x5100]}, "tgid": 123, "tid": 124}
+        self.assertFalse(capture.startup_call(row, 123, []))
+        row["call"]["args"] = [0x4111]
+        self.assertFalse(capture.startup_call(row, 123, []))
+        row["context"] = {"terminals": [{"terminal": "/dev/ptmx"}, {"terminal": "/dev/pts/1"}]}
+        self.assertTrue(capture.startup_call(row, 123, []))
+        row = {"call": {"number": 112}, "tid": 124, "preExec": True}
+        self.assertFalse(capture.startup_call(row, 123, []))
+        created = {"event": "created", "tid": 124, "creatorTgid": 123, "preExec": True}
+        self.assertTrue(capture.startup_call(row, 123, [created]))
+
+    def test_vehicle_requires_exact_fresh_review_and_clean_checkout(self):
+        driver = load("run-hosted")
+        pins = json.loads((HERE / "driver-pins.json").read_bytes())
+        with tempfile.TemporaryDirectory(prefix="childstage-source-", dir="/work/tmp") as temporary:
+            output = Path(temporary)
+            verify_source_gate(self, driver, pins, output)
+
+    def test_vehicle_rejects_expired_packet_before_download(self):
+        driver = load("run-hosted")
+        from fixtures import installed_artifacts
+        pins = json.loads((HERE / "driver-pins.json").read_bytes())
+        artifact = {"id": pins["artifactId"], "name": pins["artifactName"], "size": pins["archiveBytes"],
+                    "digest": "sha256:" + pins["archiveSha256"]}
+        complete = {"runHead": pins["caller"], "artifacts": {"linux-amd64": artifact}}
+        metadata = {"name": artifact["name"], "size_in_bytes": artifact["size"], "digest": artifact["digest"],
+                    "workflow_run": {"id": pins["producerRun"], "head_sha": pins["caller"]}, "expired": True}
+        with tempfile.TemporaryDirectory(prefix="childstage-expired-", dir="/work/tmp") as temporary:
+            verify_expired_packet(self, driver, installed_artifacts, pins, complete, metadata, Path(temporary))
+
+    def test_vehicle_image_bytes_cannot_be_substituted(self):
+        driver = load("run-hosted")
+        with tempfile.TemporaryDirectory(prefix="childstage-image-", dir="/work/tmp") as temporary:
+            image = Path(temporary) / "image"
+            image.write_bytes(b"original")
+            expected = driver.digest(image)
+            driver.verify_image(image, expected, 8)
+            image.write_bytes(b"replaced")
+            with self.assertRaisesRegex(RuntimeError, "selected image"):
+                driver.verify_image(image, expected, 8)
+
+    def test_selected_group_remains_the_original_31_images(self):
+        import hashlib
+        pins = json.loads((HERE / "driver-pins.json").read_bytes())
+        raw = (HERE / "driver-selection.json").read_bytes()
+        selected = json.loads(raw)
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), pins["selectionSha256"])
+        self.assertEqual(len(selected["group"]["members"]), 31)
+        self.assertEqual(selected["group"]["index"], 1)
+        self.assertEqual(selected["group"]["members"][15]["version"], "v0.1.225")
+        self.assertEqual(selected["group"]["members"][15]["artifact"]["binarySha256"], pins["workerDigest"])
+        self.assertEqual(selected["originalBytes"] + sum(row["imageBytes"] for row in selected["group"]["members"]), 934547328)
 
     def test_retained_image_survives_missing_original_snapshot(self):
         worker = {"pid": 123, "digest": "same"}
@@ -148,6 +212,13 @@ def synthetic_controller(root):
         sys.stdin.buffer.read(1)
 
 
+def synthetic_outer_controller(root):
+    driver = load("run-hosted")
+    code = 'import json,os,subprocess,sys,time; from pathlib import Path; child=subprocess.Popen(["/bin/sleep","60"],start_new_session=True); Path(sys.argv[1]).write_text(json.dumps({"root":os.getpid(),"child":child.pid,"sid":os.getsid(0)})); time.sleep(60)'
+    with (root / "child.log").open("wb") as log:
+        return driver.execute_guarded([sys.executable, "-c", code, str(root / "descendant.json")], dict(os.environ), log, root)
+
+
 def verify_preexisting(root, cohort, argv):
     with patch.object(sys, "argv", argv), patch.object(backend, "require_disposable"), patch.object(capture, "stop_cohort") as stop:
         try:
@@ -159,6 +230,25 @@ def verify_preexisting(root, cohort, argv):
     stop.assert_not_called()
     assert cohort.read_text() == '{"workers":[]}'
     assert not (root / "output").exists()
+
+
+def verify_source_gate(test, driver, pins, output):
+    source = "a" * 40
+    with patch.dict(os.environ, {"REVIEWED_DIAGNOSTIC_SOURCE": source}), patch.object(driver.subprocess, "check_output", side_effect=[source + "\n", b""]):
+        driver.validate_source(output, pins)
+    with patch.dict(os.environ, {"REVIEWED_DIAGNOSTIC_SOURCE": source}), patch.object(driver.subprocess, "check_output", side_effect=[source + "\n", b"?? unreviewed.py"]):
+        with test.assertRaisesRegex(RuntimeError, "not clean"):
+            driver.validate_source(output, pins)
+    with patch.dict(os.environ, {"REVIEWED_DIAGNOSTIC_SOURCE": "b" * 40}), patch.object(driver.subprocess, "check_output", return_value=source + "\n"):
+        with test.assertRaisesRegex(RuntimeError, "fresh review pin"):
+            driver.validate_source(output, pins)
+
+
+def verify_expired_packet(test, driver, artifacts, pins, complete, metadata, output):
+    with patch.object(artifacts, "verify_set", return_value=complete), patch.object(artifacts, "api", return_value=metadata), patch.object(artifacts, "fetch_archive") as fetch:
+        with test.assertRaisesRegex(RuntimeError, "exact live pin"):
+            driver.acquire(output, output, pins)
+    fetch.assert_not_called()
 
 
 def wait_json(path):
@@ -198,16 +288,46 @@ def wait_guardian(pid):
         os.close(descriptor)
 
 
-def exercise_controller_death(root):
+def ptrace_controller(root, observer):
+    code = 'import json,os,subprocess,sys,time; from pathlib import Path; child=subprocess.Popen(["/bin/sleep","60"],start_new_session=True); Path(sys.argv[1]).write_text(json.dumps({"root":os.getpid(),"child":child.pid})); time.sleep(60)'
+    return capture.ptrace(observer, root, "death", [sys.executable, "-c", code, str(root / "descendant.json")], 25)
+
+
+def exercise_ptrace_death(root, observer, victim):
     previous = backend.subreaper()
     controller, pids = None, []
     try:
-        controller = subprocess.Popen([sys.executable, str(Path(__file__)), "--controller", str(root)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        if not select.select([controller.stdout], [], [], 5)[0]:
-            raise RuntimeError("synthetic controller failed to publish its guardian")
-        started = json.loads(controller.stdout.readline())
+        controller = subprocess.Popen([sys.executable, str(Path(__file__)), "--ptrace-controller", str(root), str(observer)],
+                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        started = wait_json(root / "death.context.json")
         descendant = wait_json(root / "descendant.json")
+        pids = [started["guardian"], started["observer"], descendant["root"], descendant["child"]]
+        os.kill(controller.pid if victim == "controller" else started["observer"], signal.SIGKILL)
+        controller.wait(timeout=12)
+        if victim == "controller":
+            wait_guardian(started["guardian"])
+        backend.reap_adopted()
+        remaining = [pid for pid in pids if Path(f"/proc/{pid}").exists()]
+        if remaining or controller.returncode == 0:
+            raise RuntimeError("ptrace death control left owned tasks or reported success")
+        return {"victim": victim, "pids": pids, "remainingOwnedTasks": remaining,
+                "controllerExit": controller.returncode, "passed": True}
+    finally:
+        remove_test_tasks(controller, pids)
+        backend.subreaper(previous)
+
+
+def exercise_controller_death(root, outer=False):
+    previous = backend.subreaper()
+    controller, pids = None, []
+    try:
+        flag = "--outer-controller" if outer else "--controller"
+        controller = subprocess.Popen([sys.executable, str(Path(__file__)), flag, str(root)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        started = controller_identity(controller, root, outer)
+        descendant = wait_json(root / "descendant.json")
+        if outer and descendant["sid"] != descendant["root"]:
+            raise RuntimeError("outer guardian changed the original new-session setting")
         pids = [started["guardian"], started["root"], descendant["child"]]
         os.kill(controller.pid, signal.SIGKILL)
         controller.wait(timeout=3)
@@ -219,8 +339,20 @@ def exercise_controller_death(root):
         backend.subreaper(previous)
 
 
+def controller_identity(controller, root, outer):
+    if outer:
+        return wait_json(root / "outer-guardian.json")
+    if not select.select([controller.stdout], [], [], 5)[0]:
+        raise RuntimeError("synthetic controller failed to publish its guardian")
+    return json.loads(controller.stdout.readline())
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--controller":
         synthetic_controller(Path(sys.argv[2]))
+    elif len(sys.argv) == 3 and sys.argv[1] == "--outer-controller":
+        raise SystemExit(synthetic_outer_controller(Path(sys.argv[2])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "--ptrace-controller":
+        raise SystemExit(ptrace_controller(Path(sys.argv[2]), Path(sys.argv[3])))
     else:
         unittest.main()

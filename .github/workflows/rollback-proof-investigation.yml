@@ -1,0 +1,78 @@
+name: Diagnostic Linux child-start capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_source:
+        description: 'Exact full diagnostic source and vehicle SHA after independent review'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: linux-childstage-diagnostic-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: Diagnostic only, one original Linux worker group
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      REVIEWED_DIAGNOSTIC_SOURCE: ${{ inputs.reviewed_source }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.reviewed_source }}
+      - name: Set owned evidence path
+        run: printf 'CHILDSTAGE_EVIDENCE=%s/childstage-evidence\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.0'
+      - name: Retain the actual historical compiler path
+        run: printf 'HISTORICAL_GO=%s\n' "$(command -v go)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: '1.27.4'
+      - name: Try one bounded disposable bpftrace setup
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/childstage-packages"
+          dpkg-query -W -f='${binary:Package}\n' | sort > "$RUNNER_TEMP/childstage-packages/before"
+          if ! command -v bpftrace >/dev/null; then
+            timeout 120s sudo -n apt-get update > "$RUNNER_TEMP/childstage-packages/setup.log" 2>&1 &&
+              timeout 120s sudo -n apt-get install -y --no-install-recommends bpftrace >> "$RUNNER_TEMP/childstage-packages/setup.log" 2>&1 || true
+          fi
+          dpkg-query -W -f='${binary:Package}\n' | sort > "$RUNNER_TEMP/childstage-packages/after"
+          comm -13 "$RUNNER_TEMP/childstage-packages/before" "$RUNNER_TEMP/childstage-packages/after" > "$RUNNER_TEMP/childstage-packages/created"
+      - name: Run reviewed controls then one diagnostic cohort
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/diagnostics/childstage/run-hosted.py
+      - name: Remove only task-installed packages
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -s "$RUNNER_TEMP/childstage-packages/created" ]]; then
+            xargs -r sudo -n apt-get purge -y -- < "$RUNNER_TEMP/childstage-packages/created"
+          fi
+          mkdir -p "$CHILDSTAGE_EVIDENCE"
+          if [[ -f "$RUNNER_TEMP/childstage-packages/setup.log" ]]; then
+            cp "$RUNNER_TEMP/childstage-packages/setup.log" "$CHILDSTAGE_EVIDENCE/bpftrace-setup.log"
+          fi
+          dpkg-query -W -f='${binary:Package}\n' | sort > "$RUNNER_TEMP/childstage-packages/final"
+          cp "$RUNNER_TEMP/childstage-packages/"{before,after,created,final} "$CHILDSTAGE_EVIDENCE/"
+          comm -13 "$RUNNER_TEMP/childstage-packages/before" "$RUNNER_TEMP/childstage-packages/final" > "$CHILDSTAGE_EVIDENCE/remaining-created-packages"
+          [[ ! -s "$CHILDSTAGE_EVIDENCE/remaining-created-packages" ]]
+          rm -rf -- "$RUNNER_TEMP/childstage-packages"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: linux-childstage-diagnostic-only
+          path: ${{ runner.temp }}/childstage-evidence
+          retention-days: 7

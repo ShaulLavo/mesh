@@ -36,7 +36,7 @@ def watch(target):
 
 
 def main():
-    if len(sys.argv) < 5 or os.geteuid() == 0:
+    if len(sys.argv) < 6 or os.geteuid() == 0 or sys.argv[4] not in ("new-session", "inherit-session"):
         raise SystemExit("normal-user owned guardian requires descriptors and target")
     log, read, ready = map(int, sys.argv[1:4])
     signal.signal(signal.SIGTERM, terminate)
@@ -44,7 +44,8 @@ def main():
     owner = backend.KernelRun(Path("/unused"), "guardian")
     target = None
     try:
-        target = subprocess.Popen(sys.argv[4:], pass_fds=(read, ready), stdout=log, stderr=log)
+        target = subprocess.Popen(sys.argv[5:], pass_fds=(read, ready), stdout=log, stderr=log,
+                                  start_new_session=sys.argv[4] == "new-session")
         owner.own(target.pid)
         os.close(read)
         os.close(ready)

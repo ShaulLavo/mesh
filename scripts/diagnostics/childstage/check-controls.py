@@ -11,7 +11,7 @@ def check(directory, worker):
     image = os.stat(worker)
     identity = f"{image.st_dev}:{image.st_ino}:{image.st_size}"
     digest = hashlib.sha256(worker.read_bytes()).hexdigest()
-    for mode, number in (("parent", 56), ("child", 112), ("terminal", 16), ("clone3", 435)):
+    for mode, number in (("parent", 56), ("parent-thread", 56), ("child", 112), ("terminal", 16), ("clone3", 435)):
         result[mode] = check_mode(directory, mode, number, identity, digest)
     return result
 
@@ -55,7 +55,7 @@ def check_mode(directory, mode, number, identity, digest):
 def real_launch(row, mode):
     # Go's pidfd capability probe has no SIGCHLD exit signal. Retain it in the
     # trace, but assert the actual os/exec clone as the positive control.
-    return mode != "parent" or row["call"]["args"][0] & 0xFF == 17
+    return not mode.startswith("parent") or row["call"]["args"][0] & 0xFF == 17
 
 
 def check_identity(rows, control, denied, identity, mode):
@@ -70,6 +70,8 @@ def check_identity(rows, control, denied, identity, mode):
         return
     if denied["tgid"] != worker or denied["tid"] != control["tid"] or denied["preExec"]:
         raise RuntimeError("parent refusal belongs to another task")
+    if mode == "parent-thread" and denied["tid"] == worker:
+        raise RuntimeError("nonleader parent refusal ran on the leader")
     children = [row for row in rows if row.get("event") == "created"
                 and row["creatorTgid"] == worker and row["preExec"]
                 and row.get("monotonicNs", 0) >= denied["call"]["enteredNs"]]

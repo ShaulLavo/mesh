@@ -11,9 +11,11 @@ import sys
 import tempfile
 import time
 
+import capture
+
 
 def command(args, cwd, log, timeout=90):
-    environment = dict(os.environ, CGO_ENABLED="0", PYTHONDONTWRITEBYTECODE="1")
+    environment = dict(os.environ, CGO_ENABLED="0", GOTOOLCHAIN="local", PYTHONDONTWRITEBYTECODE="1")
     result = subprocess.run(args, cwd=cwd, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
     log.write_bytes(result.stdout)
     if result.returncode:
@@ -26,7 +28,7 @@ def digest(path):
 
 def clean_tasks(report):
     remaining = []
-    for trace in report.glob("*.jsonl"):
+    for trace in report.rglob("*.jsonl"):
         for line in trace.read_text().splitlines():
             row = json.loads(line)
             pid = row.get("root") if row.get("event") == "armed" else row.get("tid")
@@ -50,11 +52,14 @@ def controls(root, scratch, report):
     command([str(historical), "version", "-m", str(worker)], scratch, report / "control-build-info.txt")
     (report / "binaries.json").write_text(json.dumps({"observerSha256": digest(observer), "controlSha256": digest(worker),
         "controlBytes": worker.stat().st_size, "observerBytes": observer.stat().st_size}) + "\n")
-    for mode in ("parent", "child", "terminal", "clone3"):
-        command([str(observer), "-output", str(report / f"{mode}.jsonl"), "-seconds", "25", "--", sys.executable,
-                 str(here / "launcher.py"), str(worker), mode, str(report / f"{mode}.control.json")],
-                root, report / f"{mode}.log", timeout=30)
+    for mode in ("parent", "parent-thread", "child", "terminal", "clone3"):
+        code = capture.ptrace(observer, report, mode, [sys.executable, str(here / "launcher.py"), str(worker), mode,
+                                                    str(report / f"{mode}.control.json")], 25)
+        if code:
+            raise RuntimeError(f"synthetic {mode} failed with status {code}")
     command([sys.executable, str(here / "check-controls.py"), str(report), str(worker)], root, report / "controls.json")
+    capture.lifecycle_controls("ptrace", observer, worker, report)
+    capture.death_controls(observer, report)
 
 
 def main():
