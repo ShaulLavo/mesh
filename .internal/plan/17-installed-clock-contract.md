@@ -1,243 +1,193 @@
 # Installed fixture clock contract
 
-Status: Approved execution plan, awaiting independent plan review and the
-parent's explicit implementation continuation. Final numerical bounds are not
-frozen. Managing authorized replacing the single overall signer 600-second
-contract in NEXT-DECISION unit 3. This plan grants no runtime run or CI cycle.
+Status: Approved execution plan with parent-applied bounded corrections from
+PLAN-REVIEW.md. Implementation may continue under the parent's instruction.
+Numerical freeze and acceptance remain held. Managing authorized one
+measurement-only hosted run of the full grouped cohort, within current overall
+and operation bounds and the existing 900-second job admission.
 
-Base: C4 `c0c899eea10a9c4f5916b0b629b736455d1d5a92`, PR
-[435](https://github.com/ShaulLavo/mesh/pull/435). Keep one continuous signer,
-origin and ledger process. Change only fixture execution-clock accounting.
-Preserve all product, startup, I/O, observation, soak and coverage contracts.
+Base: C4 c0c899eea10a9c4f5916b0b629b736455d1d5a92, PR 435.
+Keep one continuous Releases signer/origin/ledger owner, with no restart,
+clock pause, trust reset or re-signing rescue. Only the explicitly authorized
+fixture-clock contract changes. Product, I/O, observation and soak limits stay.
 
-## 1. Use the retained evidence at its actual boundary
+## Evidence and eligibility
 
-Read `signer-format-fix-plan/REPORT.md`, `NEXT-DECISION.md` and
-`17-worker-proof-groups.md` with the actual C4 fixture drivers and exporter.
-The reproducible local audit is
-`/work/reports/mesh-auto-update/signer-clock-contract/audit.py`. Run it with
-Python to reproduce `AUDIT.json`. It reads ZIP members in memory and verifies
-archive lengths and SHA-256 against retained API metadata.
+The retained audit reads all 24 C3 and 10 C4 archives and verifies their API
+lengths and SHA-256. It finds 105 completed whole-grouped-proof records and
+66 outer native-source timings, but no complete individual native-group or
+installed-group entry-through-cleanup samples. Ten passed installed outcomes
+are not elapsed measurements. Do not divide wrapper totals, subtract ZIP/job
+times, use observation-only intervals or treat 600-second alarms as completed
+samples. The original audit and source mapping remain in signer-clock-contract.
 
-| Retained evidence | Actual clock coverage | Missing coverage |
-| --- | --- | --- |
-| All 24 C3 and 10 C4 ZIPs | 105 `groups/<source>/<profile>/timing.json` records, including 66 in nine successful C3 native shards | No individual native-group start-through-cleanup durations |
-| C3 native `timings.json` | 66 complete source-wrapper durations, including child exit and cleanup | Different candidate/context from installed supplemental builds |
-| Installed results across both cycles | Ten passed group outcome records with scoped cleanup | No installed-group elapsed duration, including setup and teardown |
-| Successful standalone adoption step records | C3 AMD64/ARM64/Darwin wall durations 364/259/391 seconds; C4 370/263/348 seconds | Combined builds, proofs and multiple ungrouped cases, with wall-clock second precision |
+Separate immutable provenance from budget eligibility:
+- Provenance records actual harness/preparation IDs, executable and overlay
+  hashes, archive/member hashes, toolchain, runner/cache facts and output identity.
+- The workload contract identifies operation kind and occurrence, platform and
+  runner class, scenario/profile, source/target recipe and epoch/state range,
+  immutable published members, ordered custom roles and exact partition.
+- Before acceptance, independently review the mapping from calibration provenance
+  to that source's unchanged workload contract, retaining the frozen bounds.
+  A new Git commit or budget-file edit alone neither invalidates that mapping
+  nor raises a limit. Changed work or context needs explicit eligibility review
+  and recalibration when the sample no longer applies.
+- Resolve custom hashes and sizes once after build, validate their roles and
+  partition and bind them to the result. They never select new limits.
+  Publication's exact signed-byte checks are unaffected.
 
-C3 caller is `0237728a0673bd9f63b883be57ac5ba004ff78bb`, installed harness
-H3 `15aba3473b18df52cbcf53a642a662bc77ca58e3`, preparation
-`a0f45b55e31d47ab9f2476de4037c86f8cc2e11d`. C4 uses H4
-`bc9b99f98f6bc7b8ae550b6a011f58b137dbe88d`, preparation
-`3097dc167bcdcadc8a561fb0f443253b74bfd025`. The format report verifies the
-scoped clock/format implementation is identical at these sources. Actual
-candidate hashes and selections still differ. Do not pool those contexts as
-interchangeable baselines. All nine C4 native shard artifacts are listed in
-retained metadata but absent locally. Their success is not a group timing.
+Use only a small ClockPlan, PhaseBudget and SampleRef helper, not a scheduler,
+measurement service, signing protocol or context-equivalence framework.
+ClockPlan freezes context, ordered keys and derived total. PhaseBudget holds
+a positive duration and eligible sample references. SampleRef holds exact
+provenance, the measured boundary, functional outcome and required cleanup.
 
-For example, C3 artifact 14002044982 contains completed full-proof wrapper
-times 206.560223778, 84.348697836 and 79.585554795 seconds for the three
-transitions. The exact members, raw values and member hashes are in `AUDIT.json`.
-The wrapper starts after context/selection and ends after aggregate validation
-and publication. It includes serial native groups and their cleanup, but omits
-the enclosing `Releases.prove` setup and final copies. It cannot size individual
-groups by division. C3 Darwin waypoint artifact 14003232140 has only two timed
-proof wrappers, 299.065338 and 132.006205334 seconds. C4 artifact 14007607701
-has 299.797936834 and 126.233318917. No missing third duration is inferred.
+## Accounting boundaries
 
-The 600-second alarms censor the fixture lifetime, not completed-group clocks.
-`signer-lifetime.json` ends before signer stop/reap and may include work after
-the exporter already died. Its 600-to-649-second values are not successful
-phase samples. C3 cancelled Darwin chain and C4 unconfirmed Darwin oldest
-cleanup remain incomplete. `observerSeconds` measures image observation only.
-ZIP timestamps, job wall times, failed totals and differences between those
-values cannot supply missing group or acquisition/build/publication timings.
+Keep Releases(root, native, output, *, clock_plan=None), with the existing
+three positional arguments. Manifest capability is a separate keyword selected
+before the one start_signer call. Keep check_budget compatible with an optional
+phase identity and close idempotent. A constructor may remain deferred for pure
+tests, but no executable acceptance call may omit a plan and silently disable
+clocks or obtain a fresh 600-second allowance. Migrate every caller, including
+standalone adoption and fresh-managed.
 
-## 2. Define every phase before execution
+Use integer nanoseconds and monotonic_ns. Instants and durations are distinct.
+One command origin begins after argument validation, before root allocation,
+and ends only after final owned-root cleanup and result writing.
 
-Keep `Releases(root, native, output, *, clock_plan=None)` with its existing
-three positional arguments. The parent accepted this shared contract with the
-format worker. `clock_plan` is independent of that worker's manifest-capability
-selection. Select both before the one `start_signer()` call. Preserve
-`check_budget()` and allow an optional phase identity. Keep `close()` idempotent.
+The following are operation types in actual call order, not eight global
+phases. Include operation kind, version/epoch or source/target, and occurrence
+so repeated calls cannot collide. Close one leaf and open the next at one
+monotonic timestamp:
+1. Setup/startup: root/path/noindex/manager controls, registry staging,
+   constructor work and exporter compilation; split immediately before Popen,
+   then time startup through actual control-socket readiness.
+2. Acquisition: each exact pair/predecessor acquisition through verified return.
+   Preserve each scenario's actual acquire/build ordering.
+3. Build: complete build(version, epoch), all three platform images, archive/hash/
+   version checks, startup image and once-built boundary tool.
+4. Proof: complete Releases.prove setup, selection, every native run_group from
+   entry through verified cleanup/leaf export, then aggregate validation,
+   canonical receipt publication and enclosing copies. Record the ungrouped
+   order proof as its existing whole phase.
+5. Publication/preparation overhead: signing, metadata/root writes, custom-source
+   retention, partition freezing, serving/head and descriptor writes.
+6. Readers: each waypoint group's complete executable checks, negative-packet
+   signing and output, preserving the actual original reader rejection.
+7. Installed group: before directory/case construction through the original body,
+   finish, verified service/process absence, group validation and root removal.
+   Standalone cases have their own leaves. Order owns its existing complete
+   three-account scenario and verified cleanup.
+8. Completion: group/matrix aggregation, exporter stop/reap, producer-log and
+   result export, noindex-after and final scratch-cleanup records.
 
-Use a small fixture clock helper with frozen `ClockPlan`, `PhaseBudget` and
-`SampleRef` records. `ClockPlan` holds context, the ordered phase tuple and
-derived `total_ns`. `PhaseBudget` holds its key, positive `limit_ns` and sample
-references. `SampleRef` holds source, archive/member digests, measured interval,
-outcome and cleanup status. Runtime `origin_ns`, `run_deadline_ns` and active
-`phase_deadline_ns` are monotonic instants, never durations or UTC values.
-A phase key identifies platform, scenario, source/build
-recipe, profile, registry/selection digest, group index and ordered member keys.
-Bind actual custom-image digests after their once-only build without changing
-the predeclared group count, order or budget. Record harness/preparation source,
-exporter capability/overlay, toolchain, runner class and cache conditions.
+Charge all inter-call work to named adjacent overhead leaves. Reject gaps,
+overlaps and unfinished success intervals. Nested body/cleanup and whole-proof
+intervals may explain or additionally guard parents; do not sum them twice.
+Signer Popen-to-reap is a separate explanatory interval. Workflow checkout,
+tools, input transfer, upload and tool cleanup are separately measured external
+job overhead, not omitted work.
 
-Use integer nanosecond durations and `time.monotonic_ns()` instants. Never use
-UTC for elapsed acceptance. Keep one run origin from entry to
-`prove-installed-catchup.py:main` after argument validation, before root creation,
-through final scratch cleanup. Pass this run clock through the existing driver
-calls; `Releases` uses the same origin. Relative offsets cross subprocess
-boundaries as remaining durations, never as new full allowances.
+## Calibration and independent numerical freeze
 
-Partition that interval into these adjacent phases in existing source order:
+Calibration is an explicit diagnostic mode with a predeclared finite envelope.
+It is not acceptance against missing or same-run-derived PhaseBudget values.
+Managing pre-authorized one full grouped-cohort hosted workflow. Passive Linux
+and order evidence may join only if their code reviews pass in time.
 
-1. Setup: root allocation, noindex/path and native-manager controls, preflight,
-   registry staging, constructor work, exporter compilation and empty-ledger
-   control. Split at signer launch. Startup: immediately before `Popen` through
-   actual control-socket readiness. Start and register teardown before launch.
-2. Acquisition: each actual `acquire_pair` plus preceding-version acquisition,
-   entry through verified return. Keep ordinary adoption's build-before-acquire
-   ordering and chain's acquire-before-build ordering.
-3. Build: each complete `Releases.build(version, epoch)` entry through return,
-   including all three platform images, archive/hash/version checks, startup
-   image and the once-built boundary tool. No excluded build time.
-4. Proof: each `Releases.prove(source, target)` entry through return. Subdivide
-   into context/selection setup, each `release_worker_groups.run_group` entry
-   through verified cleanup and leaf export, and final aggregate validation,
-   receipt publication and enclosing copies. Ungrouped order's first proof
-   remains one whole proof phase. Retain each existing 600-second grouped or
-   180-second ungrouped `run_transition` limit. Propagate fixture group guards
-   only from `Releases.run_transition`; standalone native CI keeps its existing
-   source-wide 600-second contract.
-5. Publication: each `Releases.publish` entry through signed metadata/root write.
-   Time custom-source retention, partition freezing, serve-tree/head calls and
-   descriptor writes as explicit preparation overhead between these phases.
-6. Readers: each waypoint group's entire `verify_readers` entry through its
-   three actual executable checks, negative-packet signing and output write.
-7. Installed group: before group-directory/case construction through original
-   scenario, `finish`/`finish_case`, verified service/process absence, group
-   validation and case-root removal. Record body and cleanup subintervals too.
-   Ungrouped adoption has one such phase per host/scenario. Order has one whole
-   account-owner phase, including all three hosts, original scenario order and
-   confirmed driver/account cleanup. Keep its existing 480-second bound.
-8. Completion overhead: exact group/matrix aggregation and output, then exporter
-   stop/reap, producer-log export, owned root removal and final cleanup records.
-   Record signer Popen-to-reap separately from total command duration.
+Before dispatch, parent verifies exact source/capability, full required matrix
+and ordered keys, operation counts, context, current overall/operation bounds,
+finite envelope, external overhead, emergency cleanup/export reserve and owner.
+Keep 900-second admission and check live remaining job time before command
+launch. The sum of operation maxima is not proof of a fit: three existing
+grouped transition allowances already sum to 1,800 seconds. Taking the minimum
+with available time merely bounds a possibly censored diagnostic. It proves
+neither impossibility nor complete admission. No unlimited/zero envelope,
+larger job, owner restart, retry-through-failure or hidden job split is allowed.
 
-Charge all inter-call and evidence-writing work to explicit adjacent overhead
-phases. Reject gaps, overlaps and unfinished intervals at finalization. Child
-subintervals explain a parent's duration; never add both to the total. Keep
-workflow checkout, tool setup, input acquisition, control steps, upload and tool
-cleanup outside this command as separately measured job overhead.
+Record completed local boundaries even when a later diagnostic stage fails,
+provided the local work, outputs and required cleanup are valid. A partial
+interval or unconfirmed cleanup is ineligible. A local sample never establishes
+whole-matrix or whole-run success. All missing keys remain explicit and block
+freeze; do not drop groups or pretend censored time covers their full work.
 
-## 3. Measure missing baselines, then freeze numbers
+For each exact eligible key, use the maximum declared completed interval M.
+Parse historical decimal text exactly if it is eligible; never reserialize a
+binary float as measurement authority. Compute:
+B = ceil((9 * M / 8) / 1 millisecond) * 1 millisecond.
+Thus bounds have 12.5 percent headroom plus less than a millisecond. Do not pool
+different groups/platforms/profiles or resize a running plan.
 
-After independent plan review and a parent continuation, implement timing and
-mocked failure controls first. This plan authorizes no baseline run. Before a
-real measurement stage, the parent must approve its exact source, matrix and
-finite calibration envelope. Derive that envelope from the enumerated operation
-counts and existing hard operation limits, and record it before launch. Keep
-the 900-second hosted job cap. Calibration may end censored and remain blocked.
-Do not replace the missing envelope with zero/unlimited time or a guessed total.
+The command total is the sum of disjoint successful-work leaf budgets,
+including setup and cleanup. Independently frozen external-overhead budgets
+use the same rounding/headroom policy; raw observed overhead is not itself a
+future upper bound. Add a separately declared finite emergency failure-cleanup
+and export reserve to job admission, without omitting or double-counting normal
+cleanup. That reserve grants no green execution time.
 
-Measure all missing phases above on each required native runner class with the
-actual original selection and serial scenario. Capture one completed interval
-per exact phase/group key, including setup, proof finalization and real cleanup.
-Use additional already retained matching complete samples where available.
-Calibration uses one signer for that entire invocation and exports partial
-evidence on failure. It emits no acceptance/completion marker. Fixes for the
-other blockers must already be reviewed; do not retry around missing-session,
-format, order or cleanup failures to manufacture a complete timing.
+Commit independently reviewed numeric values, full key coverage, provenance
+mapping, arithmetic and admitted totals before a separate acceptance run.
+If calibration censors, or a complete group/derived invocation cannot fit
+admission, stop with its actual interval, missing keys and a proposed job split
+for managing. Do not enlarge the job or alter execution shape silently.
 
-For every phase/group key, choose the maximum eligible completed duration
-`M` from the declared sample set. Use integer nanoseconds; for historical JSON
-seconds, parse decimal text exactly and round upward to one nanosecond. Derive
-`B = ceil((9 * M / 8) / 1 ms) * 1 ms`. This is 1.125 times the measured maximum
-plus less than one millisecond. Reject absent, failed, censored or mismatched
-samples. Never average across groups, platforms or profiles. Keep the sample
-references and the arithmetic beside every bound.
+## Deadline handoff and failure ownership
 
-For illustration only, the three C3 AMD64 chain wrapper samples above derive
-232.381, 94.893 and 89.534 seconds, totaling 416.808 seconds. This is only a
-wrapper subtotal. It omits builds, setup, installed groups and terminal cleanup,
-and is not an executable whole-run bound.
+Set the absolute command deadline once. Set each frozen phase deadline once
+at entry; enforce the earlier and every unchanged inner limit. Parent deadlines
+remain authoritative across dispatch, launch, IPC and return. A transmitted
+remaining duration cannot restart after dispatch latency. Apply this to native
+group, ordered owner/driver and origin/socket waits.
 
-The fixture total is the sum of the disjoint leaf budgets, including actual
-setup and cleanup. A parent proof guard may use a separately measured whole
-proof budget; it is an additional guard and is not added again. The job total
-adds measured external workflow overhead. Freeze these numbers and their full
-expected key sequence in reviewed source before a separate acceptance run.
-No live measurement may resize the running plan, write its own passing bound,
-borrow unused phase allowance or extend an absolute deadline. Missing baseline
-means freeze blocked. If the derived full job cannot fit 900 seconds, stop for
-an explicit execution-shape decision. This plan does not extend jobs or shard
-an invocation into new signer lifetimes.
+Releases.run_transition supplies fixed ordered group limits and remaining
+enclosing allowance to the grouped child. That child enforces entry through
+verified cleanup and leaf export; standalone native execution retains its
+existing source-wide bounds. Keep grouped/source proof 600 seconds, ungrouped
+transition 180, ordered owner 480, and all current product startup, I/O, health,
+hashing, settlement, quarantine, five-second observations and both soak windows.
 
-## 4. Enforce one lifetime and preserve the claims
+Do not assume current teardown is wholly bounded: a wrapper leader can exit
+before descendants, and ordered recovery currently lacks an outer timeout.
+Add the small explicit handoff and finite recovery/cleanup allowance. Latch the
+first failure, stop new work and disarm repeated watchdog interruption before
+teardown. Gracefully stop, then bound escalation/reaping and verify owned
+descendant/service absence even after leader exit. Never remove a consumed root.
+Preserve the original error, cleanup errors, incomplete timings and retained
+resource identities. Any emergency allowance fits the job admission and cannot
+turn an expired case green. Terminal success follows final cleanup and the
+last applicable guard.
 
-Set the run deadline once to origin plus the derived fixture total. Set each
-phase/group deadline once at entry using its frozen budget. Enforce the earlier
-deadline and every existing inner operation limit, before and after each call.
-Cap blocking subprocess/socket waits by remaining time. Use one monotonic
-watchdog for in-process work to enter the existing interruption/cleanup path.
-Native group subprocesses retain process-group ownership and bounded teardown.
-The Go exporter gets `-test.timeout=<remaining run duration>ns` at its sole
-launch. Never pause that process clock. Remove both hard-coded signer `600`
-checks together; preserve native source-wide and per-transition 600 limits.
+Give the single Go exporter its reviewed remaining lifetime at its sole launch;
+do not pause/relaunch it. Keep one-hour TLS/TUF material validity and reject an
+outliving plan. Stop/reap after consumers end; remove only owned material and
+preserve shared caches/services.
 
-On timeout, exporter death, malformed reply, assertion or cleanup failure,
-record the original failure, stop new work and run existing bounded teardown.
-Cleanup after expiry cannot turn the run green. Retain explicit unconfirmed
-resources if teardown fails. Emit success only after exact coverage, every
-clock guard and terminal cleanup pass. No relaunch, trust reset, re-signing,
-stale-ledger fallback, or additional fixture identity may rescue that invocation.
+## Validation and preserved claims
 
-The single Go exporter owns its private keys, Sigstore/TUF proxy, TLS origin,
-control socket, signing, seed, inspect and validated ledger for the whole run.
-Python owns its process and immutable input/output inventory. Keep its existing
-one-hour TLS/TUF validity; reject a plan that outlives that material. Stop/reap
-the exporter after all case consumers stop, then remove only owned material.
-Keep pre-existing caches/services untouched. A group owns its fresh state,
-original attached worker, selected workers/shells, daemon/helper/managers,
-terminal/listener/route observer and case root. Confirm their absence before
-the next group. The fixture signer is the expressly shared dependency.
+Keep the ten cohort jobs (oldest/chain/waypoint on all three platforms plus
+Linux AMD64 order), every selected worker and source/profile, 31-worker/1-GiB
+partition, exact custom roles and all standalone/fresh/native/schema-1 checks.
+Each group owns a fresh state, original attachment, selected workers/shells,
+daemon/helper/managers, terminal/listener/route and case root. Cleanup precedes
+the next group; identity continuity is within that group only.
 
-Keep the exact ten cohort jobs: oldest, chain and waypoint on linux/amd64,
-linux/arm64 and darwin/arm64, plus order on linux/amd64. Oldest repeats adopt
-and rollback for every selected group. Chain and waypoint repeat none, first
-and final failure scenarios for every group; waypoint also runs all original
-reader checks. Preserve standalone adoption's five scenarios per inventory host
-and the interrupt-only companion selection, all three fresh-managed jobs and
-the original schema 1/native proof matrix. Never drop a historical member,
-deduplicate a protocol or change the 31-worker/1-GiB partition and custom-source
-rules to fit a bound.
+Keep all original label/member/PID/image/protocol/token/attachment, hop/helper/
+rollback/quarantine, failed-edge restart, route/preservation and signed-byte
+assertions. The future-capable fixture ledger remains explicit and independent
+of the old reader, which still rejects real schema-2 bytes. Private fixture
+success cannot replace main-only signed-draft validation. Preserve complete
+native/index/installed/post-sign completion gates and firstPublishedUpdater null.
 
-Preserve all exact group/member/label validation, PID/image/protocol/token and
-original attachment identity, hop/helper/rollback/quarantine, failed-edge restart,
-route/preservation and independent-state claims in plan 17. Keep 5-second
-observations and both order/soak windows, eight hashing workers, 128-MiB image
-bound, 6-second health, 30/90-second subprocess, 150-second chain, 90-second
-rollback and 45-second quarantine limits. Groups prove independent runs, with
-identity continuity within a group only. They do not prove cross-group overlap.
+Focused deterministic controls cover exact rounding/keys, missing/censored
+samples, no self-sizing, wall-clock immunity, one launch, phase expiry, exporter
+death, malformed/empty/stale replies, leader exit before descendants, delayed
+handoff, timeout in cleanup, ordered recovery exhaustion and partial timing
+export. No generic supervisor rewrite is needed. Independent code review
+precedes calibration; independent numerical review precedes acceptance.
 
-Keep release signatures and bytes immutable after signing. Actual supplemental
-signatures stay tied to their original exporter/trust identity. Keep the old
-waypoint executable rejecting actual schema 2 bytes and the future-capable
-exporter's fully validated ledger selected by the parallel format correction.
-Fixture success cannot replace main-only signed-draft validation. Preserve the
-signed native index, complete installed matrix, exact subject/digest checks and
-post-sign completion gate. Keep `firstPublishedUpdater: null` conditional.
-
-## 5. Review and stop at the authorized gate
-
-The parent commissions independent review of this plan, applies bounded review
-fixes and explicitly resumes this same unit before implementation. No delegate
-or implementation starts in this plan phase. Future mocked controls cover
-rounding, exact key accounting, no self-sizing, monotonic wall-clock immunity,
-one launch, early/late phase expiry, signer death, partial output and cleanup
-refusal. Verify both Python and Go use the frozen total, without weakening any
-inner window. Normal required checks and independent source review follow.
-
-Any corrected harness needs an immutable H checkpoint and the consistent five
-caller-reference refresh. Cycle 5 requires reviewed NEXT-DECISION units 1-4,
-complete frozen measurements and separate existing authorization. This plan
-supplies no CI permission, seed/build/dispatch/retry, source publication, PR
-push/watch/merge, fleet/helper/trust/proxy/kernel change or paid runner.
-
-This planning unit retains only the local plan commit and identical report,
-plus its small reproducible audit. No runtime resource was created, so no runtime
-cleanup is needed. The T3-provided exclusive tree stays parent-owned at the
-C4-based plan commit. Parent owns these report artifacts until review and lane
-closeout. Implementation has not started.
+Parent applies these bounded plan corrections and explicitly resumes the same
+author for timing/mock implementation. No implementation ran in the plan phase.
+Cycle 5 requires units 1 through 4 in/reviewed, complete numerical freeze and
+existing managing authorization. This plan grants no other CI cycle, case,
+source publication, merge, fleet/helper/trust/proxy/kernel change or paid runner.
