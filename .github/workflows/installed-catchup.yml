@@ -340,7 +340,7 @@ jobs:
     if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Signed native cohort (${{ matrix.platform }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.calibration_only && 30 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -366,8 +366,10 @@ jobs:
             runner: macos-15
     steps:
       - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_SECONDS: ${{ inputs.calibration_only && '1800' || '900' }}
         run: |
-          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"]},open(p,"x"))'
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_SECONDS"])*1000000000},open(p,"x"))'
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
@@ -438,7 +440,7 @@ jobs:
           clock=()
           if [[ $CLOCK_CALIBRATION == true ]]; then
             clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
-              --clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60)
+              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
           fi
           printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \

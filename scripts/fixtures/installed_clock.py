@@ -14,6 +14,7 @@ import time
 
 SECOND = 1_000_000_000
 MILLISECOND = 1_000_000
+MAX_JOB_NS = 1800 * SECOND
 ACTIVE = ContextVar("installed_fixture_clock", default=None)
 HANDOFF = ContextVar("installed_fixture_parent_deadline", default=None)
 
@@ -65,6 +66,7 @@ class ClockPlan:
     emergency_ns: int = 0
     eligibility_review: str = ""
     external_budget: PhaseBudget = None
+    admission_ns: int = 900 * SECOND
 
     def validate(self):
         if self.mode == "unbound":
@@ -72,15 +74,16 @@ class ClockPlan:
         if self.mode not in ("diagnostic", "frozen") or not self.workload:
             raise ValueError("fixture needs an explicit diagnostic or frozen clock plan")
         total = positive(self.command_ns) + positive(self.external_ns) + positive(self.emergency_ns)
-        if total > 900 * SECOND or self.command_ns >= 3600 * SECOND:
-            raise ValueError("fixture admission exceeds 900 seconds or material validity")
+        if positive(self.admission_ns) > MAX_JOB_NS or total > self.admission_ns:
+            raise ValueError("fixture admission exceeds its declared job budget or 30-minute ceiling")
         if self.mode == "diagnostic":
             self.validate_diagnostic()
             return
         self.validate_frozen()
 
     def validate_diagnostic(self):
-        if self.command_ns > 600 * SECOND or self.phases or self.guards:
+        maximum = 1500 * SECOND if self.admission_ns == MAX_JOB_NS else 600 * SECOND
+        if self.command_ns > maximum or self.phases or self.guards:
             raise ValueError("diagnostic keeps the current overall bound and cannot size phases")
 
     def validate_frozen(self):
@@ -124,7 +127,7 @@ class Clock:
         self.plan, self.now = plan, now
         self.origin_ns = now() if origin_ns is None else origin_ns
         self.job_origin_ns = self.origin_ns if job_origin_ns is None else job_origin_ns
-        self.job_deadline_ns = self.job_origin_ns + 900 * SECOND
+        self.job_deadline_ns = self.job_origin_ns + plan.admission_ns
         self.deadline_ns = self.origin_ns + plan.command_ns
         if self.origin_ns - self.job_origin_ns > plan.external_ns or self.deadline_ns + plan.emergency_ns > self.job_deadline_ns:
             raise ClockExpired("insufficient live job admission for command and emergency reserve")
@@ -283,6 +286,7 @@ class Clock:
                  "command_ns": now - self.origin_ns, "disjoint_ns": sum(row["elapsed_ns"] for row in self.rows),
                  "external_before_ns": self.origin_ns - self.job_origin_ns, "external_budget_ns": self.plan.external_ns,
                  "emergency_reserve_ns": self.plan.emergency_ns, "deadline_ns": self.deadline_ns,
+                 "job_admission_ns": self.plan.admission_ns,
                  "cleanup_deadline_ns": self.cleanup_deadline_ns, "workload": self.plan.workload,
                  "provenance": self.provenance | provenance, "leaves": leaves, "samples": samples, "failures": self.failures,
                  "expected_sample_keys": sorted(self.expected_samples),
@@ -345,7 +349,7 @@ def parent_deadline(maximum):
 @contextmanager
 def handoff(deadline_ns, *, watchdog=False):
     positive(deadline_ns)
-    remaining_until(deadline_ns, 900)
+    remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
     token = HANDOFF.set(min(deadline_ns, HANDOFF.get() or deadline_ns))
     previous = start_handoff_alarm(HANDOFF.get()) if watchdog else None
     try:
@@ -359,7 +363,7 @@ def handoff(deadline_ns, *, watchdog=False):
 def start_handoff_alarm(deadline_ns):
     previous = (signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL)[0], time.monotonic_ns())
     signal.signal(signal.SIGALRM, handoff_expired)
-    signal.setitimer(signal.ITIMER_REAL, remaining_until(deadline_ns, 900))
+    signal.setitimer(signal.ITIMER_REAL, remaining_until(deadline_ns, MAX_JOB_NS / SECOND))
     return previous
 
 
@@ -444,6 +448,7 @@ def arguments(parser):
     parser.add_argument("--clock-plan", type=Path, help="independently reviewed frozen fixture budget")
     parser.add_argument("--clock-job-start", type=Path, help="same-host monotonic job-origin record")
     parser.add_argument("--clock-command-seconds", type=int, default=600)
+    parser.add_argument("--clock-job-seconds", type=int, default=900)
     parser.add_argument("--clock-external-seconds", type=int, default=240)
     parser.add_argument("--clock-emergency-seconds", type=int, default=60)
 
@@ -462,13 +467,16 @@ def from_arguments(args, native):
             raise ValueError("frozen clock workload differs from actual invocation")
     else:
         plan = ClockPlan(mode=mode, workload=workload, command_ns=args.clock_command_seconds * SECOND,
-                         external_ns=args.clock_external_seconds * SECOND, emergency_ns=args.clock_emergency_seconds * SECOND)
+                         external_ns=args.clock_external_seconds * SECOND, emergency_ns=args.clock_emergency_seconds * SECOND,
+                         admission_ns=args.clock_job_seconds * SECOND)
     plan.validate()
     if args.clock_job_start is None:
         raise ValueError("executable fixture needs its original job clock for admission")
     job = json.loads(args.clock_job_start.read_text())
     if job["run"] != os.environ.get("GITHUB_RUN_ID") or job["job"] != os.environ.get("GITHUB_JOB"):
         raise ValueError("fixture admission clock belongs to another job")
+    if plan.admission_ns > positive(job["admission_ns"]):
+        raise ValueError("fixture plan exceeds the original job's declared admission")
     return Clock(plan, job_origin_ns=positive(job["origin_ns"]))
 
 
@@ -580,10 +588,13 @@ def job_record(action, path):
     if action == "job-start":
         if path.exists():
             raise ValueError("job clock cannot be reset")
-        path.write_text(json.dumps({"origin_ns": now, "run": os.environ["GITHUB_RUN_ID"], "job": os.environ["GITHUB_JOB"]}) + "\n")
+        path.write_text(json.dumps({"origin_ns": now, "run": os.environ["GITHUB_RUN_ID"], "job": os.environ["GITHUB_JOB"], "admission_ns": 900 * SECOND}) + "\n")
         return
     value = json.loads(path.read_text())
-    value.update(end_ns=now, elapsed_ns=now - value["origin_ns"], admission_ns=900 * SECOND,
+    admission_ns = positive(value["admission_ns"])
+    if admission_ns > MAX_JOB_NS:
+        raise ValueError("job clock exceeds the 30-minute ceiling")
+    value.update(end_ns=now, elapsed_ns=now - value["origin_ns"],
                  external_complete=False, unmeasured_tail="action post-job cleanup and cache-save work")
     fixture = path.parent / "cohort-proof" / "fixture-clock.json"
     if fixture.exists():
@@ -592,7 +603,7 @@ def job_record(action, path):
                      external_budget_ns=command["external_budget_ns"])
         value["external_observed_ns"] = value["external_before_ns"] + value["external_after_ns"]
     print("CLOCK_JOB_INTERVAL " + json.dumps(value), flush=True)
-    if value["elapsed_ns"] >= 900 * SECOND:
+    if value["elapsed_ns"] >= admission_ns:
         raise ClockExpired("job clock expired during external overhead or cleanup")
     if fixture.exists() and value["external_observed_ns"] > value["external_budget_ns"]:
         raise ClockExpired("external job overhead exceeded its declared diagnostic/frozen budget")

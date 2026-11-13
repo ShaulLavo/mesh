@@ -103,6 +103,36 @@ class ClockTest(unittest.TestCase):
         self.assertIn("-test.timeout=600000000000ns", launch.call_args.args[0])
         launch.assert_called_once()
 
+    def test_approved_measurement_envelope_is_explicit_and_never_accepts(self):
+        plan = diagnostic(command_ns=1500 * clocks.SECOND, admission_ns=1800 * clocks.SECOND)
+        clock = self.clock(plan)
+        self.assertEqual(clock.job_deadline_ns - clock.job_origin_ns, 1800 * clocks.SECOND)
+        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_releases.subprocess, "Popen") as launch, patch.object(installed_releases.native_services, "wait_for"):
+            releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=plan)
+            releases.launch_signer()
+        self.assertIn("-test.timeout=1500000000000ns", launch.call_args.args[0])
+        self.assertFalse(self.export(clock)["accepted"])
+
+    def test_default_measurement_and_absolute_job_ceiling_cannot_grow_implicitly(self):
+        with self.assertRaises(ValueError):
+            diagnostic(command_ns=700 * clocks.SECOND, external_ns=100 * clocks.SECOND).validate()
+        with self.assertRaises(ValueError):
+            diagnostic(command_ns=1500 * clocks.SECOND, admission_ns=1801 * clocks.SECOND).validate()
+
+    def test_extended_measurement_must_fit_the_original_job_declaration(self):
+        origin = self.root / "job-origin.json"
+        job = {"origin_ns": clocks.time.monotonic_ns(), "run": "owned-run", "job": "owned-job", "admission_ns": 900 * clocks.SECOND}
+        origin.write_text(json.dumps(job))
+        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
+            clock_command_seconds=1500, clock_job_seconds=1800, clock_external_seconds=240, clock_emergency_seconds=60,
+            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=False)
+        with patch.dict(os.environ, GITHUB_RUN_ID="owned-run", GITHUB_JOB="owned-job"):
+            with self.assertRaisesRegex(ValueError, "original job"):
+                clocks.from_arguments(args, "linux/amd64")
+            job["admission_ns"] = 1800 * clocks.SECOND
+            origin.write_text(json.dumps(job))
+            self.assertEqual(clocks.from_arguments(args, "linux/amd64").plan.admission_ns, 1800 * clocks.SECOND)
+
     def test_diagnostic_never_self_sizes_or_accepts(self):
         clock = self.clock()
         with clock.activate():
@@ -363,7 +393,8 @@ class ClockTest(unittest.TestCase):
         self.assertIn("platform: [linux/amd64, linux/arm64, darwin/arm64]", reusable)
         self.assertIn("mode: [oldest, chain, waypoint, order]", reusable)
         self.assertIn("timeout-minutes: 15", reusable)
-        self.assertIn("--clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
+        self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
+        self.assertIn("timeout-minutes: ${{ inputs.calibration_only && 30 || 15 }}", reusable)
         self.assertIn("inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
 
     def test_cleanup_alarm_cannot_launch_another_action_after_absolute_expiry(self):
