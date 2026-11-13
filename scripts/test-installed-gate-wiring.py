@@ -3,6 +3,7 @@
 
 import fnmatch
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -37,6 +38,22 @@ def condition_status(condition, **values):
 
 
 class InstalledGateWiringTests(unittest.TestCase):
+    def test_manager_harness_runs_with_the_actual_workflow_command(self):
+        workflow = (WORKFLOWS / "installed-catchup.yml").read_text()
+        job = GATE.job(workflow, "ordered-manager-domains")
+        command = next(line.strip() for line in job.splitlines() if 'installed_artifacts.py harness ' in line)
+        source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+        with tempfile.TemporaryDirectory(prefix="harness-cli-") as temporary:
+            output = Path(temporary) / "ordered-managers"
+            output.mkdir()
+            environment = dict(os.environ, GITHUB_WORKSPACE=str(ROOT), RUNNER_TEMP=temporary, MESH_HARNESS_SOURCE=source,
+                               PYTHONDONTWRITEBYTECODE="1")
+            environment.pop("PYTHONPATH", None)
+            result = subprocess.run(["bash", "-c", command], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = json.loads((output / "harness-source.json").read_text())
+            self.assertEqual((observed["actual"], observed["expected"]), (source, source))
+
     def assert_consumer(self, source, producer):
         self.assertEqual(field(source, "uses"), f"ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{PIN}")
         for setting in (f"harness_source: {PIN}", "worker_artifact_prefix: update-native",

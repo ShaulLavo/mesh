@@ -179,8 +179,13 @@ class FleetBaselinesTest(unittest.TestCase):
 
 
 class ExactCohortInputTest(unittest.TestCase):
+    def test_copy_controls_obey_darwin_exclusion(self):
+        with patch("fixtures.noindex_paths.platform.system", return_value="Darwin"):
+            self.test_owned_copy_preserves_exact_digest_and_borrowed_permissions()
+            self.test_changed_bytes_and_escaping_paths_fail_closed()
+
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="ci-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="ci-", suffix=".noindex", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.source = self.root / "source"
@@ -516,6 +521,11 @@ class AccountIsolationTest(unittest.TestCase):
 
 
 class ArtifactPinTest(unittest.TestCase):
+    def test_archive_controls_obey_darwin_exclusion(self):
+        with patch("fixtures.noindex_paths.platform.system", return_value="Darwin"):
+            self.test_pinned_id_archive_is_verified_before_extraction()
+            self.test_pinned_archive_rejects_nonlocal_members()
+
     def inputs(self):
         jobs = [{"name": "Native proofs / prepare (" + key.replace("-", "/") + ", runner)",
                  "status": "completed", "conclusion": "success"} for key in installed_artifacts.KEYS]
@@ -571,7 +581,7 @@ class ArtifactPinTest(unittest.TestCase):
 
     def test_pinned_id_archive_is_verified_before_extraction(self):
         data = self.archive(b"actual pinned bytes")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(suffix=".noindex") as temporary:
             root = Path(temporary)
             self.download_control(root, data, data)
             self.assertEqual((root / "input/tools/control").read_bytes(), b"actual pinned bytes")
@@ -581,7 +591,7 @@ class ArtifactPinTest(unittest.TestCase):
 
     def test_replacement_after_intake_fails_before_extraction(self):
         original, replacement = self.archive(b"artifact A"), self.archive(b"artifact B")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(suffix=".noindex") as temporary:
             root = Path(temporary)
             with self.assertRaisesRegex(RuntimeError, "pinned size or SHA-256"):
                 self.download_control(root, original, replacement)
@@ -590,7 +600,7 @@ class ArtifactPinTest(unittest.TestCase):
 
     def test_pinned_archive_rejects_nonlocal_members(self):
         data = self.archive(b"not extracted", "../outside")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(suffix=".noindex") as temporary:
             root = Path(temporary)
             with self.assertRaisesRegex(RuntimeError, "nonlocal path"):
                 self.download_control(root, data, data)
@@ -599,7 +609,7 @@ class ArtifactPinTest(unittest.TestCase):
 
     def test_truncated_archive_fails_before_extraction(self):
         data = self.archive(b"original pinned archive")
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(suffix=".noindex") as temporary:
             root = Path(temporary)
             with self.assertRaisesRegex(RuntimeError, "pinned size or SHA-256"):
                 self.download_control(root, data, data[:-4])

@@ -106,7 +106,7 @@ jobs:
       - name: Prove three isolated native managers before installed order setup
         run: |
           mkdir -p "$RUNNER_TEMP/ordered-managers"
-          python3 scripts/fixtures/installed_artifacts.py harness "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/ordered-managers/harness-source.json"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py harness "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/ordered-managers/harness-source.json"
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
             env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
             python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/ordered-managers"
