@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from fixtures import noindex_paths, release_worker_groups as groups, release_worker_index as index, installed_adoption
 from fixtures import release_worker_completion as completion, installed_paths, installed_publication
+from fixtures import installed_chain
 
 PLATFORM = {"os": "linux", "arch": "amd64"}
 SOURCE = "a" * 40
@@ -735,9 +736,31 @@ class PublishedCompletionTests(unittest.TestCase):
         return {"sourceBuild": source, "rollback": rollback, "routeKind": "direct", "expectedHops": [], "hops": [],
             "authenticatedTarget": target, "routePlans": [{"target": target, "next": target, "currentDigest": source["digest"]}],
             "activationFault": {"bound": True, "released": True, "error": ""},
-            "failedRestart": {"failed": failure, "helper": {"sha256": final_build["digest"]}},
+            "failedRestart": self.produced_restart(source, build, failure) if rollback else {},
             "final": {"build": final_build, "helper": {"sha256": final_build["digest"]}, "ledger": ledger,
                 "journal": {"phase": "rolled_back" if rollback else "committed", "request": {"current": source, "manifest": {"version": build["version"]}}}}}
+
+    def produced_restart(self, source, target, failure):
+        with tempfile.TemporaryDirectory(dir=self.root) as temporary:
+            state = Path(temporary)
+            marker = state / "updates/host-update.json"
+            marker.parent.mkdir()
+            marker.write_text("{}")
+            units = SimpleNamespace(stop=mock.Mock(), start=mock.Mock(side_effect=lambda _name: os.utime(marker, ns=(1, 1))))
+            case = SimpleNamespace(state=state, units=units, ready=lambda: True, inspect_retained=mock.Mock(),
+                control=lambda _operation: {"host": {"build": source}}, mapped_helper=lambda: {"sha256": source["digest"]},
+                cohort=SimpleNamespace(verify=mock.Mock(return_value=[source["digest"]])),
+                releases=SimpleNamespace(native=source["platform"]["os"] + "/" + source["platform"]["arch"],
+                    builds={source["version"]: source, target["version"]: target}))
+            request = {"id": "actual-restart-control", "generation": 1}
+            ledger = {"state": {"phase": "waiting"}, "failed": [failure]}
+            record = {}
+            with mock.patch.object(installed_chain, "read_journal", return_value={"request": request}), mock.patch.object(installed_chain, "read_ledger", return_value=ledger):
+                installed_chain.verify_failed_restart(case, record, source["version"], target["version"])
+                installed_publication.verify_restarted_published_helper(case, record, source["version"])
+            case.inspect_retained.assert_called_once()
+            case.cohort.verify.assert_called_once_with("native-failed-edge-restart")
+            return record["failedRestart"]
 
     def mutate_route(self, scenario, action):
         output = self.root / "linux-amd64"
@@ -762,6 +785,25 @@ class PublishedCompletionTests(unittest.TestCase):
     def test_third_release_direct_and_distinct_staged_success_and_rollback_complete(self):
         self.install_routes(True)
         self.validate()
+
+    def test_actual_rollback_list_cannot_be_replaced_with_one_object(self):
+        self.install_routes()
+        self.mutate_route("published-rollback", lambda value: value["updates"][-1]["failedRestart"].update(
+            failed=value["updates"][-1]["failedRestart"]["failed"][0]))
+        with self.assertRaisesRegex(ValueError, "durable failed edge"):
+            self.validate()
+
+    def test_actual_staged_failure_list_cannot_gain_unmatched_edges(self):
+        self.install_routes(True)
+        self.mutate_route("published-chain-rb", lambda value: value["updates"][-1]["failedRestart"]["failed"].append({"edge": "other"}))
+        with self.assertRaisesRegex(ValueError, "durable failed edge"):
+            self.validate()
+
+    def test_actual_rollback_failure_list_cannot_be_empty(self):
+        self.install_routes()
+        self.mutate_route("published-rollback", lambda value: value["updates"][-1]["failedRestart"]["failed"].clear())
+        with self.assertRaisesRegex(ValueError, "durable failed edge"):
+            self.validate()
 
     def test_available_intermediate_groups_cannot_be_skipped(self):
         self.install_routes(True)

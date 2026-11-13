@@ -381,7 +381,7 @@ def validate_route_outcome(update, worker_count):
         failures = [item for item in final["ledger"]["failed"] if item["edge"] == edge
                     and item["version"] == target["version"] and item["phase"] == "rolled_back"]
         if (current["digest"] != final["build"]["digest"] or current["platform"] != final["build"]["platform"]
-                or not failures or update["failedRestart"]["failed"] not in failures
+                or not failures or update["failedRestart"]["failed"] != failures
                 or update["failedRestart"]["helper"]["sha256"] != final["build"]["digest"]
                 or update["activationFault"] != {"bound": True, "released": True, "error": ""}):
             raise ValueError("published rollback lacks its fault, durable failed edge or restored helper restart")
