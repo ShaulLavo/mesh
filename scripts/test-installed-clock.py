@@ -121,6 +121,16 @@ class ClockTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             diagnostic(command_ns=1500 * clocks.SECOND, admission_ns=1801 * clocks.SECOND).validate()
 
+    def test_prepared_io_allocation_keeps_job_ceiling_and_cannot_accept(self):
+        plan = diagnostic(command_ns=1380 * clocks.SECOND, external_ns=360 * clocks.SECOND, admission_ns=1800 * clocks.SECOND)
+        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 1800 * clocks.SECOND)
+        clock = self.clock(plan)
+        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_releases.subprocess, "Popen") as launch, patch.object(installed_releases.native_services, "wait_for"):
+            releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=plan)
+            releases.launch_signer()
+        self.assertIn("-test.timeout=1380000000000ns", launch.call_args.args[0])
+        self.assertFalse(self.export(clock)["accepted"])
+
     def test_extended_measurement_must_fit_the_original_job_declaration(self):
         origin = self.root / "job-origin.json"
         job = {"origin_ns": clocks.time.monotonic_ns(), "run": "owned-run", "job": "owned-job", "admission_ns": 900 * clocks.SECOND}

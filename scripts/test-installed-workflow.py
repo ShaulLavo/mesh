@@ -233,7 +233,7 @@ class WorkflowControls(unittest.TestCase):
             self.assertEqual(source.count('open(p,"x")'), 1)
             self.assertIn("needs.plans.outputs.minutes", source)
             self.assertIn("--clock-plan", source)
-            self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", source)
+            self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1380 --clock-external-seconds 360 --clock-emergency-seconds 60", source)
         consumer = job(PREPARED, "consume")
         self.assertIn("needs: [plans, prepare]", consumer)
         self.assertIn("profile: [none, first, final]", consumer)
@@ -262,7 +262,10 @@ class WorkflowControls(unittest.TestCase):
             self.assertIn("--installed-adoption", args)
             self.assertIn("--prepared-releases", args)
             self.assertIn("--installed-slice", args)
-            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "1500")
+            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "1380")
+            self.assertEqual(args[args.index("--clock-external-seconds") + 1], "360")
+            self.assertEqual(sum(int(args[args.index(flag) + 1]) for flag in
+                ("--clock-command-seconds", "--clock-external-seconds", "--clock-emergency-seconds")), 1800)
             self.assertNotIn("--clock-plan", args)
 
     def test_calibration_alias_and_all_nine_support_profiles_are_preserved(self):
