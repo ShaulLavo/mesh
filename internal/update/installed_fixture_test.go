@@ -161,27 +161,41 @@ func TestInstalledHostRead(t *testing.T) {
 
 func installedLedger(t *testing.T, root *os.Root, request installedSignRequest) {
 	t.Helper()
+	trace := newInstalledOrderReadTrace()
+	defer trace.write(t, root)
+	finish := trace.begin("store.open")
 	store, err := OpenStore(request.Ledger)
+	finish(err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	finish = trace.begin("ledger.read")
 	entries, more, err := store.HostLedger(t.Context(), 0, 64)
+	finish(err)
 	if err != nil || more {
 		t.Fatalf("bounded installed ledger: %v more=%v", err, more)
 	}
+	finish = trace.begin("state.read")
 	state, err := store.HostState(t.Context())
+	finish(err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	finish = trace.begin("failures.read")
 	failed, next, err := store.hostFailedPage("", 64)
+	finish(err)
 	if err != nil || next != "" {
 		t.Fatalf("bounded installed failed edges: %v next=%q", err, next)
 	}
+	finish = trace.begin("peers.read")
 	peers, err := store.HostPeers(t.Context())
+	finish(err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	finish = trace.begin("dependents.read")
 	dependents, err := store.HostDependents(t.Context())
+	finish(err)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,346 @@
+"""Pure diagnostic controls. No native host or product process is executed."""
+import copy
+from concurrent.futures import Future
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import tempfile
+import threading
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from fixtures import installed_order, installed_order_host, installed_order_trace as trace, installed_releases
+
+
+def observation(version, stamp="2000-01-01T00:00:00.000000999Z"):
+    return {"journal": {"phase": "committed", "updatedAt": stamp,
+        "request": {"id": "request", "generation": 2, "manifest": {"version": version}}},
+        "state": {"phase": "idle"}, "entries": [{"version": version, "request": "request", "generation": 2,
+            "metadata": "pin", "committedAt": stamp}], "failed": [], "peers": [], "peerFailures": {}, "stateWrittenAt": 0,
+        "ready": True, "build": {"version": version}}
+
+
+class CompetingDriver:
+    def __init__(self, role, produced, parent_error):
+        self.account = {"role": role, "id": role}
+        self.produced, self.parent_error = produced, parent_error
+
+    def call(self, operation, **fields):
+        if operation == "inspect" and fields.get("active", True) and self.account["role"] == "canary":
+            if not self.produced.wait(2):
+                raise AssertionError("direct producer did not finish")
+            raise self.parent_error
+        version = installed_releases.VERSIONS[-1 if self.account["role"] == "canary" else 0]
+        return copy.deepcopy(observation(version))
+
+
+class OrderTraceTest(unittest.TestCase):
+    def test_competing_failure_retains_producer_before_parent_selected_exception(self):
+        produced = threading.Event()
+        parent_error = ValueError("canary full inspection failed")
+        drivers = [CompetingDriver(role, produced, parent_error) for role in ("canary", "sleep", "burst")]
+        original = installed_order.fail_pending
+        def propagate(future, error):
+            if "fixture missed" in str(error):
+                produced.set()
+            return original(future, error)
+        record = {}
+        with patch.object(installed_order, "fail_pending", side_effect=propagate):
+            with self.assertRaises(ValueError) as caught:
+                installed_order.release_latest(type("Origin", (), {"head": lambda *_: None})(), Path("/unused"), drivers, record)
+        self.assertIs(caught.exception, parent_error)
+        self.assertIn("orderDiagnostics", record)
+        direct = record["orderDiagnostics"]["burst"]["failures"]
+        self.assertEqual(direct[0]["kind"], "producer")
+        self.assertIn("fixture missed", direct[0]["message"])
+        self.assertNotIn("predecessor.result", direct[0]["traceback"])
+        self.assertEqual(record["orderDiagnostics"]["sleep"]["failures"][0]["kind"], "propagated")
+        selected = record["orderDiagnostics"]["canary"]["failures"][-1]
+        self.assertEqual((selected["kind"], selected["type"]), ("parent-selected", "ValueError"))
+        self.assertFalse(any(thread.name.startswith("ordered-opportunity") for thread in threading.enumerate()))
+
+    def test_torn_multi_read_handoff_is_recorded_without_fixing_eligibility(self):
+        old_read, published = threading.Event(), threading.Event()
+        latest = installed_releases.VERSIONS[-1]
+        live = observation(installed_releases.VERSIONS[0])
+        live["state"]["owned"] = {"request": "request", "generation": 2}
+        driver = SimpleNamespace(account={"role": "canary"}, diagnostics=trace.Trace("canary"))
+        def read(operation, **fields):
+            entries = copy.deepcopy(live["entries"])
+            if fields.get("active") is False:
+                old_read.set()
+                self.assertTrue(published.wait(2))
+            value = copy.deepcopy(live)
+            value["entries"] = entries
+            return value
+        driver.call = read
+        def publish_after_old_ledger():
+            self.assertTrue(old_read.wait(2))
+            live.update(observation(latest))
+            published.set()
+        writer = threading.Thread(target=publish_after_old_ledger)
+        writer.start()
+        handoff = Future()
+        try:
+            installed_order.await_version(driver, latest, "committed", 90, lambda reply: trace.publish(driver, handoff, reply))
+        finally:
+            published.set()
+            writer.join(2)
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(live["entries"][0]["version"], latest)
+        captured = json.loads(driver.diagnostics.handoff_bytes)
+        self.assertFalse(captured["correlation"]["matchingLedgerObserved"])
+        missing = copy.deepcopy(captured["observation"])
+        missing["state"]["owned"] = {"request": "request", "generation": 2, "metadata": "pin"}
+        self.assertFalse(trace.correlation(missing)["ledgerMetadataMatchesOwned"])
+        self.assertEqual(captured["observation"], handoff.result())
+        with self.assertRaises(StopIteration):
+            installed_order.exercise_soak(None, handoff.result(), installed_releases.VERSIONS[0], latest)
+
+    def test_raw_nanosecond_gap_is_retained_while_current_comparison_stays(self):
+        predecessor = observation(installed_releases.VERSIONS[-1], "2026-01-01T00:00:00.000000999Z")
+        dependent = observation(installed_releases.VERSIONS[-1], "2026-01-01T00:00:05.000000000Z")
+        target = installed_releases.VERSIONS[-1]
+        driver = SimpleNamespace(diagnostics=trace.Trace("burst"))
+        cutoff = installed_order.commit_time(predecessor, target) + timedelta(seconds=5)
+        trace.cutoff(driver, predecessor, target, cutoff)
+        published = []
+        installed_order.publish_soaked_commit(dependent, target, cutoff, published.append)
+        self.assertEqual(published, [dependent])
+        self.assertEqual(5_000_000_000 - 999, 4_999_999_001)
+        raw = driver.diagnostics.reserved["cutoff"]["details"]["rawPredecessor"]["committedAt"]
+        self.assertEqual(raw, "2026-01-01T00:00:00.000000999Z")
+        self.assertEqual(driver.diagnostics.reserved["cutoff"]["details"]["parserResolutionNs"], 1000)
+
+    def test_delayed_source_eligibility_is_distinct_from_delayed_read_completion(self):
+        for cause in ("eligibility", "read-completion"):
+            self.check_delayed_source(cause)
+
+    def check_delayed_source(self, cause):
+        clock = SyntheticClock()
+        target = installed_releases.VERSIONS[-1]
+        reply = observation(target, clock.now().isoformat())
+        driver = SimpleNamespace(account={"role": "canary"}, diagnostics=trace.Trace("canary"))
+        calls, seen = [], []
+        def call(operation, **fields):
+            calls.append((operation, fields))
+            value = copy.deepcopy(reply)
+            if fields.get("active") is False:
+                return delayed_reply(clock, value, cause, len(calls))
+            return value
+        driver.call = call
+        with patch.object(installed_order, "time", clock.api()), patch.object(installed_order, "datetime", clock.dates()), patch.object(trace, "time", clock.api()):
+            installed_order.await_version(driver, target, "committed", 90, lambda value: seen.append((clock.seconds, value)))
+            with self.assertRaisesRegex(RuntimeError, "fixture missed"):
+                installed_order.exercise_soak(None, seen[0][1], installed_releases.VERSIONS[0], target)
+        self.assertGreaterEqual(seen[0][0], 6)
+        samples = [row["last"]["details"]["settled"] for key, row in driver.diagnostics.events.items() if key.startswith("eligibility.sample:")]
+        self.assertEqual(False in samples, cause == "eligibility")
+        self.assertFalse(any(operation == "stop" for operation, _fields in calls))
+
+    def test_delayed_consumer_wake_preserves_publication_boundary(self):
+        clock, entered, wake = SyntheticClock(), threading.Event(), threading.Event()
+        target = installed_releases.VERSIONS[-1]
+        producer = SimpleNamespace(diagnostics=trace.Trace("canary"))
+        driver = SimpleNamespace(account={"role": "burst", "id": "burst"}, diagnostics=trace.Trace("burst"),
+            call=lambda *_args, **_kwargs: observation(installed_releases.VERSIONS[0]))
+        handoff, errors = Future(), []
+        class DelayedFuture:
+            def result(self):
+                value = handoff.result()
+                entered.set()
+                if not wake.wait(2):
+                    raise AssertionError("consumer wake barrier expired")
+                return value
+        def consume():
+            try:
+                installed_order.soak_controller(driver, DelayedFuture(), None, Future(), installed_releases.VERSIONS[0], target)
+            except BaseException as error:
+                errors.append(error)
+        with patch.object(installed_order, "datetime", clock.dates()), patch.object(trace, "time", clock.api()):
+            trace.publish(producer, handoff, observation(target, clock.now().isoformat()))
+            consumer = threading.Thread(target=consume)
+            consumer.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                clock.advance(6)
+            finally:
+                wake.set()
+                consumer.join(2)
+        self.assertFalse(consumer.is_alive())
+        self.assertIn("fixture missed", str(errors[0]))
+        published = producer.diagnostics.events["future.publish:::"]["last"]["end"]["monotonicNs"]
+        resumed = driver.diagnostics.events["future.wake:::"]["last"]["end"]["monotonicNs"]
+        self.assertEqual(resumed - published, 6_000_000_000)
+
+    def test_diagnostic_write_failure_preserves_original_exception_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.check_diagnostic_write_failure(Path(directory))
+
+    def check_diagnostic_write_failure(self, root):
+        driver = SimpleNamespace(account={"role": "canary"}, close=lambda: None, diagnostics=trace.Trace("canary"))
+        record = {"passed": False, "error": "original product failure"}
+        primary = ValueError(record["error"])
+        original = Path.write_bytes
+        def write(path, data):
+            if path.name.endswith("-timeline.json"):
+                raise OSError("diagnostic write rejected")
+            return original(path, data)
+        with patch.object(Path, "write_bytes", write), self.assertRaises(ValueError) as caught:
+            try:
+                raise primary
+            finally:
+                installed_order.teardown(SimpleNamespace(close=lambda: None), [driver], record, root)
+        self.assertIs(caught.exception, primary)
+        summary = record["orderDiagnostics"]["canary"]
+        self.assertFalse(summary["complete"])
+        self.assertEqual(summary["failures"][0]["kind"], "export")
+
+    def test_cleanup_failure_keeps_existing_precedence_and_separate_diagnostics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cleanup_error = OSError("native cleanup failed")
+            def close():
+                raise cleanup_error
+            driver = SimpleNamespace(account={"role": "canary"}, close=close, diagnostics=trace.Trace("canary"))
+            record = {"passed": False, "error": "original product failure"}
+            with self.assertRaisesRegex(RuntimeError, "original product failure; cleanup failed") as caught:
+                installed_order.teardown(SimpleNamespace(close=lambda: None), [driver], record, Path(directory))
+            self.assertIn("native cleanup failed", str(caught.exception.__cause__))
+            failures = record["orderDiagnostics"]["canary"]["failures"]
+            self.assertEqual(failures[-1]["kind"], "cleanup")
+            self.assertFalse(record["passed"])
+
+    def test_incomplete_diagnostics_cannot_create_a_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            driver = SimpleNamespace(account={"role": "canary"}, close=lambda: None, diagnostics=trace.Trace("canary"))
+            driver.diagnostics.complete = False
+            record = {"passed": True}
+            with self.assertRaisesRegex(RuntimeError, "coverage incomplete"):
+                installed_order.teardown(SimpleNamespace(close=lambda: None), [driver], record, Path(directory))
+            self.assertFalse(json.loads((Path(directory) / "ordered-native.json").read_text())["passed"])
+
+    def test_export_failure_is_separate_and_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, files, owner = Path(directory), {}, trace.Trace("canary")
+            (root / trace.TIMELINE).write_bytes(b"x" * (trace.HISTORY_LIMIT + 1))
+            trace.account_export(root, files)
+            decoded = {key: bytes.fromhex(value) for key, value in files.items()}
+            trace.export_status(decoded, owner)
+            self.assertFalse(owner.complete)
+            self.assertEqual(owner.failures[-1]["kind"], "export")
+            self.assertLess(len(trace.encoded(files)), 4096)
+            driver = SimpleNamespace(account={"role": "canary"}, close=lambda: None, diagnostics=owner)
+            self.assert_primary_survives(root, driver)
+
+    def assert_primary_survives(self, root, driver):
+        primary = ValueError("original product failure")
+        record = {"passed": False, "error": str(primary)}
+        with self.assertRaises(ValueError) as caught:
+            try:
+                raise primary
+            finally:
+                installed_order.teardown(SimpleNamespace(close=lambda: None), [driver], record, root)
+        self.assertIs(caught.exception, primary)
+
+    def test_failed_native_read_keeps_available_boundary_data_and_original_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.check_native_read(Path(directory), "ledger", 1)
+
+    def test_nonledger_inspection_does_not_require_a_ledger_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.check_native_read(Path(directory), "inspect", 0)
+
+    def check_native_read(self, root, kind, returncode):
+        owner = trace.Trace("account")
+        origin = object.__new__(installed_order_host.Origin)
+        origin.root, origin.diagnostics = root, owner
+        def process(*_args, **fields):
+            if fields["env"]["MESH_INSTALLED_READ_KIND"] == "ledger":
+                (root / trace.READER).write_text(json.dumps({"complete": True, "spans": [{"phase": "ledger.read", "success": False}]}))
+            return SimpleNamespace(returncode=returncode, stdout="original native failure", stderr="")
+        with patch.object(installed_order_host.subprocess, "run", side_effect=process):
+            if returncode:
+                self.assert_native_failure(origin, root, kind)
+            else:
+                origin.read_host(kind, root / "state", root / "out.json")
+        self.assertTrue(owner.complete)
+        if kind == "ledger":
+            self.assertEqual(owner.reader["spans"][0]["success"], False)
+        self.assertIn("native.reader:" + kind + "::", owner.events)
+
+    def assert_native_failure(self, origin, root, kind):
+        with self.assertRaisesRegex(RuntimeError, "original native failure"):
+            origin.read_host(kind, root / "state", root / "out.json")
+
+    def test_incomplete_available_sidecar_is_exported_with_failed_coverage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root, files = Path(directory), {}
+            owner = trace.Trace("account")
+            owner.complete = False
+            owner.failure(ValueError("producer original"), "dispatch", "producer")
+            owner.write(root / trace.TIMELINE)
+            trace.account_export(root, files)
+            retained = json.loads(bytes.fromhex(files[trace.TIMELINE]))
+            self.assertEqual(retained["failures"][0]["message"], "producer original")
+            self.assertFalse(json.loads(bytes.fromhex(files[trace.STATUS]))["complete"])
+
+    def test_handoff_has_separate_budget_and_failure_records_survive_history_bound(self):
+        owner = trace.Trace("canary")
+        value = observation(installed_releases.VERSIONS[-1])
+        value["extra"] = "x" * 100_000
+        owner.handoff(value)
+        self.assertGreater(len(owner.handoff_bytes), trace.HISTORY_LIMIT)
+        self.assertTrue(owner.complete)
+        owner.event("oversized", blob="x" * trace.HISTORY_LIMIT)
+        owner.failure(ValueError("original"), "controller", "producer")
+        summary = owner.summary()
+        self.assertLessEqual(len(trace.encoded(summary)), trace.HISTORY_LIMIT)
+        self.assertEqual(summary["failures"][0]["message"], "original")
+        self.assertIn("handoff", summary["reserved"])
+        self.assertFalse(summary["complete"])
+
+    def test_reserved_carrier_is_observed_without_rebasing_or_semantics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            class Endpoint:
+                def __init__(self):
+                    self.diagnostics = trace.Trace("mock")
+                    self.case = SimpleNamespace(root=Path(directory))
+                @trace.calls
+                def call(self, operation, timeout=30, **fields):
+                    return fields["fixtureDeadlineNs"], timeout
+                @trace.dispatched
+                def dispatch(self, operation, value):
+                    return value["fixtureDeadlineNs"]
+            endpoint = Endpoint()
+            self.assertEqual(endpoint.call("inspect", fixtureDeadlineNs=123), (123, 30))
+            self.assertEqual(endpoint.dispatch("inspect", {"fixtureDeadlineNs": 123}), 123)
+            for row in endpoint.diagnostics.events.values():
+                self.assertEqual(row["last"]["details"]["fixtureDeadlineNs"], 123)
+
+
+class SyntheticClock:
+    def __init__(self):
+        self.seconds = 0
+        self.base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def advance(self, seconds):
+        self.seconds += seconds
+
+    def now(self):
+        return self.base + timedelta(seconds=self.seconds)
+
+    def api(self):
+        return SimpleNamespace(monotonic=lambda: self.seconds, sleep=self.advance,
+            monotonic_ns=lambda: int(self.seconds * 1_000_000_000), time_ns=lambda: int(self.seconds * 1_000_000_000))
+
+    def dates(self):
+        return SimpleNamespace(now=lambda _: self.now(), fromisoformat=datetime.fromisoformat)
+
+
+def delayed_reply(clock, value, cause, call_number):
+    if cause == "eligibility" and call_number == 1:
+        value["state"]["owned"] = {"request": "request", "generation": 2}
+        return value
+    clock.advance(6)
+    return value
