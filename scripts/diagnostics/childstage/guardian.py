@@ -28,10 +28,11 @@ def watch(target):
         if code is not None and not announced:
             publish({"exit": code})
             announced = True
-        if select.select([sys.stdin], [], [], 0.02)[0]:
-            if os.read(sys.stdin.fileno(), 1):
-                raise RuntimeError("owned guardian accepts EOF only")
-            return
+        if not select.select([sys.stdin], [], [], 0.02)[0]:
+            continue
+        if os.read(sys.stdin.fileno(), 1):
+            raise RuntimeError("owned guardian accepts EOF only")
+        return
 
 
 def main():
