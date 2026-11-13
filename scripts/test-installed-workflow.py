@@ -197,6 +197,7 @@ class WorkflowControls(unittest.TestCase):
             result = workflow.physical_plans(index, False, "linux/amd64", "chain")
         self.assertEqual(len(result["plans"]), 4)
         self.assertEqual(set(result["minutes"].values()), {20})
+        self.assertEqual(result["profiles"], list(workflow.PROFILES))
         path = self.root / result["plans"]["linux-amd64-chain-consume-first"]
         value = json.loads(path.read_bytes())
         value["workload"]["installedSlice"]["select"][0]["profile"] = "chain-final"
@@ -236,7 +237,7 @@ class WorkflowControls(unittest.TestCase):
             self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1380 --clock-external-seconds 360 --clock-emergency-seconds 60", source)
         consumer = job(PREPARED, "consume")
         self.assertIn("needs: [plans, prepare]", consumer)
-        self.assertIn("profile: [none, first, final]", consumer)
+        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", consumer)
         self.assertNotIn("setup-go", consumer)
         self.assertNotIn("go build", consumer)
         self.assertNotIn("--native-helper", consumer)
@@ -312,7 +313,8 @@ class WorkflowControls(unittest.TestCase):
             self.assertNotIn("mode: [", source)
         consumers = job(PREPARED, "consume")
         self.assertIn("include: ${{ fromJSON(needs.plans.outputs.case).include }}", consumers)
-        profiles = matrix_values(consumers, "profile")
+        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", consumers)
+        profiles = workflow.physical_plans(None, True, "linux/amd64", "chain")["profiles"]
         self.assertEqual(profiles, ["none", "first", "final"])
         actual = {(row["platform"], row["mode"], profile) for row in rows for profile in profiles}
         self.assertEqual(actual, set(itertools.product(workflow.RUNNERS, workflow.MODES, workflow.PROFILES)))
@@ -330,7 +332,7 @@ class WorkflowControls(unittest.TestCase):
         needs = re.search(r"^    needs: \[(.+)\]$", job(PREPARED, "consume"), re.M).group(1).split(", ")
         ready = [case for case in cases if all((case, dependency) in completed for dependency in needs)]
         self.assertEqual(set(ready), {case for case in cases if case[0].startswith("linux/")})
-        self.assertEqual(len(ready) * len(matrix_values(job(PREPARED, "consume"), "profile")), 12)
+        self.assertEqual(len(ready) * len(workflow.PROFILES), 12)
 
     def test_required_reusable_inputs_and_case_concurrency_are_distinct(self):
         header = PREPARED.split("\npermissions:", 1)[0]
@@ -351,7 +353,8 @@ class WorkflowControls(unittest.TestCase):
         for platform, mode in outer_cases():
             output = self.root / (platform.replace("/", "-") + "-" + mode)
             environment = os.environ | {"GITHUB_OUTPUT": str(output), "PYTHONDONTWRITEBYTECODE": "1",
-                "PYTHONPATH": str(ROOT / "scripts"), "DIAGNOSTIC": "true", "NATIVE_PLATFORM": platform, "PROOF_MODE": mode}
+                "PYTHONPATH": str(ROOT / "scripts"), "DIAGNOSTIC": "true", "NATIVE_PLATFORM": platform,
+                "PROOF_MODE": mode, "MEASUREMENT_PROFILE": ""}
             result = subprocess.run(["bash", "-c", command], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
@@ -360,6 +363,80 @@ class WorkflowControls(unittest.TestCase):
             key = workflow.installed_budgets.PLATFORMS[platform][0] + "-" + mode + "-"
             self.assertTrue(all(name.startswith(key) for name in json.loads(observed["plans"])))
             self.assertEqual(set(json.loads(observed["plans"]).values()), {""})
+            self.assertEqual(json.loads(observed["profiles"]), list(workflow.PROFILES))
+
+    def test_filter_is_one_diagnostic_profile_and_cannot_select_frozen_plans(self):
+        for profile in workflow.PROFILES:
+            with patch.object(workflow.installed_budgets, "select_plan") as select:
+                value = workflow.physical_plans(None, True, "linux/arm64", "waypoint", profile)
+            select.assert_not_called()
+            self.assertEqual(value["profiles"], [profile])
+            self.assertEqual(set(value["minutes"]), {"linux-arm64-waypoint-prepare", "linux-arm64-waypoint-consume-" + profile})
+            with self.assertRaisesRegex(ValueError, "explicit diagnostic measurement"):
+                workflow.physical_plans(None, False, "linux/arm64", "waypoint", profile)
+        for invalid in ("all", "none,final", "chain-none", "unknown"):
+            with self.assertRaises(ValueError):
+                workflow.physical_plans(None, True, "linux/arm64", "chain", invalid)
+
+    def test_filtered_cli_fails_before_outputs_without_measurement_and_rejects_unknown_profile(self):
+        command = step(job(PREPARED, "plans"), "Require independently reviewed physical job plans or explicit measurement")
+        output = self.root / "filtered-output"
+        base = os.environ | {"GITHUB_OUTPUT": str(output), "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": str(ROOT / "scripts"), "NATIVE_PLATFORM": "linux/amd64", "PROOF_MODE": "chain"}
+        for diagnostic, profile, status in (("false", "final", 1), ("true", "unknown", 2), ("true", "final", 0)):
+            result = subprocess.run(["bash", "-c", command], cwd=ROOT,
+                env=base | {"DIAGNOSTIC": diagnostic, "MEASUREMENT_PROFILE": profile},
+                capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, status, result.stderr)
+            if status:
+                self.assertFalse(output.exists())
+                continue
+            observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
+            self.assertEqual(json.loads(observed["profiles"]), ["final"])
+            self.assertEqual(len(json.loads(observed["minutes"])), 2)
+
+    def test_filtered_workflow_never_runs_aggregate_and_ordinary_call_keeps_all_profiles(self):
+        self.assertIn("inputs.measurement_profile == ''", job(PREPARED, "aggregate"))
+        self.assertIn("measurement_profile:\n        default: ''\n        type: string", PREPARED)
+        self.assertNotIn("measurement_profile:", job(CATCHUP, "prepared-cohort"))
+        self.assertEqual(workflow.selected_profiles(False, ""), ["none", "first", "final"])
+        self.assertEqual(workflow.selected_profiles(True, ""), ["none", "first", "final"])
+
+    def test_registered_recovery_selects_only_four_missing_full_profiles(self):
+        source = (WORKFLOWS / "rollback-proof-investigation.yml").read_text()
+        recovery = job(source, "recovery")
+        rows = re.findall(r"          - platform: (\S+)\n            mode: (\S+)\n            profile: (\S+)", recovery)
+        self.assertEqual(rows, [("linux/amd64", "chain", "final"), ("linux/arm64", "chain", "none"),
+                                ("linux/arm64", "waypoint", "final"), ("darwin/arm64", "chain", "none")])
+        self.assertIn("needs: recovery-inputs", recovery)
+        self.assertIn("uses: ./.github/workflows/installed-prepared.yml", recovery)
+        for key, expression in (("native_platform", "matrix.platform"), ("mode", "matrix.mode"),
+                                ("measurement_profile", "matrix.profile"), ("harness_source", "github.sha")):
+            self.assertIn(key + ": ${{ " + expression + " }}", recovery)
+        self.assertIn("calibration_only: true", recovery)
+        self.assertIn("inputs.measurement_scope != 'consumer-recovery'", job(source, "measure"))
+        self.assertIn("if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'", job(source, "support"))
+        self.assertNotIn("observer", source + PREPARED)
+        for platform, mode, profile in rows:
+            planned = workflow.physical_plans(None, True, platform, mode, profile)
+            self.assertEqual(planned["case"], workflow.case_matrix(platform, mode))
+            self.assertEqual(planned["profiles"], [profile])
+            directory = self.root / (platform.replace("/", "-") + mode)
+            bundle(directory, 7, mode)
+            selected = workflow.selection(directory, profile)
+            self.assertEqual(selected["select"], [{"profile": "chain-" + profile, "group_indices": list(range(7))}])
+            self.assertEqual(selected["readers"], [])
+
+    def test_recovery_input_gate_rejects_every_wrong_producer_field(self):
+        source = (WORKFLOWS / "rollback-proof-investigation.yml").read_text()
+        gate = job(source, "recovery-inputs")
+        self.assertIn("if: inputs.measurement_scope == 'consumer-recovery'", gate)
+        command = step(gate, "Require the original complete producer identity for recovery")
+        environment = os.environ | {"PRODUCER_RUN": "43356291036",
+            "PRODUCER_SOURCE": "3097dc167bcdcadc8a561fb0f443253b74bfd025", "PRODUCER_PREFIX": "update-native"}
+        for change in ({}, {"PRODUCER_RUN": "43356291037"}, {"PRODUCER_SOURCE": "a" * 40}, {"PRODUCER_PREFIX": "replacement"}):
+            result = subprocess.run(["bash", "-c", command], env=environment | change, capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 1 if change else 0, result.stderr)
 
     def test_cli_bundled_preparer_is_optional_and_waypoint_is_forwarded(self):
         spec = importlib.util.spec_from_file_location("prepared_workflow_cli", ROOT / "scripts/prove-installed-catchup.py")

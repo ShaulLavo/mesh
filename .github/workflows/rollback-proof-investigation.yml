@@ -16,10 +16,10 @@ on:
         required: true
         type: string
       measurement_scope:
-        description: 'Measure prepared cohorts and all nine support profiles together, or select a subset'
+        description: 'Measure full cohorts/support, or only the four missing consumer recovery slots'
         default: all
         type: choice
-        options: [all, cohort, prepared, support]
+        options: [all, cohort, prepared, support, consumer-recovery]
       catalog_evidence:
         description: 'Enable only after composing the reviewed passive catalog source'
         default: false
@@ -35,7 +35,7 @@ concurrency:
 
 jobs:
   measure:
-    if: inputs.measurement_scope != 'support'
+    if: inputs.measurement_scope != 'support' && inputs.measurement_scope != 'consumer-recovery'
     uses: ./.github/workflows/installed-catchup.yml
     with:
       harness_source: ${{ github.sha }}
@@ -59,3 +59,48 @@ jobs:
       reusable_call: true
       calibration_only: true
       calibration_support: ${{ matrix.profile }}
+
+  recovery-inputs:
+    if: inputs.measurement_scope == 'consumer-recovery'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Require the original complete producer identity for recovery
+        env:
+          PRODUCER_RUN: ${{ inputs.producer_run }}
+          PRODUCER_SOURCE: ${{ inputs.producer_source }}
+          PRODUCER_PREFIX: ${{ inputs.producer_prefix }}
+        run: |
+          set -euo pipefail
+          test "$PRODUCER_RUN" = 43356291036
+          test "$PRODUCER_SOURCE" = 3097dc167bcdcadc8a561fb0f443253b74bfd025
+          test "$PRODUCER_PREFIX" = update-native
+
+  recovery:
+    needs: recovery-inputs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            mode: chain
+            profile: final
+          - platform: linux/arm64
+            mode: chain
+            profile: none
+          - platform: linux/arm64
+            mode: waypoint
+            profile: final
+          - platform: darwin/arm64
+            mode: chain
+            profile: none
+    uses: ./.github/workflows/installed-prepared.yml
+    with:
+      native_platform: ${{ matrix.platform }}
+      mode: ${{ matrix.mode }}
+      measurement_profile: ${{ matrix.profile }}
+      harness_source: ${{ github.sha }}
+      worker_artifact_prefix: ${{ inputs.producer_prefix }}
+      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
+      worker_artifact_source: ${{ inputs.producer_source }}
+      calibration_only: true
