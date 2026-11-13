@@ -4,6 +4,7 @@ import shutil
 import time
 
 from fixtures import installed_adoption, installed_native, installed_releases, installed_clock
+from fixtures import installed_transport_lifecycle
 
 
 def prepare(releases, origin, source):
@@ -36,6 +37,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         case.seed()
         start = case.start_adoption(first)
         record["bootstrap"] = case.validate_result(case.await_result(first), first, start["pin"])
+        installed_transport_lifecycle.prove(case, record["bootstrap"])
         record["cohort"] = case.start_cohort(releases.registry, releases.probe)
         failed_version = {"none": [], "first": [intermediate], "final": [final]}[failure]
         case.write_fault({"daemon": failed_version, "holdHelper": [intermediate]})
@@ -53,6 +55,9 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        sampled = installed_transport_lifecycle.sampled_failure(error)
+        if sampled is not None:
+            record["mappedImageFailure"] = sampled
         raise
     finally:
         finish(case, record, output)
@@ -123,6 +128,7 @@ def observe_hop(case, record, version):
     if image is None:
         return False
     case.inspect_retained()
+    installed_transport_lifecycle.checkpoint(case, version, "observed intermediate hop")
     digests = case.cohort.verify("native-hop-" + version)
     record["hops"].append({"version": version, "helper": image, "workers": digests})
     faults = json.loads(case.fault.read_text())
@@ -163,6 +169,7 @@ def await_first_rollback(case, record, source, target):
 
 def observe_first_rollback(case, record, source):
     case.inspect_retained()
+    installed_transport_lifecycle.checkpoint(case, source, "observed first rollback")
     running = case.control("host.info")["host"]["build"]
     if running["digest"] != case.releases.builds[source]["digest"]:
         raise RuntimeError("native first-hop rollback did not restore its exact source image")
@@ -190,6 +197,7 @@ def validate_terminal(case, record, journal, seen, intermediate, final, fail_fin
     if helper is None:
         return False
     case.inspect_retained()
+    installed_transport_lifecycle.checkpoint(case, intermediate if fail_final else final, "observed terminal hop")
     record["finalWorkers"] = case.cohort.verify("native-final-" + expected_phase)
     running = case.control("host.info")["host"]["build"]
     expected = intermediate if fail_final else final
@@ -258,6 +266,7 @@ def verify_quarantine(case, before, failure, ledger, source, target):
     if running["digest"] != case.releases.builds[source]["digest"]:
         raise RuntimeError("native restart left its verified rollback image")
     case.inspect_retained()
+    installed_transport_lifecycle.checkpoint(case, source, "observed failed-edge restart")
 
 
 @installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
@@ -273,7 +282,10 @@ def finish(case, record, output):
     finally:
         installed_native.retain_logs(case.root, output, case.host["name"])
         retain_chain_result(case, output)
+        installed_transport_lifecycle.finish(case, record, output)
         (output / (case.host["name"] + "-native-pair.json")).write_text(json.dumps(record, indent=2) + "\n")
+        if record.get("transportLifecycle", {}).get("status") == "incomplete" and "error" not in record:
+            raise installed_transport_lifecycle.CoverageIncomplete("transport observer coverage incomplete; nonreproduction is not established")
 
 
 def retain_chain_result(case, output):

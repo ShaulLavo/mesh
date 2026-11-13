@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/transporttrace"
 )
 
 // Unpublished installed fixtures can fail a real native service start while
@@ -36,9 +37,23 @@ func init() {
 	if os.Args[1] == "update-helper" && slices.Contains(fault.Helper, release.Version) {
 		os.Exit(70)
 	}
+	if os.Args[1] == "daemon" {
+		configureTransportLifecycle()
+	}
 	if os.Args[1] == "update-helper" {
 		holdInstalledHelper(path)
 	}
+}
+
+func configureTransportLifecycle() {
+	directory := os.Getenv("MESH_TRANSPORT_LIFECYCLE_DIR")
+	if directory == "" {
+		return
+	}
+	build := release.Current()
+	transporttrace.Configure(transporttrace.New(directory, transporttrace.Identity{
+		PID: os.Getpid(), Version: build.Version, Commit: build.Commit, Digest: build.Digest,
+	}))
 }
 
 func holdInstalledHelper(path string) {

@@ -38,6 +38,8 @@ class SampleRef:
     cleanup_verified: bool
 
     def eligible(self, workload):
+        if self.workload.get("transportLifecycle") or self.provenance.get("transportLifecycle"):
+            return False
         return self.completed is True and self.cleanup_verified is True and self.workload == workload and bool(self.provenance) and type(self.elapsed_ns) is int and self.elapsed_ns > 0
 
 
@@ -73,6 +75,8 @@ class ClockPlan:
             raise ValueError("unbound fixture clock cannot execute")
         if self.mode not in ("diagnostic", "frozen") or not self.workload:
             raise ValueError("fixture needs an explicit diagnostic or frozen clock plan")
+        if self.workload.get("transportLifecycle") and self.mode != "diagnostic":
+            raise ValueError("transport lifecycle measurements cannot freeze budgets or grant acceptance")
         total = positive(self.command_ns) + positive(self.external_ns) + positive(self.emergency_ns)
         if positive(self.admission_ns) > MAX_JOB_NS or total > self.admission_ns:
             raise ValueError("fixture admission exceeds its declared job budget or 30-minute ceiling")
@@ -281,6 +285,9 @@ class Clock:
         if self.unresolved:
             self.fail(ValueError("fixture key sets remain unresolved: " + ", ".join(sorted(self.unresolved))))
             complete = False
+        if self.plan.workload.get("transportLifecycle"):
+            samples = [row | {"eligible": False, "diagnostic_complete": row["eligible"]} for row in samples]
+            leaves = [row | {"eligible": False, "diagnostic_complete": row["eligible"]} for row in leaves]
         value = {"mode": self.plan.mode, "accepted": complete and self.plan.mode == "frozen",
                  "measurement_completed": complete, "origin_ns": self.origin_ns, "end_ns": now,
                  "command_ns": now - self.origin_ns, "disjoint_ns": sum(row["elapsed_ns"] for row in self.rows),
@@ -461,6 +468,11 @@ def from_arguments(args, native):
                 "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
                 "manifestSchemas": [1, 2] if args.format_waypoint else [1]}
     prepared = prepared_workload(args)
+    from fixtures import installed_transport_lifecycle
+    if installed_transport_lifecycle.enabled():
+        if args.clock_mode != "diagnostic":
+            raise ValueError("transport lifecycle observer needs explicit diagnostic mode")
+        workload["transportLifecycle"] = installed_transport_lifecycle.MARKER
     prepared_id = prepared.pop("preparedId", None)
     workload.update(prepared)
     if prepared_id is not None:
@@ -483,6 +495,8 @@ def from_arguments(args, native):
     if plan.admission_ns > positive(job["admission_ns"]):
         raise ValueError("fixture plan exceeds the original job's declared admission")
     clock = Clock(plan, job_origin_ns=positive(job["origin_ns"]))
+    if workload.get("transportLifecycle"):
+        clock.provenance["transportLifecycle"] = workload["transportLifecycle"]
     if prepared_id is not None:
         clock.provenance["preparedId"] = prepared_id
     return clock

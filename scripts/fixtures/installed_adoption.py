@@ -30,6 +30,8 @@ class AdoptionCase(installed_native.Installation):
         self.expected_workers = 1
         self.worker_group = None
         self.catalog = None
+        from fixtures import installed_transport_lifecycle
+        installed_transport_lifecycle.configure(self)
 
     def start_cohort(self, registry, probe):
         current = self.control("host.info")["host"]["build"]

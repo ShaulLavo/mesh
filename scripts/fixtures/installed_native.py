@@ -347,6 +347,9 @@ class Installation:
         self.route_observer = installed_routes.Observer(self.port, self.listener, self.root / "route-observation.json")
         self.route_observer.start()
 
+        from fixtures import installed_transport_lifecycle
+        installed_transport_lifecycle.capture_original(self)
+
     def prepare_client(self):
         config = self.root / "cc"
         config.mkdir()
