@@ -16,8 +16,8 @@
   },
   "phases": [
     {
-      "key": "setup#1",
-      "limit_ns": 3075000000,
+      "key": "span:setup#1",
+      "limit_ns": 39568000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -30,7 +30,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#1",
+            "signer-build:#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -39,7 +45,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 123744785610,
+              "end_ns": 158916104948,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -53,108 +65,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#1",
+                "signer-build:#1"
+              ]
+            }
           },
-          "elapsed_ns": 2733137847,
+          "elapsed_ns": 35171319338,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "signer-build:#1",
-      "limit_ns": 36493000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 32438181491,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#2",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 33924,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "signer-start#1",
+      "key": "span:setup#2",
       "limit_ns": 58000000,
       "workload": {
         "platform": "linux/amd64",
@@ -168,7 +94,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#2",
+            "signer-start#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -177,7 +109,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 158916104948,
+              "end_ns": 158967088130,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -191,62 +129,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#2",
+                "signer-start#1"
+              ]
+            }
           },
-          "elapsed_ns": 50949258,
+          "elapsed_ns": 50983182,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#3",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 159247,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "acquire:v0.1.249#1",
+      "key": "span:setup#3",
       "limit_ns": 1230000000,
       "workload": {
         "platform": "linux/amd64",
@@ -260,7 +158,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#3",
+            "acquire:v0.1.249#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -269,7 +173,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 158967088130,
+              "end_ns": 160059836930,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -283,62 +193,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#3",
+                "acquire:v0.1.249#1"
+              ]
+            }
           },
-          "elapsed_ns": 1092589553,
+          "elapsed_ns": 1092748800,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#4",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 40265,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "acquire:v0.1.196#1",
+      "key": "span:setup#4",
       "limit_ns": 1386000000,
       "workload": {
         "platform": "linux/amd64",
@@ -352,7 +222,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#4",
+            "acquire:v0.1.196#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -361,7 +237,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 160059836930,
+              "end_ns": 161291020058,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -375,62 +257,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#4",
+                "acquire:v0.1.196#1"
+              ]
+            }
           },
-          "elapsed_ns": 1231142863,
+          "elapsed_ns": 1231183128,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#5",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 59000,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "acquire:v0.1.248#1",
+      "key": "span:setup#5",
       "limit_ns": 1235000000,
       "workload": {
         "platform": "linux/amd64",
@@ -444,7 +286,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#5",
+            "acquire:v0.1.248#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -453,7 +301,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 161291020058,
+              "end_ns": 162388092791,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -467,62 +321,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#5",
+                "acquire:v0.1.248#1"
+              ]
+            }
           },
-          "elapsed_ns": 1097013733,
+          "elapsed_ns": 1097072733,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#6",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 46086,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "build:v0.1.9001:epoch=1#1",
+      "key": "span:setup#6",
       "limit_ns": 69137000000,
       "workload": {
         "platform": "linux/amd64",
@@ -536,7 +350,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#6",
+            "build:v0.1.9001:epoch=1#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -545,7 +365,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 162388092791,
+              "end_ns": 223842705070,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -559,17 +385,23 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#6",
+                "build:v0.1.9001:epoch=1#1"
+              ]
+            }
           },
-          "elapsed_ns": 61454566193,
+          "elapsed_ns": 61454612279,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#7",
-      "limit_ns": 1000000,
+      "key": "span:setup#7",
+      "limit_ns": 240359000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -582,7 +414,15 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#7",
+            "proof:v0.1.249:v0.1.9001#1",
+            "native-transition:v0.1.249:v0.1.9001#1",
+            "proof:v0.1.249:v0.1.9001#2"
+          ]
+        }
       },
       "samples": [
         {
@@ -591,7 +431,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 223842705070,
+              "end_ns": 437494524760,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -605,200 +451,24 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#7",
+                "proof:v0.1.249:v0.1.9001#1",
+                "native-transition:v0.1.249:v0.1.9001#1",
+                "proof:v0.1.249:v0.1.9001#2"
+              ]
+            }
           },
-          "elapsed_ns": 84016,
+          "elapsed_ns": 213651819690,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "proof:v0.1.249:v0.1.9001#1",
-      "limit_ns": 54000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 47813734,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "native-transition:v0.1.249:v0.1.9001#1",
-      "limit_ns": 240302000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 213601075590,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "proof:v0.1.249:v0.1.9001#2",
-      "limit_ns": 4000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 2846350,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#8",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 24115,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "publish:v0.1.9001#1",
+      "key": "span:setup#8",
       "limit_ns": 128000000,
       "workload": {
         "platform": "linux/amd64",
@@ -812,7 +482,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#8",
+            "publish:v0.1.9001#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -821,7 +497,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 437494524760,
+              "end_ns": 437608240477,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -835,62 +517,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#8",
+                "publish:v0.1.9001#1"
+              ]
+            }
           },
-          "elapsed_ns": 113691602,
+          "elapsed_ns": 113715717,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#9",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 32019,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "build:v0.1.9002:epoch=1#1",
+      "key": "span:setup#9",
       "limit_ns": 30375000000,
       "workload": {
         "platform": "linux/amd64",
@@ -904,7 +546,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#9",
+            "build:v0.1.9002:epoch=1#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -913,7 +561,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 437608240477,
+              "end_ns": 464607722177,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -927,17 +581,23 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#9",
+                "build:v0.1.9002:epoch=1#1"
+              ]
+            }
           },
-          "elapsed_ns": 26999449681,
+          "elapsed_ns": 26999481700,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#10",
-      "limit_ns": 1000000,
+      "key": "span:setup#10",
+      "limit_ns": 93222000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -950,7 +610,15 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#10",
+            "proof:linux-amd64:v0.1.9002#1",
+            "native-transition:linux-amd64:v0.1.9002#1",
+            "proof:linux-amd64:v0.1.9002#2"
+          ]
+        }
       },
       "samples": [
         {
@@ -959,7 +627,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 464607722177,
+              "end_ns": 547470844422,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -973,200 +647,24 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#10",
+                "proof:linux-amd64:v0.1.9002#1",
+                "native-transition:linux-amd64:v0.1.9002#1",
+                "proof:linux-amd64:v0.1.9002#2"
+              ]
+            }
           },
-          "elapsed_ns": 60002,
+          "elapsed_ns": 82863122245,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "proof:linux-amd64:v0.1.9002#1",
-      "limit_ns": 114000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 100649659,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "native-transition:linux-amd64:v0.1.9002#1",
-      "limit_ns": 93105000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 82759555132,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "proof:linux-amd64:v0.1.9002#2",
-      "limit_ns": 4000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 2857452,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#11",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 22001,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "publish:v0.1.9002#1",
+      "key": "span:setup#11",
       "limit_ns": 110000000,
       "workload": {
         "platform": "linux/amd64",
@@ -1180,7 +678,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#11",
+            "publish:v0.1.9002#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1189,7 +693,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 547470844422,
+              "end_ns": 547568332636,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1203,62 +713,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#11",
+                "publish:v0.1.9002#1"
+              ]
+            }
           },
-          "elapsed_ns": 97466213,
+          "elapsed_ns": 97488214,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#12",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 42259,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "custom-source:v0.1.9001#1",
+      "key": "span:setup#12",
       "limit_ns": 2986000000,
       "workload": {
         "platform": "linux/amd64",
@@ -1272,7 +742,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#12",
+            "custom-source:v0.1.9001#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1281,7 +757,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 547568332636,
+              "end_ns": 550221978196,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1295,62 +777,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#12",
+                "custom-source:v0.1.9001#1"
+              ]
+            }
           },
-          "elapsed_ns": 2653603301,
+          "elapsed_ns": 2653645560,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#13",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 49863,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "build:v0.1.9003:epoch=1#1",
+      "key": "span:setup#13",
       "limit_ns": 30263000000,
       "workload": {
         "platform": "linux/amd64",
@@ -1364,7 +806,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#13",
+            "build:v0.1.9003:epoch=1#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1373,7 +821,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 550221978196,
+              "end_ns": 577121718360,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1387,17 +841,23 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#13",
+                "build:v0.1.9003:epoch=1#1"
+              ]
+            }
           },
-          "elapsed_ns": 26899690301,
+          "elapsed_ns": 26899740164,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#14",
-      "limit_ns": 1000000,
+      "key": "span:setup#14",
+      "limit_ns": 93421000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -1410,7 +870,15 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#14",
+            "proof:linux-amd64:v0.1.9003#1",
+            "native-transition:linux-amd64:v0.1.9003#1",
+            "proof:linux-amd64:v0.1.9003#2"
+          ]
+        }
       },
       "samples": [
         {
@@ -1419,7 +887,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 577121718360,
+              "end_ns": 660162471005,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1433,200 +907,24 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#14",
+                "proof:linux-amd64:v0.1.9003#1",
+                "native-transition:linux-amd64:v0.1.9003#1",
+                "proof:linux-amd64:v0.1.9003#2"
+              ]
+            }
           },
-          "elapsed_ns": 52367,
+          "elapsed_ns": 83040752645,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "proof:linux-amd64:v0.1.9003#1",
-      "limit_ns": 113000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 99825077,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "native-transition:linux-amd64:v0.1.9003#1",
-      "limit_ns": 93306000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 82938009352,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "proof:linux-amd64:v0.1.9003#2",
-      "limit_ns": 4000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 2865849,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#15",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 22461,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "publish:v0.1.9003#1",
+      "key": "span:setup#15",
       "limit_ns": 85000000,
       "workload": {
         "platform": "linux/amd64",
@@ -1640,7 +938,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#15",
+            "publish:v0.1.9003#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1649,7 +953,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 660162471005,
+              "end_ns": 660237817718,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1663,17 +973,23 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#15",
+                "publish:v0.1.9003#1"
+              ]
+            }
           },
-          "elapsed_ns": 75324252,
+          "elapsed_ns": 75346713,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#16",
-      "limit_ns": 1000000,
+      "key": "span:setup#16",
+      "limit_ns": 116000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -1686,7 +1002,15 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#16",
+            "serve:releases#1",
+            "setup#17",
+            "head:v0.1.9001#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1695,7 +1019,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 660237817718,
+              "end_ns": 660340167000,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1709,200 +1039,24 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#16",
+                "serve:releases#1",
+                "setup#17",
+                "head:v0.1.9001#1"
+              ]
+            }
           },
-          "elapsed_ns": 51757,
+          "elapsed_ns": 102349282,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "serve:releases#1",
-      "limit_ns": 115000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 101794277,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#17",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 40566,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "head:v0.1.9001#1",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 462682,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "setup#18",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 28793,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "partition:v0.1.9001#1",
+      "key": "span:setup#18",
       "limit_ns": 3032000000,
       "workload": {
         "platform": "linux/amd64",
@@ -1916,7 +1070,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#18",
+            "partition:v0.1.9001#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -1925,7 +1085,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 660340167000,
+              "end_ns": 663035116616,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -1939,62 +1105,22 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#18",
+                "partition:v0.1.9001#1"
+              ]
+            }
           },
-          "elapsed_ns": 2694920823,
+          "elapsed_ns": 2694949616,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#19",
-      "limit_ns": 1000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 34063,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "prepared-export:#1",
+      "key": "span:setup#19",
       "limit_ns": 10184000000,
       "workload": {
         "platform": "linux/amd64",
@@ -2008,7 +1134,13 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#19",
+            "prepared-export:#1"
+          ]
+        }
       },
       "samples": [
         {
@@ -2017,7 +1149,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 663035116616,
+              "end_ns": 672087030085,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -2031,17 +1169,23 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#19",
+                "prepared-export:#1"
+              ]
+            }
           },
-          "elapsed_ns": 9051879406,
+          "elapsed_ns": 9051913469,
           "completed": true,
           "cleanup_verified": true
         }
       ]
     },
     {
-      "key": "setup#20",
-      "limit_ns": 1000000,
+      "key": "span:setup#20",
+      "limit_ns": 661000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -2054,53 +1198,14 @@
         "manifestSchemas": [
           1
         ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 35186,
-          "completed": true,
-          "cleanup_verified": true
+        "preparedRole": "prepare",
+        "clockSpan": {
+          "leaves": [
+            "setup#20",
+            "completion#1",
+            "completion#2"
+          ]
         }
-      ]
-    },
-    {
-      "key": "completion#1",
-      "limit_ns": 476000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
       },
       "samples": [
         {
@@ -2109,7 +1214,13 @@
               "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
               "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
             },
-            "observation": {}
+            "observation": {},
+            "clock_span": {
+              "start_ns": 672087030085,
+              "end_ns": 672674487624,
+              "origin_ns": 123744785610,
+              "command_end_ns": 672674487624
+            }
           },
           "workload": {
             "platform": "linux/amd64",
@@ -2123,55 +1234,16 @@
             "manifestSchemas": [
               1
             ],
-            "preparedRole": "prepare"
+            "preparedRole": "prepare",
+            "clockSpan": {
+              "leaves": [
+                "setup#20",
+                "completion#1",
+                "completion#2"
+              ]
+            }
           },
-          "elapsed_ns": 422619956,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "completion#2",
-      "limit_ns": 186000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "chain",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": false,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "preparedRole": "prepare"
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/snapshot-2/evidence/linux-amd64-chain-prepare/cohort-proof/fixture-clock.json",
-              "sha256": "322d7b534d99b24b26bbac74409d897acc1ae6916fac84f80dc39af197b4dfe0"
-            },
-            "observation": {}
-          },
-          "workload": {
-            "platform": "linux/amd64",
-            "host": "pc",
-            "mode": "chain",
-            "scenario": null,
-            "grouped": true,
-            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-            "catalogEvidence": false,
-            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-            "manifestSchemas": [
-              1
-            ],
-            "preparedRole": "prepare"
-          },
-          "elapsed_ns": 164802397,
+          "elapsed_ns": 587457539,
           "completed": true,
           "cleanup_verified": true
         }
@@ -8340,7 +7412,7 @@
       ]
     }
   ],
-  "command_ns": 617580000000,
+  "command_ns": 617556000000,
   "external_ns": 187955000000,
   "external_budget": {
     "key": "external",
@@ -8409,5 +7481,5 @@
   },
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,
-  "eligibility_review": "Independent GPT review, 2026-11-13, run 43451015125 snapshot 2; see ELIGIBILITY.md"
+  "eligibility_review": ""
 }

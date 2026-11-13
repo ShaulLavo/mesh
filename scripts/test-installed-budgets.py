@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from fixtures import installed_budgets as budgets, installed_clock as clocks
+from fixtures import installed_budgets as budgets, installed_clock as clocks, installed_span_controls as span_controls
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = (ROOT / ".github/workflows/installed-catchup.yml").read_text()
@@ -53,10 +53,8 @@ class FrozenBudgetTests(unittest.TestCase):
                               if self.args.worker_registry else None,
                               "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
                               "manifestSchemas": [1, 2] if mode == "waypoint" else [1]}
-        phase, external = synthetic_budget("setup#1"), synthetic_budget("external")
-        plan = clocks.ClockPlan(mode="frozen", workload=workload, phases=(phase,), command_ns=phase.limit_ns,
-            external_ns=external.limit_ns, emergency_ns=clocks.SECOND, eligibility_review="test-only approval",
-            external_budget=external, admission_ns=1175 * clocks.SECOND)
+        external = synthetic_budget("external")
+        plan = span_controls.synthetic_plan(workload, external)
         value = asdict(plan) | changes
         (self.root / (key + ".json")).write_text(json.dumps(value))
         entries = json.loads(self.index.read_text())["plans"] if self.index.exists() else {}
@@ -86,7 +84,7 @@ class FrozenBudgetTests(unittest.TestCase):
         value = json.loads(path.read_text())
         value.update(mode="diagnostic", phases=[], command_ns=clocks.SECOND)
         path.write_text(json.dumps(value))
-        with self.assertRaisesRegex(ValueError, "selection differs"):
+        with self.assertRaisesRegex(ValueError, "selection differs|span|ineligible clock sample"):
             budgets.select_plan(self.index, key, context)
 
     def test_plan_binding_preserves_original_origin_and_registry_identity(self):
@@ -107,7 +105,7 @@ class FrozenBudgetTests(unittest.TestCase):
             value = json.loads(path.read_text())
             value["workload"][field] = changed
             path.write_text(json.dumps(value))
-            with self.assertRaisesRegex(ValueError, "selection differs"):
+            with self.assertRaisesRegex(ValueError, "selection differs|span|ineligible clock sample"):
                 budgets.select_plan(self.index, key, context)
 
     def test_original_job_identity_and_live_setup_time_stay_enforced(self):
@@ -180,24 +178,22 @@ class FrozenBudgetTests(unittest.TestCase):
         self.args.clock_plan = self.root / "linux-amd64-oldest.json"
         with self.assertRaisesRegex(ValueError, "prepared role differs"):
             budgets.bind(self.args, "linux/amd64")
-        value = json.loads(self.args.clock_plan.read_text())
-        value["workload"]["preparedRole"] = "prepare"
-        self.args.clock_plan.write_text(json.dumps(value))
+        span_controls.write_plan(self.args.clock_plan, span_controls.reviewed_for_test("linux-amd64-chain-prepare"))
         budgets.bind(self.args, "linux/amd64")
         self.args.export_prepared, self.args.prepared_releases = None, self.root / "bundle"
         with self.assertRaisesRegex(ValueError, "prepared role differs"):
             budgets.bind(self.args, "linux/amd64")
-        value["workload"]["preparedRole"] = "consume"
-        self.args.clock_plan.write_text(json.dumps(value))
+        span_controls.write_plan(self.args.clock_plan, span_controls.reviewed_for_test("linux-amd64-chain-consume-first"))
         budgets.bind(self.args, "linux/amd64")
 
-    def test_actual_fresh_plan_admits_only_its_exact_workload(self):
+    def test_actual_fresh_draft_requires_fresh_review_before_binding(self):
         self.args.clock_plan_index = budgets.INDEX
         self.args.source_host, self.args.worker_registry, self.args.fresh_managed = None, None, True
-        budgets.bind(self.args, "linux/amd64")
+        with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
+            budgets.bind(self.args, "linux/amd64")
+        self.args.clock_plan = self.root / "test-only-fresh.json"
+        span_controls.write_plan(self.args.clock_plan, span_controls.reviewed_for_test())
         plan = clocks.from_arguments(self.args, "linux/amd64").plan
-        self.assertEqual(plan.workload["mode"], "fresh")
-        self.assertEqual(budgets.workflow_minutes(plan), 15)
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(plan.emergency_ns, 60 * clocks.SECOND)
         for field, value in (("source_host", "pc"), ("scenario", "initial")):
@@ -220,11 +216,13 @@ class FrozenBudgetTests(unittest.TestCase):
 
     def test_reviewed_order_plan_preserves_its_complete_admission(self):
         key, workload = budgets.selection("linux/amd64", "order")
-        _path, plan = budgets.select_plan(budgets.INDEX, key, workload)
-        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_905_000_000)
+        with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
+            budgets.select_plan(budgets.INDEX, key, workload)
+        plan = span_controls.reviewed_for_test(key)
+        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_884_000_000)
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(budgets.workflow_minutes(plan), 15)
-        self.assertEqual((len(plan.phases), len(plan.guards)), (43, 11))
+        self.assertEqual((len(plan.phases), len(plan.guards)), (16, 11))
 
     def test_all_ten_cohort_cells_and_six_support_cells_are_required(self):
         profiles = budgets.required_profiles(True, True, None, False)
@@ -233,9 +231,12 @@ class FrozenBudgetTests(unittest.TestCase):
         self.assertEqual(sum(context["grouped"] for _key, context in profiles), 10)
         self.assertIn(("linux-amd64-order", budgets.selection("linux/amd64", "order")[1]), profiles)
         for key, context in profiles:
+            if context["mode"] in ("chain", "waypoint"):
+                continue
             self.write_plan(context["platform"], context["mode"], context["scenario"], context["catalogEvidence"])
         args = SimpleNamespace(index=self.index, cohort=True, support=True, adoption_scenario=None, catalog_evidence=False)
-        self.assertEqual(budgets.workflow_budgets(args), {key: 20 for key, _context in profiles})
+        with self.assertRaisesRegex(ValueError, "no independently approved.*chain"):
+            budgets.workflow_budgets(args)
 
 
 class WorkflowWiringTests(unittest.TestCase):
@@ -286,11 +287,12 @@ class WorkflowWiringTests(unittest.TestCase):
             "GITHUB_JOB": "native-fresh", "PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1",
             "MESH_CATALOG_EVIDENCE": "0"}
         accepted = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT, env=environment, capture_output=True, timeout=5)
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertNotEqual(accepted.returncode, 0)
+        self.assertIn(b"reviewed eligibility", accepted.stderr)
         mismatch = subprocess.run(["bash", "-e", "-c", script.replace("source_host=None", 'source_host="pc"')], cwd=ROOT,
             env=environment, capture_output=True, timeout=5)
         self.assertNotEqual(mismatch.returncode, 0)
-        self.assertIn(b"workload differs from actual invocation", mismatch.stderr)
+        self.assertIn(b"reviewed eligibility", mismatch.stderr)
         self.assertEqual(list(root.iterdir()), [origin])
 
     def test_support_diagnostic_selection_is_explicit_and_cannot_enable_ordinary_fallback(self):

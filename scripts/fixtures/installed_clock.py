@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 import functools
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,11 @@ import signal
 import subprocess
 import sys
 import time
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+spans = importlib.import_module("fixtures.installed_spans")
+partition_leaf_keys, span_intervals = spans.partition_leaf_keys, spans.span_intervals
 
 SECOND = 1_000_000_000
 MILLISECOND = 1_000_000
@@ -96,11 +102,62 @@ class ClockPlan:
             raise ValueError("frozen clock needs reviewed eligibility and exact unique keys")
         for row in budgets:
             row.validate()
+        validate_spans(self)
         if self.external_budget is None or self.external_budget.limit_ns != self.external_ns:
             raise ValueError("frozen external overhead needs its independently measured budget")
         self.external_budget.validate()
         if sum(row.limit_ns for row in self.phases) != self.command_ns:
-            raise ValueError("command clock must equal disjoint leaf budgets")
+            raise ValueError("command clock must equal disjoint span budgets")
+
+
+def validate_spans(plan):
+    parts = [row.workload.get("clockSpan", {}).get("leaves") for row in plan.phases]
+    if any(not isinstance(part, list) or not part for part in parts):
+        raise ValueError("frozen clock requires explicit span membership; leaf plans are obsolete")
+    keys = [key for part in parts for key in part]
+    if parts != partition_leaf_keys(keys, plan.workload):
+        raise ValueError("frozen span membership differs from canonical partition")
+    for row, part in zip(plan.phases, parts):
+        if row.key != "span:" + part[0] or row.workload != plan.workload | {"clockSpan": {"leaves": part}}:
+            raise ValueError("span key/workload projection differs")
+    if any("clockSpan" in row.workload for row in plan.guards):
+        raise ValueError("guards cannot contain span membership")
+    validate_span_samples(plan.phases)
+
+
+def validate_span_samples(phases):
+    sources = None
+    cursors = {}
+    for phase in phases:
+        current_sources = validate_span_sources(phase, cursors, phase is phases[-1])
+        if sources is not None and current_sources != sources:
+            raise ValueError("span samples mix incomplete invocations")
+        sources = current_sources
+
+
+def validate_span_sources(phase, cursors, final):
+    sources = set()
+    for sample in phase.samples:
+        source, start, end, origin, terminal = span_sample(sample)
+        if source in sources or start != cursors.get(source, origin):
+            raise ValueError("span samples duplicate a source or have a gap/overlap")
+        sources.add(source)
+        cursors[source] = end
+        if final and end != terminal:
+            raise ValueError("span samples omit the command endpoint")
+    return sources
+
+
+def span_sample(sample):
+    ref = sample.provenance.get("fixture_record", {})
+    endpoints = sample.provenance.get("clock_span", {})
+    fields = ("start_ns", "end_ns", "origin_ns", "command_end_ns")
+    if not ref.get("path") or len(ref.get("sha256", "")) != 64 or any(type(endpoints.get(key)) is not int for key in fields):
+        raise ValueError("span sample lacks exact source and endpoints")
+    start, end, origin, terminal = (endpoints[key] for key in fields)
+    if not 0 <= origin <= start < end <= terminal or end - start != sample.elapsed_ns:
+        raise ValueError("span sample endpoints differ from its elapsed interval")
+    return (ref["path"], ref["sha256"], origin, terminal), start, end, origin, terminal
 
 
 def load_plan(path):
@@ -119,6 +176,36 @@ def load_plan(path):
 
 def load_budget(value):
     return PhaseBudget(**(value | {"samples": tuple(SampleRef(**row) for row in value["samples"])}))
+
+
+def reduce_span_budgets(observations):
+    """Reduce whole completed invocations; callers verify retained source bytes."""
+    if not observations:
+        raise ValueError("span reduction needs completed source invocations")
+    workload = observations[0]["fixture"]["workload"]
+    intervals = [span_intervals(row["fixture"]) for row in observations]
+    if any(row["fixture"]["workload"] != workload for row in observations):
+        raise ValueError("span reduction mixes workloads")
+    parts = [[part["leaves"] for part in rows] for rows in intervals]
+    if any(part != parts[0] for part in parts):
+        raise ValueError("span reduction mixes membership")
+    result = []
+    for index, part in enumerate(intervals[0]):
+        context = workload | {"clockSpan": {"leaves": part["leaves"]}}
+        samples = tuple(span_reference(row, rows[index], context) for row, rows in zip(observations, intervals))
+        result.append(PhaseBudget(part["key"], bound(max(row.elapsed_ns for row in samples)), context, samples))
+    validate_span_samples(result)
+    return tuple(result)
+
+
+def span_reference(observed, part, workload):
+    record = observed["fixture"]
+    provenance = observed.get("provenance", {"fixture_record": observed["source"], "observation": {}})
+    if provenance.get("fixture_record") != observed["source"]:
+        raise ValueError("span source reference differs from measured invocation")
+    endpoints = {key: part[key] for key in ("start_ns", "end_ns")}
+    endpoints.update(origin_ns=record["origin_ns"], command_end_ns=record["end_ns"])
+    return SampleRef(provenance | {"clock_span": endpoints}, workload, part["elapsed_ns"], True, True)
 
 
 class ClockExpired(TimeoutError):
@@ -145,6 +232,9 @@ class Clock:
         self.counts["setup"] = 1
         self.watchdog, self.previous_handler = False, None
         self.budgets = {row.key: row.limit_ns for row in plan.phases + plan.guards}
+        self.span_index, self.span_leaf_index = 0, 0
+        self.span_started_ns = self.origin_ns
+        self.span_deadline_ns = self.origin_ns + plan.phases[0].limit_ns if plan.mode == "frozen" else None
 
     def effective_deadline(self):
         if self.cleanup_deadline_ns is not None:
@@ -152,7 +242,7 @@ class Clock:
         ends = [self.deadline_ns]
         ends.extend(row["deadline_ns"] for row in self.stack)
         if self.plan.mode == "frozen":
-            ends.append(self.started_ns + self.limit(self.active_key))
+            ends.append(self.span_deadline_ns)
         return min(ends)
 
     def limit(self, key):
@@ -196,13 +286,32 @@ class Clock:
         self.counts[name] = self.counts.get(name, 0) + 1
         return name + "#" + str(self.counts[name])
 
-    def switch(self, name, *, now=None):
+    def switch(self, name, *, now=None, _checked=False):
         now = self.now() if now is None else now
-        self.check(now)
+        if not _checked:
+            self.check(now)
+        key = self.next_key(name)
+        if self.plan.mode == "frozen" and not self.failures:
+            self.advance_span(key, now)
         self.close_leaf(now)
-        self.active_key, self.started_ns = self.next_key(name), now
+        self.active_key, self.started_ns = key, now
         self.arm()
         return self.active_key
+
+    def advance_span(self, key, now):
+        phase = self.plan.phases[self.span_index]
+        offset = self.span_leaf_index + 1
+        index = self.span_index
+        if offset == len(phase.workload["clockSpan"]["leaves"]):
+            index, offset = index + 1, 0
+        if index >= len(self.plan.phases) or self.plan.phases[index].workload["clockSpan"]["leaves"][offset] != key:
+            error = ValueError("frozen clock sequence differs from expected span leaf: " + key)
+            self.fail(error)
+            raise error
+        if index != self.span_index:
+            self.span_started_ns = now
+            self.span_deadline_ns = now + self.plan.phases[index].limit_ns
+        self.span_index, self.span_leaf_index = index, offset
 
     def close_leaf(self, now):
         self.rows.append({"key": self.active_key, "start_ns": self.started_ns, "end_ns": now,
@@ -239,7 +348,7 @@ class Clock:
                              "elapsed_ns": ended - start, "completed": not self.failures,
                              "cleanup_verified": False})
         self.stack.pop()
-        self.switch(previous, now=ended)
+        self.switch(previous, now=ended, _checked=True)
 
     def arm(self):
         if self.watchdog and not self.failures:
@@ -279,7 +388,7 @@ class Clock:
         self.close_leaf(now)
         keys = [row["key"] for row in self.rows]
         complete = not self.failures and cleanup_verified
-        if self.plan.mode == "frozen" and keys != [row.key for row in self.plan.phases]:
+        if self.plan.mode == "frozen" and keys != self.leaf_keys():
             self.fail(ValueError("frozen clock sequence differs from actual disjoint leaves"))
             complete = False
         samples = [qualify(row, cleanup_verified or row["key"] in self.clean_keys) for row in self.samples]
@@ -304,8 +413,28 @@ class Clock:
                  "provenance": self.provenance | provenance, "leaves": leaves, "samples": samples, "failures": self.failures,
                  "expected_sample_keys": sorted(self.expected_samples),
                  "missing_sample_keys": missing, "unresolved_key_sets": sorted(self.unresolved)}
+        value["spans"] = self.recorded_spans(leaves)
         self.persist(path, value)
         return value
+
+    def leaf_keys(self):
+        return [key for row in self.plan.phases for key in row.workload["clockSpan"]["leaves"]]
+
+    def recorded_spans(self, leaves):
+        result, offset = [], 0
+        for phase in self.plan.phases:
+            part = phase.workload["clockSpan"]["leaves"]
+            rows = leaves[offset:offset + len(part)]
+            if not rows:
+                break
+            if [row["key"] for row in rows] != part[:len(rows)]:
+                break
+            result.append({"key": phase.key, "leaves": [row["key"] for row in rows],
+                           "start_ns": rows[0]["start_ns"], "end_ns": rows[-1]["end_ns"],
+                           "elapsed_ns": rows[-1]["end_ns"] - rows[0]["start_ns"], "limit_ns": phase.limit_ns,
+                           "completed": len(rows) == len(part) and all(row["eligible"] for row in rows)})
+            offset += len(part)
+        return result
 
     def persist(self, path, value):
         path = Path(path)
@@ -319,6 +448,7 @@ class Clock:
         last.update(end_ns=now, elapsed_ns=now - last["start_ns"], completed=completed, eligible=eligible)
         value.update(end_ns=now, command_ns=now - self.origin_ns,
                      disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
+        value["spans"] = self.recorded_spans(value["leaves"])
         value["measurement_write_epilogue"] = {"start_ns": now, "charged_to": "completion", "final_absolute_guard": True}
         value["accepted"] = accepted
         path.write_text(json.dumps(value, indent=2) + "\n")
@@ -334,6 +464,7 @@ class Clock:
             value.update(accepted=False, measurement_completed=False, failures=self.failures)
             value.update(end_ns=now, command_ns=now - self.origin_ns,
                          disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
+            value["spans"] = self.recorded_spans(value["leaves"])
             path.write_text(json.dumps(value, indent=2) + "\n")
 
 
@@ -568,15 +699,19 @@ def operation(name):
 
 def timed(kind, identity=lambda *_args, **_kwargs: ""):
     def decorate(function):
-        @functools.wraps(function)
-        def call(*args, **kwargs):
-            name = kind + ":" + identity(*args, **kwargs)
-            if kind == "case-cleanup":
-                cleanup()
-            with operation(name):
-                return function(*args, **kwargs)
-        return call
+        return timed_function(function, kind, identity)
     return decorate
+
+
+def timed_function(function, kind, identity):
+    @functools.wraps(function)
+    def call(*args, **kwargs):
+        name = kind + ":" + identity(*args, **kwargs)
+        if kind == "case-cleanup":
+            cleanup()
+        with operation(name):
+            return function(*args, **kwargs)
+    return call
 
 
 @contextmanager

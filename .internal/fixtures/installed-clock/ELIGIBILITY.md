@@ -1,7 +1,14 @@
 # Measured installed clocks
 
-Status: Approved for the exact workloads in these plans after independent GPT
-numerical review on 2026-11-13. Measurements come from hosted run
+Status: Local span drafts, pending fresh independent numerical and code review.
+The 33 plans retain their historical raw sources, external observations, reserves
+and admissions. The 201 guard objects are unchanged. Empty eligibility reviews
+block runtime use. No numerical approval below transfers to span grouping, and
+no new frozen acceptance is claimed. Four consumer slots remain unindexed.
+
+The following entries record historical leaf-plan approvals only.
+
+Measurements come from hosted run
 [43421606579](https://github.com/ShaulLavo/mesh/actions/runs/43421606579), source
 `a5cdb054ab73c6a9cf6fbb0a85f4b34f68fd1676`.
 

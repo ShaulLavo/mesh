@@ -1,8 +1,31 @@
 # Installed frozen plan selection
 
-This wiring change supplies no numeric plan. The parent records independent
-eligibility approval and activates exact plans in a separate change. An absent
-index or plan is a hard error for ordinary fixture callers.
+The 33 indexed numeric files are local operation-span drafts. Their empty
+`eligibility_review` deliberately blocks execution. Fresh independent numerical
+and code reviews must approve the new grouping before the parent activates it.
+Historical leaf-plan approvals do not approve span semantics. Index selections,
+external observations, admissions, reserves and all 201 guard objects are unchanged.
+
+Each phase key is `span:<first raw leaf key>`. Its workload is the invocation
+workload plus `clockSpan: {leaves: [...]}`. The strict pure grammar in
+`scripts/fixtures/installed_spans.py` binds operation identities, nested resumes,
+heads, complete group indices and readers to the retained workload. Setup joins
+its following whole operation. Consecutive declared release/public serving and
+heads share one span. The exact final setup/completion pair has its own span.
+Unknown shapes fail before execution. Old leaf plans have no loader fallback.
+
+A span deadline starts at its first leaf and survives all nested calls and
+resumes. Command, active span, stacked guards and parent handoffs remain absolute
+bounds. Terminal export stays in the final span through the final write/check;
+late returns are censored and cannot accept. Raw leaves and operation samples
+remain diagnostic evidence.
+
+Run `python3 -B scripts/migrate-installed-spans.py --output OUTPUT` to rebuild
+the exact candidate packet from the retained same-invocation sources at the
+historical baseline. `--write-drafts` also replaces this exclusive tree's numeric
+files, leaving eligibility empty. The tool verifies original samples with their
+measured harness API and validates draft shape with the current API under an
+explicit test-only marker. No review marker is emitted into runtime plans.
 
 The parent owns `index.json` and plan files. After independent approval, the index
 has this shape, with paths relative to this directory:

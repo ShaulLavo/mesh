@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
+from fixtures import installed_span_controls as span_controls
 from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host, installed_native, installed_accounts, installed_paths, native_services
 
 
@@ -220,16 +221,14 @@ class ClockTest(unittest.TestCase):
         self.assertFalse(interval["external_complete"])
 
     def test_frozen_exact_sequence_and_derived_total(self):
-        phases = tuple(budget(key) for key in ("setup#1", "work#1", "setup#2"))
-        plan = clocks.ClockPlan("frozen", {"scenario": "chain"}, phases, (), sum(row.limit_ns for row in phases),
-                                240 * clocks.SECOND, 60 * clocks.SECOND, "independent review", budget("external", 213_333_333_333))
-        clock = self.clock(plan)
-        with clock.operation("work"):
-            self.now.advance(100_000_000)
+        clock = self.clock(self.fresh_plan())
+        for key in span_controls.leaf_keys(clock.plan)[1:]:
+            self.now.advance(1)
+            clock.switch(key.rsplit("#", 1)[0])
         self.assertTrue(self.export(clock)["accepted"])
 
     def fresh_plan(self):
-        return clocks.load_plan(Path(__file__).resolve().parents[1] / ".internal/fixtures/installed-clock/linux-amd64-fresh.json")
+        return span_controls.reviewed_for_test()
 
     def test_frozen_switch_checks_the_timestamp_it_records(self):
         clock = self.clock(self.fresh_plan())
@@ -240,15 +239,16 @@ class ClockTest(unittest.TestCase):
         self.assertLess(clock.rows[-1]["elapsed_ns"], clock.plan.phases[0].limit_ns)
         clock.now.assert_called_once()
 
-    def test_reviewed_millisecond_setup_leaf_expires_without_a_floor(self):
+    def test_setup_and_operation_share_an_absolute_span_without_a_floor(self):
         clock = self.clock(self.fresh_plan())
-        clock.switch("signer-build:")
-        clock.switch("setup")
-        self.assertEqual(clock.limit("setup#2"), clocks.MILLISECOND)
+        deadline = clock.effective_deadline()
         self.now.advance(clocks.MILLISECOND)
-        with self.assertRaisesRegex(clocks.ClockExpired, "setup#2"):
-            clock.switch("signer-start")
-        self.assertEqual(clock.active_key, "setup#2")
+        clock.switch("signer-build:")
+        self.assertEqual(clock.effective_deadline(), deadline)
+        self.now.value = deadline
+        with self.assertRaisesRegex(clocks.ClockExpired, "signer-build"):
+            clock.switch("setup")
+        self.assertEqual(clock.active_key, "signer-build:#1")
         self.assertEqual(clock.cleanup_deadline_ns, self.now() + clock.plan.emergency_ns)
 
     def test_operation_finish_checks_guard_before_popping_it(self):
@@ -285,20 +285,20 @@ class ClockTest(unittest.TestCase):
 
     def test_reviewed_fresh_sequence_can_complete_with_controlled_time(self):
         clock = self.clock(self.fresh_plan())
-        for phase in clock.plan.phases[1:]:
+        for key in span_controls.leaf_keys(clock.plan)[1:]:
             self.now.advance(1)
-            clock.switch(phase.key.rsplit("#", 1)[0])
+            clock.switch(key.rsplit("#", 1)[0])
         value = self.export(clock)
         self.assertTrue(value["accepted"])
         self.assertEqual(value["disjoint_ns"], value["command_ns"])
 
     def test_reviewed_completion_export_overrun_is_censored(self):
         clock = self.clock(self.fresh_plan())
-        for phase in clock.plan.phases[1:]:
-            clock.switch(phase.key.rsplit("#", 1)[0])
+        for key in span_controls.leaf_keys(clock.plan)[1:]:
+            clock.switch(key.rsplit("#", 1)[0])
         write = Path.write_text
         def slow(path, data, *args, **kwargs):
-            self.now.advance(clock.limit("completion#2"))
+            self.now.advance(clock.plan.phases[-1].limit_ns)
             return write(path, data, *args, **kwargs)
         with patch.object(Path, "write_text", slow):
             value = self.export(clock)
