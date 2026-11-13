@@ -138,9 +138,14 @@ def execute(scratch, evidence, inputs, old, observer, control):
         try:
             return task.wait(timeout=630)
         finally:
-            if task.poll() is None:
-                os.killpg(task.pid, signal.SIGTERM)
-                task.wait(timeout=15)
+            stop_task(task)
+
+
+def stop_task(task):
+    if task.poll() is not None:
+        return
+    os.killpg(task.pid, signal.SIGTERM)
+    task.wait(timeout=15)
 
 
 def main():
@@ -173,6 +178,8 @@ def main():
         backend.subreaper(previous)
         if cleanup_error:
             raise cleanup_error
+        if remaining:
+            raise RuntimeError("diagnostic outer task cleanup incomplete")
 
 
 def validate_source(evidence, pins):
