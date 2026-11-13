@@ -116,9 +116,15 @@ def read_journal(case):
 
 
 def observe_hop(case, record, version):
-    if not case.ready():
+    # Activation stops the source daemon; one sample cannot promise a second
+    # connection will still find its socket before the target starts.
+    try:
+        response = case.control("host.info")
+    except FileNotFoundError:
         return False
-    running = case.control("host.info")["host"]["build"]
+    if response.get("type") != "host.info.result":
+        return False
+    running = response["host"]["build"]
     if running["digest"] != case.releases.builds[version]["digest"]:
         return False
     ledger = read_ledger(case)
