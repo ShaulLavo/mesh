@@ -7,6 +7,7 @@ import importlib.util
 import os
 import shutil
 import socket
+import struct
 import ssl
 import socketserver
 import http.client
@@ -19,7 +20,7 @@ import threading
 import subprocess
 from types import SimpleNamespace
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
 from fixtures import installed_review_controls, installed_listener_controls, installed_catalog_controls, installed_order_trace_controls
@@ -622,6 +623,125 @@ def read_connect_response(connection):
             raise RuntimeError("publication proxy header exceeded its control bound")
     if not data.startswith(b"HTTP/1.0 200"):
         raise RuntimeError("publication proxy rejected the approved release host")
+
+
+class ChainObservationTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="chain-observation-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.source, self.middle, self.final = installed_releases.VERSIONS
+        self.builds = {version: {"version": version, "digest": str(number) * 64}
+                       for number, version in enumerate(installed_releases.VERSIONS, 1)}
+        self.case = object.__new__(installed_adoption.AdoptionCase)
+        self.case.root, self.case.state = self.root, self.root / "state"
+        self.case.releases = SimpleNamespace(builds=self.builds)
+        self.case.fault = self.root / "fault.json"
+        self.case.write_fault({"holdHelper": [self.middle], "daemon": []})
+        self.case.inspect_retained = Mock()
+        self.case.cohort = SimpleNamespace(verify=Mock(return_value=["retained-worker"]))
+        self.record = {"hops": []}
+        self.ledger = {"entries": [{"version": self.middle, "origin": "host"}]}
+        self.image = {"sha256": self.builds[self.middle]["digest"]}
+        self.socket_factory = self.enter_patch(patch.object(installed_native.controls.socket, "socket"))
+        self.ledger_reader = self.enter_patch(patch.object(installed_chain, "read_ledger", return_value=self.ledger))
+        self.helper_reader = self.enter_patch(patch.object(installed_chain, "ready_helper", return_value=self.image))
+        self.checkpoint = self.enter_patch(patch.object(installed_chain.installed_transport_lifecycle, "checkpoint"))
+
+    def enter_patch(self, context):
+        value = context.start()
+        self.addCleanup(context.stop)
+        return value
+
+    def connection(self, version=None, error=None):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.connect.side_effect = error
+        payload = json.dumps({"type": "host.info.result", "host": {"build": self.builds[version or self.source]}}).encode()
+        connection.recv.side_effect = [b"\x01" + struct.pack(">I", len(payload)), payload]
+        return connection
+
+    def observe(self):
+        return installed_chain.observe_hop(self.case, self.record, self.middle)
+
+    def assert_unobserved(self):
+        self.assertEqual(self.record, {"hops": []})
+        self.case.inspect_retained.assert_not_called()
+        self.case.cohort.verify.assert_not_called()
+        self.checkpoint.assert_not_called()
+        self.assertEqual(json.loads(self.case.fault.read_text())["holdHelper"], [self.middle])
+
+    def test_source_response_is_not_followed_by_a_second_connect_during_stop(self):
+        source = self.connection()
+        missing = self.connection(error=FileNotFoundError(2, "daemon.sock removed by stop"))
+        self.socket_factory.side_effect = [source, missing]
+        self.assertFalse(self.observe())
+        self.socket_factory.assert_called_once_with(socket.AF_UNIX)
+        source.connect.assert_called_once_with(str(self.case.state / "daemon.sock"))
+        missing.connect.assert_not_called()
+        self.ledger_reader.assert_not_called()
+        self.assert_unobserved()
+
+    def test_intermediate_uses_the_same_response_and_runs_every_checkpoint(self):
+        connection = self.connection(self.middle)
+        self.socket_factory.side_effect = [connection, self.connection(error=FileNotFoundError(2, "stopped"))]
+        self.assertTrue(self.observe())
+        self.socket_factory.assert_called_once_with(socket.AF_UNIX)
+        self.case.inspect_retained.assert_called_once_with()
+        self.checkpoint.assert_called_once_with(self.case, self.middle, "observed intermediate hop")
+        self.case.cohort.verify.assert_called_once_with("native-hop-" + self.middle)
+        self.assertEqual(self.record["hops"], [{"version": self.middle, "helper": self.image, "workers": ["retained-worker"]}])
+        self.assertEqual(json.loads(self.case.fault.read_text()), {"daemon": []})
+
+    def test_missing_socket_is_only_an_unobserved_sample(self):
+        self.socket_factory.return_value = self.connection(error=FileNotFoundError(2, "not yet listening"))
+        self.assertFalse(self.observe())
+        self.socket_factory.assert_called_once_with(socket.AF_UNIX)
+        self.ledger_reader.assert_not_called()
+        self.assert_unobserved()
+
+    def test_other_connect_errors_propagate(self):
+        for error in (PermissionError("denied"), ConnectionRefusedError("refused"), TimeoutError("expired")):
+            self.check_connect_error(error)
+
+    def check_connect_error(self, error):
+        self.socket_factory.return_value = self.connection(error=error)
+        with self.assertRaises(type(error)):
+            self.observe()
+        self.assert_unobserved()
+
+    def test_incomplete_response_propagates(self):
+        connection = self.connection()
+        connection.recv.side_effect = [b""]
+        self.socket_factory.return_value = connection
+        with self.assertRaisesRegex(RuntimeError, "incomplete response"):
+            self.observe()
+        self.assert_unobserved()
+
+    def test_missing_helper_evidence_is_not_a_missing_socket(self):
+        self.socket_factory.return_value = self.connection(self.middle)
+        self.helper_reader.side_effect = FileNotFoundError(2, "installed.json missing")
+        with self.assertRaises(FileNotFoundError):
+            self.observe()
+        self.assert_unobserved()
+
+    def test_missing_socket_cannot_extend_the_existing_chain_bound(self):
+        self.socket_factory.return_value = self.connection(error=FileNotFoundError(2, "still absent"))
+        with patch.object(installed_chain, "read_journal", return_value={}), \
+                patch.object(installed_chain.time, "monotonic", side_effect=[0, 0, 150]), \
+                patch.object(installed_chain.time, "sleep") as pause:
+            with self.assertRaisesRegex(RuntimeError, "signed native chain did not finish"):
+                installed_chain.await_chain(self.case, self.record, self.middle, self.final, False)
+        pause.assert_called_once_with(0.05)
+        self.assert_unobserved()
+
+    def test_final_graded_host_info_still_rejects_a_missing_daemon(self):
+        self.socket_factory.return_value = self.connection(error=FileNotFoundError(2, "final daemon absent"))
+        self.ledger["entries"].append({"version": self.final, "origin": "host"})
+        with self.assertRaises(FileNotFoundError):
+            installed_chain.validate_terminal(self.case, self.record, {"phase": "committed"},
+                                             {self.middle}, self.middle, self.final, False)
+        self.assertNotIn("running", self.record)
 
 
 class EmptyLedgerTest(unittest.TestCase):
