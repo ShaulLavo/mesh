@@ -201,18 +201,22 @@ class ClockTest(unittest.TestCase):
     def test_leader_exit_still_stops_owned_descendants(self):
         process = Mock(pid=123)
         process.poll.return_value = 0
-        with patch.object(clocks, "send_group") as send, patch.object(clocks, "wait_group") as wait, patch.object(clocks, "native_descendants", return_value={}):
-            clocks.stop_group(process, clocks.time.monotonic_ns() + 10 * clocks.SECOND)
+        ownership = Mock()
+        ownership.live.return_value = {}
+        with patch.object(clocks, "send_group") as send, patch.object(clocks, "wait_group") as wait:
+            clocks.stop_group(process, clocks.time.monotonic_ns() + 10 * clocks.SECOND, ownership=ownership)
         self.assertEqual(send.call_count, 2)
         send.assert_any_call(123, signal.SIGKILL)
         self.assertTrue(wait.call_args.kwargs["require_absent"])
+        ownership.verify.assert_called_once()
 
     def test_actual_exited_wrapper_does_not_leave_its_sleep_child(self):
         code = "import subprocess; subprocess.Popen(['/bin/sleep','30'])"
         process = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)
         try:
             process.wait(timeout=5)
-            clocks.stop_group(process, clocks.time.monotonic_ns() + 10 * clocks.SECOND)
+            with self.assertRaisesRegex(RuntimeError, "launch-time ownership unavailable"):
+                clocks.stop_group(process, clocks.time.monotonic_ns() + 10 * clocks.SECOND)
             self.assertFalse(clocks.group_alive(process.pid))
         finally:
             clocks.send_group(process.pid, signal.SIGKILL)
@@ -425,6 +429,143 @@ class ClockTest(unittest.TestCase):
         self.assertFalse(row["completed"])
         self.assertTrue(row["censored"])
         self.assertGreaterEqual(row["elapsed_ns"], 21 * clocks.SECOND // 10)
+
+
+class NativeOwnershipTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="clock-ownership-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.controls = []
+        self.addCleanup(self.stop_controls)
+
+    def launch(self, exit_code=0, held=True):
+        marker, release = self.root / "child.pid", self.root / "release"
+        code = ("import pathlib,subprocess,sys,time; "
+                "p=subprocess.Popen(['/bin/sleep','30'],start_new_session=True); "
+                "pathlib.Path(sys.argv[1]).write_text(str(p.pid)); "
+                "exec('while not pathlib.Path(sys.argv[2]).exists(): time.sleep(.005)' if sys.argv[3]=='hold' else ''); "
+                "sys.exit(int(sys.argv[4]))")
+        process = subprocess.Popen([sys.executable, "-c", code, str(marker), str(release), "hold" if held else "exit", str(exit_code)], start_new_session=True)
+        control = {"process": process, "marker": marker, "child": None, "birth": None}
+        self.controls.append(control)
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        while not marker.exists():
+            clocks.time.sleep(clocks.remaining_until(deadline, 0.005))
+        control["child"] = int(marker.read_text())
+        control["birth"] = clocks.process_birth(control["child"], deadline)
+        return process, control["child"], release
+
+    def stop_controls(self):
+        for control in self.controls:
+            process, marker = control["process"], control["marker"]
+            deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+            if control["birth"] is not None and clocks.process_birth(control["child"], deadline) == control["birth"]:
+                clocks.signal_process(control["child"], signal.SIGKILL)
+            clocks.send_group(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+            self.verify_control_stopped(marker)
+
+    def verify_control_stopped(self, marker):
+        if not marker.exists():
+            return
+        pid = int(marker.read_text())
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        while clocks.process_birth(pid, deadline) is not None:
+            clocks.time.sleep(clocks.remaining_until(deadline, 0.005))
+
+    def capture_control(self, process, child):
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        ownership = clocks.NativeOwnership(process, self.root, self.root, deadline)
+        ownership.note_pid(child, clocks.process_snapshot(deadline))
+        self.assertIn(child, ownership.correlated)
+        return ownership
+
+    def test_known_escaped_child_survives_leader_and_is_stopped(self):
+        process, child, release = self.launch()
+        ownership = self.capture_control(process, child)
+        release.touch()
+        process.wait(timeout=5)
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        with self.assertRaisesRegex(RuntimeError, "ownership coverage/absence unconfirmed"):
+            installed_releases.wait_transition(process, ["generic-control"], deadline, ownership)
+        clocks.stop_group(process, deadline, ownership=ownership)
+        self.assertIsNone(clocks.process_birth(child, deadline))
+        ownership.save()
+        evidence = json.loads((self.root / "fixture-native-ownership.json").read_text())
+        self.assertGreater(evidence["observation_ns"], 0)
+
+    def test_failed_wrapper_still_checks_escaped_child(self):
+        process, child, release = self.launch(exit_code=7)
+        ownership = self.capture_control(process, child)
+        release.touch()
+        process.wait(timeout=5)
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        with self.assertRaises(subprocess.CalledProcessError):
+            installed_releases.wait_transition(process, ["generic-control"], deadline, ownership)
+        clocks.stop_group(process, deadline, ownership=ownership)
+        self.assertIsNone(clocks.process_birth(child, deadline))
+
+    def test_already_exited_unobserved_launcher_cannot_claim_absence(self):
+        process, child, _release = self.launch(held=False)
+        process.wait(timeout=5)
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        ownership = clocks.NativeOwnership(process, self.root, self.root, deadline)
+        with self.assertRaisesRegex(RuntimeError, "ownership coverage/absence unconfirmed"):
+            clocks.stop_group(process, deadline, (self.root,), ownership=ownership)
+        self.assertIsNotNone(clocks.process_birth(child, deadline))
+
+    def rows(self):
+        return {pid: {"pid": pid, "parent": parent, "group": pid, "uid": os.getuid(), "birth": "birth-" + str(pid)}
+                for pid, parent in ((10, 1), (20, 10), (30, 20))}
+
+    def test_native_worker_and_detached_shell_are_correlated_while_live(self):
+        state = self.root / "mesh-transition.control"
+        state.mkdir()
+        (state / "cohort.json").write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
+        rows = self.rows()
+        with patch.object(clocks, "process_snapshot", return_value=rows):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, clocks.time.monotonic_ns() + clocks.SECOND)
+        self.assertEqual(ownership.expected, {20, 30})
+        self.assertEqual(ownership.correlated, {20, 30})
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            ownership.verify(clocks.time.monotonic_ns() + clocks.SECOND)
+
+    def test_missing_detached_identity_never_uses_a_late_root_scan(self):
+        rows = self.rows()
+        rows[30]["parent"] = 1
+        state = self.root / "mesh-transition.control"
+        state.mkdir()
+        (state / "cohort.json").write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
+        with patch.object(clocks, "process_snapshot", return_value=rows):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, clocks.time.monotonic_ns() + clocks.SECOND)
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "missing.*30"):
+                ownership.verify(clocks.time.monotonic_ns() + clocks.SECOND)
+
+    def test_reused_expected_pid_is_not_owned_by_its_new_birth(self):
+        rows = self.rows()
+        with patch.object(clocks, "process_snapshot", return_value=rows):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, clocks.time.monotonic_ns() + clocks.SECOND)
+            ownership.note_pid(30, rows)
+        changed = {30: rows[30] | {"birth": "another-lifetime", "parent": 1}}
+        with patch.object(clocks, "process_snapshot", return_value=changed):
+            self.assertEqual(ownership.live(clocks.time.monotonic_ns() + clocks.SECOND), {})
+            with self.assertRaisesRegex(RuntimeError, "changedLifetimes.*30"):
+                ownership.verify(clocks.time.monotonic_ns() + clocks.SECOND)
+
+    def test_unresolved_transition_keeps_the_consumed_root_receipt_negative(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root)
+        directory = self.root / "proof"
+        directory.mkdir()
+        releases.builds["target"] = {"path": "not-executed"}
+        with patch.object(installed_releases.subprocess, "Popen"), patch.object(clocks, "NativeOwnership"), patch.object(installed_releases, "wait_transition", side_effect=RuntimeError("unresolved ownership")), patch.object(installed_releases, "stop_transition", side_effect=RuntimeError("retain root")):
+            with self.assertRaisesRegex(RuntimeError, "retain root"):
+                releases.run_transition("not-executed", "target", directory, {}, None)
+        value = json.loads((self.root / "fixture-ownership.json").read_text())
+        self.assertFalse(value["transitionsAbsent"])
+        self.assertFalse(releases.transition_clean)
+        releases.close()
 
 
 if __name__ == "__main__":

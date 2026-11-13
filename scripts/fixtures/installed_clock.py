@@ -613,9 +613,135 @@ def cleanup_inputs(root):
         raise RuntimeError("fixture ownership unconfirmed; retain native inputs and helper")
 
 
-def stop_group(process, deadline_ns, roots=()):
+class NativeOwnership:
+    def __init__(self, process, root, output, deadline_ns):
+        self.process, self.root, self.output = process, Path(root), Path(output)
+        self.owned, self.expected, self.pending, self.correlated = {}, set(), set(), set()
+        self.unresolved, self.scans, self.observation_ns, self.verification_ns = [], 0, 0, 0
+        self.launch_birth = None
+        self.verified = False
+        self.observe(deadline_ns, launching=True)
+
+    def observe(self, deadline_ns, launching=False):
+        started = time.monotonic_ns()
+        try:
+            rows = process_snapshot(deadline_ns)
+            self.capture(rows, launching)
+            self.read_native_records(rows)
+            self.scans += 1
+        finally:
+            self.observation_ns += time.monotonic_ns() - started
+
+    def capture(self, rows, launching):
+        leader = rows.get(self.process.pid)
+        if launching:
+            if leader is None or leader["uid"] != os.getuid():
+                self.unresolved.append("launcher identity unavailable at launch")
+                return
+            self.launch_birth = leader["birth"]
+            self.owned[(self.process.pid, self.launch_birth)] = leader
+        known = {pid for pid, birth in self.owned if pid in rows and rows[pid]["birth"] == birth}
+        if self.launch_birth is not None and (leader is None or leader["birth"] == self.launch_birth):
+            known.update(pid for pid, row in rows.items() if row["group"] == self.process.pid and row["uid"] == os.getuid())
+        while True:
+            children = {pid for pid, row in rows.items() if row["parent"] in known and row["uid"] == os.getuid()}
+            if children.issubset(known):
+                break
+            known.update(children)
+        for pid in known:
+            self.owned[(pid, rows[pid]["birth"])] = rows[pid]
+
+    def read_native_records(self, rows):
+        paths = list(self.output.rglob("*.cohort.json"))
+        for directory in self.root.glob("mesh-transition.*"):
+            paths.extend(directory.glob("cohort.json"))
+            paths.extend(directory.glob("state/s/*/meta.json"))
+        for path in paths:
+            value = json.loads(path.read_text())
+            if path.name == "meta.json":
+                self.note_shell(value.get("pid"), rows)
+                continue
+            self.note_cohort(value, rows)
+
+    def note_shell(self, pid, rows):
+        if type(pid) is not int or pid <= 0:
+            return
+        self.note_pid(pid, rows)
+        if pid not in rows or (pid, rows[pid]["birth"]) not in self.owned:
+            return
+        parent = rows[pid]["parent"]
+        if parent in rows and (parent, rows[parent]["birth"]) in self.owned:
+            self.note_pid(parent, rows)
+            self.pending.discard(parent)
+
+    def note_cohort(self, value, rows):
+        records = list(value.get("workers", []))
+        if value.get("original"):
+            records.append(value["original"])
+        for record in records:
+            self.note_worker(record, rows)
+
+    def note_worker(self, record, rows):
+        pid, shell = record.get("pid"), record.get("shellPid")
+        if type(pid) is not int or pid <= 0:
+            return
+        self.note_pid(pid, rows)
+        if type(shell) is int and shell > 0:
+            self.note_pid(shell, rows)
+            self.pending.discard(pid)
+        else:
+            self.pending.add(pid)
+
+    def note_pid(self, pid, rows):
+        self.expected.add(pid)
+        if pid in rows and (pid, rows[pid]["birth"]) in self.owned:
+            self.correlated.add(pid)
+
+    def verify(self, deadline_ns):
+        started = time.monotonic_ns()
+        self.verified = False
+        try:
+            self.verify_absence(deadline_ns)
+            self.verified = True
+        finally:
+            self.verification_ns += time.monotonic_ns() - started
+
+    def verify_absence(self, deadline_ns):
+        rows = process_snapshot(deadline_ns)
+        self.read_native_records(rows)
+        missing = sorted(self.expected.difference(self.correlated))
+        changed = [pid for pid in self.expected if pid in rows and (pid, rows[pid]["birth"]) not in self.owned]
+        live = [row for (pid, birth), row in self.owned.items() if pid in rows and rows[pid]["birth"] == birth]
+        if self.launch_birth is None or not self.expected or missing or changed or self.pending or self.unresolved or live:
+            raise RuntimeError("native ownership coverage/absence unconfirmed; retain root: " + str({
+                "missing": missing, "changedLifetimes": changed, "pendingWorkers": sorted(self.pending), "live": [row["pid"] for row in live], "unresolved": self.unresolved}))
+
+    def live(self, deadline_ns):
+        rows = process_snapshot(deadline_ns)
+        return {pid: birth for pid, birth in self.owned if pid in rows and rows[pid]["birth"] == birth}
+
+    def save(self):
+        value = {"launcherPid": self.process.pid, "launcherBirth": self.launch_birth,
+                 "owned": list(self.owned.values()), "expectedPids": sorted(self.expected),
+                 "pendingWorkers": sorted(self.pending), "unresolved": self.unresolved,
+                 "correlatedPids": sorted(self.correlated),
+                 "scans": self.scans, "observation_ns": self.observation_ns, "verification_ns": self.verification_ns,
+                 "absenceVerified": self.verified,
+                 "coverage": "launch ancestry reconciled with native worker/shell records"}
+        (self.output / "fixture-native-ownership.json").write_text(json.dumps(value, indent=2) + "\n")
+
+
+def process_snapshot(deadline_ns):
+    result = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,stat="], capture_output=True, text=True,
+                            check=True, timeout=remaining_until(deadline_ns, 2))
+    rows = [line.split() for line in result.stdout.splitlines()]
+    return {int(row[0]): {"pid": int(row[0]), "parent": int(row[1]), "group": int(row[2]), "uid": int(row[3]),
+                         "birth": " ".join(row[3:-1])} for row in rows if len(row) == 10 and not row[-1].startswith("Z")}
+
+
+def stop_group(process, deadline_ns, roots=(), *, ownership=None):
     group = process.pid
-    owned = native_descendants(group, roots, deadline_ns)
+    owned = ownership.live(deadline_ns) if ownership is not None else {}
     send_group(group, signal.SIGTERM)
     signal_descendants(owned, signal.SIGTERM, deadline_ns)
     wait_group(process, group, deadline_ns, 2)
@@ -623,22 +749,9 @@ def stop_group(process, deadline_ns, roots=()):
     signal_descendants(owned, signal.SIGKILL, deadline_ns)
     process.wait(timeout=remaining_until(deadline_ns, 10))
     wait_group(process, group, deadline_ns, 10, require_absent=True)
-    if any(process_birth(pid, deadline_ns) == birth for pid, birth in owned.items()):
-        raise RuntimeError("native descendant cleanup unconfirmed; retain owned root")
-
-
-def native_descendants(group, roots, deadline_ns):
-    result = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,pgid=,args="], capture_output=True, text=True,
-                            check=True, timeout=remaining_until(deadline_ns, 2))
-    rows = [line.split(None, 3) for line in result.stdout.splitlines()]
-    owned = {int(row[0]) for row in rows if row[2] == str(group) or any(str(root) in row[3] for root in roots)}
-    while True:
-        children = {int(row[0]) for row in rows if int(row[1]) in owned}
-        if children.issubset(owned):
-            break
-        owned.update(children)
-    births = {pid: process_birth(pid, deadline_ns) for pid in owned}
-    return {pid: birth for pid, birth in births.items() if birth is not None}
+    if ownership is None:
+        raise RuntimeError("native launch-time ownership unavailable; retain owned root")
+    ownership.verify(deadline_ns)
 
 
 def process_birth(pid, deadline_ns):

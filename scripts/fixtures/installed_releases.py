@@ -260,15 +260,19 @@ class Releases:
         self.transition_clean = False
         self.record_ownership()
         process = subprocess.Popen(command, cwd=REPO, env=environment, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        ownership = None
         try:
-            wait_transition(process, command, deadline_ns)
+            ownership = installed_clock.NativeOwnership(process, self.root, directory, deadline_ns)
+            wait_transition(process, command, deadline_ns, ownership)
             self.transition_clean = True
         except BaseException as error:
             installed_clock.failure(error)
-            stop_transition(process, tuple(self.root.glob("mesh-transition.*")))
+            stop_transition(process, ownership=ownership)
             self.transition_clean = True
             raise
         finally:
+            if ownership is not None:
+                ownership.save()
             self.record_ownership()
             self.retain_transition_clock(directory)
 
@@ -349,13 +353,20 @@ class Releases:
                 "commandDeadlineNs": self.clock.deadline_ns, "mode": self.clock_plan.mode, "reaped": self.signer.poll() is not None})
 
 
-def stop_transition(process, roots=()):
-    installed_clock.stop_group(process, installed_clock.parent_deadline(20), roots)
+def stop_transition(process, roots=(), *, ownership=None):
+    installed_clock.stop_group(process, installed_clock.parent_deadline(20), roots, ownership=ownership)
 
 
-def wait_transition(process, command, deadline_ns):
-    code = process.wait(timeout=installed_clock.remaining_until(deadline_ns, 600))
+def wait_transition(process, command, deadline_ns, ownership):
+    while process.poll() is None:
+        ownership.observe(deadline_ns)
+        try:
+            process.wait(timeout=installed_clock.remaining_until(deadline_ns, 0.1))
+        except subprocess.TimeoutExpired:
+            installed_clock.remaining_until(deadline_ns, 600)
+    code = process.returncode
     if code:
         raise subprocess.CalledProcessError(code, command)
     if installed_clock.group_alive(process.pid):
         raise RuntimeError("native transition leader exited before its owned descendants")
+    ownership.verify(deadline_ns)
