@@ -18,10 +18,10 @@ def receive(connection, length):
     return result
 
 
-def round_trip(socket_path, request):
+def round_trip(socket_path, request, *, timeout=10):
     payload = json.dumps(request, separators=(",", ":")).encode()
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(10)
+        connection.settimeout(timeout)
         connection.connect(socket_path)
         connection.sendall(b"\x01" + struct.pack(">I", len(payload)) + payload)
         header = receive(connection, 5)

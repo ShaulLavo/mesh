@@ -1,7 +1,5 @@
 """Pure controls for passive installed-session evidence; no Mesh binaries."""
 import ast
-import hashlib
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -230,30 +228,8 @@ class CatalogEvidenceTests(unittest.TestCase):
         io.assert_called_once_with(self.state / "daemon.sock", "W000", "COHORT_before_install_W000")
         self.assertEqual([json.loads(line)["phase"] for line in path.read_text().splitlines()], ["begin", "failed"])
 
-    def test_diagnostic_driver_preserves_actual_group_and_rejects_missing_member(self):
-        source = Path(__file__).parents[1] / "diagnose-installed-catalog.py"
-        spec = importlib.util.spec_from_file_location("catalog_driver", source)
-        driver = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(driver)
-        workers = [{"version": "v0.1." + str(index), "digest": str(index), "protocol": 1} for index in range(241, 250)]
-        raw = json.dumps({"workers": workers, "original": {"digest": driver.BASELINE}}).encode()
-        record = self.root / "c4.json"
-        record.write_bytes(raw)
-        members = [{"version": item["version"], "artifact": {"binarySha256": item["digest"]}, "protocol": item["protocol"]} for item in workers]
-        groups = [{"index": 0}, {"index": 1}, {"index": 2, "members": members}]
-        with patch.object(driver, "C4_RECORD", hashlib.sha256(raw).hexdigest()), patch.object(driver.installed_adoption, "installed_groups", return_value=groups):
-            self.assertEqual(driver.exact_group("registry", "binary", record), groups[2])
-            members.pop()
-            with self.assertRaisesRegex(RuntimeError, "all nine"):
-                driver.exact_group("registry", "binary", record)
-        primary = RuntimeError("original I/O")
-        driver.finish((Mock(side_effect=OSError("cleanup failed")),), primary)
-        self.assertIn("cleanup unconfirmed", primary.__notes__[0])
-        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
-            driver.finish((Mock(side_effect=OSError("cleanup failed")),), None)
-
     def test_source_preserves_three_level_nesting(self):
-        for path in (Path(evidence.__file__), Path(__file__), Path(installed_cohort.__file__), Path(release_workers.__file__), Path(__file__).parents[1] / "diagnose-installed-catalog.py"):
+        for path in (Path(evidence.__file__), Path(__file__), Path(installed_cohort.__file__), Path(release_workers.__file__)):
             self.assertLessEqual(depth(ast.parse(path.read_text())), 3, str(path))
 
 

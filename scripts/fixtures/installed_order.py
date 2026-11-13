@@ -135,9 +135,10 @@ def run(root, output, descriptor, operation):
     installed_accounts.require_hosted_root()
     installed_paths.validate(root)
     installed_account_run.claim(root, output, operation)
-    accounts, drivers = installed_accounts.Accounts(root, output), []
+    accounts, drivers = None, []
     record = {"passed": False, "supplementalSourceBuilds": True, "observations": []}
     try:
+        accounts = installed_accounts.Accounts(root, output)
         accounts.create()
         share_inputs(accounts, descriptor)
         for account in accounts.accounts:
@@ -151,11 +152,16 @@ def run(root, output, descriptor, operation):
         for driver in drivers:
             order_trace.failure(driver, error, "run", "parent-selected")
         record["error"] = str(error)
-        deadline_ns = installed_account_run.owner_failure(root, error, descriptor["fixtureEmergencyNs"])
-        installed_clock.failure_cleanup_handoff(deadline_ns)
+        latch_failure(root, descriptor, error)
         raise
     finally:
-        teardown(accounts, drivers, record, output)
+        if accounts is not None:
+            teardown(accounts, drivers, record, output, lambda error: latch_failure(root, descriptor, error))
+
+
+def latch_failure(root, descriptor, error):
+    deadline_ns = installed_account_run.owner_failure(root, error, descriptor["fixtureEmergencyNs"])
+    installed_clock.failure_cleanup_handoff(deadline_ns)
 
 
 def share_inputs(accounts, descriptor):
@@ -436,12 +442,13 @@ def verify_order(canary, sleeper, burst, version):
         raise RuntimeError("ordered hosts lack actual authenticated predecessor/consumer observations")
 
 
-def teardown(accounts, drivers, record, output):
+def teardown(accounts, drivers, record, output, on_error=None):
     order_trace.retain(drivers, record, output)
     actions = [driver.close for driver in reversed(drivers)]
     actions.append(accounts.close)
     try:
-        installed_native.cleanup_all(actions)
+        with installed_native.cleanup_errors(on_error):
+            installed_native.cleanup_all(actions)
         record["cleanup"] = {"accountsAbsent": True, "servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
         for driver in drivers:
@@ -457,6 +464,8 @@ def teardown(accounts, drivers, record, output):
             record["passed"], record["error"] = False, str(diagnostic_error)
         (output / "ordered-native.json").write_text(json.dumps(record, indent=2) + "\n")
     if fail_success:
+        if on_error is not None:
+            on_error(diagnostic_error)
         raise diagnostic_error
 
 

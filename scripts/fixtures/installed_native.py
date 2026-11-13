@@ -1,5 +1,7 @@
 """Actual legacy daemons, helpers, attached PTYs and service-manager fixtures."""
 import http.client
+from contextlib import contextmanager
+from contextvars import ContextVar
 import importlib
 import json
 import os
@@ -16,29 +18,55 @@ import uuid
 from xml.sax.saxutils import escape
 from pathlib import Path
 
-from fixtures import native_services, installed_routes, installed_listener_evidence
+from fixtures import native_services, installed_routes, installed_listener_evidence, installed_clock
 
 REPO = Path(__file__).resolve().parents[2]
 HELPERS = REPO / "integration" / "helpers"
 sys.path.insert(0, str(HELPERS))
 terminal_module = importlib.import_module("terminal_window")
 controls = importlib.import_module("mesh_control")
+CLEANUP_FAILURE = ContextVar("installed_cleanup_failure", default=None)
 
 
-def cleanup_all(actions):
+@contextmanager
+def cleanup_errors(handler):
+    token = CLEANUP_FAILURE.set(handler)
+    try:
+        yield
+    finally:
+        CLEANUP_FAILURE.reset(token)
+
+
+def cleanup_all(actions, on_error=None):
     failures = []
     for action in actions:
         try:
+            installed_clock.timeout(10)
+        except installed_clock.ClockExpired as error:
+            failures.append(str(error))
+            break
+        try:
             action()
         except BaseException as error:
+            cleanup_failure(error, on_error)
             failures.append(str(error))
     if failures:
         raise RuntimeError("; ".join(failures))
 
 
+def cleanup_failure(error, on_error):
+    on_error = on_error or CLEANUP_FAILURE.get()
+    if on_error is not None:
+        try:
+            on_error(error)
+        except BaseException as latch_error:
+            error.add_note("cleanup failure latch unavailable: " + str(latch_error))
+    installed_clock.failure(error)
+
+
 def peer_pid(path):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(2)
+        connection.settimeout(installed_clock.timeout(2))
         connection.connect(str(path))
         if sys.platform == "darwin":
             return connection.getsockopt(0, 2)
@@ -110,7 +138,7 @@ class Units:
         link.symlink_to(path)
 
     def gui_command(self, arguments):
-        return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=10, check=False)
+        return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=installed_clock.timeout(10), check=False)
 
     def set_gui_environment(self):
         if os.environ.get("GITHUB_ACTIONS") != "true":
@@ -269,7 +297,7 @@ class Installation:
         path.write_text(template)
 
     def control(self, operation, **fields):
-        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields})
+        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields}, timeout=installed_clock.timeout(10))
 
     def ready(self):
         try:
@@ -434,7 +462,7 @@ class Installation:
         if path.exists():
             if peer_pid(path) != self.worker:
                 raise RuntimeError("refusing cleanup through a worker socket with unknown ownership")
-            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session})
+            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session}, timeout=installed_clock.timeout(10))
             if response.get("type") != "ok":
                 raise RuntimeError("owned worker rejected session cleanup: " + json.dumps(response))
             return
@@ -484,7 +512,7 @@ class Installation:
 
 
 def process_stamp(pid):
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart="], capture_output=True, text=True, timeout=5, check=False)
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart="], capture_output=True, text=True, timeout=installed_clock.timeout(5), check=False)
     if result.returncode == 1 and not native_services.alive(pid):
         return None
     if result.returncode or not result.stdout.strip().startswith(str(os.getuid()) + " "):

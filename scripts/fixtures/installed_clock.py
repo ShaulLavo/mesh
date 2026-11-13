@@ -287,12 +287,15 @@ class Clock:
         path = Path(path)
         accepted = value["accepted"]
         value["accepted"] = False
+        last = value["leaves"][-1]
+        completed, eligible = last["completed"], last["eligible"]
+        last.update(completed=False, eligible=False)
         path.write_text(json.dumps(value, indent=2) + "\n")
         now = self.now()
-        last = value["leaves"][-1]
-        last.update(end_ns=now, elapsed_ns=now - last["start_ns"])
+        last.update(end_ns=now, elapsed_ns=now - last["start_ns"], completed=completed, eligible=eligible)
         value.update(end_ns=now, command_ns=now - self.origin_ns,
                      disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
+        value["measurement_write_epilogue"] = {"start_ns": now, "charged_to": "completion", "final_absolute_guard": True}
         value["accepted"] = accepted
         path.write_text(json.dumps(value, indent=2) + "\n")
         self.check_persisted(path, value)
@@ -301,7 +304,12 @@ class Clock:
         try:
             self.check()
         except ClockExpired:
+            now = self.now()
+            last = value["leaves"][-1]
+            last.update(completed=False, eligible=False, end_ns=now, elapsed_ns=now - last["start_ns"], censored=True)
             value.update(accepted=False, measurement_completed=False, failures=self.failures)
+            value.update(end_ns=now, command_ns=now - self.origin_ns,
+                         disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
             path.write_text(json.dumps(value, indent=2) + "\n")
 
 
@@ -503,17 +511,50 @@ def native_group(output, group):
             raise ValueError("native group differs from reviewed budget workload")
         end = min(end, start + positive(guard["limit_ns"]))
     sample = {"key": key, "start_ns": start, "completed": False, "cleanup_verified": False}
+    primary = None
     try:
         with handoff(end):
             yield sample
             remaining_until(end, 1)
         sample.update(completed=True, cleanup_verified=True)
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        sample.update(end_ns=time.monotonic_ns(), elapsed_ns=time.monotonic_ns() - start)
         evidence = Path(path).parent / "fixture-group-clock.json"
-        previous = json.loads(evidence.read_text()) if evidence.exists() else {"samples": []}
+        retain_native_sample(evidence, sample, start, end, primary)
+
+
+def retain_native_sample(path, sample, start, deadline_ns, primary):
+    try:
+        previous = json.loads(path.read_text()) if path.exists() else {"samples": []}
         previous["samples"].append(sample)
-        evidence.write_text(json.dumps(previous, indent=2) + "\n")
+        persist_native_sample(path, previous, sample, start, deadline_ns, primary)
+    except BaseException as error:
+        sample["completed"] = False
+        if primary is None:
+            raise
+        primary.add_note("native measurement export unavailable: " + str(error))
+
+
+def persist_native_sample(path, value, sample, start, deadline_ns, primary):
+    completed, sample["completed"] = sample["completed"], False
+    sample.update(end_ns=time.monotonic_ns(), elapsed_ns=time.monotonic_ns() - start)
+    path.write_text(json.dumps(value, indent=2) + "\n")
+    measured = time.monotonic_ns()
+    sample.update(end_ns=measured, elapsed_ns=measured - start,
+                  measurement_write_epilogue={"start_ns": measured, "charged_to": "enclosing native transition", "final_absolute_guard": True})
+    try:
+        remaining_until(deadline_ns, 1)
+        sample["completed"] = completed
+        path.write_text(json.dumps(value, indent=2) + "\n")
+        remaining_until(deadline_ns, 1)
+    except ClockExpired as error:
+        sample.update(completed=False, censored=True, end_ns=time.monotonic_ns(), elapsed_ns=time.monotonic_ns() - start)
+        path.write_text(json.dumps(value, indent=2) + "\n")
+        if primary is None:
+            raise
+        primary.add_note("native measurement export exceeded its absolute group deadline: " + str(error))
 
 
 def native_selection(groups):
@@ -535,7 +576,8 @@ def job_record(action, path):
         path.write_text(json.dumps({"origin_ns": now, "run": os.environ["GITHUB_RUN_ID"], "job": os.environ["GITHUB_JOB"]}) + "\n")
         return
     value = json.loads(path.read_text())
-    value.update(end_ns=now, elapsed_ns=now - value["origin_ns"], admission_ns=900 * SECOND)
+    value.update(end_ns=now, elapsed_ns=now - value["origin_ns"], admission_ns=900 * SECOND,
+                 external_complete=False, unmeasured_tail="action post-job cleanup and cache-save work")
     fixture = path.parent / "cohort-proof" / "fixture-clock.json"
     if fixture.exists():
         command = json.loads(fixture.read_text())
@@ -547,6 +589,28 @@ def job_record(action, path):
         raise ClockExpired("job clock expired during external overhead or cleanup")
     if fixture.exists() and value["external_observed_ns"] > value["external_budget_ns"]:
         raise ClockExpired("external job overhead exceeded its declared diagnostic/frozen budget")
+
+
+def cleanup_inputs(root):
+    root = Path(root)
+    control, proof = root / "cohort-control", root / "cohort-proof"
+    control.mkdir(exist_ok=True)
+    launch, ownership, clock = control / "fixture-launch.json", proof / "fixture-ownership.json", proof / "fixture-clock.json"
+    prelaunch = not any(path.exists() for path in (launch, ownership, clock))
+    value = {"inputsMayBeRemoved": prelaunch, "reason": "no fixture launch attempted" if prelaunch else "fixture ownership unconfirmed"}
+    try:
+        owned = json.loads(ownership.read_text()) if ownership.exists() else {}
+        final = json.loads(clock.read_text()) if clock.exists() else {}
+        absent = owned.get("signerAbsent") is True and owned.get("transitionsAbsent") is True
+        root_removed = "retained_root" in final.get("provenance", {}) and final["provenance"]["retained_root"] is None
+        if absent and root_removed:
+            value.update(inputsMayBeRemoved=True, reason="fixture owners and root confirmed absent")
+    except (OSError, ValueError, TypeError):
+        value.update(inputsMayBeRemoved=False, reason="fixture ownership evidence unreadable")
+    value["retained"] = [] if value["inputsMayBeRemoved"] else [str(root / name) for name in ("native-worker-input.noindex", "native-tools.noindex")]
+    (control / "tools-cleanup-decision.json").write_text(json.dumps(value, indent=2) + "\n")
+    if not value["inputsMayBeRemoved"]:
+        raise RuntimeError("fixture ownership unconfirmed; retain native inputs and helper")
 
 
 def stop_group(process, deadline_ns, roots=()):
@@ -625,4 +689,7 @@ def group_alive(group):
 
 
 if __name__ == "__main__":
-    job_record(*sys.argv[1:])
+    if sys.argv[1] == "cleanup-inputs":
+        cleanup_inputs(sys.argv[2])
+    else:
+        job_record(*sys.argv[1:])

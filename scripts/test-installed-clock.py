@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host
+from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host, installed_native, installed_accounts, installed_paths, native_services
 
 
 class Time:
@@ -221,10 +221,12 @@ class ClockTest(unittest.TestCase):
     def test_ordered_recovery_has_finite_outer_timeout(self):
         ticket = self.root / "account-run.json"
         ticket.write_text(json.dumps({"cleanup_deadline_ns": clocks.time.monotonic_ns() + clocks.SECOND}))
-        with patch.object(installed_account_run.subprocess, "run", side_effect=subprocess.TimeoutExpired("recover", 1)) as run:
+        process = Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("recover", 1)
+        with patch.object(installed_account_run.subprocess, "Popen", return_value=process), patch.object(installed_account_run, "stop_recovery"):
             with self.assertRaises(subprocess.TimeoutExpired):
                 installed_account_run.recover(ticket)
-        self.assertLessEqual(run.call_args.kwargs["timeout"], 1)
+        self.assertLessEqual(process.wait.call_args.kwargs["timeout"], 1)
 
     def test_ordered_owner_failure_anchor_never_resets(self):
         ticket = self.root / "account-run.json"
@@ -319,6 +321,110 @@ class ClockTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 15", reusable)
         self.assertIn("--clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
         self.assertIn("inputs.catalog_evidence && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
+
+    def test_cleanup_alarm_cannot_launch_another_action_after_absolute_expiry(self):
+        deadline = self.now() + clocks.SECOND
+        next_action = Mock()
+        def expire():
+            self.now.advance(2 * clocks.SECOND)
+            installed_account_run.recovery_expired(None, None)
+        with patch.object(clocks.time, "monotonic_ns", self.now), clocks.handoff(deadline):
+            with self.assertRaisesRegex(RuntimeError, "finite reserve"):
+                installed_native.cleanup_all([expire, next_action])
+        next_action.assert_not_called()
+
+    def test_native_command_clamps_to_remaining_reserve_and_refuses_expired_start(self):
+        deadline = self.now() + clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), clocks.handoff(deadline), patch.object(native_services.subprocess, "run", return_value=Mock(returncode=0)) as run:
+            native_services.command(["owned-control"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 1)
+            self.now.advance(2 * clocks.SECOND)
+            with self.assertRaises(clocks.ClockExpired):
+                native_services.command(["not-started"])
+        run.assert_called_once()
+
+    def test_nested_order_teardown_latches_before_next_cleanup_action(self):
+        first, events = RuntimeError("first nested cleanup failure"), []
+        accounts = Mock(accounts=[])
+        def fail():
+            raise first
+        def latch(*args):
+            events.append(("latched", args[1]))
+            return self.now() + 60 * clocks.SECOND
+        accounts.close.side_effect = lambda: installed_native.cleanup_all([fail, lambda: events.append("next")])
+        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND}
+        with patch.object(installed_accounts, "require_hosted_root"), patch.object(installed_paths, "validate"), patch.object(installed_account_run, "claim"), patch.object(installed_accounts, "Accounts", return_value=accounts), patch.object(installed_order, "share_inputs"), patch.object(installed_order, "bootstrap"), patch.object(installed_order, "scenarios"), patch.object(installed_account_run, "owner_failure", side_effect=latch), patch.object(clocks, "failure_cleanup_handoff"):
+            with self.assertRaisesRegex(RuntimeError, "first nested cleanup failure"):
+                installed_order.run(self.root, self.root, descriptor, "control")
+        self.assertEqual(events[0][0], "latched")
+        self.assertIs(events[0][1], first)
+        self.assertEqual(events[1], "next")
+
+    def test_order_setup_failure_after_claim_latches_without_replacing_error(self):
+        failure = RuntimeError("account setup failed")
+        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND}
+        with patch.object(installed_accounts, "require_hosted_root"), patch.object(installed_paths, "validate"), patch.object(installed_account_run, "claim"), patch.object(installed_accounts, "Accounts", side_effect=failure), patch.object(installed_account_run, "owner_failure", return_value=1) as latch, patch.object(clocks, "failure_cleanup_handoff"):
+            with self.assertRaises(RuntimeError) as caught:
+                installed_order.run(self.root, self.root, descriptor, "control")
+        self.assertIs(caught.exception, failure)
+        self.assertIs(latch.call_args.args[1], failure)
+
+    def test_recovery_timeout_signals_the_durable_owner_within_one_reserve(self):
+        ticket = self.root / "account-run.json"
+        ticket.write_text(json.dumps({"cleanup_deadline_ns": self.now() + 60 * clocks.SECOND, "recovery": {"pid": 73}}))
+        failure = subprocess.TimeoutExpired("owned-recovery", 28)
+        process = Mock()
+        process.wait.side_effect = [failure, 0]
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_account_run.subprocess, "Popen", return_value=process), patch.object(installed_account_run.subprocess, "run", return_value=Mock()) as signal_owner, patch.object(installed_account_run, "alive", return_value=False):
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                installed_account_run.recover(ticket)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(process.wait.call_args_list[0].kwargs["timeout"], 28)
+        self.assertIn("signal-recovery", signal_owner.call_args.args[0])
+        self.assertLessEqual(signal_owner.call_args.kwargs["timeout"], 2)
+
+    def test_missing_clock_export_never_deletes_negatively_owned_inputs(self):
+        for name in ("cohort-proof", "native-worker-input.noindex", "native-tools.noindex"):
+            (self.root / name).mkdir()
+        (self.root / "cohort-proof/fixture-ownership.json").write_text(json.dumps({"signerAbsent": False, "transitionsAbsent": False}))
+        workflow = Path(".github/workflows/installed-catchup.yml").read_text()
+        section = workflow.split("      - name: Remove owned downloaded native inputs and helper tool\n", 1)[1].split("      - uses:", 1)[0]
+        script = "\n".join(line[10:] for line in section.split("        run: |\n", 1)[1].splitlines())
+        result = subprocess.run(["bash", "-e", "-c", script], env=os.environ | {"RUNNER_TEMP": str(self.root)}, capture_output=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue((self.root / "native-worker-input.noindex").is_dir())
+        self.assertTrue((self.root / "native-tools.noindex").is_dir())
+        self.assertFalse(json.loads((self.root / "cohort-control/tools-cleanup-decision.json").read_text())["inputsMayBeRemoved"])
+
+    def test_late_terminal_export_censors_the_final_leaf_only(self):
+        clock = self.clock()
+        clock.samples.append({"key": "earlier", "completed": True, "cleanup_verified": True})
+        self.now.value = clock.deadline_ns - clocks.SECOND // 10
+        write = Path.write_text
+        def slow(path, data, *args, **kwargs):
+            self.now.advance(clocks.SECOND)
+            return write(path, data, *args, **kwargs)
+        with patch.object(Path, "write_text", slow):
+            value = clock.export(self.root / "clock.json", True, {})
+        self.assertFalse(value["measurement_completed"])
+        self.assertFalse(value["leaves"][-1]["eligible"])
+        self.assertFalse(value["leaves"][-1]["completed"])
+        self.assertTrue(value["samples"][0]["eligible"])
+
+    def test_native_export_cost_is_measured_and_late_return_is_censored(self):
+        handoff = self.root / "handoff.json"
+        handoff.write_text(json.dumps({"deadline_ns": self.now() + clocks.SECOND, "mode": "diagnostic", "prefix": "proof#1"}))
+        write = Path.write_text
+        def slow(path, data, *args, **kwargs):
+            self.now.advance(2 * clocks.SECOND)
+            return write(path, data, *args, **kwargs)
+        with patch.dict(os.environ, MESH_INSTALLED_CLOCK_HANDOFF=str(handoff)), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(Path, "write_text", slow), self.assertRaises(clocks.ClockExpired):
+            with clocks.native_group(self.root, {"index": 0}):
+                self.now.advance(clocks.SECOND // 10)
+        row = json.loads((self.root / "fixture-group-clock.json").read_text())["samples"][0]
+        self.assertFalse(row["completed"])
+        self.assertTrue(row["censored"])
+        self.assertGreaterEqual(row["elapsed_ns"], 21 * clocks.SECOND // 10)
 
 
 if __name__ == "__main__":

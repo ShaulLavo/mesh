@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 
-from fixtures import installed_native, installed_paths, native_services, installed_account_run
+from fixtures import installed_native, installed_paths, native_services, installed_account_run, installed_clock
 
 
 def require_hosted_root():
@@ -122,6 +122,7 @@ class Accounts:
                 "DBUS_SESSION_BUS_ADDRESS=unix:path=" + runtime + "/bus", "PYTHONDONTWRITEBYTECODE=1", "MESH_HARNESS_SOURCE="]
 
     def run(self, account, arguments, **options):
+        options["timeout"] = installed_clock.timeout(options.get("timeout", 10))
         return subprocess.run(self.arguments(account, arguments), **options)
 
     def arguments(self, account, arguments):

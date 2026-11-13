@@ -149,8 +149,44 @@ def privileged_signal(ticket_path, number):
 
 def recover(ticket_path):
     deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(30))
-    subprocess.run(privileged_arguments("recover", ticket_path, str(deadline_ns)), check=True,
-                   timeout=installed_clock.remaining_until(deadline_ns, 30))
+    remaining = installed_clock.remaining_until(deadline_ns, 30)
+    execution_ns = deadline_ns - int(min(2, remaining / 4) * installed_clock.SECOND)
+    arguments = privileged_arguments("recover", ticket_path, str(execution_ns))
+    process = subprocess.Popen(arguments, start_new_session=True)
+    try:
+        status = process.wait(timeout=installed_clock.remaining_until(execution_ns, 30))
+        if status:
+            raise subprocess.CalledProcessError(status, arguments)
+    except BaseException as error:
+        stop_recovery(process, ticket_path, deadline_ns, error)
+        raise
+    recovery = json.loads(ticket_path.read_text()).get("recovery")
+    if recovery is None or alive(recovery):
+        raise RuntimeError("recovery owner absence unconfirmed; retain account resources")
+
+
+def stop_recovery(process, ticket_path, deadline_ns, primary):
+    try:
+        recovery = json.loads(ticket_path.read_text()).get("recovery")
+        if recovery is None:
+            raise RuntimeError("recovery launch identity unavailable")
+        subprocess.run(privileged_arguments("signal-recovery", ticket_path, str(int(signal.SIGKILL))), check=True,
+                       timeout=installed_clock.remaining_until(deadline_ns, 2))
+        process.wait(timeout=installed_clock.remaining_until(deadline_ns, 2))
+        if alive(recovery):
+            raise RuntimeError("bound recovery owner remains alive")
+    except BaseException as error:
+        primary.add_note("recovery termination unconfirmed; retain owned resources: " + str(error))
+        stop_recovery_launcher(process, primary)
+
+
+def stop_recovery_launcher(process, primary):
+    if process.poll() is not None:
+        return
+    try:
+        process.kill()
+    except OSError as error:
+        primary.add_note("recovery launcher termination unconfirmed: " + str(error))
 
 
 def privileged_arguments(operation, path, *arguments):
@@ -193,16 +229,20 @@ def root_action(arguments):
     if operation == "signal":
         signal_bound(owner, int(values[0]))
         return
+    if operation == "signal-recovery":
+        signal_bound(ticket.get("recovery"), int(values[0]))
+        return
     if operation != "recover" or alive(owner):
         raise RuntimeError("refusing recovery while the bound account owner may be running")
     deadline_ns = min(ticket["cleanup_deadline_ns"], int(values[0]))
     installed_clock.remaining_until(deadline_ns, 30)
-    signal.signal(signal.SIGALRM, recovery_expired)
-    signal.setitimer(signal.ITIMER_REAL, installed_clock.remaining_until(deadline_ns, 30))
     resources = Path(ticket["output"]) / "account-resources.json"
     if not resources.exists() or resources.stat().st_uid != 0:
         raise RuntimeError("account resource ownership is missing; retaining scratch")
-    installed_accounts.Accounts.resume(resources, ticket).close()
+    ticket["recovery"] = identity(os.getpid())
+    save(path, ticket)
+    with installed_clock.handoff(deadline_ns, watchdog=True):
+        installed_accounts.Accounts.resume(resources, ticket).close()
 
 
 def recovery_expired(_number, _frame):

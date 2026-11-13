@@ -440,6 +440,7 @@ jobs:
             clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
               --clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60)
           fi
+          printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
             --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" \
             --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
@@ -447,10 +448,8 @@ jobs:
       - name: Remove owned downloaded native inputs and helper tool
         if: always()
         run: |
-          clock="$RUNNER_TEMP/cohort-proof/fixture-clock.json"
-          if [[ -f $clock ]]; then
-            python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["provenance"]["retained_root"] is None, "unconfirmed fixture owner retains inputs/tools"' "$clock"
-          fi
+          set -euo pipefail
+          python3 scripts/fixtures/installed_clock.py cleanup-inputs "$RUNNER_TEMP"
           rm -rf -- "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/native-tools.noindex"
           test ! -e "$RUNNER_TEMP/native-worker-input.noindex"
           test ! -e "$RUNNER_TEMP/native-tools.noindex/native-helper"
