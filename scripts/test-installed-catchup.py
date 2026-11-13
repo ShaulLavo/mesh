@@ -303,14 +303,20 @@ class InstalledModeShellTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ.get("MESH_SHORT_TMP"))
         self.addCleanup(temporary.cleanup)
         (Path(temporary.name) / "cohort-control").mkdir()
+        origin = str(Path(temporary.name) / "installed-job-clock.json")
+        frozen = ["--clock-mode", "frozen", "--clock-job-start", origin]
+        diagnostic = ["--clock-mode", "diagnostic", "--clock-job-start", origin,
+                      "--clock-job-seconds", "1800", "--clock-command-seconds", "1500",
+                      "--clock-external-seconds", "240", "--clock-emergency-seconds", "60"]
         for mode, flags in (("oldest", []), ("chain", ["--signed-chain"]), ("waypoint", ["--format-waypoint"]), ("order", ["--ordered-hosts"])):
-            environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": temporary.name, "CLOCK_CALIBRATION": "false"}
-            result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
-            self.assertEqual(result.returncode, 0, (mode, result.stderr))
-            arguments = result.stdout.decode().split("\0")[:-1]
-            position = arguments.index("--source-host")
-            self.assertEqual(arguments[position:], ["--source-host", "mac"] + flags)
-            self.assertIn("--worker-registry", arguments)
+            for calibration, clock in (("false", frozen), ("true", diagnostic)):
+                environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": temporary.name, "CLOCK_CALIBRATION": calibration}
+                result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, (mode, calibration, result.stderr))
+                arguments = result.stdout.decode().split("\0")[:-1]
+                position = arguments.index("--source-host")
+                self.assertEqual(arguments[position:], ["--source-host", "mac"] + flags + clock)
+                self.assertIn("--worker-registry", arguments)
         self.assertTrue(json.loads((Path(temporary.name) / "cohort-control/fixture-launch.json").read_text())["started"])
 
 
