@@ -443,14 +443,18 @@ def verify_order(canary, sleeper, burst, version):
 
 
 def teardown(accounts, drivers, record, output, on_error=None):
+    with installed_native.cleanup_errors(on_error):
+        teardown_owned(accounts, drivers, record, output, on_error)
+
+
+def teardown_owned(accounts, drivers, record, output, on_error):
     initial_diagnostic_error = order_trace.retain(drivers, record, output)
     if initial_diagnostic_error is not None and record.get("passed") and on_error is not None:
         on_error(initial_diagnostic_error)
     actions = [driver.close for driver in reversed(drivers)]
     actions.append(accounts.close)
     try:
-        with installed_native.cleanup_errors(on_error):
-            installed_native.cleanup_all(actions)
+        installed_native.cleanup_all(actions)
         record["cleanup"] = {"accountsAbsent": True, "servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
         for driver in drivers:
@@ -464,11 +468,19 @@ def teardown(accounts, drivers, record, output, on_error=None):
         fail_success = diagnostic_error is not None and record.get("passed", False)
         if fail_success:
             record["passed"], record["error"] = False, str(diagnostic_error)
-        (output / "ordered-native.json").write_text(json.dumps(record, indent=2) + "\n")
+        write_ordered_result(output, record)
     if fail_success:
         if on_error is not None:
             on_error(diagnostic_error)
         raise diagnostic_error
+
+
+def write_ordered_result(output, record):
+    try:
+        (output / "ordered-native.json").write_text(json.dumps(record, indent=2) + "\n")
+    except BaseException as error:
+        installed_native.cleanup_failure(error, None)
+        raise
 
 
 def interrupted(number, _frame):

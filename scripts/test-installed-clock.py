@@ -8,7 +8,7 @@ import tempfile
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host, installed_native, installed_accounts, installed_paths, native_services
 
@@ -129,7 +129,8 @@ class ClockTest(unittest.TestCase):
             first = clock.cleanup_deadline_ns
             clock.fail(RuntimeError("cleanup also failed"))
         self.assertEqual(clock.cleanup_deadline_ns, first)
-        timer.assert_called_with(signal.ITIMER_REAL, 0)
+        timer.assert_any_call(signal.ITIMER_REAL, 0)
+        timer.assert_called_with(signal.ITIMER_REAL, 60)
         value = self.export(clock, False)
         self.assertEqual(value["failures"][0]["type"], "ClockExpired")
         self.assertFalse(value["measurement_completed"])
@@ -439,6 +440,73 @@ class ClockTest(unittest.TestCase):
         self.assertFalse(row["completed"])
         self.assertTrue(row["censored"])
         self.assertGreaterEqual(row["elapsed_ns"], 21 * clocks.SECOND // 10)
+
+    def fragmented_control(self, step_ns, operation):
+        payload = b'{"type":"host.info.result"}'
+        pending = bytearray(b"\x01" + len(payload).to_bytes(4, "big") + payload)
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        def receive(length):
+            self.now.advance(step_ns)
+            chunk = bytes(pending[:min(3, length)])
+            del pending[:len(chunk)]
+            return chunk
+        connection.recv.side_effect = receive
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_native.controls.socket, "socket", return_value=connection):
+            return operation(connection)
+
+    def test_fragmented_native_control_never_restarts_the_absolute_reserve(self):
+        case = installed_native.Installation.__new__(installed_native.Installation)
+        case.state = self.root
+        deadline = self.now() + clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), clocks.handoff(deadline), self.assertRaisesRegex(TimeoutError, "absolute socket exchange"):
+            self.fragmented_control(clocks.SECOND // 5, lambda _connection: case.control("host.info"))
+        self.assertLessEqual(self.now(), deadline + clocks.SECOND // 5)
+
+    def test_nested_cleanup_keeps_watchdog_and_fragmented_io_inside_reserve(self):
+        case = installed_native.Installation.__new__(installed_native.Installation)
+        case.state = self.root
+        clock = self.clock()
+        clock.cleanup_deadline_ns = self.now() + clocks.SECOND
+        def fail():
+            raise RuntimeError("nested cleanup failure")
+        with patch.object(clocks.signal, "signal", return_value=signal.SIG_DFL), patch.object(clocks.signal, "setitimer") as timer, clock.activate(watchdog=True):
+            with self.assertRaisesRegex(RuntimeError, "absolute socket exchange"):
+                self.fragmented_control(clocks.SECOND // 5, lambda _connection: installed_native.cleanup_all([fail, lambda: case.control("host.info")]))
+        timer.assert_any_call(signal.ITIMER_REAL, 1)
+        self.assertEqual(timer.call_args_list[2].args, (signal.ITIMER_REAL, 1))
+        self.assertLessEqual(self.now(), clock.cleanup_deadline_ns + clocks.SECOND // 5)
+
+    def test_diagnostic_export_latches_before_later_account_cleanup(self):
+        owner = {"pid": 73, "birth": "owned"}
+        ticket = self.root / "account-run.json"
+        ticket.write_text(json.dumps({"owner": owner, "cleanup_deadline_ns": self.now() + 600 * clocks.SECOND}))
+        driver = SimpleNamespace(account={"role": "canary"}, diagnostics=installed_order_trace.Trace("canary"))
+        target = self.root / "failed-handoff.json"
+        original = Path.write_bytes
+        def write(path, data):
+            if path == target:
+                raise OSError("diagnostic write failed")
+            return original(path, data)
+        driver.close = lambda: installed_order_trace.write_diagnostic(b"owned", target, driver.diagnostics)
+        accounts = SimpleNamespace(close=lambda: self.now.advance(20 * clocks.SECOND))
+        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND}
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_account_run, "identity", return_value=owner), patch.object(clocks, "failure_cleanup_handoff"), patch.object(Path, "write_bytes", write), self.assertRaisesRegex(RuntimeError, "coverage incomplete"):
+            installed_order.teardown(accounts, [driver], {"passed": True}, self.root, lambda error: installed_order.latch_failure(self.root, descriptor, error))
+        result = json.loads(ticket.read_text())
+        self.assertEqual(result["failure_ns"], 100 * clocks.SECOND)
+        self.assertEqual(result["cleanup_deadline_ns"], 160 * clocks.SECOND)
+
+    def test_final_ordered_result_write_latches_the_original_error(self):
+        owner = {"pid": 73, "birth": "owned"}
+        ticket = self.root / "account-run.json"
+        ticket.write_text(json.dumps({"owner": owner, "cleanup_deadline_ns": self.now() + 600 * clocks.SECOND}))
+        failure = OSError("final result write failed")
+        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND}
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_account_run, "identity", return_value=owner), patch.object(clocks, "failure_cleanup_handoff"), patch.object(Path, "write_text", side_effect=failure), self.assertRaises(OSError) as caught:
+            installed_order.teardown(SimpleNamespace(close=lambda: None), [], {"passed": True}, self.root, lambda error: installed_order.latch_failure(self.root, descriptor, error))
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(json.loads(ticket.read_text())["failure_ns"], 100 * clocks.SECOND)
 
 
 class NativeOwnershipTest(unittest.TestCase):

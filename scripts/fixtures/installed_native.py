@@ -298,7 +298,8 @@ class Installation:
         path.write_text(template)
 
     def control(self, operation, **fields):
-        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields}, timeout=installed_clock.timeout(10))
+        deadline_ns = installed_clock.parent_deadline(10)
+        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields}, timeout=installed_clock.timeout(10), deadline_ns=deadline_ns)
 
     def ready(self):
         try:
@@ -463,7 +464,7 @@ class Installation:
         if path.exists():
             if peer_pid(path) != self.worker:
                 raise RuntimeError("refusing cleanup through a worker socket with unknown ownership")
-            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session}, timeout=installed_clock.timeout(10))
+            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session}, timeout=installed_clock.timeout(10), deadline_ns=installed_clock.parent_deadline(10))
             if response.get("type") != "ok":
                 raise RuntimeError("owned worker rejected session cleanup: " + json.dumps(response))
             return

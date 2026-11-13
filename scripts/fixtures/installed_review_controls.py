@@ -571,7 +571,10 @@ class OrderedLifecycleTest(unittest.TestCase):
         with patch.object(installed_native, "process_stamp", return_value="owned lifetime"), patch.object(installed_native, "peer_pid", return_value=case.worker):
             with patch.object(installed_native.controls, "round_trip", return_value={"type": "ok"}) as control, patch.object(installed_native.os, "kill") as kill:
                 case.stop_worker()
-        control.assert_called_once_with(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": "owned"}, timeout=10)
+        control.assert_called_once()
+        self.assertEqual(control.call_args.args, (str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": "owned"}))
+        self.assertEqual(control.call_args.kwargs["timeout"], 10)
+        self.assertIsInstance(control.call_args.kwargs["deadline_ns"], int)
         kill.assert_not_called()
 
     def test_worker_lifetime_change_is_never_signalled_or_contacted(self):

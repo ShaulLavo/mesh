@@ -169,6 +169,13 @@ class Clock:
         if self.cleanup_deadline_ns is None:
             self.cleanup_deadline_ns = min(self.now() + self.plan.emergency_ns, self.job_deadline_ns)
         self.disarm()
+        self.arm_cleanup()
+
+    def arm_cleanup(self):
+        if self.watchdog and self.cleanup_deadline_ns is not None:
+            remaining = (self.cleanup_deadline_ns - self.now()) / SECOND
+            if remaining > 0:
+                signal.setitimer(signal.ITIMER_REAL, remaining)
 
     def begin_cleanup(self):
         error = sys.exc_info()[1]
@@ -176,8 +183,7 @@ class Clock:
             error = ClockExpired("fixture work deadline ended before cleanup")
         if error is not None:
             self.fail(error)
-        if self.watchdog and self.failures:
-            signal.setitimer(signal.ITIMER_REAL, max(0.000001, (self.effective_deadline() - self.now()) / SECOND))
+        self.arm_cleanup()
 
     def next_key(self, name):
         self.counts[name] = self.counts.get(name, 0) + 1

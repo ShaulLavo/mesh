@@ -52,12 +52,18 @@ def diagnostic(method):
         try:
             return method(self, *args, **kwargs)
         except BaseException as error:
+            notify_failure(error)
             self.complete = False
             self.diagnostic_errors.append({"type": type(error).__name__, "phase": method.__name__})
             del self.diagnostic_errors[:-8]
             if len(self.failures) < 8:
                 self.failures.append(error_record(error, method.__name__, "export" if method.__name__ == "write" else "diagnostic"))
     return guarded
+
+
+def notify_failure(error):
+    from fixtures import installed_native
+    installed_native.cleanup_failure(error, None)
 
 
 class Trace:
@@ -94,6 +100,8 @@ class Trace:
 
     @diagnostic
     def failure(self, error, phase, kind):
+        if kind in ("diagnostic", "export"):
+            notify_failure(error)
         if len(self.failures) == 8:
             self.complete = False
             return
