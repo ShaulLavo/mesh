@@ -680,9 +680,7 @@ class NativeOwnership:
             try:
                 value = json.loads(path.read_text())
             except FileNotFoundError:
-                self.vanished_record_reads += 1
-                if path not in self.observed_records:
-                    self.unresolved.append("native record vanished before observation: " + str(path))
+                self.record_vanished(path)
                 continue
             if path.name == "meta.json":
                 self.note_shell(value.get("pid"), rows)
@@ -690,6 +688,11 @@ class NativeOwnership:
                 continue
             self.note_cohort(value, rows)
             self.observed_records.add(path)
+
+    def record_vanished(self, path):
+        self.vanished_record_reads += 1
+        if path not in self.observed_records:
+            self.unresolved.append("native record vanished before observation: " + str(path))
 
     def note_shell(self, pid, rows):
         if type(pid) is not int or pid <= 0:
