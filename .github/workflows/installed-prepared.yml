@@ -1,0 +1,317 @@
+name: Prepared installed cohort
+
+on:
+  workflow_call:
+    inputs:
+      harness_source:
+        required: true
+        type: string
+      worker_artifact_prefix:
+        required: true
+        type: string
+      worker_artifact_run:
+        required: true
+        type: number
+      worker_artifact_source:
+        required: true
+        type: string
+      calibration_only:
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  MESH_HARNESS_SOURCE: ${{ inputs.harness_source }}
+  MESH_PREPARATION_SOURCE: ${{ inputs.worker_artifact_source }}
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONPATH: ${{ github.workspace }}/scripts
+
+concurrency:
+  group: prepared-cohort-${{ github.run_id }}-${{ github.workflow }}-${{ inputs.worker_artifact_run }}-${{ inputs.worker_artifact_source }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plans:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      minutes: ${{ steps.plans.outputs.minutes }}
+      plans: ${{ steps.plans.outputs.plans }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source }}
+      - name: Require independently reviewed physical job plans or explicit measurement
+        id: plans
+        env:
+          DIAGNOSTIC: ${{ inputs.calibration_only }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ $DIAGNOSTIC == true ]]; then args+=(--diagnostic); fi
+          python3 scripts/fixtures/installed_workflow.py plans "${args[@]}"
+
+  prepare:
+    needs: plans
+    name: Prepare once (${{ matrix.platform }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ fromJSON(needs.plans.outputs.minutes)[format('{0}-{1}-prepare', matrix.key, matrix.mode)] }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        mode: [chain, waypoint]
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            host: pc
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            host: pi
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            host: mac
+            runner: macos-15
+    steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: ${{ fromJSON(needs.plans.outputs.minutes)[format('{0}-{1}-prepare', matrix.key, matrix.mode)] }}
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source }}
+      - name: Require actual native manager before acquisition or builds
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Pin complete original producer intake and measure space before transfer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ inputs.worker_artifact_run }}
+          PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}
+          PRODUCER_PREFIX: ${{ inputs.worker_artifact_prefix }}
+          ARTIFACT_KEY: ${{ matrix.key }}
+        run: |
+          set -euo pipefail
+          python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/cohort-control/producer-pin.json"
+          mkdir -p "$RUNNER_TEMP/native-worker-input.noindex"
+          python3 scripts/fixtures/installed_storage.py "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/cohort-control/storage-preflight.json"
+          python3 scripts/fixtures/installed_artifacts.py download "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/cohort-control/worker-download.json"
+      - name: Prepare complete releases and native proofs once and export public bundle
+        timeout-minutes: 25
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          SOURCE_HOST: ${{ matrix.host }}
+          PROOF_MODE: ${{ matrix.mode }}
+          CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
+          CLOCK_PLAN: ${{ fromJSON(needs.plans.outputs.plans)[format('{0}-{1}-prepare', matrix.key, matrix.mode)] }}
+          MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input.noindex
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/native-worker-input.noindex"
+          python3 scripts/fixtures/installed_artifacts.py native "$input" "$MESH_PREPARATION_SOURCE" "$INSTALLED_CATCHUP_PLATFORM"
+          chmod +x "$input/tools/worker-probe"
+          mkdir -p "$RUNNER_TEMP/native-tools.noindex"
+          go build -o "$RUNNER_TEMP/native-tools.noindex/native-helper" ./scripts/fixtures/native-helper
+          mode=(--signed-chain)
+          if [[ $PROOF_MODE == waypoint ]]; then mode=(--format-waypoint); fi
+          clock=(--clock-mode frozen --clock-plan "$CLOCK_PLAN" --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
+          if [[ $CLOCK_CALIBRATION == true ]]; then
+            clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
+              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+          fi
+          printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" --native-preflight --installed-adoption \
+            --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" --worker-registry "$input/retained/workers.json" \
+            --worker-probe "$input/tools/worker-probe" --source-host "$SOURCE_HOST" "${mode[@]}" "${clock[@]}" \
+            --export-prepared "$RUNNER_TEMP/prepared.noindex"
+      - name: Remove original inputs only after actual runtime teardown
+        if: always()
+        run: python3 scripts/fixtures/installed_workflow.py cleanup "$RUNNER_TEMP"
+      - name: Pack one mode-preserving public transfer after runtime teardown
+        run: python3 scripts/fixtures/installed_workflow.py pack "$RUNNER_TEMP/prepared.noindex" "$RUNNER_TEMP/prepared-transfer.noindex"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-prepared-${{ matrix.key }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/prepared-transfer.noindex/bundle.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Remove uploaded public payload after verified runtime cleanup
+        run: python3 scripts/fixtures/installed_workflow.py cleanup "$RUNNER_TEMP" --bundle
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-preparation-evidence-${{ matrix.key }}-${{ matrix.mode }}
+          path: |
+            ${{ runner.temp }}/installed-job-clock.json
+            ${{ runner.temp }}/cohort-control
+            ${{ runner.temp }}/cohort-proof
+            ${{ runner.temp }}/prepared.noindex
+            ${{ runner.temp }}/prepared-transfer.noindex
+          compression-level: 0
+          retention-days: 7
+      - name: Record external interval through uploads
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/cohort-proof/fixture-clock.json"
+
+  consume:
+    needs: [plans, prepare]
+    name: Complete profile (${{ matrix.platform }}, ${{ matrix.mode }}, ${{ matrix.profile }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ fromJSON(needs.plans.outputs.minutes)[format('{0}-{1}-consume-{2}', matrix.key, matrix.mode, matrix.profile)] }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        mode: [chain, waypoint]
+        profile: [none, first, final]
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            host: pc
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            host: pi
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            host: mac
+            runner: macos-15
+    steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: ${{ fromJSON(needs.plans.outputs.minutes)[format('{0}-{1}-consume-{2}', matrix.key, matrix.mode, matrix.profile)] }}
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source }}
+      - name: Require actual native manager before bundle acquisition
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
+      - name: Measure space and acquire the single same-run prepared artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ARTIFACT: installed-prepared-${{ matrix.key }}-${{ matrix.mode }}
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          python3 scripts/fixtures/installed_workflow.py fetch "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$BUNDLE_ARTIFACT" "$RUNNER_TEMP/prepared.noindex" "$RUNNER_TEMP/cohort-control"
+          python3 scripts/fixtures/installed_workflow.py select "$RUNNER_TEMP/prepared.noindex" "$PROFILE" "$RUNNER_TEMP/cohort-control/installed-slice.json"
+      - name: Run one complete authoritative installed profile using bundled helper
+        timeout-minutes: 25
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          SOURCE_HOST: ${{ matrix.host }}
+          PROOF_MODE: ${{ matrix.mode }}
+          CLOCK_CALIBRATION: ${{ inputs.calibration_only }}
+          CLOCK_PLAN: ${{ fromJSON(needs.plans.outputs.plans)[format('{0}-{1}-consume-{2}', matrix.key, matrix.mode, matrix.profile)] }}
+        run: |
+          set -euo pipefail
+          mode=(--signed-chain)
+          if [[ $PROOF_MODE == waypoint ]]; then mode=(--format-waypoint); fi
+          clock=(--clock-mode frozen --clock-plan "$CLOCK_PLAN" --clock-job-start "$RUNNER_TEMP/installed-job-clock.json")
+          if [[ $CLOCK_CALIBRATION == true ]]; then
+            clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
+              --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+          fi
+          printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" --native-preflight --installed-adoption \
+            --source-host "$SOURCE_HOST" "${mode[@]}" "${clock[@]}" \
+            --prepared-releases "$RUNNER_TEMP/prepared.noindex" --installed-slice "$RUNNER_TEMP/cohort-control/installed-slice.json"
+      - name: Remove bundled payload only after actual runtime teardown
+        if: always()
+        run: python3 scripts/fixtures/installed_workflow.py cleanup "$RUNNER_TEMP" --bundle
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-slice-${{ matrix.key }}-${{ matrix.mode }}-${{ matrix.profile }}
+          path: |
+            ${{ runner.temp }}/installed-job-clock.json
+            ${{ runner.temp }}/cohort-control
+            ${{ runner.temp }}/cohort-proof
+            ${{ runner.temp }}/prepared.noindex
+            ${{ runner.temp }}/prepared-transfer.noindex
+          compression-level: 0
+          retention-days: 7
+      - name: Record external interval through upload
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json" "$RUNNER_TEMP/cohort-proof/fixture-clock.json"
+
+  aggregate:
+    needs: [plans, prepare, consume]
+    if: always() && needs.plans.result == 'success'
+    name: Exact prepared coverage (${{ matrix.key }}, ${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        key: [linux-amd64, linux-arm64, darwin-arm64]
+        mode: [chain, waypoint]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source }}
+      - name: Require successful producer and consumers before downloading closure inputs
+        env:
+          PREPARATION_RESULT: ${{ needs.prepare.result }}
+          CONSUMER_RESULT: ${{ needs.consume.result }}
+        run: |
+          test "$PREPARATION_RESULT" = success
+          test "$CONSUMER_RESULT" = success
+      - name: Measure space and acquire the exact prepared bytes for closure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ARTIFACT: installed-prepared-${{ matrix.key }}-${{ matrix.mode }}
+        run: python3 scripts/fixtures/installed_workflow.py fetch "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$BUNDLE_ARTIFACT" "$RUNNER_TEMP/prepared.noindex" "$RUNNER_TEMP/aggregate-control"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: installed-preparation-evidence-${{ matrix.key }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/preparation
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: installed-slice-${{ matrix.key }}-${{ matrix.mode }}-*
+          path: ${{ runner.temp }}/consumers
+      - name: Require producer completion and exact profile group reader closure
+        env:
+          ARTIFACT_KEY: ${{ matrix.key }}
+          PROOF_MODE: ${{ matrix.mode }}
+        run: |
+          set -euo pipefail
+          consumers=()
+          for profile in none first final; do
+            consumers+=("$RUNNER_TEMP/consumers/installed-slice-$ARTIFACT_KEY-$PROOF_MODE-$profile/cohort-proof")
+          done
+          python3 scripts/aggregate-installed-slices.py "$RUNNER_TEMP/prepared.noindex" "$RUNNER_TEMP/preparation/cohort-proof" "$RUNNER_TEMP/aggregate-control/result.json" "${consumers[@]}"
+      - name: Remove aggregate-owned input copies after the pure closure command
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/prepared.noindex" "$RUNNER_TEMP/prepared-transfer.noindex" "$RUNNER_TEMP/preparation" "$RUNNER_TEMP/consumers"
+          test ! -e "$RUNNER_TEMP/prepared.noindex"
+          test ! -e "$RUNNER_TEMP/prepared-transfer.noindex"
+          test ! -e "$RUNNER_TEMP/preparation"
+          test ! -e "$RUNNER_TEMP/consumers"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-prepared-aggregate-${{ matrix.key }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/aggregate-control
+          retention-days: 7

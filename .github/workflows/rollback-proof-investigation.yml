@@ -15,6 +15,11 @@ on:
         description: 'Exact native preparation artifact prefix'
         required: true
         type: string
+      measurement_scope:
+        description: 'Measure prepared cohorts and all nine support profiles together, or select a subset'
+        default: all
+        type: choice
+        options: [all, cohort, prepared, support]
       catalog_evidence:
         description: 'Enable only after composing the reviewed passive catalog source'
         default: false
@@ -30,6 +35,7 @@ concurrency:
 
 jobs:
   measure:
+    if: inputs.measurement_scope != 'support'
     uses: ./.github/workflows/installed-catchup.yml
     with:
       harness_source: ${{ github.sha }}
@@ -38,4 +44,18 @@ jobs:
       worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
       worker_artifact_source: ${{ inputs.producer_source }}
       calibration_only: true
+      calibration_scope: ${{ inputs.measurement_scope == 'prepared' && 'prepared' || 'cohort' }}
       catalog_evidence: ${{ inputs.catalog_evidence }}
+
+  support:
+    if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [adoption-all, adoption-interrupt, fresh]
+    uses: ./.github/workflows/installed-catchup.yml
+    with:
+      harness_source: ${{ github.sha }}
+      reusable_call: true
+      calibration_only: true
+      calibration_support: ${{ matrix.profile }}

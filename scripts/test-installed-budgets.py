@@ -210,7 +210,7 @@ class WorkflowWiringTests(unittest.TestCase):
     def test_support_diagnostic_selection_is_explicit_and_cannot_enable_ordinary_fallback(self):
         script = self.script(job("frozen-budgets"), "Select reviewed per-platform and profile job admissions")
         with tempfile.TemporaryDirectory(prefix="support-calibration-") as temporary:
-            environment = os.environ | {"CALIBRATION_ONLY": "true", "PUBLICATION_ONLY": "false", "HAS_COHORT": "true",
+            environment = os.environ | {"CALIBRATION_ONLY": "true", "CALIBRATION_SCOPE": "cohort", "PUBLICATION_ONLY": "false", "HAS_COHORT": "true",
                 "CATALOG_EVIDENCE": "false", "PAIRED_SCENARIO": "", "GITHUB_OUTPUT": str(Path(temporary) / "outputs"),
                 "PYTHONDONTWRITEBYTECODE": "1"}
             for selection in ("adoption-all", "adoption-interrupt", "fresh"):
@@ -271,7 +271,7 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn("inputs.calibration_only && 30", cohort)
         self.assertIn("if [[ $CLOCK_CALIBRATION == true ]]", cohort)
         self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", cohort)
-        self.assertIn("mode: [oldest, chain, waypoint, order]", cohort)
+        self.assertIn("mode: [oldest, order]", cohort)
         self.assertEqual(cohort.count("            mode: order"), 2)
         self.assertNotIn("continue-on-error", WORKFLOW)
         self.assertIn("--publication-version", job("publication-native"))
@@ -307,10 +307,12 @@ class WorkflowWiringTests(unittest.TestCase):
         worker = SimpleNamespace(run_prepare=unittest.mock.Mock(), run_slice=unittest.mock.Mock())
         args = SimpleNamespace(export_prepared=Path("/export"), prepared_releases=None, source_host="pc",
             worker_registry=Path("/registry"), worker_probe=Path("/probe"), installed_slice=Path("/slice"),
-            native_helper=unittest.mock.Mock())
+            native_helper=unittest.mock.Mock(), format_waypoint=True)
         with patch.dict(sys.modules, {"fixtures.installed_prepared": worker}):
             proof.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "test-plan")
             self.assertEqual(worker.run_prepare.call_args.args[3]["name"], "pc")
+            self.assertTrue(worker.run_prepare.call_args.kwargs["format_waypoint"])
+            self.assertEqual(worker.run_prepare.call_args.kwargs["preparer"], args.native_helper.resolve.return_value)
             worker.run_slice.assert_not_called()
             args.export_prepared, args.prepared_releases = None, Path("/bundle")
             proof.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "test-plan")
@@ -322,7 +324,7 @@ class WorkflowWiringTests(unittest.TestCase):
         proof = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(proof)
         args = {"export_prepared": None, "prepared_releases": Path("/bundle"), "installed_slice": Path("/slice"),
-            "signed_chain": True, "format_waypoint": False, "ordered_hosts": False, "fresh_managed": False,
+            "installed_adoption": True, "signed_chain": True, "format_waypoint": False, "ordered_hosts": False, "fresh_managed": False,
             "scenario": None, "prepare_only": False, "publication_version": None, "publication_source": None,
             "native_helper": Path("/preparer")}
         parser = unittest.mock.Mock()
@@ -330,7 +332,7 @@ class WorkflowWiringTests(unittest.TestCase):
         proof.validate_prepared_arguments(parser, SimpleNamespace(**args))
         parser.error.assert_not_called()
         for changes in ({"installed_slice": None}, {"fresh_managed": True}, {"publication_source": "a" * 40},
-                        {"native_helper": None}, {"export_prepared": Path("/export")}):
+                        {"installed_adoption": False}, {"format_waypoint": True}, {"export_prepared": Path("/export")}):
             with self.assertRaisesRegex(ValueError, "invalid prepared CLI"):
                 proof.validate_prepared_arguments(parser, SimpleNamespace(**(args | changes)))
 

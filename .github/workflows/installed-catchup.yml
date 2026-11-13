@@ -43,6 +43,10 @@ on:
         type: boolean
         default: false
         description: 'Measurement-only full cohort; never installed acceptance'
+      calibration_scope:
+        type: string
+        default: cohort
+        description: 'Diagnostic cohort or prepared selection; requires calibration_only for prepared scope'
       calibration_support:
         type: string
         default: ''
@@ -55,6 +59,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/installed-catchup.yml'
+      - '.github/workflows/installed-prepared.yml'
+      - 'scripts/fixtures/installed_workflow.py'
+      - 'scripts/fixtures/installed_prepared.py'
+      - 'scripts/fixtures/installed_slices.py'
+      - 'scripts/test-installed-prepared.py'
+      - 'scripts/test-installed-workflow.py'
+      - 'scripts/aggregate-installed-slices.py'
       - 'scripts/prove-installed-catchup.*'
       - 'scripts/fixtures/installed_paths.py'
       - 'scripts/fixtures/native_services.py'
@@ -102,7 +113,7 @@ env:
   MESH_HARNESS_SOURCE: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
 
 concurrency:
-  group: installed-catchup-${{ inputs.reusable_call && format('call-{0}-{1}-{2}-{3}', github.run_id, github.workflow, inputs.worker_artifact_run, inputs.worker_artifact_source) || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
+  group: installed-catchup-${{ inputs.reusable_call && format('call-{0}-{1}-{2}-{3}-{4}-{5}', github.run_id, github.workflow, inputs.worker_artifact_run, inputs.worker_artifact_source, inputs.calibration_support, inputs.calibration_scope) || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.reusable_call }}
 
 defaults:
@@ -126,6 +137,7 @@ jobs:
         env:
           CALIBRATION_ONLY: ${{ inputs.calibration_only }}
           CALIBRATION_SUPPORT: ${{ inputs.calibration_support }}
+          CALIBRATION_SCOPE: ${{ inputs.calibration_scope || 'cohort' }}
           PUBLICATION_ONLY: ${{ inputs.publication_only }}
           HAS_COHORT: ${{ inputs.worker_artifact_prefix != '' }}
           CATALOG_EVIDENCE: ${{ inputs.catalog_evidence || !inputs.calibration_only }}
@@ -140,14 +152,20 @@ jobs:
               *) echo 'Unknown diagnostic support profile' >&2; exit 2 ;;
             esac
           fi
+          case "$CALIBRATION_SCOPE" in
+            cohort) ;;
+            prepared) test "$CALIBRATION_ONLY" = true ;;
+            *) echo 'Unknown diagnostic scope' >&2; exit 2 ;;
+          esac
           profiles=()
+          if [[ $CALIBRATION_ONLY == true ]]; then profiles+=(--diagnostic); fi
+          if [[ $PUBLICATION_ONLY == true ]]; then profiles+=(--publication); fi
           if [[ $CALIBRATION_ONLY != true && $PUBLICATION_ONLY != true ]]; then
-            profiles+=(--support)
             if [[ $HAS_COHORT == true ]]; then profiles+=(--cohort); fi
             if [[ -n $PAIRED_SCENARIO ]]; then profiles+=(--adoption-scenario "$PAIRED_SCENARIO"); fi
-            if [[ $CATALOG_EVIDENCE == true ]]; then profiles+=(--catalog-evidence); fi
+            if [[ $CATALOG_EVIDENCE == true ]]; then profiles+=(--catalog); fi
           fi
-          minutes=$(PYTHONPATH=scripts python3 scripts/fixtures/installed_budgets.py workflow-budgets "${profiles[@]}")
+          minutes=$(PYTHONPATH=scripts python3 scripts/fixtures/installed_workflow.py unsplit "${profiles[@]}")
           printf 'minutes=%s\n' "$minutes" >> "$GITHUB_OUTPUT"
 
   ordered-manager-domains:
@@ -355,7 +373,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: installed-catchup-${{ strategy.job-index }}
+          name: installed-catchup-${{ inputs.calibration_support || 'ordinary' }}-${{ strategy.job-index }}
           path: ${{ runner.temp }}/installed-catchup
           retention-days: 7
       - name: Record external overhead through upload without claiming acceptance
@@ -425,7 +443,7 @@ jobs:
 
   signed-cohort-chain:
     needs: frozen-budgets
-    if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only && inputs.calibration_support == '' && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    if: inputs.worker_artifact_prefix != '' && ! inputs.publication_only && inputs.calibration_support == '' && inputs.calibration_scope != 'prepared' && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
     name: Signed native cohort (${{ matrix.platform }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)[format('{0}-{1}{2}', matrix.key, matrix.mode, (inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest' && '-catalog' || '')] }}
@@ -433,7 +451,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [linux/amd64, linux/arm64, darwin/arm64]
-        mode: [oldest, chain, waypoint, order]
+        mode: [oldest, order]
         exclude:
           - platform: linux/arm64
             mode: order
@@ -556,3 +574,14 @@ jobs:
       - name: Record external overhead through upload without claiming acceptance
         if: always()
         run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json"
+
+  prepared-cohort:
+    needs: frozen-budgets
+    if: inputs.worker_artifact_prefix != '' && !inputs.publication_only && inputs.calibration_support == '' && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
+    uses: ./.github/workflows/installed-prepared.yml
+    with:
+      harness_source: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      worker_artifact_prefix: ${{ inputs.worker_artifact_prefix }}
+      worker_artifact_run: ${{ inputs.worker_artifact_run }}
+      worker_artifact_source: ${{ inputs.worker_artifact_source }}
+      calibration_only: ${{ inputs.calibration_only || false }}

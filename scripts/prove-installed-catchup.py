@@ -68,14 +68,12 @@ def validate_prepared_arguments(parser, args):
         return
     if bool(args.prepared_releases) != bool(args.installed_slice) or args.export_prepared and args.prepared_releases:
         parser.error("prepared consumer needs --prepared-releases and --installed-slice; export is a separate invocation")
-    if not (args.signed_chain or args.format_waypoint) or args.ordered_hosts or args.fresh_managed or args.scenario or args.prepare_only:
+    if not args.installed_adoption or args.signed_chain == args.format_waypoint or args.ordered_hosts or args.fresh_managed or args.scenario or args.prepare_only:
         parser.error("prepared releases require an explicit chain or waypoint invocation without other profiles")
     if args.publication_version or args.publication_source:
         parser.error("prepared supplemental releases cannot select real signed publication")
     if args.export_prepared and not (args.worker_registry and args.worker_probe and args.source_host):
         parser.error("prepared export needs its authoritative worker registry, probe and source host")
-    if args.prepared_releases and not args.native_helper:
-        parser.error("prepared installed consumer requires the production helper preparer")
 
 
 def run_owned(arguments, output, native, clock):
@@ -159,14 +157,16 @@ def run_requested(arguments, root, output, native, *, clock_plan=None):
 
 def run_prepared_requested(args, root, output, native, clock_plan):
     from fixtures import installed_prepared
+    preparer = args.native_helper.resolve(strict=True) if args.native_helper else None
     if args.export_prepared:
         hosts = [host for host in fleet_baselines.load()["hosts"] if host["platform"] == native and host["name"] == args.source_host]
         if len(hosts) != 1:
             raise ValueError("prepared export needs one exact inventory source host on this platform")
         installed_prepared.run_prepare(root, output, native, hosts[0], args.worker_registry, args.worker_probe,
-                                       args.export_prepared, clock_plan=clock_plan)
+                                       args.export_prepared, clock_plan=clock_plan,
+                                       format_waypoint=args.format_waypoint, preparer=preparer)
         return
-    installed_prepared.run_slice(root, output, native, args.native_helper.resolve(strict=True), args.prepared_releases,
+    installed_prepared.run_slice(root, output, native, preparer, args.prepared_releases,
                                 args.installed_slice, clock_plan=clock_plan)
 
 
