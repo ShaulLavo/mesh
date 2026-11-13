@@ -1,0 +1,41 @@
+name: Installed clock calibration
+
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run:
+        description: 'Existing complete reviewed native preparation run'
+        required: true
+        type: number
+      producer_source:
+        description: 'Exact recorded preparation source SHA'
+        required: true
+        type: string
+      producer_prefix:
+        description: 'Exact native preparation artifact prefix'
+        required: true
+        type: string
+      catalog_evidence:
+        description: 'Enable only after composing the reviewed passive catalog source'
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: installed-clock-calibration-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    uses: ./.github/workflows/installed-catchup.yml
+    with:
+      harness_source: ${{ github.sha }}
+      reusable_call: true
+      worker_artifact_prefix: ${{ inputs.producer_prefix }}
+      worker_artifact_run: ${{ inputs.producer_run }}
+      worker_artifact_source: ${{ inputs.producer_source }}
+      calibration_only: true
+      catalog_evidence: ${{ inputs.catalog_evidence }}

@@ -6,22 +6,24 @@ import subprocess
 import sys
 import time
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_native, installed_releases
+from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_native, installed_releases, installed_clock
 
 
-def prove(root, output, native):
+def prove(root, output, native, *, clock_plan=None):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
         raise RuntimeError("fresh installed fixture needs 4 GiB free before builds and acquisition")
-    releases = installed_releases.Releases(root, native, output)
+    releases = installed_releases.Releases(root, native, output, clock_plan=clock_plan)
     try:
         releases.start_signer()
         from fixtures import installed_origin
         run(root, output, native, releases, installed_origin.Origin(root))
     finally:
-        releases.close()
-        installed_adoption.retain_producer_logs(root, output)
+        try:
+            releases.close()
+        finally:
+            installed_adoption.retain_producer_logs(root, output)
 
 
 class FreshCase(installed_adoption.AdoptionCase):
@@ -127,6 +129,11 @@ def run(root, output, native, releases, origin):
     releases.publish(target, 1, [releases.prove(releases.builds[first]["path"], target)])
     origin.serve_tree(releases.directory)
     origin.head(releases.directory, first)
+    run_fresh_case(root, output, releases, origin, target)
+
+
+@installed_clock.timed("fresh-case")
+def run_fresh_case(root, output, releases, origin, target):
     case = FreshCase(root, origin, releases)
     record = {"passed": False, "supplementalSourceBuilds": True, "adoptionSeededPolicy": False}
     try:
@@ -173,7 +180,9 @@ def validate_commit(case, target, entry, helper):
             "client": case.terminal.pid, "worker": case.worker, "shell": case.shell, "listener": case.listener}
 
 
+@installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
 def finish(case, output, record):
+    installed_clock.cleanup()
     try:
         collect_diagnostics(case, output)
     except Exception as error:

@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from fixtures import installed_origin, installed_releases
+from fixtures import installed_origin, installed_releases, installed_clock
 
 
 def prepare(releases, origin, source):
@@ -67,6 +67,7 @@ def execute(releases, source, value, label):
     return result
 
 
+@installed_clock.timed("readers", lambda releases, group: str(group["index"]))
 def verify_readers(releases, group):
     first, waypoint, future = installed_releases.VERSIONS
     suffix = "-group-" + str(group["index"])

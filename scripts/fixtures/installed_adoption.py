@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort, release_worker_groups
+from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort, release_worker_groups, installed_clock
 
 
 class AdoptionCase(installed_native.Installation):
@@ -244,6 +244,7 @@ def validate_initialized_baseline(before, after, domain_path):
         raise RuntimeError("baseline initialization created an unexpected preserved component")
 
 
+@installed_clock.timed("installed-case", lambda root, output, host, pair, preparer, origin, releases, scenario, *_args, **_kwargs: host["name"] + ":" + scenario)
 def run_case(root, output, host, pair, preparer, origin, releases, scenario, previous=None, registry=None, probe=None, group=None):
     case = AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
     case.worker_group = group
@@ -273,7 +274,9 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
     return case.root
 
 
+@installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
 def finish_case(case, record, output):
+    installed_clock.cleanup()
     try:
         try:
             collect_service_snapshot(case)
@@ -301,7 +304,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None, *, clock_plan=None):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -313,7 +316,7 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
     if (signed_chain or ordered_hosts) and registry is None:
         raise RuntimeError("signed chain requires the authoritative exact worker cohort")
-    releases = installed_releases.Releases(root, native, output, manifest_schemas=(1, 2) if format_waypoint else (1,))
+    releases = installed_releases.Releases(root, native, output, manifest_schemas=(1, 2) if format_waypoint else (1,), clock_plan=clock_plan)
     if registry:
         releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
         releases.probe = probe
@@ -322,8 +325,10 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         releases.start_signer()
         run_prepared(root, output, native, preparer, hosts, releases, prepare_only, signed_chain, format_waypoint, ordered_hosts, scenario)
     finally:
-        releases.close()
-        retain_producer_logs(root, output)
+        try:
+            releases.close()
+        finally:
+            retain_producer_logs(root, output)
 
 
 def run_prepared(root, output, native, preparer, hosts, releases, prepare_only=False, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None):
@@ -369,6 +374,8 @@ def run_host_cases(root, output, host, pair, previous, preparer, origin, release
         scenarios = (selected,)
     if releases.registry:
         groups = installed_groups(releases.registry, host["daemon"], pair["daemon"]["executable"], pair["daemon"]["executable"])
+        installed_clock.expect_samples("installed-group:" + host["name"] + ":" + mode + ":" + str(group["index"]) + "#1" for mode in scenarios for group in groups)
+        installed_clock.installed_partition_resolved()
         for scenario in scenarios:
             run_grouped_adoption(root, output, host, pair, previous, preparer, origin, releases, scenario, groups)
         return []
@@ -382,24 +389,33 @@ def run_host_cases(root, output, host, pair, previous, preparer, origin, release
     return failures
 
 
+@installed_clock.timed("partition", lambda registry, version, *_args: version)
 def installed_groups(registry, version, binary, original):
     selection = release_worker_groups.freeze(registry, version, binary)
     return release_worker_groups.partition(selection, Path(original).stat().st_size)
 
 
 def run_grouped_adoption(root, output, host, pair, previous, preparer, origin, releases, scenario, groups):
+    installed_clock.expect_samples("installed-group:" + host["name"] + ":" + scenario + ":" + str(group["index"]) + "#1" for group in groups)
     destination = output / "groups" / (host["name"] + "-" + scenario)
     for group in groups:
         releases.check_budget()
         directory = destination / str(group["index"])
-        directory.mkdir(parents=True)
+        run_adoption_group(root, directory, host, pair, previous, preparer, origin, releases, scenario, group)
+        releases.check_budget()
+    complete_installed_groups(destination, groups, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
+
+
+def run_adoption_group(root, directory, host, pair, previous, preparer, origin, releases, scenario, group):
+    with installed_clock.operation("installed-group:" + host["name"] + ":" + scenario + ":" + str(group["index"])) as key:
+        installed_clock.validate_group(key, group)
         prior = None if scenario == "initial" else previous
+        directory.mkdir(parents=True, exist_ok=True)
         case_root = run_case(root, directory, host, pair, preparer, origin, releases, scenario, prior,
                              releases.registry, releases.probe, group)
         validate_installed_group(directory, group, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
         shutil.rmtree(case_root)
-        releases.check_budget()
-    complete_installed_groups(destination, groups, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
+        installed_clock.clean_sample(key)
 
 
 def original_source(image):
@@ -434,7 +450,8 @@ def complete_installed_groups(destination, selected, labels, source):
         entries.append({"group": release_worker_groups.public_group(group), "stateRun": original["stateRun"],
             "result": release_worker_completion.asset(destination, records[0]),
             "observations": release_worker_completion.asset(destination, cohorts[0])})
-    (destination / "installed-groups.json").write_bytes(release_worker_groups.encode({"schema": 1, "requiredLabels": labels, "groups": entries}))
+    name = "diagnostic-installed-groups.json" if installed_clock.current() and installed_clock.current().plan.mode == "diagnostic" else "installed-groups.json"
+    (destination / name).write_bytes(release_worker_groups.encode({"schema": 1, "requiredLabels": labels, "groups": entries}))
 
 
 def require_clean_case(output, name, releases):
@@ -462,7 +479,10 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
         return
     first = installed_releases.VERSIONS[0]
     groups = installed_groups(releases.registry, first, releases.builds[first]["path"], pair["daemon"]["executable"])
+    installed_clock.expect_samples("installed-group:" + host["name"] + ":chain-" + mode + ":" + str(group["index"]) + "#1" for mode in ("none", "first", "final") for group in groups)
+    installed_clock.installed_partition_resolved()
     if format_waypoint:
+        installed_clock.expect_samples("readers:" + str(group["index"]) + "#1" for group in groups)
         for group in groups:
             installed_waypoint.verify_readers(releases, group)
     for failure in ("none", "first", "final"):
@@ -480,6 +500,9 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
         return
     descriptor = root / "ordered-input.json"
     descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
+        "fixtureDeadlineNs": installed_clock.parent_deadline(480),
+        "fixtureCleanupDeadlineNs": min(releases.clock.deadline_ns + releases.clock.plan.emergency_ns, releases.clock.job_deadline_ns),
+        "fixtureEmergencyNs": releases.clock.plan.emergency_ns,
         "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}, default=str))
     arguments = ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
         "PYTHONPATH=" + str(Path(__file__).parents[1]), "PYTHONDONTWRITEBYTECODE=1", sys.executable,

@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from fixtures import fleet_baselines, installed_paths, native_services
+from fixtures import fleet_baselines, installed_paths, native_services, installed_clock
 
 
 def interrupted(number, _frame):
@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--scenario", choices=("adopt", "rollback", "helper", "initial", "interrupt"), help="one adoption profile; the default requires all profiles")
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
+    installed_clock.arguments(parser)
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -46,19 +47,66 @@ def main():
         raise RuntimeError(f"native platform is {native}; required {required}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    root = installed_paths.create()
+    clock = installed_clock.from_arguments(arguments, native) if arguments.installed_adoption or arguments.fresh_managed else None
+    if clock:
+        with clock.activate(watchdog=True):
+            run_owned(arguments, output, native, clock)
+        return
+    run_owned(arguments, output, native, None)
+
+
+def run_owned(arguments, output, native, clock):
+    root = None
+    failure = None
     try:
+        root = installed_paths.create()
         from fixtures import noindex_paths
         (output / "noindex-setup.json").write_text(json.dumps(noindex_paths.require(root) | {"before": noindex_paths.observation()}) + "\n")
         (output / "socket-paths.json").write_text(json.dumps(installed_paths.validate(root), indent=2) + "\n")
         native_services.positive_control(root, output / "native-manager.json")
-        run_requested(arguments, root, output, native)
+        run_requested(arguments, root, output, native, clock_plan=clock.plan if clock else None)
+    except BaseException as error:
+        failure = error
+        installed_clock.failure(error)
     finally:
-        clean_scratch(root, output)
-        (output / "noindex-after.json").write_text(json.dumps(noindex_paths.observation()) + "\n")
+        finish_with_primary(root, output, clock, failure)
+    if failure is not None:
+        raise failure
+    if clock and clock.failures:
+        raise RuntimeError("fixture clock did not complete: " + clock.failures[0]["error"])
 
 
-def run_requested(arguments, root, output, native):
+def finish_with_primary(root, output, clock, primary):
+    try:
+        finish_owned(root, output, clock)
+    except BaseException as cleanup_error:
+        if primary is not None:
+            raise RuntimeError(str(primary) + "; cleanup failed: " + str(cleanup_error)) from primary
+        raise
+
+
+def finish_owned(root, output, clock):
+    cleaned = root is None
+    try:
+        installed_clock.cleanup()
+        if clock:
+            clock.switch("completion")
+        if root is not None:
+            from fixtures import noindex_paths
+            clean_scratch(root, output)
+            (output / "noindex-after.json").write_text(json.dumps(noindex_paths.observation()) + "\n")
+            cleaned = True
+    except BaseException as error:
+        installed_clock.failure(error)
+        raise
+    finally:
+        if clock:
+            provenance = {"harness": os.environ.get("MESH_HARNESS_SOURCE"), "preparation": os.environ.get("MESH_PREPARATION_SOURCE"),
+                          "run": os.environ.get("GITHUB_RUN_ID"), "job": os.environ.get("GITHUB_JOB"), "retained_root": str(root) if not cleaned else None}
+            clock.export(output / "fixture-clock.json", cleaned, provenance)
+
+
+def run_requested(arguments, root, output, native, *, clock_plan=None):
     if arguments.publication_version is not None or arguments.publication_source is not None:
         if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
             raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
@@ -68,7 +116,7 @@ def run_requested(arguments, root, output, native):
         return
     if arguments.fresh_managed:
         from fixtures import installed_fresh
-        installed_fresh.prove(root, output, native)
+        installed_fresh.prove(root, output, native, clock_plan=clock_plan)
         return
     if arguments.installed_adoption:
         if arguments.native_helper is None and not arguments.prepare_only:
@@ -77,13 +125,18 @@ def run_requested(arguments, root, output, native):
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
         installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
             arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint,
-            arguments.format_waypoint, arguments.ordered_hosts, arguments.scenario)
+            arguments.format_waypoint, arguments.ordered_hosts, arguments.scenario, clock_plan=clock_plan)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
 
 
 def clean_scratch(root, output):
+    ownership = output / "fixture-ownership.json"
+    if ownership.exists():
+        owned = json.loads(ownership.read_text())
+        if owned.get("signerAbsent") is not True or owned.get("transitionsAbsent") is not True:
+            raise RuntimeError(f"fixture owner cleanup unconfirmed; retained {root}")
     record = output / "native-manager.json"
     cleanup = json.loads(record.read_text()).get("cleanup", {}) if record.exists() else {}
     if not cleanup.get("serviceAbsent") or not cleanup.get("processAbsent"):

@@ -3,7 +3,7 @@ import json
 import shutil
 import time
 
-from fixtures import installed_adoption, installed_native, installed_releases
+from fixtures import installed_adoption, installed_native, installed_releases, installed_clock
 
 
 def prepare(releases, origin, source):
@@ -60,6 +60,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
 
 
 def run_groups(root, output, host, pair, preparer, origin, releases, previous, failure, groups):
+    installed_clock.expect_samples("installed-group:" + host["name"] + ":chain-" + failure + ":" + str(group["index"]) + "#1" for group in groups)
     first, intermediate, final = installed_releases.VERSIONS
     expected = ["before-install"]
     if failure == "first":
@@ -71,13 +72,20 @@ def run_groups(root, output, host, pair, preparer, origin, releases, previous, f
     for group in groups:
         releases.check_budget()
         directory = output / "groups" / (host["name"] + "-chain-" + failure) / str(group["index"])
-        directory.mkdir(parents=True)
-        case_root = run_case(root, directory, host, pair, preparer, origin, releases, previous, failure, group)
-        installed_adoption.validate_installed_group(directory, group, expected, installed_adoption.original_source(pair["daemon"]))
-        shutil.rmtree(case_root)
+        run_one_group(root, directory, host, pair, preparer, origin, releases, previous, failure, group, expected)
         releases.check_budget()
     installed_adoption.complete_installed_groups(output / "groups" / (host["name"] + "-chain-" + failure), groups, expected,
                                                 installed_adoption.original_source(pair["daemon"]))
+
+
+def run_one_group(root, directory, host, pair, preparer, origin, releases, previous, failure, group, expected):
+    with installed_clock.operation("installed-group:" + host["name"] + ":chain-" + failure + ":" + str(group["index"])) as key:
+        installed_clock.validate_group(key, group)
+        directory.mkdir(parents=True, exist_ok=True)
+        case_root = run_case(root, directory, host, pair, preparer, origin, releases, previous, failure, group)
+        installed_adoption.validate_installed_group(directory, group, expected, installed_adoption.original_source(pair["daemon"]))
+        shutil.rmtree(case_root)
+        installed_clock.clean_sample(key)
 
 
 def await_chain(case, record, intermediate, final, fail_final):
@@ -252,7 +260,9 @@ def verify_quarantine(case, before, failure, ledger, source, target):
     case.inspect_retained()
 
 
+@installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
 def finish(case, record, output):
+    installed_clock.cleanup()
     try:
         case.close()
         record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}

@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from fixtures import published_releases
+from fixtures import published_releases, installed_clock
 
 FIXTURE = Path(__file__).with_name("fleet-baselines.json")
 
@@ -17,6 +17,7 @@ def load():
     return data
 
 
+@installed_clock.timed("acquire", lambda root, version, *_args, **_kwargs: version)
 def acquire(root, version, platform, expected=None, fetcher=published_releases.download):
     root = Path(root) / version
     root.mkdir(parents=True, exist_ok=True)

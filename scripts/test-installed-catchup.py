@@ -24,7 +24,7 @@ from unittest.mock import Mock, patch
 from fixtures import fleet_baselines, installed_paths as paths, native_services, published_releases, installed_cohort, installed_artifacts, installed_accounts, installed_routes, installed_chain, installed_native, publication_origin, installed_publication, installed_storage
 from fixtures import installed_review_controls, installed_listener_controls
 from fixtures import installed_releases, release_transition
-from fixtures import installed_adoption
+from fixtures import installed_adoption, installed_clock
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -45,6 +45,12 @@ class ExporterFormatTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="exporter-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        plan = installed_clock.ClockPlan("diagnostic", {"test": "exporter"}, command_ns=600 * installed_clock.SECOND,
+                                        external_ns=240 * installed_clock.SECOND, emergency_ns=60 * installed_clock.SECOND)
+        self.clock = installed_clock.Clock(plan)
+        active = self.clock.activate()
+        active.__enter__()
+        self.addCleanup(active.__exit__, None, None, None)
 
     def test_future_overlay_changes_only_manifest_schema_guard(self):
         replacements = installed_releases.future_manifest_overlay(self.root)
@@ -69,7 +75,7 @@ class ExporterFormatTest(unittest.TestCase):
         with patch.object(installed_releases, "Releases") as factory, patch.object(installed_adoption, "run_prepared"), \
                 patch.object(installed_adoption, "retain_producer_logs"):
             installed_adoption.run(self.root, self.root, "linux/amd64", None, format_waypoint=waypoint)
-        factory.assert_called_once_with(self.root, "linux/amd64", self.root, manifest_schemas=schemas)
+        factory.assert_called_once_with(self.root, "linux/amd64", self.root, manifest_schemas=schemas, clock_plan=None)
         factory.return_value.start_signer.assert_called_once_with()
         factory.return_value.close.assert_called_once_with()
 
@@ -84,7 +90,7 @@ class ExporterFormatTest(unittest.TestCase):
     def check_exporter_build(self, schemas):
         root = self.root / str(len(schemas))
         root.mkdir()
-        releases = installed_releases.Releases(root, "linux/amd64", root, manifest_schemas=schemas)
+        releases = installed_releases.Releases(root, "linux/amd64", root, manifest_schemas=schemas, clock_plan=self.clock.plan)
         self.addCleanup(releases.close)
         source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=installed_releases.REPO, text=True).strip()
         with patch.object(installed_releases.subprocess, "run") as run, \
@@ -101,12 +107,14 @@ class ExporterFormatTest(unittest.TestCase):
         self.assertEqual(record["harnessSource"], source)
         self.assertEqual(record["overlaySha256"], installed_releases.digest((root / "exporter-overlay.json").read_bytes()))
         launch.assert_called_once()
-        self.assertIn("-test.timeout=600s", launch.call_args.args[0])
+        duration = next(arg for arg in launch.call_args.args[0] if arg.startswith("-test.timeout="))
+        self.assertTrue(duration.endswith("ns"))
+        self.assertLessEqual(int(duration.removeprefix("-test.timeout=").removesuffix("ns")), 600 * installed_clock.SECOND)
         with self.assertRaisesRegex(RuntimeError, "already launched"):
             releases.start_signer()
 
     def test_exporter_build_failure_never_launches_or_falls_back(self):
-        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(1, 2))
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(1, 2), clock_plan=self.clock.plan)
         self.addCleanup(releases.close)
         with patch.object(installed_releases.subprocess, "run", side_effect=RuntimeError("build failed")) as run, \
                 patch.object(installed_releases.subprocess, "Popen") as launch:
@@ -189,11 +197,20 @@ class SocketPathsTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not mounted"):
                 paths.create()
 
+    def test_unconfirmed_fixture_owner_retains_scratch(self):
+        root, output = self.root / "owned", self.root / "evidence"
+        root.mkdir()
+        output.mkdir()
+        (output / "fixture-ownership.json").write_text(json.dumps({"signerAbsent": True, "transitionsAbsent": False}))
+        with self.assertRaisesRegex(RuntimeError, "fixture owner cleanup unconfirmed"):
+            PROOF.clean_scratch(root, output)
+        self.assertTrue(root.exists())
+
     def test_python_fixture_blocks_remain_at_most_three_deep(self):
         scripts = PROOF_PATH.parent
-        files = (PROOF_PATH, Path(__file__), *(scripts / "fixtures" / name for name in
+        files = (PROOF_PATH, Path(__file__), scripts / "test-installed-clock.py", *(scripts / "fixtures" / name for name in
             ("release_worker_groups.py", "release_worker_index.py", "release_worker_completion.py", "noindex_paths.py", "installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_native.py", "fleet_baselines.py",
-             "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py")))
+             "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -283,7 +300,7 @@ class InstalledModeShellTest(unittest.TestCase):
         command = command.replace("python3 scripts/prove-installed-catchup.py", "capture_args")
         prefix = 'set -euo pipefail\ninput="$RUNNER_TEMP/native-worker-input.noindex"\ncapture_args() { printf "%s\\0" "$@"; }\n'
         for mode, flags in (("oldest", []), ("chain", ["--signed-chain"]), ("waypoint", ["--format-waypoint"]), ("order", ["--ordered-hosts"])):
-            environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": "/owned-unit"}
+            environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": "/owned-unit", "CLOCK_CALIBRATION": "false"}
             result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 0, (mode, result.stderr))
             arguments = result.stdout.decode().split("\0")[:-1]

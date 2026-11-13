@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence
+from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence, installed_clock
 
 
 class Driver:
@@ -22,31 +22,43 @@ class Driver:
         os.chown(self.path, account["uid"], -1)
         self.log = (accounts.output / (account["role"] + "-driver.log")).open("wb")
         self.process = None
+        self.fixture_deadline_ns = descriptor["fixtureDeadlineNs"]
+        self.cleanup_deadline_ns = descriptor["fixtureCleanupDeadlineNs"]
         script = accounts.source / "scripts/fixtures/installed_order_host.py"
         try:
             self.process = subprocess.Popen(accounts.arguments(account, [sys.executable, script, self.path]),
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
                 env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
             os.set_blocking(self.process.stdout.fileno(), False)
+            os.set_blocking(self.process.stdin.fileno(), False)
         except BaseException:
             self.log.close()
             raise
 
     def call(self, operation, timeout=30, **fields):
-        self.process.stdin.write(json.dumps({"operation": operation} | fields).encode() + b"\n")
-        self.process.stdin.flush()
-        deadline = time.monotonic() + timeout
+        parent = self.cleanup_deadline_ns if operation == "close" else self.fixture_deadline_ns
+        deadline_ns = min(parent, installed_clock.parent_deadline(timeout))
+        installed_clock.remaining_until(deadline_ns, timeout)
+        payload = json.dumps(fields | {"operation": operation, "fixtureDeadlineNs": deadline_ns}).encode() + b"\n"
+        self.write_request(payload, deadline_ns)
         data = b""
-        while time.monotonic() < deadline:
+        while time.monotonic_ns() < deadline_ns:
             if self.process.poll() is not None:
                 raise RuntimeError("ordered host driver exited: " + self.account["role"])
-            if select.select([self.process.stdout], [], [], min(1, max(0, deadline - time.monotonic())))[0]:
+            if select.select([self.process.stdout], [], [], installed_clock.remaining_until(deadline_ns, 1))[0]:
                 data += os.read(self.process.stdout.fileno(), 65536)
-            if b"\n" in data:
-                return json.loads(data)
             if len(data) > 2 << 20:
                 raise RuntimeError("ordered host response exceeds its bound")
+            if b"\n" in data:
+                return json.loads(data)
         raise RuntimeError("ordered native host operation exceeded its bound: " + operation)
+
+    def write_request(self, payload, deadline_ns):
+        pending = memoryview(payload)
+        while pending:
+            if not select.select([], [self.process.stdin], [], installed_clock.remaining_until(deadline_ns, 1))[1]:
+                continue
+            pending = pending[os.write(self.process.stdin.fileno(), pending):]
 
     def close(self):
         installed_native.cleanup_all([self.close_host, self.stop_driver, self.retain_logs, self.log.close])
@@ -54,7 +66,7 @@ class Driver:
     def close_host(self):
         if self.process and self.process.poll() is None:
             self.call("close")
-            self.process.wait(timeout=10)
+            self.process.wait(timeout=installed_clock.timeout(10))
 
     def retain_logs(self):
         if self.process and self.process.poll() is None:
@@ -75,10 +87,10 @@ class Driver:
             return
         self.process.terminate()
         try:
-            self.process.wait(timeout=10)
+            self.process.wait(timeout=installed_clock.timeout(10))
         except subprocess.TimeoutExpired:
             self.process.kill()
-            self.process.wait(timeout=10)
+            self.process.wait(timeout=installed_clock.timeout(10))
 
 
 def publish_logs(payload, output, name):
@@ -125,6 +137,8 @@ def run(root, output, descriptor, operation):
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        deadline_ns = installed_account_run.owner_failure(root, error, descriptor["fixtureEmergencyNs"])
+        installed_clock.failure_cleanup_handoff(deadline_ns)
         raise
     finally:
         teardown(accounts, drivers, record, output)
@@ -398,4 +412,6 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     descriptor_path, destination = map(Path, sys.argv[1:3])
-    run(descriptor_path.parent, destination, json.loads(descriptor_path.read_text()), sys.argv[3])
+    descriptor = json.loads(descriptor_path.read_text())
+    with installed_clock.handoff(descriptor["fixtureDeadlineNs"], watchdog=True):
+        run(descriptor_path.parent, destination, descriptor, sys.argv[3])

@@ -7,7 +7,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence
+from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence, installed_clock
 
 
 class Origin(installed_origin.Origin):
@@ -21,7 +21,7 @@ class Origin(installed_origin.Origin):
         environment = os.environ | {"MESH_INSTALLED_READ_ROOT": str(state.parent), "MESH_INSTALLED_READ_STATE": str(state),
             "MESH_INSTALLED_READ_OUTPUT": str(output.relative_to(state.parent)), "MESH_INSTALLED_READ_KIND": kind}
         result = subprocess.run([str(self.root / "signer-test"), "-test.run=^TestInstalledHostRead$"],
-                                env=environment, capture_output=True, text=True, timeout=15, check=False)
+                                env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(15), check=False)
         if result.returncode:
             raise RuntimeError("native account product inspection failed: " + result.stdout[-4096:] + result.stderr[-4096:])
 
@@ -36,6 +36,10 @@ class Host:
         self.closed = False
 
     def dispatch(self, operation, value):
+        with installed_clock.handoff(value["fixtureDeadlineNs"], watchdog=True):
+            return self.dispatch_operation(operation, value)
+
+    def dispatch_operation(self, operation, value):
         if operation == "prepare":
             return self.prepare()
         if operation == "configure":

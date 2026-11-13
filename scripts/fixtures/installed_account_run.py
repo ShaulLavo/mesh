@@ -6,7 +6,9 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 import uuid
+from fixtures import installed_clock
 
 
 def save(path, value):
@@ -60,19 +62,23 @@ def claim(root, output, operation):
     return operation
 
 
+@installed_clock.timed("ordered-owner")
 def launch(root, output, arguments, timeout=480):
     operation = uuid.uuid4().hex
     ticket_path = root / "account-run.json"
     if ticket_path.exists():
         raise RuntimeError("refusing an existing privileged account-run ticket")
+    descriptor = json.loads((root / "ordered-input.json").read_text())
     ticket = {"schema": 1, "operation": operation, "root": str(root.resolve()), "output": str(output.resolve()),
+              "deadline_ns": min(descriptor["fixtureDeadlineNs"], installed_clock.parent_deadline(timeout)),
+              "cleanup_deadline_ns": descriptor["fixtureCleanupDeadlineNs"],
               "supervisor": identity(os.getpid()), "descriptor": hashlib.sha256((root / "ordered-input.json").read_bytes()).hexdigest(), "owner": None}
     save(ticket_path, ticket)
     process = subprocess.Popen([*arguments, operation], start_new_session=True)
     ticket["launcher"] = identity(process.pid)
     # The child alone writes owner identity; never overwrite its claim.
     save(output / "account-launcher.json", ticket)
-    supervise(process, ticket_path, output, timeout, privileged_signal, recover)
+    supervise(process, ticket_path, output, installed_clock.remaining_until(ticket["deadline_ns"], timeout), privileged_signal, recover)
 
 
 def supervise(process, ticket_path, output, timeout, signal_owner, recover_owner):
@@ -83,18 +89,37 @@ def supervise(process, ticket_path, output, timeout, signal_owner, recover_owner
             failure = RuntimeError("privileged account owner exited unsuccessfully: " + str(status))
     except BaseException as error:
         failure = error
+        installed_clock.failure(error)
         record_failure(ticket_path, output, error)
         stop_owner(process, ticket_path, signal_owner)
     if failure is not None and not (output / "account-run-failure.json").exists():
         record_failure(ticket_path, output, failure)
     ticket = json.loads(ticket_path.read_text())
+    if failure is not None:
+        installed_clock.failure_deadline(failure, ticket["cleanup_deadline_ns"])
     if alive(ticket.get("owner")):
         raise RuntimeError("privileged account owner remains alive; retaining its scratch")
-    recover_owner(ticket_path)
+    try:
+        recover_owner(ticket_path)
+    except BaseException as error:
+        save(output / "account-recovery-failure.json", {"originalError": str(failure), "cleanupError": str(error), "retainedRoot": str(ticket_path.parent)})
+        raise RuntimeError(str(failure or "ordered cleanup failed") + "; recovery failed: " + str(error)) from error
     verify_cleanup(ticket_path.parent, output, parent_receipt=False)
     save(output / "account-run-result.json", {"schema": 1, "operation": ticket["operation"], "ownerStopped": True, "cleanupVerified": True})
     if failure is not None:
         raise failure
+
+
+def owner_failure(root, error, emergency_ns):
+    path = root / "account-run.json"
+    ticket = json.loads(path.read_text())
+    if ticket.get("owner") != identity(os.getpid()):
+        raise RuntimeError("ordered failure owner identity changed")
+    ticket.setdefault("failure_ns", time.monotonic_ns())
+    ticket["cleanup_deadline_ns"] = min(ticket["cleanup_deadline_ns"], ticket["failure_ns"] + emergency_ns)
+    ticket.setdefault("originalError", str(error))
+    save(path, ticket)
+    return ticket["cleanup_deadline_ns"]
 
 
 def record_failure(ticket_path, output, error):
@@ -103,22 +128,29 @@ def record_failure(ticket_path, output, error):
 
 
 def stop_owner(process, ticket_path, signal_owner):
+    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(20))
     signal_owner(ticket_path, signal.SIGTERM)
     try:
-        process.wait(timeout=10)
+        process.wait(timeout=installed_clock.remaining_until(deadline_ns, 10))
     except subprocess.TimeoutExpired:
         signal_owner(ticket_path, signal.SIGKILL)
-        process.wait(timeout=10)
+        process.wait(timeout=installed_clock.remaining_until(deadline_ns, 10))
+    owner = json.loads(ticket_path.read_text()).get("owner")
+    if alive(owner):
+        signal_owner(ticket_path, signal.SIGKILL)
+    while alive(owner):
+        time.sleep(installed_clock.remaining_until(deadline_ns, 0.025))
 
 
 def privileged_signal(ticket_path, number):
-    subprocess.run(privileged_arguments("signal", ticket_path, str(int(number))), check=True, timeout=10)
+    deadline_ns = json.loads(ticket_path.read_text())["cleanup_deadline_ns"]
+    subprocess.run(privileged_arguments("signal", ticket_path, str(int(number))), check=True, timeout=installed_clock.remaining_until(deadline_ns, 10))
 
 
 def recover(ticket_path):
-    # Recovery's native operations retain their existing per-command bounds.
-    # Do not SIGKILL a second account owner while it is tearing down resources.
-    subprocess.run(privileged_arguments("recover", ticket_path), check=True)
+    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(30))
+    subprocess.run(privileged_arguments("recover", ticket_path, str(deadline_ns)), check=True,
+                   timeout=installed_clock.remaining_until(deadline_ns, 30))
 
 
 def privileged_arguments(operation, path, *arguments):
@@ -163,10 +195,18 @@ def root_action(arguments):
         return
     if operation != "recover" or alive(owner):
         raise RuntimeError("refusing recovery while the bound account owner may be running")
+    deadline_ns = min(ticket["cleanup_deadline_ns"], int(values[0]))
+    installed_clock.remaining_until(deadline_ns, 30)
+    signal.signal(signal.SIGALRM, recovery_expired)
+    signal.setitimer(signal.ITIMER_REAL, installed_clock.remaining_until(deadline_ns, 30))
     resources = Path(ticket["output"]) / "account-resources.json"
     if not resources.exists() or resources.stat().st_uid != 0:
         raise RuntimeError("account resource ownership is missing; retaining scratch")
     installed_accounts.Accounts.resume(resources, ticket).close()
+
+
+def recovery_expired(_number, _frame):
+    raise installed_clock.ClockExpired("ordered account recovery exhausted its finite reserve; retain owned resources")
 
 
 if __name__ == "__main__":

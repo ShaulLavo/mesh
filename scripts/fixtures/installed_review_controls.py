@@ -407,6 +407,7 @@ class AccountRunReviewTest(unittest.TestCase):
         descriptor.write_text("{}")
         import hashlib
         ticket = {"schema": 1, "operation": "control", "root": str(root), "output": str(output), "owner": None,
+                  "cleanup_deadline_ns": time.monotonic_ns() + 20_000_000_000,
                   "supervisor": installed_account_run.identity(os.getpid()), "descriptor": hashlib.sha256(descriptor.read_bytes()).hexdigest()}
         path = root / "account-run.json"
         installed_account_run.save(path, ticket)

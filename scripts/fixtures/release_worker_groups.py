@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+from fixtures import installed_clock
 
 from fixtures import release_workers, noindex_paths
 
@@ -287,6 +288,7 @@ def run(source, candidate, platform, output):
     selected = freeze(registry, build["version"], source)
     original = source.stat().st_size
     groups = partition(selected, original)
+    installed_clock.native_selection(groups)
     root = output / "groups" / ctx["sourceDigest"] / profile
     root.mkdir(parents=True)
     leaves = output / "groups" / "leaves"
@@ -319,13 +321,19 @@ def peak_rss(entry, leaves):
 
 
 def run_group(source, candidate, platform, root, leaves, group, original, environment):
+    with installed_clock.native_group(root, group):
+        return run_group_body(source, candidate, platform, root, leaves, group, original, environment)
+
+
+def run_group_body(source, candidate, platform, root, leaves, group, original, environment):
     directory = root / str(group["index"])
     directory.mkdir()
     descriptor = directory / "selected.json"
     descriptor.write_bytes(encode({"group": group, "originalBytes": original}))
     child = environment | {"MESH_WORKER_GROUP": str(descriptor.resolve())}
     script = Path(__file__).parents[1] / "prove-release-transition.sh"
-    subprocess.run(["bash", str(script), str(source), str(candidate), platform, str(directory)], env=child, check=True)
+    subprocess.run(["bash", str(script), str(source), str(candidate), platform, str(directory)], env=child, check=True,
+                   timeout=installed_clock.timeout(600) if os.environ.get("MESH_INSTALLED_CLOCK_HANDOFF") else None)
     receipts = list(directory.glob("*.json"))
     receipts = [path for path in receipts if RECEIPT.fullmatch(path.name)]
     if len(receipts) != 1:
@@ -333,6 +341,8 @@ def run_group(source, candidate, platform, root, leaves, group, original, enviro
     raw = receipts[0].read_bytes()
     observations = json.loads((directory / "observations" / (receipts[0].stem + ".cohort.json")).read_bytes())
     cleanup = json.loads((directory / "cleanup.json").read_bytes())
+    if cleanup.get("processesAbsent") is not True or cleanup.get("stateAbsent") is not True:
+        raise ValueError("native group cleanup unconfirmed")
     entry = {"group": public_group(group), "stateRun": cleanup["stateRun"],
              "observations": leaf(leaves, observations, "observations"), "cleanup": leaf(leaves, cleanup, "cleanup"),
              "forward": leaf(leaves, {"bytes": raw.decode(), "sha256": digest(raw)}, "forward"), "rollback": None}
