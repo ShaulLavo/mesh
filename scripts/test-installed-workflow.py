@@ -38,7 +38,8 @@ def bundle(root, count=7, mode="waypoint"):
     payload = root / "helper"
     payload.write_bytes(b"offline executable payload")
     payload.chmod(0o755)
-    value = {"schema": 1, "mode": mode, "groups": [{"index": index} for index in range(count)],
+    value = {"schema": 1, "harnessSource": "a" * 40, "preparationSource": "b" * 40,
+             "publishedRegistrySha256": "c" * 64, "mode": mode, "groups": [{"index": index} for index in range(count)],
              "files": {"helper": {"sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
                                   "size": payload.stat().st_size, "executable": True}}}
     (root / "prepared.json").write_text(json.dumps(value))
@@ -267,6 +268,15 @@ class WorkflowControls(unittest.TestCase):
         for script in ("test-installed-prepared.py", "test-installed-workflow.py"):
             self.assertIn("python3 scripts/" + script, ci)
             self.assertIn("scripts/" + script, CATCHUP)
+
+    def test_harness_and_original_preparation_sources_remain_distinct(self):
+        self.assertIn("MESH_HARNESS_SOURCE: ${{ inputs.harness_source }}", PREPARED)
+        self.assertIn("MESH_PREPARATION_SOURCE: ${{ inputs.worker_artifact_source }}", PREPARED)
+        producer = job(PREPARED, "prepare")
+        self.assertIn('installed_artifacts.py native "$input" "$MESH_PREPARATION_SOURCE"', producer)
+        self.assertIn("PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}", producer)
+        for name in ("prepare", "consume"):
+            self.assertIn("ref: ${{ inputs.harness_source }}", job(PREPARED, name))
 
     def test_cli_bundled_preparer_is_optional_and_waypoint_is_forwarded(self):
         spec = importlib.util.spec_from_file_location("prepared_workflow_cli", ROOT / "scripts/prove-installed-catchup.py")
