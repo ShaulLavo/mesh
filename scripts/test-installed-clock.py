@@ -603,7 +603,7 @@ class ClockTest(unittest.TestCase):
         self.assertIn("mode: [chain, waypoint]", reusable)
         self.assertIn("native_platform: ${{ matrix.platform }}", reusable)
         self.assertIn("matrix: ${{ fromJSON(needs.plans.outputs.case) }}", prepared)
-        self.assertIn("profile: [none, first, final]", prepared)
+        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", prepared)
         self.assertIn("uses: ./.github/workflows/installed-prepared.yml", reusable)
         self.assertIn("timeout-minutes: 15", reusable)
         self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)

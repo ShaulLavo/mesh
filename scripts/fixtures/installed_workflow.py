@@ -28,16 +28,26 @@ def physical_key(platform, mode, role, profile=None):
     return key + "-" + profile if profile else key
 
 
-def physical_plans(index, diagnostic, platform, mode):
+def physical_plans(index, diagnostic, platform, mode, measurement_profile=""):
+    profiles = selected_profiles(diagnostic, measurement_profile)
     matrix = case_matrix(platform, mode)
     values, paths = {}, {}
-    add_physical_plans(values, paths, index, diagnostic, platform, mode)
-    return {"minutes": values, "plans": paths, "case": matrix}
+    add_physical_plans(values, paths, index, diagnostic, platform, mode, profiles)
+    return {"minutes": values, "plans": paths, "case": matrix, "profiles": profiles}
 
 
-def add_physical_plans(values, paths, index, diagnostic, platform, mode):
+def selected_profiles(diagnostic, measurement_profile):
+    if not measurement_profile:
+        return list(PROFILES)
+    if not diagnostic or measurement_profile not in PROFILES:
+        raise ValueError("profile filtering requires explicit diagnostic measurement and one supported profile")
+    return [measurement_profile]
+
+
+def add_physical_plans(values, paths, index, diagnostic, platform, mode, profiles):
     host = installed_budgets.PLATFORMS[platform][1]
-    for role, profile in (("prepare", None), ("consume", "none"), ("consume", "first"), ("consume", "final")):
+    roles = [("prepare", None)] + [("consume", profile) for profile in profiles]
+    for role, profile in roles:
         key = physical_key(platform, mode, role, profile)
         if diagnostic:
             values[key], paths[key] = 30, ""
@@ -178,6 +188,7 @@ def main():
     plans.add_argument("--diagnostic", action="store_true")
     plans.add_argument("--platform", choices=tuple(RUNNERS), required=True)
     plans.add_argument("--mode", choices=MODES, required=True)
+    plans.add_argument("--measurement-profile", choices=PROFILES, default="")
     unsplit = commands.add_parser("unsplit")
     unsplit.add_argument("--index", type=Path, default=installed_budgets.INDEX)
     unsplit.add_argument("--diagnostic", action="store_true")
@@ -205,7 +216,7 @@ def main():
     if args.command == "select":
         args.output.write_text(json.dumps(selection(args.bundle, args.profile)) + "\n")
     elif args.command == "plans":
-        write_plans_output(physical_plans(args.index, args.diagnostic, args.platform, args.mode))
+        write_plans_output(physical_plans(args.index, args.diagnostic, args.platform, args.mode, args.measurement_profile))
     elif args.command == "unsplit":
         print(json.dumps(unsplit_plans(args), separators=(",", ":")))
     elif args.command == "fetch":

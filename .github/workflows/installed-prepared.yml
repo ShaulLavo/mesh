@@ -26,6 +26,10 @@ on:
       calibration_only:
         default: false
         type: boolean
+      measurement_profile:
+        default: ''
+        type: string
+        description: 'One diagnostic-only complete profile; empty requires all profiles and aggregate closure'
 
 permissions:
   contents: read
@@ -53,6 +57,7 @@ jobs:
       minutes: ${{ steps.plans.outputs.minutes }}
       plans: ${{ steps.plans.outputs.plans }}
       case: ${{ steps.plans.outputs.case }}
+      profiles: ${{ steps.plans.outputs.profiles }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,10 +68,12 @@ jobs:
           DIAGNOSTIC: ${{ inputs.calibration_only }}
           NATIVE_PLATFORM: ${{ inputs.native_platform }}
           PROOF_MODE: ${{ inputs.mode }}
+          MEASUREMENT_PROFILE: ${{ inputs.measurement_profile }}
         run: |
           set -euo pipefail
           args=()
           if [[ $DIAGNOSTIC == true ]]; then args+=(--diagnostic); fi
+          if [[ -n $MEASUREMENT_PROFILE ]]; then args+=(--measurement-profile "$MEASUREMENT_PROFILE"); fi
           python3 scripts/fixtures/installed_workflow.py plans --platform "$NATIVE_PLATFORM" --mode "$PROOF_MODE" "${args[@]}"
 
   prepare:
@@ -173,7 +180,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [none, first, final]
+        profile: ${{ fromJSON(needs.plans.outputs.profiles) }}
         include: ${{ fromJSON(needs.plans.outputs.case).include }}
     steps:
       - name: Record original job clock before checkout and setup
@@ -239,7 +246,7 @@ jobs:
 
   aggregate:
     needs: [plans, prepare, consume]
-    if: always() && needs.plans.result == 'success'
+    if: always() && needs.plans.result == 'success' && inputs.measurement_profile == ''
     name: Exact prepared coverage (${{ matrix.key }}, ${{ matrix.mode }})
     runs-on: ubuntu-24.04
     timeout-minutes: 10
