@@ -119,13 +119,18 @@ class Manager:
 
 
 def mapped_image(pid, executable):
-    expected = Path(executable).resolve().stat()
+    expected_path = Path(executable).resolve()
+    expected = expected_path.stat()
     image = Path(f"/proc/{pid}/exe")
     if platform.system() == "Darwin":
         image = darwin_image(pid, expected)
     loaded = image.stat()
     if (loaded.st_dev, loaded.st_ino) != (expected.st_dev, expected.st_ino):
-        raise RuntimeError("native service mapped another executable inode")
+        error = RuntimeError("native service mapped another executable inode")
+        error.mapped_image = {
+            "expected": {"executable": str(expected_path), "device": expected.st_dev, "inode": expected.st_ino},
+            "mapped": {"executable": str(image), "device": loaded.st_dev, "inode": loaded.st_ino}}
+        raise error
     with image.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return {"pid": pid, "inode": loaded.st_ino, "device": loaded.st_dev, "sha256": digest}

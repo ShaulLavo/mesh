@@ -7,6 +7,8 @@ import threading
 import time
 import traceback
 
+from fixtures import installed_clock
+
 
 TIMELINE = "order-timeline.json"
 READER = "order-reader-timeline.json"
@@ -97,6 +99,13 @@ class Trace:
         if len(encoded(self.reserved)) > 8192:
             self.reserved.pop(phase)
             self.complete = False
+
+    def retain_failure(self, phase, **details):
+        value = json.loads(encoded({"at": stamp(), "details": details}))
+        reserved = self.reserved | {phase: value}
+        if len(encoded(reserved)) > 8192:
+            raise ValueError("failure identity exceeds reservation bound")
+        self.reserved = reserved
 
     @diagnostic
     def failure(self, error, phase, kind):
@@ -192,6 +201,52 @@ def failure(driver, error, phase, kind):
     owner = trace(driver)
     if owner is not None:
         owner.failure(error, phase, kind)
+
+
+def limited_identity(value, keys):
+    result = {key: bounded_text(str(value.get(key, "")), 768) for key in keys}
+    truncated = [key for key in keys if result[key] != str(value.get(key, ""))]
+    if truncated:
+        result["truncatedFields"] = truncated
+    return result
+
+
+def mapping_identity(mapping):
+    if mapping is None:
+        return None
+    return {kind: limited_identity(value, ("executable",)) | {"device": value["device"], "inode": value["inode"]}
+            for kind, value in mapping.items()}
+
+
+def helper_inspection_failure(host, primary, manager, pid, receipt, observed):
+    owner = trace(host)
+    if owner is None:
+        return
+    try:
+        deadline_ns = installed_clock.HANDOFF.get()
+        installed_clock.remaining_until(deadline_ns, 1)
+        journal = observed.get("journal") or {}
+        owner.retain_failure("helperInspectionFailure", service={"label": bounded_text(manager.label, 128),
+            "manager": bounded_text(manager.system, 32), "pid": pid}, receipt=limited_identity(receipt, ("executable", "servicePath", "digest")),
+            mapping=mapping_identity(getattr(primary, "mapped_image", None)), verifiedMapping=observed.get("helper"),
+            installationJournal=limited_identity(journal, ("phase", "updatedAt")),
+            hostUpdatePhase=bounded_text(observed.get("state", {}).get("phase", ""), 64),
+            journalObservation="earlier in this inspection; not reread after failure", fixtureDeadlineNs=deadline_ns)
+    except BaseException as error:
+        primary.add_note("ordered helper failure evidence unavailable: " + bounded_text(str(error), 256))
+
+
+def driver_exit(driver, primary, operation, returncode, deadline_ns):
+    owner = trace(driver)
+    if owner is None:
+        return
+    try:
+        installed_clock.remaining_until(deadline_ns, 1)
+        owner.retain_failure("driverExit", pid=driver.process.pid, returncode=returncode, signal=-returncode if returncode < 0 else None,
+            operation=operation, stderrFile=driver.account["role"] + "-driver.log", fixtureDeadlineNs=deadline_ns)
+    except BaseException as error:
+        primary.add_note(f"ordered driver exit pid={driver.process.pid} returncode={returncode} signal={-returncode if returncode < 0 else None}; "
+                         "evidence unavailable: " + bounded_text(str(error), 256))
 
 
 @contextmanager

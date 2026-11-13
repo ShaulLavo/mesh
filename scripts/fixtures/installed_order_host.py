@@ -123,9 +123,14 @@ class Host:
         result["route"] = case.route_observer.snapshot()
         receipt = json.loads((case.state / "update/helper/installed.json").read_text())
         manager = case.units.managers["helper"]
-        result["helper"] = native_services.mapped_image(manager.manager_pid(), receipt["executable"])
-        if result["helper"]["sha256"] != receipt["digest"]:
-            raise RuntimeError("ordered native helper executes another image")
+        pid = manager.manager_pid()
+        try:
+            result["helper"] = native_services.mapped_image(pid, receipt["executable"])
+            if result["helper"]["sha256"] != receipt["digest"]:
+                raise RuntimeError("ordered native helper executes another image")
+        except BaseException as error:
+            order_trace.helper_inspection_failure(self, error, manager, pid, receipt, result)
+            raise
         return result
 
     def close(self):

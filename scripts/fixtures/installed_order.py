@@ -52,8 +52,11 @@ class Driver:
         self.write_request(payload, deadline_ns, operation)
         data = b""
         while time.monotonic_ns() < deadline_ns:
-            if self.process.poll() is not None:
-                raise RuntimeError("ordered host driver exited: " + self.account["role"])
+            returncode = self.process.poll()
+            if returncode is not None:
+                error = RuntimeError("ordered host driver exited: " + self.account["role"])
+                order_trace.driver_exit(self, error, operation, returncode, deadline_ns)
+                raise error
             if select.select([self.process.stdout], [], [], installed_clock.remaining_until(deadline_ns, 1))[0]:
                 data += os.read(self.process.stdout.fileno(), 65536)
             if len(data) > 2 << 20:

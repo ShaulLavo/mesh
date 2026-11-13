@@ -2,15 +2,18 @@
 import copy
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import io
 from pathlib import Path
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from fixtures import installed_order, installed_order_host, installed_order_trace as trace, installed_releases
+from fixtures import installed_clock, installed_order, installed_order_host, installed_order_trace as trace, installed_releases, native_services
 
 
 def observation(version, stamp="2000-01-01T00:00:00.000000999Z"):
@@ -33,6 +36,142 @@ class CompetingDriver:
             raise self.parent_error
         version = installed_releases.VERSIONS[-1 if self.account["role"] == "canary" else 0]
         return copy.deepcopy(observation(version))
+
+
+class OrderFailureEvidenceTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.deadline = time.monotonic_ns() + 10_000_000_000
+
+    def mapping_error(self):
+        expected = SimpleNamespace(st_dev=11, st_ino=22)
+        mapped = SimpleNamespace(st_dev=11, st_ino=33)
+        with patch.object(Path, "resolve", return_value=Path("/expected/helper")), patch.object(Path, "stat", side_effect=[expected, mapped]) as reads:
+            with self.assertRaisesRegex(RuntimeError, "^native service mapped another executable inode$") as caught:
+                native_services.mapped_image(1234, "/receipt/helper")
+        self.assertEqual(reads.call_count, 2)
+        return caught.exception
+
+    def host(self):
+        state = self.root / "state"
+        (state / "update/helper").mkdir(parents=True)
+        receipt = {"executable": "/receipt/helper", "servicePath": "/units/helper.service", "digest": "d" * 64}
+        (state / "update/helper/installed.json").write_text(json.dumps(receipt))
+        journal = observation(installed_releases.VERSIONS[-1])["journal"]
+        (state / "update/installation.json").write_text(json.dumps(journal))
+        (self.root / "ordered-ledger.json").write_text(json.dumps({"state": {"phase": "idle"}, "entries": [], "peers": []}))
+        manager = SimpleNamespace(label="mesh-update-helper", system="Linux", manager_pid=Mock(return_value=1234))
+        host = object.__new__(installed_order_host.Host)
+        host.closed, host.diagnostics = False, trace.Trace("canary")
+        host.case = SimpleNamespace(root=self.root, state=state, origin=SimpleNamespace(ledger=Mock()), ready=lambda: True,
+            control=lambda _: {"host": {"build": {"version": installed_releases.VERSIONS[-1]}}}, inspect_retained=Mock(),
+            route_observer=SimpleNamespace(snapshot=lambda: {}), units=SimpleNamespace(managers={"helper": manager}), close=Mock())
+        return host, receipt
+
+    def inspect_failure(self, host, error):
+        with patch.object(native_services, "mapped_image", side_effect=error) as mapped:
+            with self.assertRaises(RuntimeError) as caught:
+                host.dispatch("inspect", {"fixtureDeadlineNs": self.deadline})
+        self.assertIs(caught.exception, error)
+        mapped.assert_called_once_with(1234, "/receipt/helper")
+        host.case.units.managers["helper"].manager_pid.assert_called_once_with()
+
+    def test_sampled_helper_identity_survives_teardown_and_account_export(self):
+        host, receipt = self.host()
+        error = self.mapping_error()
+        self.inspect_failure(host, error)
+        saved = json.loads((self.root / trace.TIMELINE).read_bytes())
+        evidence = saved["reserved"]["helperInspectionFailure"]["details"]
+        self.assertEqual(evidence["receipt"], receipt)
+        self.assertEqual(evidence["service"], {"label": "mesh-update-helper", "manager": "Linux", "pid": 1234})
+        self.assertEqual(evidence["mapping"]["expected"], {"executable": "/expected/helper", "device": 11, "inode": 22})
+        self.assertEqual(evidence["mapping"]["mapped"], {"executable": "/proc/1234/exe", "device": 11, "inode": 33})
+        self.assertEqual(evidence["installationJournal"]["phase"], "committed")
+        (host.case.state / "update/helper/installed.json").write_text('{"executable":"/later/helper"}')
+        host.close()
+        output = self.root / "output"
+        output.mkdir()
+        original_stderr = b"original driver traceback\nRuntimeError: native service mapped another executable inode\n"
+        (output / "canary-driver.log").write_bytes(original_stderr)
+        with patch("sys.stdout", new_callable=io.StringIO) as stream:
+            installed_order_host.export_logs(self.root)
+        installed_order.publish_logs(stream.getvalue(), output, "canary-ordered", trace.Trace("parent"))
+        exported = json.loads((output / ("canary-ordered-" + trace.TIMELINE)).read_bytes())
+        self.assertEqual(exported["reserved"]["helperInspectionFailure"]["details"], evidence)
+        self.assertEqual((output / "canary-driver.log").read_bytes(), original_stderr)
+
+    def test_capture_failure_or_expired_deadline_preserves_original_exception(self):
+        host, _receipt = self.host()
+        original = self.mapping_error()
+        with patch.object(host.diagnostics, "retain_failure", side_effect=OSError("capture unavailable")), patch.object(trace, "notify_failure") as notify:
+            self.inspect_failure(host, original)
+        notify.assert_not_called()
+        self.assertIn("capture unavailable", " ".join(original.__notes__))
+        with installed_clock.handoff(self.deadline):
+            self.check_expired_capture(host, original)
+        self.assertIn("existing deadline expired", " ".join(original.__notes__))
+
+    def check_expired_capture(self, host, original):
+        with patch.object(installed_clock, "remaining_until", side_effect=installed_clock.ClockExpired("existing deadline expired")):
+            with patch.object(host.diagnostics, "retain_failure") as reserve, patch.object(installed_clock, "parent_deadline", side_effect=AssertionError("deadline reset")):
+                trace.helper_inspection_failure(host, original, host.case.units.managers["helper"], 1234, {}, {})
+        reserve.assert_not_called()
+
+    def test_long_failure_identities_are_bounded_and_mark_truncation(self):
+        host, receipt = self.host()
+        original = self.mapping_error()
+        receipt["servicePath"] = "\U0001f680" * 16384
+        with installed_clock.handoff(self.deadline):
+            trace.helper_inspection_failure(host, original, host.case.units.managers["helper"], 1234, receipt, {})
+        payload = trace.encoded(host.diagnostics.reserved)
+        self.assertLessEqual(len(payload), 8192)
+        saved = host.diagnostics.reserved["helperInspectionFailure"]["details"]
+        self.assertEqual(saved["receipt"]["truncatedFields"], ["servicePath"])
+        self.assertTrue(host.diagnostics.complete)
+
+    def test_success_keeps_mapped_result_and_performs_no_failure_capture(self):
+        expected = SimpleNamespace(st_dev=11, st_ino=22)
+        with patch.object(Path, "resolve", return_value=Path("/expected/helper")), patch.object(Path, "stat", return_value=expected):
+            with patch.object(Path, "open", return_value=io.BytesIO(b"helper")):
+                image = native_services.mapped_image(1234, "/receipt/helper")
+        self.assertEqual(image, {"pid": 1234, "inode": 22, "device": 11, "sha256": hashlib.sha256(b"helper").hexdigest()})
+        host, receipt = self.host()
+        image["sha256"] = receipt["digest"]
+        with patch.object(native_services, "mapped_image", return_value=image), patch.object(trace, "helper_inspection_failure") as capture:
+            self.assertEqual(host.inspect(True)["helper"], image)
+        capture.assert_not_called()
+        self.assertEqual(host.diagnostics.reserved, {})
+
+    def test_observed_exit_records_status_or_signal_without_polling_again(self):
+        for returncode in (1, -15, 143):
+            driver = self.exited_driver(returncode)
+            with self.assertRaisesRegex(RuntimeError, "^ordered host driver exited: canary$"):
+                driver.call("inspect")
+            saved = driver.diagnostics.reserved["driverExit"]["details"]
+            self.assertEqual(saved["returncode"], returncode)
+            self.assertEqual(saved["signal"], 15 if returncode < 0 else None)
+            self.assertEqual(saved["pid"], 5678)
+            self.assertEqual(saved["stderrFile"], "canary-driver.log")
+            driver.process.poll.assert_called_once_with()
+
+    def exited_driver(self, returncode):
+        driver = object.__new__(installed_order.Driver)
+        driver.account = {"role": "canary"}
+        driver.diagnostics = trace.Trace("canary")
+        driver.fixture_deadline_ns = driver.cleanup_deadline_ns = self.deadline
+        driver.process = SimpleNamespace(pid=5678, poll=Mock(return_value=returncode))
+        driver.write_request = Mock()
+        return driver
+
+    def test_exit_status_survives_unavailable_optional_capture(self):
+        driver = self.exited_driver(-15)
+        with patch.object(driver.diagnostics, "retain_failure", side_effect=ValueError("reservation bound")):
+            with self.assertRaisesRegex(RuntimeError, "^ordered host driver exited: canary$") as caught:
+                driver.call("inspect")
+        self.assertIn("pid=5678 returncode=-15 signal=15", " ".join(caught.exception.__notes__))
+        driver.process.poll.assert_called_once_with()
 
 
 class OrderTraceTest(unittest.TestCase):
