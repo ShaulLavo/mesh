@@ -720,6 +720,33 @@ class NativeOwnershipTest(unittest.TestCase):
             ownership.verify(deadline)
         self.assertFalse(ownership.verified)
 
+    def test_new_unread_vanished_record_cannot_hide_behind_prior_coverage(self):
+        state = self.root / "mesh-transition.known"
+        state.mkdir()
+        (state / "cohort.json").write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        rows = self.rows()
+        with patch.object(clocks, "process_snapshot", return_value=rows):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        other = self.root / "mesh-transition.unread"
+        other.mkdir()
+        path = other / "cohort.json"
+        path.write_text(json.dumps({"workers": [{"pid": 40, "shellPid": 50}]}))
+        detached = {pid: {"pid": pid, "parent": parent, "group": pid, "uid": os.getuid(), "birth": "birth-" + str(pid)}
+                    for pid, parent in ((40, 1), (50, 40))}
+        original = Path.read_text
+        def disappear(candidate, *args, **kwargs):
+            if candidate == path:
+                path.unlink()
+                raise FileNotFoundError(str(path))
+            return original(candidate, *args, **kwargs)
+        with patch.object(clocks, "process_snapshot", return_value=detached), patch.object(Path, "read_text", disappear):
+            ownership.observe(deadline)
+            with self.assertRaisesRegex(RuntimeError, "vanished before observation"):
+                ownership.verify(deadline)
+        self.assertEqual(ownership.expected, {20, 30})
+        self.assertFalse(ownership.verified)
+
     def test_native_record_permission_error_is_not_treated_as_removal(self):
         state = self.root / "mesh-transition.denied"
         state.mkdir()

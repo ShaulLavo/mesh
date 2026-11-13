@@ -637,6 +637,7 @@ class NativeOwnership:
         self.owned, self.expected, self.pending, self.correlated = {}, set(), set(), set()
         self.unresolved, self.scans, self.observation_ns, self.verification_ns = [], 0, 0, 0
         self.vanished_record_reads = 0
+        self.observed_records = set()
         self.launch_birth = None
         self.verified = False
         self.observe(deadline_ns, launching=True)
@@ -680,11 +681,15 @@ class NativeOwnership:
                 value = json.loads(path.read_text())
             except FileNotFoundError:
                 self.vanished_record_reads += 1
+                if path not in self.observed_records:
+                    self.unresolved.append("native record vanished before observation: " + str(path))
                 continue
             if path.name == "meta.json":
                 self.note_shell(value.get("pid"), rows)
+                self.observed_records.add(path)
                 continue
             self.note_cohort(value, rows)
+            self.observed_records.add(path)
 
     def note_shell(self, pid, rows):
         if type(pid) is not int or pid <= 0:
