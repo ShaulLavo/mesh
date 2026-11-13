@@ -1,61 +1,126 @@
-name: Installed clock calibration
+name: Ordered helper measurement
 
 on:
   workflow_dispatch:
     inputs:
-      producer_run:
-        description: 'Existing complete reviewed native preparation run'
+      harness_source:
+        description: 'Exact reviewed harness SHA, independent of the vehicle and original producer'
         required: true
+        default: ba56cc36bcf42e766e036cb8f062702e861c06f1
         type: string
-      producer_source:
-        description: 'Exact recorded preparation source SHA'
-        required: true
-        type: string
-      producer_prefix:
-        description: 'Exact native preparation artifact prefix'
-        required: true
-        type: string
-      measurement_scope:
-        description: 'Measure prepared cohorts and all nine support profiles together, or select a subset'
-        default: all
-        type: choice
-        options: [all, cohort, prepared, support]
-      catalog_evidence:
-        description: 'Enable only after composing the reviewed passive catalog source'
-        default: false
-        type: boolean
 
 permissions:
   contents: read
   actions: read
 
+env:
+  MESH_HARNESS_SOURCE: ${{ inputs.harness_source }}
+
 concurrency:
-  group: installed-clock-calibration-${{ github.run_id }}
+  group: ordered-helper-measurement-${{ github.run_id }}
   cancel-in-progress: false
 
-jobs:
-  measure:
-    if: inputs.measurement_scope != 'support'
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
-      calibration_only: true
-      calibration_scope: ${{ inputs.measurement_scope == 'prepared' && 'prepared' || 'cohort' }}
-      catalog_evidence: ${{ inputs.catalog_evidence }}
+defaults:
+  run:
+    shell: bash
 
-  support:
-    if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [adoption-all, adoption-interrupt, fresh]
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      calibration_only: true
-      calibration_support: ${{ matrix.profile }}
+jobs:
+  order:
+    name: Signed native cohort (linux/amd64, order)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Record original job clock before checkout and setup
+        env:
+          FIXTURE_JOB_MINUTES: 30
+        run: |
+          python3 -c 'import json,os,time; p=os.environ["RUNNER_TEMP"]+"/installed-job-clock.json"; json.dump({"origin_ns":time.monotonic_ns(),"run":os.environ["GITHUB_RUN_ID"],"job":os.environ["GITHUB_JOB"],"admission_ns":int(os.environ["FIXTURE_JOB_MINUTES"])*60*1000000000},open(p,"x"))'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source }}
+      - name: Require the real native manager before acquisition or builds
+        env:
+          INSTALLED_CATCHUP_PLATFORM: linux/amd64
+        run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
+      - name: Require three actual user managers before ordered proof builds
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
+            env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
+            python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/cohort-control/ordered-managers"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Require the complete pinned producer artifact set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: '43356291036'
+          PRODUCER_SOURCE: 3097dc167bcdcadc8a561fb0f443253b74bfd025
+          MESH_PREPARATION_SOURCE: 3097dc167bcdcadc8a561fb0f443253b74bfd025
+          PRODUCER_PREFIX: update-native
+        run: |
+          python3 scripts/fixtures/installed_artifacts.py set "$GITHUB_REPOSITORY" "$PRODUCER_RUN" \
+            "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/cohort-control/producer-pin.json"
+      - name: Measure actual archive extraction space before large acquisition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_KEY: linux-amd64
+        run: |
+          mkdir -p "$RUNNER_TEMP/native-worker-input.noindex"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/cohort-control/storage-preflight.json"
+      - name: Download the exact pinned native worker archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_KEY: linux-amd64
+        run: |
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/cohort-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/cohort-control/worker-download.json"
+      - name: Consume exact native registry and once-built observer
+        env:
+          INSTALLED_CATCHUP_PLATFORM: linux/amd64
+          SOURCE_HOST: pc
+          PRODUCER_SOURCE: 3097dc167bcdcadc8a561fb0f443253b74bfd025
+          MESH_PREPARATION_SOURCE: 3097dc167bcdcadc8a561fb0f443253b74bfd025
+          PYTHONDONTWRITEBYTECODE: '1'
+          MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input.noindex
+          MESH_CATALOG_EVIDENCE: '0'
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/native-worker-input.noindex"
+          python3 scripts/fixtures/installed_artifacts.py native "$input" "$PRODUCER_SOURCE" "$INSTALLED_CATCHUP_PLATFORM"
+          test -s "$input/retained/workers.json"
+          chmod +x "$input/tools/worker-probe"
+          mkdir -p "$RUNNER_TEMP/native-tools.noindex"
+          go build -o "$RUNNER_TEMP/native-tools.noindex/native-helper" ./scripts/fixtures/native-helper
+          mode=(--ordered-hosts)
+          clock=(--clock-mode diagnostic --clock-job-start "$RUNNER_TEMP/installed-job-clock.json"
+            --clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60)
+          printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" \
+            --native-preflight --installed-adoption --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" \
+            --worker-registry "$input/retained/workers.json" --worker-probe "$input/tools/worker-probe" \
+            --source-host "$SOURCE_HOST" ${mode[@]+"${mode[@]}"} ${clock[@]+"${clock[@]}"}
+      - name: Remove owned downloaded native inputs and helper tool
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 scripts/fixtures/installed_clock.py cleanup-inputs "$RUNNER_TEMP"
+          rm -rf -- "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/native-tools.noindex"
+          test ! -e "$RUNNER_TEMP/native-worker-input.noindex"
+          test ! -e "$RUNNER_TEMP/native-tools.noindex/native-helper"
+          mkdir -p "$RUNNER_TEMP/cohort-control"
+          printf '{"inputsAbsent":true,"helperToolAbsent":true}\n' > "$RUNNER_TEMP/cohort-control/tools-cleanup.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-cohort-linux-amd64-order
+          path: |
+            ${{ runner.temp }}/cohort-control
+            ${{ runner.temp }}/cohort-proof
+          retention-days: 7
+      - name: Record external overhead through upload without claiming acceptance
+        if: always()
+        run: python3 scripts/fixtures/installed_clock.py job-finish "$RUNNER_TEMP/installed-job-clock.json"

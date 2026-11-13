@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline controls for hosted prepared selections, intake and fail-closed cleanup."""
 from dataclasses import asdict
+import ast
 import hashlib
 import io
 import importlib.util
@@ -10,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import tarfile
 from types import SimpleNamespace
@@ -17,7 +19,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-from fixtures import installed_clock, installed_slices, installed_workflow as workflow
+from fixtures import installed_artifacts, installed_clock, installed_slices, installed_workflow as workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -268,9 +270,8 @@ class WorkflowControls(unittest.TestCase):
                 ("--clock-command-seconds", "--clock-external-seconds", "--clock-emergency-seconds")), 1800)
             self.assertNotIn("--clock-plan", args)
 
-    def test_calibration_alias_and_all_nine_support_profiles_are_preserved(self):
+    def test_calibration_and_all_nine_support_profiles_are_preserved(self):
         source = (WORKFLOWS / "installed-clock-calibration.yml").read_text()
-        self.assertEqual(source, (WORKFLOWS / "rollback-proof-investigation.yml").read_text())
         self.assertIn("profile: [adoption-all, adoption-interrupt, fresh]", job(source, "support"))
         self.assertIn("calibration_only: true", job(source, "support"))
         self.assertIn("inputs.calibration_support, inputs.calibration_scope", CATCHUP)
@@ -369,6 +370,164 @@ class WorkflowControls(unittest.TestCase):
         with patch("fixtures.installed_prepared.run_slice") as run:
             cli.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "plan")
         run.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", None, Path("/bundle"), Path("/slice"), clock_plan="plan")
+
+
+SOURCE = "ba56cc36bcf42e766e036cb8f062702e861c06f1"
+PRODUCER = "3097dc167bcdcadc8a561fb0f443253b74bfd025"
+VEHICLE = (ROOT / ".github/workflows/rollback-proof-investigation.yml").read_text()
+COHORT = CATCHUP.split("  signed-cohort-chain:\n", 1)[1].split("\n  prepared-cohort:", 1)[0]
+
+
+def vehicle_step(source, name):
+    return source.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
+
+
+def vehicle_script(source, name):
+    value = vehicle_step(source, name)
+    if "        run: |\n" not in value:
+        return value.split("        run: ", 1)[1].strip()
+    return "\n".join(line[10:] for line in value.split("        run: |\n", 1)[1].splitlines())
+
+
+class OrderVehicleTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="order-vehicle-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+
+    def test_dispatch_selects_one_linux_order_job_without_a_reusable_fanout(self):
+        self.assertIn("workflow_dispatch:", VEHICLE)
+        self.assertEqual(re.findall(r"^  ([\w-]+):\n", VEHICLE.split("jobs:\n", 1)[1], re.M), ["order"])
+        for forbidden in ("matrix", "strategy:", "needs:", "workflow_call:", "pull_request:", "continue-on-error", "secrets:"):
+            self.assertNotIn(forbidden, VEHICLE)
+        self.assertIn("runs-on: ubuntu-24.04\n    timeout-minutes: 30", VEHICLE)
+        self.assertIn("contents: read\n  actions: read", VEHICLE)
+        self.assertIn("cancel-in-progress: false", VEHICLE)
+
+    def test_harness_pin_is_separate_from_vehicle_and_original_producer(self):
+        self.assertIn("required: true\n        default: " + SOURCE + "\n        type: string", VEHICLE)
+        self.assertIn("MESH_HARNESS_SOURCE: ${{ inputs.harness_source }}", VEHICLE)
+        self.assertIn("ref: ${{ inputs.harness_source }}", VEHICLE)
+        self.assertNotIn("github.sha", VEHICLE)
+        self.assertNotEqual(SOURCE, PRODUCER)
+        output = self.root / "harness.json"
+        with patch.object(installed_artifacts.subprocess, "check_output", return_value=SOURCE + "\n"):
+            installed_artifacts.verify_harness(SOURCE, output)
+            self.assertEqual(json.loads(output.read_bytes())["actual"], SOURCE)
+            with self.assertRaisesRegex(RuntimeError, "explicit source pin"):
+                installed_artifacts.verify_harness(PRODUCER, output)
+
+    def test_original_clock_is_recorded_before_checkout_and_cannot_be_reset(self):
+        name = "Record original job clock before checkout and setup"
+        self.assertEqual(vehicle_script(VEHICLE, name), vehicle_script(COHORT, name))
+        self.assertLess(VEHICLE.index(name), VEHICLE.index("uses: actions/checkout@"))
+        env = os.environ | {"RUNNER_TEMP": str(self.root), "FIXTURE_JOB_MINUTES": "30",
+                            "GITHUB_RUN_ID": "offline-order", "GITHUB_JOB": "order"}
+        command = ["bash", "-eu", "-c", vehicle_script(VEHICLE, name)]
+        first = subprocess.run(command, env=env, capture_output=True, timeout=5)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        clock = self.root / "installed-job-clock.json"
+        original = clock.read_bytes()
+        self.assertEqual(json.loads(original)["admission_ns"], 1_800_000_000_000)
+        second = subprocess.run(command, env=env, capture_output=True, timeout=5)
+        self.assertNotEqual(second.returncode, 0)
+        self.assertEqual(clock.read_bytes(), original)
+
+    def test_both_manager_preflights_and_complete_producer_intake_are_preserved(self):
+        names = ("Require the real native manager before acquisition or builds",
+                 "Require three actual user managers before ordered proof builds",
+                 "Require the complete pinned producer artifact set",
+                 "Measure actual archive extraction space before large acquisition",
+                 "Download the exact pinned native worker archive")
+        for name in names:
+            self.assertEqual(vehicle_script(VEHICLE, name), vehicle_script(COHORT, name))
+        self.assertLess(VEHICLE.index(names[0]), VEHICLE.index(names[1]))
+        self.assertLess(VEHICLE.index(names[1]), VEHICLE.index("uses: actions/setup-go@"))
+        self.assertLess(VEHICLE.index(names[2]), VEHICLE.index(names[3]))
+        self.assertLess(VEHICLE.index(names[3]), VEHICLE.index(names[4]))
+        self.assertIn("PRODUCER_RUN: '43356291036'", VEHICLE)
+        self.assertIn("PRODUCER_PREFIX: update-native", VEHICLE)
+        self.assertEqual(VEHICLE.count("PRODUCER_SOURCE: " + PRODUCER), 2)
+        self.assertEqual(VEHICLE.count("MESH_PREPARATION_SOURCE: " + PRODUCER), 2)
+        self.assertEqual(VEHICLE.count("ARTIFACT_KEY: linux-amd64"), 2)
+        self.assertIn("go-version: '1.27.4'\n          cache: true", VEHICLE)
+
+    def recorder(self):
+        binary = self.root / "bin"
+        binary.mkdir()
+        recorder = self.root / "record.py"
+        recorder.write_text("import json,os,sys\n"
+                            "with open(os.environ['ORDER_COMMANDS'],'a') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
+                            "if os.environ.get('ORDER_FAIL') in sys.argv[1:3]: raise SystemExit(29)\n")
+        for name in ("python3", "go"):
+            path = binary / name
+            path.write_text('#!/bin/sh\nexec "$ORDER_PYTHON" -B "$ORDER_RECORDER" ' + name + ' "$@"\n')
+            path.chmod(0o755)
+        input_root = self.root / "native-worker-input.noindex"
+        (input_root / "retained").mkdir(parents=True)
+        (input_root / "tools").mkdir()
+        (input_root / "retained/workers.json").write_text("{}")
+        (input_root / "tools/worker-probe").touch()
+        (self.root / "cohort-control").mkdir()
+        return os.environ | {"PATH": str(binary) + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": str(self.root),
+            "ORDER_PYTHON": sys.executable, "ORDER_RECORDER": str(recorder), "ORDER_COMMANDS": str(self.root / "commands.jsonl"),
+            "PRODUCER_SOURCE": PRODUCER, "INSTALLED_CATCHUP_PLATFORM": "linux/amd64", "SOURCE_HOST": "pc",
+            "PROOF_MODE": "order", "CLOCK_CALIBRATION": "true"}
+
+    def run_consumer(self, source, env):
+        log = self.root / "commands.jsonl"
+        log.unlink(missing_ok=True)
+        result = subprocess.run(["bash", "-c", vehicle_script(source, "Consume exact native registry and once-built observer")],
+                                env=env, capture_output=True, timeout=5)
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        return result, rows
+
+    def test_executed_consumer_arguments_match_the_current_signed_cohort_order_job(self):
+        env = self.recorder()
+        original, expected = self.run_consumer(COHORT, env)
+        actual, observed = self.run_consumer(VEHICLE, env)
+        self.assertEqual(original.returncode, 0, original.stderr)
+        self.assertEqual(actual.returncode, 0, actual.stderr)
+        self.assertEqual(observed, expected)
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(observed[0][1:3], ["scripts/fixtures/installed_artifacts.py", "native"])
+        self.assertEqual(observed[1][0:2], ["go", "build"])
+        args = observed[2]
+        for flag in ("--native-preflight", "--installed-adoption", "--ordered-hosts", "--worker-registry", "--worker-probe"):
+            self.assertIn(flag, args)
+        for flag, value in (("--clock-mode", "diagnostic"), ("--clock-job-seconds", "1800"),
+                            ("--clock-command-seconds", "1500"), ("--clock-external-seconds", "240"), ("--clock-emergency-seconds", "60")):
+            self.assertEqual(args[args.index(flag) + 1], value)
+        self.assertEqual(args[args.index("--clock-job-start") + 1], str(self.root / "installed-job-clock.json"))
+        self.assertIn("MESH_CATALOG_EVIDENCE: '0'", VEHICLE)
+
+    def test_consumer_failure_keeps_its_status_and_stops_before_the_next_command(self):
+        env = self.recorder()
+        for command, count, launched in (("python3", 1, False), ("go", 2, False), ("scripts/prove-installed-catchup.py", 3, True)):
+            result, rows = self.run_consumer(VEHICLE, env | {"ORDER_FAIL": command})
+            self.assertEqual(result.returncode, 29)
+            self.assertEqual(len(rows), count)
+            self.assertEqual((self.root / "cohort-control/fixture-launch.json").exists(), launched)
+
+    def test_cleanup_upload_and_external_finish_match_the_original_order_job(self):
+        name = "Remove owned downloaded native inputs and helper tool"
+        expected = COHORT[COHORT.index("      - name: " + name):]
+        expected = expected.replace("${{ matrix.key }}", "linux-amd64").replace("${{ matrix.mode }}", "order")
+        actual = VEHICLE[VEHICLE.index("      - name: " + name):]
+        self.assertEqual(actual, expected)
+        self.assertEqual(actual.count("if: always()"), 3)
+        self.assertIn('installed_clock.py cleanup-inputs "$RUNNER_TEMP"', actual)
+        self.assertLess(actual.index("cleanup-inputs"), actual.index("rm -rf"))
+
+    def test_local_controls_keep_the_three_block_limit(self):
+        def depth(node, level=0):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                level = 1
+            elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.Try)):
+                level += 1
+            return max((depth(child, level) for child in ast.iter_child_nodes(node)), default=level)
+        self.assertLessEqual(depth(ast.parse(Path(__file__).read_text())), 3)
+
 
 
 if __name__ == "__main__":
