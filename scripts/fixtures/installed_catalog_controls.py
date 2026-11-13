@@ -1,5 +1,6 @@
 """Pure controls for passive installed-session evidence; no Mesh binaries."""
 import ast
+import io
 import json
 import os
 from pathlib import Path
@@ -227,6 +228,154 @@ class CatalogEvidenceTests(unittest.TestCase):
         self.assertIs(caught.exception, failure)
         io.assert_called_once_with(self.state / "daemon.sock", "W000", "COHORT_before_install_W000")
         self.assertEqual([json.loads(line)["phase"] for line in path.read_text().splitlines()], ["begin", "failed"])
+
+    def test_installed_start_waits_for_real_publication_then_runs_original_verifier_once(self):
+        cohort = self.cohort()
+        cohort.catalog, cohort.group = None, None
+        cohort.config, cohort.registry = self.root / "config", self.root / "registry"
+        cohort.version, cohort.binary = "v0.1.249", self.root / "never-executed"
+        workers = [{"session": "W004"}]
+        calls = []
+        messages = [self.snapshot(), {"type": "state.current", "stateCurrent": {"sections": {"sessions": {"ageMillis": 0}}}},
+                    self.publication("W004", "session.changed"), self.publication("ORIG")]
+        failure = subprocess.CalledProcessError(1, ["original-verifier"], stderr="original graded I/O failed")
+
+        def receive(_connection):
+            value = messages.pop(0)
+            calls.append(value["type"])
+            return value
+
+        def launch(_state, _config, _item, _index, _boot, _host, record, _path):
+            calls.append("direct-startup")
+            record["workers"].extend(workers)
+
+        def run(arguments, **kwargs):
+            if arguments[2] in ("start", "start-published"):
+                self.assertEqual(kwargs["timeout"], 90)
+                with patch.dict(os.environ, kwargs["env"]):
+                    release_workers.main(arguments[2:])
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+            self.assertEqual(arguments[2], "verify")
+            self.assertEqual(kwargs["timeout"], 90)
+            self.assertFalse(messages, "graded I/O preceded the complete publication boundary")
+            calls.append("original-verifier")
+            raise failure
+
+        directory = self.state / "s/ORIG"
+        directory.mkdir(parents=True)
+        (directory / "meta.json").write_text('{"bootId":"boot"}')
+        environment = {"MESH_GROUP_ORIGINAL": '{"session":"ORIG"}'}
+        with patch.object(cohort, "environment", return_value=environment), patch.object(installed_cohort.subprocess, "run", side_effect=run) as command, patch.object(release_workers, "applicable", return_value=[{}]), patch.object(release_workers, "start_one", side_effect=launch), patch.object(release_workers, "control"), patch.object(release_workers.socket, "socket"), patch.object(evidence, "receive_control", side_effect=receive), patch("fixtures.release_worker_evidence.positive_control", return_value={"passed": True}):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                cohort.start()
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(calls, ["direct-startup", "state.snapshot", "state.current", "state.event", "state.event", "original-verifier"])
+        saved = json.loads(cohort.record.read_text())
+        self.assertEqual(saved["initialPublication"], {"method": "state.watch", "host": "local", "sessions": ["ORIG", "W004"]})
+        self.assertEqual(saved["verificationFailure"]["stderr"]["tail"], failure.stderr)
+
+    def snapshot(self, rows=()):
+        return {"type": "state.snapshot", "stateSnapshot": {"host": {"id": "local"}, "sessions": list(rows)}}
+
+    def publication(self, session="W004", kind="session.added", host="local", state="detached"):
+        return {"type": "state.event", "stateEvent": {"kind": kind, "payload": {
+            "session": {"id": session, "hostId": host, "state": state}}}}
+
+    def test_initial_snapshot_publication_avoids_wait_and_closes_watch(self):
+        row = self.publication()["stateEvent"]["payload"]["session"]
+        connection = Mock()
+        socket_context = Mock()
+        socket_context.__enter__ = Mock(return_value=connection)
+        socket_context.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=socket_context), patch.object(release_workers, "control") as control, patch.object(evidence, "receive_control", return_value=self.snapshot([row])) as read:
+            actual = release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+        self.assertEqual(actual["sessions"], ["W004"])
+        read.assert_called_once()
+        connection.settimeout.assert_not_called()
+        socket_context.__exit__.assert_called_once()
+        control.assert_called_once_with(connection, {"type": "state.watch", "requestId": "cohort-publication", "watch": {"topics": ["host", "sessions"]}})
+
+    def test_publication_uses_bounded_real_control_frames_and_sends_no_attach(self):
+        messages = (self.snapshot(), self.publication())
+        payloads = [json.dumps(message).encode() for message in messages]
+        stream = io.BytesIO(b"".join(b"\x01" + struct.pack(">I", len(payload)) + payload for payload in payloads))
+        connection = Mock()
+        connection.recv.side_effect = stream.read
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=connection):
+            result = release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+        self.assertEqual(result["sessions"], ["W004"])
+        connection.sendall.assert_called_once()
+        sent = connection.sendall.call_args.args[0]
+        self.assertEqual(sent[0], 1)
+        self.assertEqual(json.loads(sent[5:])["type"], "state.watch")
+        self.assertEqual(stream.read(), b"")
+
+    def test_publication_refusal_stream_loss_and_inactive_rows_never_satisfy_boundary(self):
+        values = [{"type": "error"}, {"type": "state.resync"}, self.snapshot() | {"more": True},
+                  self.snapshot() | {"page": 1}, self.publication(host="other"), self.publication(state="interrupted"),
+                  {"type": "state.event", "stateEvent": {"kind": "session.removed", "payload": {"sessionId": "W004"}}}]
+        for value in values:
+            self.reject_publication(value)
+
+    def reject_publication(self, value):
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket", return_value=connection), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=[self.snapshot(), value]):
+            with self.assertRaises(RuntimeError):
+                release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+        connection.__exit__.assert_called_once()
+
+    def test_missing_publication_propagates_deadline_without_graded_io_or_new_timeout(self):
+        deadline = TimeoutError("existing startup deadline")
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(release_workers, "session_io") as io, patch.object(evidence, "receive_control", side_effect=[self.snapshot(), deadline]):
+            with self.assertRaises(TimeoutError) as caught:
+                release_workers.wait_publication(self.state, "local", [{"session": "W004"}])
+        self.assertIs(caught.exception, deadline)
+        io.assert_not_called()
+
+    def test_complete_cohort_waits_for_missing_w004_despite_other_rows_and_current_age(self):
+        workers = [{"session": "W" + format(index, "03X")} for index in range(9)]
+        rows = [self.publication(item["session"])["stateEvent"]["payload"]["session"] for item in workers if item["session"] != "W004"]
+        messages = [self.snapshot(rows), {"type": "state.current", "stateCurrent": {"sections": {"sessions": {"ageMillis": 0}}}}, self.publication()]
+        with patch.dict(os.environ, {}, clear=True), patch.object(release_workers.socket, "socket"), patch.object(release_workers, "control"), patch.object(evidence, "receive_control", side_effect=messages) as read:
+            actual = release_workers.wait_publication(self.state, "local", workers)
+        self.assertEqual(actual["sessions"], [item["session"] for item in workers])
+        self.assertEqual(read.call_count, 3)
+
+    def test_startup_absolute_timeout_does_not_start_verifier_or_retry(self):
+        cohort = self.cohort()
+        cohort.group, cohort.config, cohort.registry = None, "unused", "unused"
+        cohort.version, cohort.binary = "v0.1.249", "unused"
+        failure = subprocess.TimeoutExpired(["start-published"], 90)
+        with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure) as run, patch.object(cohort, "verify") as verify:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                cohort.start()
+        self.assertIs(caught.exception, failure)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        verify.assert_not_called()
+
+    def test_publication_error_preserves_saved_worker_ownership_and_stops_owned_cohort(self):
+        directory = self.state / "s/ORIG"
+        directory.mkdir(parents=True)
+        (directory / "meta.json").write_text('{"bootId":"boot"}')
+        path = self.root / "owned-cohort.json"
+        failure = RuntimeError("publication refused")
+
+        def launch(_state, _config, _item, _index, _boot, _host, record, _path):
+            record["workers"].append({"session": "W004", "pid": 7, "shellPid": 42})
+            release_workers.save(path, record)
+
+        with patch.object(release_workers, "start_one", side_effect=launch), patch.object(release_workers, "wait_publication", side_effect=failure), patch.object(release_workers, "stop") as stop, patch("fixtures.release_worker_evidence.positive_control", return_value={"passed": True}):
+            with self.assertRaises(RuntimeError) as caught:
+                release_workers.start(self.state, self.state, [{}], path, publish=True)
+        self.assertIs(caught.exception, failure)
+        stop.assert_called_once_with(path)
+        self.assertEqual(json.loads(path.read_text())["workers"], [{"session": "W004", "pid": 7, "shellPid": 42}])
 
     def test_source_preserves_three_level_nesting(self):
         for path in (Path(evidence.__file__), Path(__file__), Path(installed_cohort.__file__), Path(release_workers.__file__)):

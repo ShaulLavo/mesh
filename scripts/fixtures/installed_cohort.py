@@ -91,7 +91,7 @@ class Cohort:
             path = self.record.with_name("selected-group.json")
             path.write_bytes(release_worker_groups.encode({"group": self.group, "originalBytes": self.original["imageBytes"]}))
             environment["MESH_WORKER_GROUP"] = str(path)
-        subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start", str(self.state), str(self.config),
+        subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start-published", str(self.state), str(self.config),
             str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
             capture_output=True, text=True, check=True, timeout=90)
         return self.verify("before-install")

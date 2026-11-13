@@ -179,7 +179,7 @@ def wait_worker(directory, process):
     raise RuntimeError("retained worker did not start within the existing proof bound")
 
 
-def start(state, config, selected, path):
+def start(state, config, selected, path, publish=False):
     from fixtures import release_worker_evidence
     state, config, path = Path(state), Path(config), Path(path)
     primary = next((state / "s").glob("*/meta.json"))
@@ -192,10 +192,62 @@ def start(state, config, selected, path):
     try:
         for index, item in enumerate(selected):
             start_one(state, config, item, index, boot, host, record, path)
+        if publish:
+            record["initialPublication"] = wait_publication(state, host, record["workers"])
+            save(path, record)
     except BaseException:
         stop(path)
         raise
     return record
+
+
+def wait_publication(state, host, workers):
+    expected = {worker["session"] for worker in workers}
+    original = os.environ.get("MESH_GROUP_ORIGINAL")
+    if original:
+        expected.add(json.loads(original)["session"])
+    visible = set()
+    # The installed caller's existing 90-second startup subprocess owns this
+    # blocking watch too. Receiving a frame never renews that absolute bound.
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.connect(str(state / "daemon.sock"))
+        control(connection, {"type": "state.watch", "requestId": "cohort-publication", "watch": {"topics": ["host", "sessions"]}})
+        initial = publication_message(connection)
+        if initial["type"] != "state.snapshot" or initial["stateSnapshot"]["host"]["id"] != host:
+            raise RuntimeError("cohort publication snapshot has another type or host")
+        for row in initial["stateSnapshot"].get("sessions", []):
+            published_session(row, host, expected, visible)
+        while expected - visible:
+            publication_event(publication_message(connection), host, expected, visible)
+    return {"method": "state.watch", "host": host, "sessions": sorted(visible)}
+
+
+def publication_message(connection):
+    from fixtures.installed_catalog_evidence import receive_control
+    value = receive_control(connection)
+    if value.get("more") or value.get("page", 0) or value["type"] in ("error", "state.resync"):
+        raise RuntimeError("cohort publication watch is incomplete or refused: " + value["type"])
+    return value
+
+
+def published_session(row, host, expected, visible):
+    if row["id"] not in expected:
+        return
+    if row["hostId"] != host or row["state"] not in ("running", "detached"):
+        raise RuntimeError("cohort publication has wrong host or inactive session " + row["id"])
+    visible.add(row["id"])
+
+
+def publication_event(value, host, expected, visible):
+    if value["type"] == "state.current":
+        return
+    if value["type"] != "state.event":
+        raise RuntimeError("unexpected cohort publication message: " + value["type"])
+    event = value["stateEvent"]
+    if event["kind"] in ("session.added", "session.changed"):
+        published_session(event["payload"]["session"], host, expected, visible)
+    if event["kind"] == "session.removed" and event["payload"]["sessionId"] in expected:
+        raise RuntimeError("cohort session removed before publication completed")
 
 
 def verify(state, path, label, daemon=True):
@@ -290,12 +342,12 @@ def process_running(pid):
 
 def main(arguments):
     operation, *values = arguments
-    if operation == "start":
+    if operation in ("start", "start-published"):
         state, config, registry, source_version, source_binary, output = values
         from fixtures import release_worker_groups
         descriptor = os.environ.get("MESH_WORKER_GROUP")
         selected = release_worker_groups.selected_group(descriptor) if descriptor else applicable(registry, source_version, source_binary)
-        start(state, config, selected, output)
+        start(state, config, selected, output, publish=operation == "start-published")
         return
     if operation == "verify":
         digests = verify(*values)
