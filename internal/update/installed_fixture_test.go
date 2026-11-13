@@ -32,6 +32,7 @@ type installedSignRequest struct {
 	Seed    *installedSeed    `json:"seed"`
 	Inspect string            `json:"inspect"`
 	Ledger  string            `json:"ledger"`
+	Export  string            `json:"export"`
 }
 
 type installedSeed struct {
@@ -97,6 +98,13 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 	if err := decoder.Decode(&request); err != nil {
 		t.Fatal(err)
 	}
+	if fixture == nil && (len(request.Files) > 0 || request.Export != "") {
+		_ = json.NewEncoder(connection).Encode(map[string]string{"error": "prepared origin cannot sign or export authority"})
+		return false
+	}
+	if request.Export != "" {
+		exportPreparedOrigin(t, root, proxy, request.Export)
+	}
 	if len(request.Files) > 0 {
 		installedSignFiles(t, root, fixture, request)
 	}
@@ -108,7 +116,11 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		proxy.put(name, data)
 	}
 	if request.Seed != nil {
-		installedSeedJournal(t, fixture, proxy, *request.Seed)
+		if fixture == nil {
+			installedSeedWithClient(t, *request.Seed, release.Client{})
+		} else {
+			installedSeedJournal(t, fixture, proxy, *request.Seed)
+		}
 	}
 	if request.Inspect != "" {
 		installedInspect(t, root, request)

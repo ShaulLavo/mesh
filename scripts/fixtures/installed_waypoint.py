@@ -75,6 +75,25 @@ def verify_readers(releases, group):
     waypoint_to_future = execute(releases, waypoint, packet(releases, waypoint, future, group), "waypoint-future" + suffix)
     if old_to_waypoint.returncode or waypoint_to_future.returncode:
         raise RuntimeError("original executable waypoint verification failed: " + old_to_waypoint.stderr + waypoint_to_future.stderr)
+    negative = negative_packet(releases, group)
+    rejected = execute(releases, first, negative, "old-incompatible-manifest" + suffix)
+    if rejected.returncode == 0 or "manifest schema 2 is unsupported" not in rejected.stderr:
+        raise RuntimeError("original reader did not reject actual incompatible manifest bytes: " + rejected.stderr)
+    (releases.output / ("original-format-readers" + suffix + ".json")).write_text(json.dumps({"supplementalSourceBuilds": True,
+        "oldToWaypoint": json.loads(old_to_waypoint.stdout), "waypointToFuture": json.loads(waypoint_to_future.stdout),
+        "oldRejectedManifestSchema2": rejected.stderr.strip()}, indent=2) + "\n")
+
+
+def negative_packet(releases, group):
+    prepared = getattr(releases, "reader_packets", None)
+    if prepared is not None:
+        return json.loads((releases.root / prepared[str(group["index"])]).read_bytes())
+    return prepare_negative_packet(releases, group)
+
+
+def prepare_negative_packet(releases, group):
+    first, waypoint, future = installed_releases.VERSIONS
+    suffix = "-group-" + str(group["index"])
     negative = packet(releases, waypoint, future, group)
     negative["source"] = documents(releases, first)
     directory = releases.root / ("negative-future" + suffix)
@@ -86,9 +105,4 @@ def verify_readers(releases, group):
     installed_origin.sign(releases.root, [directory / "metadata.json"], directory / "envelope.json")
     negative["target"].update(metadata=base64.b64encode(raw).decode(), page=base64.b64encode(page).decode(),
         envelope=base64.b64encode((directory / "envelope.json").read_bytes()).decode())
-    rejected = execute(releases, first, negative, "old-incompatible-manifest" + suffix)
-    if rejected.returncode == 0 or "manifest schema 2 is unsupported" not in rejected.stderr:
-        raise RuntimeError("original reader did not reject actual incompatible manifest bytes: " + rejected.stderr)
-    (releases.output / ("original-format-readers" + suffix + ".json")).write_text(json.dumps({"supplementalSourceBuilds": True,
-        "oldToWaypoint": json.loads(old_to_waypoint.stdout), "waypointToFuture": json.loads(waypoint_to_future.stdout),
-        "oldRejectedManifestSchema2": rejected.stderr.strip()}, indent=2) + "\n")
+    return negative

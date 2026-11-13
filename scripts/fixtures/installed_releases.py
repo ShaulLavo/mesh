@@ -60,14 +60,14 @@ def rollback_context(manifest, source):
 
 
 class Releases:
-    def __init__(self, root, native, output, *, manifest_schemas=(1,), clock_plan=None):
+    def __init__(self, root, native, output, *, manifest_schemas=(1,), clock_plan=None, prepared=False):
         if manifest_schemas not in ((1,), (1, 2)):
             raise ValueError("unsupported fixture exporter manifest capability")
         self.manifest_schemas = manifest_schemas
         self.clock_plan, self.clock = clock_plan, installed_clock.current()
         self.root, self.native, self.output = Path(root), native, Path(output)
         self.directory = self.root / "releases"
-        self.directory.mkdir()
+        self.directory.mkdir(exist_ok=prepared)
         self.signer = None
         self.signer_log = None
         self.signer_started = None
@@ -75,6 +75,7 @@ class Releases:
         self.transition_clean = True
         self.registry, self.probe = None, None
         self.builds, self.manifests, self.metadata, self.startup = {}, {}, {}, {}
+        self.server_kind = "signer"
 
     def environment(self):
         return os.environ | {"TMPDIR": str(self.root), "TMP": str(self.root), "TEMP": str(self.root), "MESH_SHORT_TMP": str(self.root),
@@ -104,14 +105,17 @@ class Releases:
                        capture_output=True, check=True, timeout=installed_clock.timeout(15))
 
     def launch_signer(self):
+        self.launch_server("TestInstalledFixtureExport", "MESH_INSTALLED_FIXTURE_DIR")
+
+    def launch_server(self, test_name, directory_variable):
         self.signer_started = time.monotonic()
         self.signer_started_ns = time.monotonic_ns()
         remaining_ns = self.clock.deadline_ns - self.signer_started_ns
         if remaining_ns <= 0:
             self.clock.check()
-        environment = self.environment() | {"MESH_INSTALLED_FIXTURE_DIR": str(self.root)}
+        environment = self.environment() | {directory_variable: str(self.root)}
         self.record_ownership(signer_absent=False)
-        self.signer = subprocess.Popen([str(self.root / "signer-test"), "-test.run", "^TestInstalledFixtureExport$", "-test.timeout=" + str(remaining_ns) + "ns"], cwd=REPO, env=environment,
+        self.signer = subprocess.Popen([str(self.root / "signer-test"), "-test.run", "^" + test_name + "$", "-test.timeout=" + str(remaining_ns) + "ns"], cwd=REPO, env=environment,
             stdout=self.signer_log, stderr=subprocess.STDOUT)
         native_services.wait_for(self.signer_ready, "installed signature exporter did not start")
 
@@ -347,7 +351,8 @@ class Releases:
         self.record_ownership()
         self.closed = True
         if self.signer_started is not None:
-            write_json(self.output / "signer-lifetime.json", {"seconds": time.monotonic() - self.signer_started,
+            name = "signer-lifetime.json" if self.server_kind == "signer" else "prepared-origin-lifetime.json"
+            write_json(self.output / name, {"seconds": time.monotonic() - self.signer_started,
                 "start_ns": self.signer_started_ns, "end_ns": time.monotonic_ns(),
                 "commandDeadlineNs": self.clock.deadline_ns, "mode": self.clock_plan.mode, "reaped": self.signer.poll() is not None})
 
