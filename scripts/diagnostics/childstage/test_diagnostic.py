@@ -29,6 +29,23 @@ def load(name):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_death_cleanup_uses_retained_handles_without_reopening_pids(self):
+        with patch.object(os, "pidfd_open") as opened, patch.object(os, "close") as closed, \
+                patch.object(backend, "kill_owned") as killed, patch.object(backend, "reap_adopted"):
+            remove_test_tasks(None, {123: 456})
+        opened.assert_not_called()
+        killed.assert_called_once_with(456)
+        closed.assert_called_once_with(456)
+
+    def test_death_control_rejects_identity_change_before_retaining_handle(self):
+        handles = {}
+        with patch.object(backend, "start_ticks", side_effect=[100, 101]), \
+                patch.object(os, "pidfd_open", return_value=456), patch.object(os, "close") as closed:
+            with self.assertRaisesRegex(RuntimeError, "identity changed"):
+                hold_test_tasks([123], handles)
+        self.assertEqual(handles, {})
+        closed.assert_called_once_with(456)
+
     def test_kernel_rows_have_backend_neutral_sequences(self):
         run = backend.KernelRun(Path("/unused"), "offline")
         first = {"event": "exec", "device": 0, "inode": 1, "bytes": 2}
@@ -261,31 +278,37 @@ def wait_json(path):
     raise RuntimeError("synthetic descendant did not publish its PID")
 
 
-def remove_test_tasks(controller, pids):
+def hold_test_tasks(pids, handles):
+    for pid in pids:
+        ticks = backend.start_ticks(pid)
+        if ticks is None:
+            raise RuntimeError("owned death-control task exited before identity retention")
+        descriptor = os.pidfd_open(pid)
+        if backend.start_ticks(pid) != ticks:
+            os.close(descriptor)
+            raise RuntimeError("death-control task identity changed while opening pidfd")
+        handles[pid] = descriptor
+
+
+def remove_test_tasks(controller, handles):
     if controller is not None and controller.poll() is None:
         controller.kill()
         controller.wait(timeout=3)
-    for pid in pids:
+    for descriptor in handles.values():
         try:
-            descriptor = os.pidfd_open(pid)
             backend.kill_owned(descriptor)
+        finally:
             os.close(descriptor)
-        except ProcessLookupError:
-            pass
     backend.reap_adopted()
     if controller is not None:
         controller.stdin.close()
         controller.stdout.close()
 
 
-def wait_guardian(pid):
-    descriptor = os.pidfd_open(pid)
-    try:
-        if not select.select([descriptor], [], [], 8)[0]:
-            raise RuntimeError("independent guardian did not finish subtree cleanup")
-        os.waitpid(pid, 0)
-    finally:
-        os.close(descriptor)
+def wait_guardian(pid, descriptor):
+    if not select.select([descriptor], [], [], 8)[0]:
+        raise RuntimeError("independent guardian did not finish subtree cleanup")
+    os.waitpid(pid, 0)
 
 
 def ptrace_controller(root, observer):
@@ -295,17 +318,21 @@ def ptrace_controller(root, observer):
 
 def exercise_ptrace_death(root, observer, victim):
     previous = backend.subreaper()
-    controller, pids = None, []
+    controller, pids, handles = None, [], {}
     try:
         controller = subprocess.Popen([sys.executable, str(Path(__file__)), "--ptrace-controller", str(root), str(observer)],
                                       stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         started = wait_json(root / "death.context.json")
         descendant = wait_json(root / "descendant.json")
         pids = [started["guardian"], started["observer"], descendant["root"], descendant["child"]]
-        os.kill(controller.pid if victim == "controller" else started["observer"], signal.SIGKILL)
+        hold_test_tasks(pids, handles)
+        if victim == "controller":
+            controller.kill()
+        else:
+            backend.kill_owned(handles[started["observer"]])
         controller.wait(timeout=12)
         if victim == "controller":
-            wait_guardian(started["guardian"])
+            wait_guardian(started["guardian"], handles[started["guardian"]])
         backend.reap_adopted()
         remaining = [pid for pid in pids if Path(f"/proc/{pid}").exists()]
         if remaining or controller.returncode == 0:
@@ -313,13 +340,13 @@ def exercise_ptrace_death(root, observer, victim):
         return {"victim": victim, "pids": pids, "remainingOwnedTasks": remaining,
                 "controllerExit": controller.returncode, "passed": True}
     finally:
-        remove_test_tasks(controller, pids)
+        remove_test_tasks(controller, handles)
         backend.subreaper(previous)
 
 
 def exercise_controller_death(root, outer=False):
     previous = backend.subreaper()
-    controller, pids = None, []
+    controller, pids, handles = None, [], {}
     try:
         flag = "--outer-controller" if outer else "--controller"
         controller = subprocess.Popen([sys.executable, str(Path(__file__)), flag, str(root)],
@@ -329,13 +356,14 @@ def exercise_controller_death(root, outer=False):
         if outer and descendant["sid"] != descendant["root"]:
             raise RuntimeError("outer guardian changed the original new-session setting")
         pids = [started["guardian"], started["root"], descendant["child"]]
+        hold_test_tasks(pids, handles)
         os.kill(controller.pid, signal.SIGKILL)
         controller.wait(timeout=3)
-        wait_guardian(started["guardian"])
+        wait_guardian(started["guardian"], handles[started["guardian"]])
         return {"guardianGone": not Path(f"/proc/{pids[0]}").exists(), "rootGone": not Path(f"/proc/{pids[1]}").exists(),
                 "detachedDescendantGone": not Path(f"/proc/{pids[2]}").exists()}
     finally:
-        remove_test_tasks(controller, pids)
+        remove_test_tasks(controller, handles)
         backend.subreaper(previous)
 
 
