@@ -1,0 +1,90 @@
+// Disposable-host alternative. Compile and pass both Go refusal controls before use.
+// No strings, argv, environment, command names or unrelated task inventory.
+BEGIN
+{
+  @owned[$1] = 1;
+  @owner[$1] = $1;
+}
+
+rawtracepoint:sched_process_fork
+/@owned[((struct task_struct *)arg0)->pid]/
+{
+  $parent = (struct task_struct *)arg0;
+  $child = (struct task_struct *)arg1;
+  @owned[$child->pid] = 1;
+  @creator[$child->pid] = $parent->pid;
+  @owner[$child->pid] = @owner[$parent->pid];
+  @births++;
+  printf("{\"event\":\"created\",\"tid\":%d,\"tgid\":%d,\"creatorTid\":%d,\"creatorTgid\":%d,\"owner\":%d,\"preExec\":%d,\"startBootNs\":%llu,\"monotonicNs\":%llu}\n",
+    $child->pid, $child->tgid, $parent->pid, $parent->tgid, @owner[$child->pid], $child->tgid != $parent->tgid, $child->start_boottime, nsecs);
+  if (@births >= 8192) { printf("{\"event\":\"coverage-error\",\"reason\":\"task-bound\"}\n"); exit(); }
+}
+
+tracepoint:sched:sched_process_exec
+/@owned[tid] || @owned[args->old_pid]/
+{
+  @owned[tid] = 1;
+  @creator[tid] = @creator[args->old_pid];
+  @owner[tid] = pid;
+  @executed[pid] = 1;
+  $task = (struct task_struct *)curtask;
+  $inode = $task->mm->exe_file->f_inode;
+  printf("{\"event\":\"exec\",\"tid\":%d,\"tgid\":%d,\"creatorTid\":%d,\"owner\":%d,\"inode\":%llu,\"bytes\":%lld,\"device\":%u,\"startBootNs\":%llu}\n",
+    tid, pid, @creator[tid], pid, $inode->i_ino, $inode->i_size, $inode->i_sb->s_dev, $task->start_boottime);
+}
+
+tracepoint:raw_syscalls:sys_enter
+/@owned[tid]/
+{
+  @number[tid] = args->id;
+  @a0[tid] = args->args[0]; @a1[tid] = args->args[1]; @a2[tid] = args->args[2];
+  @a3[tid] = args->args[3]; @a4[tid] = args->args[4]; @a5[tid] = args->args[5];
+  @entered[tid] = nsecs;
+  @cloneflags[tid] = 0;
+  if (args->id == 435 && args->args[1] >= 8) { @cloneflags[tid] = *(uint64 *)uptr(args->args[0]); }
+}
+
+tracepoint:raw_syscalls:sys_exit
+/@owned[tid] && (args->ret == -1 || args->id == 56 || args->id == 435) && (@entered[tid] || args->ret == -1)/
+{
+  if (!@entered[tid]) { printf("{\"event\":\"coverage-error\",\"reason\":\"unpaired-failed-return\"}\n"); exit(); }
+  $task = (struct task_struct *)curtask;
+  $cred = $task->cred;
+  $pgid = $task->signal->pids[2];
+  $sid = $task->signal->pids[3];
+  $inode = $task->mm->exe_file->f_inode;
+  printf("{\"event\":\"return\",\"tid\":%d,\"tgid\":%d,\"creatorTid\":%d,\"owner\":%d,\"preExec\":%d,\"number\":%lld,\"entryNumber\":%lld,\"args\":[%llu,%llu,%llu,%llu,%llu,%llu],\"clone3Flags\":%llu,\"result\":%lld,\"enteredNs\":%llu,\"monotonicNs\":%llu,\"uid\":%u,\"euid\":%u,\"gid\":%u,\"egid\":%u,\"ppid\":%d,\"pgid\":%d,\"sid\":%d,\"seccomp\":%d,\"cgroupId\":%llu,\"startBootNs\":%llu,\"inode\":%llu,\"bytes\":%lld,\"device\":%u}\n",
+    tid, pid, @creator[tid], @owner[tid], !@executed[pid], args->id, @number[tid], @a0[tid], @a1[tid], @a2[tid], @a3[tid], @a4[tid], @a5[tid],
+    @cloneflags[tid], args->ret, @entered[tid], nsecs, $cred->uid.val, $cred->euid.val, $cred->gid.val, $cred->egid.val,
+    $task->real_parent->tgid, $pgid->numbers[0].nr, $sid->numbers[0].nr, $task->seccomp.mode, cgroup, $task->start_boottime,
+    $inode->i_ino, $inode->i_size, $inode->i_sb->s_dev);
+  $fd = args->id == 16 ? @a0[tid] : 0;
+  if ($fd < 128 && $fd < $task->files->fdt->max_fds) {
+    $file = $task->files->fdt->fd[$fd];
+    if ($file) {
+      $fi = $file->f_inode;
+      printf("{\"event\":\"descriptor\",\"tid\":%d,\"fd\":%llu,\"monotonicNs\":%llu,\"device\":%u,\"mode\":%u,\"uid\":%u,\"gid\":%u,\"inode\":%llu}\n",
+        tid, $fd, nsecs, $fi->i_rdev, $fi->i_mode, $fi->i_uid.val, $fi->i_gid.val, $fi->i_ino);
+    }
+  }
+  @records++;
+  if (@records >= 16384) { printf("{\"event\":\"coverage-error\",\"reason\":\"record-bound\"}\n"); exit(); }
+}
+
+tracepoint:sched:sched_process_exit
+/@owned[tid]/
+{
+  printf("{\"event\":\"exit\",\"tid\":%d}\n", tid);
+  delete(@owned[tid]); delete(@owner[tid]); delete(@creator[tid]); delete(@number[tid]);
+  delete(@a0[tid]); delete(@a1[tid]); delete(@a2[tid]); delete(@a3[tid]); delete(@a4[tid]); delete(@a5[tid]);
+  delete(@entered[tid]); delete(@cloneflags[tid]);
+  if (pid == tid) { delete(@executed[pid]); }
+}
+
+END
+{
+  clear(@owned); clear(@owner); clear(@creator); clear(@number);
+  clear(@a0); clear(@a1); clear(@a2); clear(@a3); clear(@a4); clear(@a5);
+  clear(@entered); clear(@cloneflags); clear(@births); clear(@records);
+  clear(@executed);
+}
