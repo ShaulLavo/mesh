@@ -60,6 +60,15 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(result["rootGone"])
         self.assertTrue(result["detachedDescendantGone"])
 
+    def test_preexisting_cohort_is_never_owned_or_stopped(self):
+        with tempfile.TemporaryDirectory(prefix="childstage-preexisting-", dir="/work/tmp") as temporary:
+            root = Path(temporary)
+            cohort = root / "cohort.json"
+            cohort.write_text('{"workers":[]}')
+            argv = ["capture.py", "--authorized-disposable-diagnostic", "--observer", "/unused", "--control", "/unused",
+                "--output", str(root / "output"), "--cohort-tool", "/unused", "state", "config", "registry", "version", "binary", str(cohort)]
+            verify_preexisting(root, cohort, argv)
+
     def test_missing_call_stays_unavailable(self):
         worker = {"pid": 123, "digest": "same"}
         failure = {"selectedArtifact": {"sha256": "same"}, "mappedImage": {"sha256": "same", "device": 1, "inode": 2, "bytes": 3}}
@@ -137,6 +146,19 @@ def synthetic_controller(root):
         os.close(write)
         print(json.dumps({"guardian": target.guardian.pid, "root": target.pid}), flush=True)
         sys.stdin.buffer.read(1)
+
+
+def verify_preexisting(root, cohort, argv):
+    with patch.object(sys, "argv", argv), patch.object(backend, "require_disposable"), patch.object(capture, "stop_cohort") as stop:
+        try:
+            capture.main()
+        except RuntimeError as error:
+            assert "pre-existing" in str(error)
+        else:
+            raise AssertionError("pre-existing cohort accepted")
+    stop.assert_not_called()
+    assert cohort.read_text() == '{"workers":[]}'
+    assert not (root / "output").exists()
 
 
 def wait_json(path):

@@ -117,6 +117,7 @@ class KernelRun:
         attempt(errors, self.stop_hook)
         if self.hook is not None:
             attempt(errors, lambda: wait_hook(self))
+            attempt(errors, self.close_hook_pipes)
         if self.target is not None:
             attempt(errors, self.target.close)
         attempt(errors, self.settle)
@@ -128,6 +129,12 @@ class KernelRun:
         if errors:
             raise RuntimeError("observer cleanup failed: " + "; ".join(errors))
         return remaining
+
+    def close_hook_pipes(self):
+        for name in ("stdin", "stdout"):
+            stream = getattr(self.hook, name, None)
+            if stream is not None and not stream.closed:
+                stream.close()
 
     def discover(self):
         alive = [pid for pid, fd in self.tasks.items() if pidfd_alive(fd)]
