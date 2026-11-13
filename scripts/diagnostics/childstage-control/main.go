@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +12,10 @@ import (
 	"os/exec"
 	"runtime"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/charmbracelet/x/xpty"
@@ -22,6 +26,8 @@ const (
 	parentMode = "parent"
 	clone3Mode = "clone3"
 )
+
+var controlContext = map[string]any{"gcPercent": 25, "scope": map[string]any{}, "thp": []map[string]any{}}
 
 func main() {
 	if len(os.Args) != 2 {
@@ -34,15 +40,11 @@ func main() {
 }
 
 func control(mode string) error {
-	runtime.GOMAXPROCS(4)
-	// Exercise Go runtime thread following before the launch is refused.
-	done := make(chan bool)
-	for range 4 {
-		go func() { runtime.LockOSThread(); done <- true }()
-	}
-	for range 4 {
-		<-done
-	}
+	setHugePages(false)
+	debug.SetGCPercent(25)
+	runtime.GOMAXPROCS(min(2, runtime.GOMAXPROCS(0)))
+	controlContext["gomaxprocs"] = runtime.GOMAXPROCS(0)
+	isolateControl()
 	// Warm Go's pidfd detection before injecting a refusal, so the real PTY
 	// clone retains the compiler/runtime's normal flags on this kernel.
 	if err := exec.Command("/bin/true").Run(); err != nil {
@@ -77,7 +79,7 @@ func control(mode string) error {
 func ptyControl(mode string, pty xpty.Pty) error {
 	cmd := exec.Command("/bin/sh", "-c", "exit 0")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
-	err := pty.Start(cmd)
+	err := startControlSession(pty, cmd)
 	if err == nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -125,11 +127,131 @@ func clone3Control() error {
 func emitControl(mode string) error {
 	value := map[string]any{"mode": mode, "errno": 1, "worker": os.Getpid(), "tid": unix.Gettid(),
 		parentMode: os.Getppid(), "go": runtime.Version(), "build": buildFacts(),
-		"setsid": true, "setctty": true, "ctty": 0, "goPtyStart": mode != clone3Mode}
+		"setsid": true, "setctty": true, "ctty": 0, "goPtyStart": mode != clone3Mode, "runtimeContext": controlContext}
 	if err := json.NewEncoder(os.Stdout).Encode(value); err != nil {
 		return fmt.Errorf("emit synthetic control identity: %w", err)
 	}
 	return nil
+}
+
+func setHugePages(enabled bool) {
+	disable := uintptr(1)
+	if enabled {
+		disable = 0
+	}
+	err := unix.Prctl(unix.PR_SET_THP_DISABLE, disable, 0, 0, 0)
+	recordTHP(map[string]any{"operation": "set", "disabled": disable, "error": errorText(err)})
+}
+
+func hugePagesDisabled() bool {
+	disabled, err := unix.PrctlRetInt(unix.PR_GET_THP_DISABLE, 0, 0, 0, 0)
+	recordTHP(map[string]any{"operation": "query", "disabled": disabled, "error": errorText(err)})
+	return err == nil && disabled != 0
+}
+
+func recordTHP(row map[string]any) {
+	controlContext["thp"] = append(controlContext["thp"].([]map[string]any), row)
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func startControlSession(pty xpty.Pty, cmd *exec.Cmd) error {
+	if !hugePagesDisabled() {
+		return startError(pty.Start(cmd))
+	}
+	setHugePages(true)
+	err := pty.Start(cmd)
+	setHugePages(false)
+	debug.FreeOSMemory()
+	return startError(err)
+}
+
+func startError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("synthetic child start: %w", err)
+}
+
+func isolateControl() {
+	current, err := os.ReadFile("/proc/self/cgroup")
+	result := map[string]any{"before": string(current), "readError": errorText(err), "callTimeoutSeconds": 2, "settleSeconds": 1}
+	controlContext["scope"] = result
+	defer func() {
+		after, readErr := os.ReadFile("/proc/self/cgroup")
+		result["after"], result["afterReadError"] = string(after), errorText(readErr)
+	}()
+	path := unifiedCgroupPath(string(current))
+	if err != nil || path == "" {
+		return
+	}
+	id := "childstage-control-" + strconv.Itoa(os.Getpid())
+	unit := "mesh-session-" + id + ".scope"
+	result["unit"] = unit
+	if strings.HasSuffix(path, "/"+unit) {
+		result["alreadyJoined"] = true
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "busctl", startScopeArgs(id, os.Getpid(), parentSlice(path))...).CombinedOutput() //nolint:gosec // Fixed busctl method; the unit uses this control's numeric PID and the slice comes from its kernel cgroup.
+	result["callError"], result["output"] = errorText(err), string(output[max(0, len(output)-1024):])
+	if err != nil {
+		return
+	}
+	result["joined"] = waitScope(unit)
+}
+
+func waitScope(unit string) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		current, err := os.ReadFile("/proc/self/cgroup")
+		if err == nil && strings.HasSuffix(unifiedCgroupPath(string(current)), "/"+unit) {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+func startScopeArgs(id string, pid int, slice string) []string {
+	properties := []string{"PIDs", "au", "1", strconv.Itoa(pid), "Description", "s", "Mesh session " + id,
+		"CollectMode", "s", "inactive-or-failed"}
+	count := 3
+	if slice != "" {
+		properties = append(properties, "Slice", "s", slice)
+		count++
+	}
+	args := []string{"--user", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
+		"org.freedesktop.systemd1.Manager", "StartTransientUnit", "ssa(sv)a(sa(sv))", "mesh-session-" + id + ".scope", "fail", strconv.Itoa(count)}
+	args = append(args, properties...)
+	return append(args, "0")
+}
+
+func unifiedCgroupPath(contents string) string {
+	for line := range strings.SplitSeq(contents, "\n") {
+		if path, ok := strings.CutPrefix(line, "0::"); ok {
+			return path
+		}
+	}
+	return ""
+}
+
+func parentSlice(path string) string {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) < 2 {
+		return ""
+	}
+	parent := segments[len(segments)-2]
+	if !strings.HasSuffix(parent, ".slice") {
+		return ""
+	}
+	return parent
 }
 
 func buildFacts() map[string]string {

@@ -24,6 +24,11 @@ def check_mode(directory, mode, number, identity, digest):
     if control["build"] != {"CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": "amd64", "GOAMD64": "v1", "-compiler": "gc",
                             "github.com/charmbracelet/x/xpty": "v0.1.4", "github.com/creack/pty": "v1.1.24"}:
         raise RuntimeError("control build or PTY dependencies differ from the failed image attributes")
+    runtime = control["runtimeContext"]
+    if runtime["gcPercent"] != 25 or not 1 <= runtime["gomaxprocs"] <= 2 or not runtime["scope"] or not runtime["thp"]:
+        raise RuntimeError("control lacks historical runtime, THP and scope setup")
+    if mode != "clone3" and not any(row["operation"] == "query" for row in runtime["thp"]):
+        raise RuntimeError("control omitted historical THP policy around PTY start")
     armed = rows[0]
     if armed["event"] != "armed" or armed["root"] != control["parent"]:
         raise RuntimeError("observer was not armed on the Python launcher")
@@ -44,7 +49,7 @@ def check_mode(directory, mode, number, identity, digest):
             raise RuntimeError(f"owned synthetic PID {pid} remains")
     return {"passed": True, "syscall": number, "tid": denied["tid"], "tgid": denied["tgid"],
             "worker": control["worker"], "sequence": denied["sequence"], "records": len(rows),
-            "teardown": True, "compiler": control["go"], "image": identity, "sha256": digest}
+            "teardown": True, "compiler": control["go"], "image": identity, "sha256": digest, "runtimeContext": runtime}
 
 
 def real_launch(row, mode):

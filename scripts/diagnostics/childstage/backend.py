@@ -75,6 +75,7 @@ class KernelRun:
         if self.bytes > MAX_BYTES or len(self.rows) >= 32768:
             raise RuntimeError("kernel observer output bound reached")
         row = json.loads(line)
+        row["sequence"] = len(self.rows) + 1
         if row["event"] == "coverage-error":
             raise RuntimeError("kernel observer reports incomplete coverage")
         if row["event"] == "return" and row["number"] != row["entryNumber"]:
@@ -106,18 +107,26 @@ class KernelRun:
             self.hook.stdin.close()
 
     def cleanup(self):
-        self.discover()
+        errors = []
+        self.cleanup_remaining = []
+        attempt(errors, self.discover)
         for descriptor in self.tasks.values():
-            kill_owned(descriptor)
+            attempt(errors, lambda descriptor=descriptor: kill_owned(descriptor))
         if self.target is not None:
-            self.target.wait(timeout=5)
-        self.stop_hook()
+            attempt(errors, lambda: self.target.wait(timeout=5))
+        attempt(errors, self.stop_hook)
         if self.hook is not None:
-            wait_hook(self)
-        self.settle()
-        remaining = [pid for pid, fd in self.tasks.items() if pidfd_alive(fd)]
+            attempt(errors, lambda: wait_hook(self))
+        if self.target is not None:
+            attempt(errors, self.target.close)
+        attempt(errors, self.settle)
+        remaining = [pid for pid, fd in self.tasks.items() if cleanup_alive(errors, fd)]
+        self.cleanup_remaining = remaining
         for descriptor in self.tasks.values():
-            os.close(descriptor)
+            attempt(errors, lambda descriptor=descriptor: os.close(descriptor))
+        self.tasks.clear()
+        if errors:
+            raise RuntimeError("observer cleanup failed: " + "; ".join(errors))
         return remaining
 
     def discover(self):
@@ -136,6 +145,8 @@ class KernelRun:
         result = []
         for child in child_pids(parent):
             if self.hook is not None and child == self.hook.pid:
+                continue
+            if self.target is not None and child == self.target.guardian.pid:
                 continue
             if task_parent(child) != parent:
                 continue
@@ -174,8 +185,8 @@ class KernelRun:
         failure = ""
         try:
             with (self.output / f"{self.name}.log").open("xb") as child_log, (self.output / f"{self.name}.kernel.log").open("xb") as hook_log, path.open("x") as trace:
-                self.target = subprocess.Popen([sys.executable, str(HERE / "barrier.py"), str(read), str(ready_write)] + argv,
-                                               pass_fds=(read, ready_write), stdout=child_log, stderr=subprocess.STDOUT)
+                self.target = GuardedTarget([sys.executable, str(HERE / "barrier.py"), str(read), str(ready_write)] + argv,
+                                            (read, ready_write), child_log)
                 self.own(self.target.pid)
                 wait_barrier(ready_read)
                 self.hook = subprocess.Popen(["sudo", "-n", sys.executable, str(HERE / "hook-supervisor.py"), str(self.target.pid), shutil.which("bpftrace")],
@@ -185,9 +196,17 @@ class KernelRun:
             failure = type(error).__name__
             raise
         finally:
-            remaining = self.cleanup()
+            cleanup_error = None
+            try:
+                remaining = self.cleanup()
+            except BaseException as error:
+                cleanup_error = error
+                remaining = self.cleanup_remaining
             with path.open("a") as trace:
-                trace.write(json.dumps({"event": "teardown", "remainingTasks": len(remaining), "observerError": failure}) + "\n")
+                trace.write(json.dumps({"event": "teardown", "remainingTasks": len(remaining),
+                    "observerError": failure + (" cleanup: " + str(cleanup_error) if cleanup_error else "")}) + "\n")
+            if cleanup_error:
+                raise cleanup_error
             if remaining:
                 raise RuntimeError("kernel observer cleanup incomplete")
 
@@ -244,6 +263,68 @@ class KernelRun:
 
 def pidfd_alive(descriptor):
     return not select.select([descriptor], [], [], 0)[0]
+
+
+def attempt(errors, action):
+    try:
+        action()
+    except BaseException as error:
+        errors.append(type(error).__name__ + ": " + str(error))
+
+
+def cleanup_alive(errors, descriptor):
+    try:
+        return pidfd_alive(descriptor)
+    except OSError as error:
+        errors.append("pidfd state unavailable: " + str(error))
+        return True
+
+
+class GuardedTarget:
+    """An independent subreaper retains cleanup ownership after controller death."""
+    def __init__(self, argv, descriptors, log):
+        self.guardian = subprocess.Popen([sys.executable, str(HERE / "guardian.py"), str(log.fileno()),
+            str(descriptors[0]), str(descriptors[1])] + argv, pass_fds=descriptors + (log.fileno(),),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, bufsize=0)
+        self.returncode = None
+        try:
+            row = self.message(10)
+            self.pid = row["root"]
+            if row.get("startTicks") != start_ticks(self.pid):
+                raise RuntimeError("guardian launcher identity changed")
+        except BaseException:
+            self.close()
+            raise
+
+    def message(self, timeout):
+        if not select.select([self.guardian.stdout], [], [], timeout)[0]:
+            raise subprocess.TimeoutExpired("owned guardian", timeout)
+        raw = self.guardian.stdout.readline(4096)
+        if not raw:
+            raise RuntimeError("owned guardian exited without its target outcome")
+        return json.loads(raw)
+
+    def poll(self):
+        if self.returncode is not None:
+            return self.returncode
+        if select.select([self.guardian.stdout], [], [], 0)[0]:
+            self.returncode = self.message(0)["exit"]
+        return self.returncode
+
+    def wait(self, timeout):
+        if self.returncode is None:
+            self.returncode = self.message(timeout)["exit"]
+        return self.returncode
+
+    def close(self):
+        if not self.guardian.stdin.closed:
+            self.guardian.stdin.close()
+        try:
+            status = self.guardian.wait(timeout=10)
+            if status:
+                raise RuntimeError("owned guardian cleanup failed")
+        finally:
+            self.guardian.stdout.close()
 
 
 def kill_owned(descriptor):

@@ -148,6 +148,8 @@ def main():
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, terminate)
     backend.require_disposable()
+    if Path(args.values[-1]).exists() or Path(args.values[-1]).is_symlink():
+        raise RuntimeError("diagnostic refuses pre-existing cohort state")
     args.output.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     (args.output / "inventory.json").write_text(json.dumps({"preexistingCohort": Path(args.values[-1]).exists(),

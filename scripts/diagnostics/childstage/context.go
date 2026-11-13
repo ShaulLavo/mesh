@@ -88,7 +88,7 @@ func terminalFacts(root string) []map[string]any {
 		return []map[string]any{{unavailable: "descriptor directory absent"}}
 	}
 	defer func() { _ = directory.Close() }()
-	entries, _ := directory.ReadDir(129)
+	entries, err := directory.ReadDir(129)
 	if err != nil || len(entries) > 128 {
 		return []map[string]any{{unavailable: "descriptor directory absent or exceeds 128 entries"}}
 	}
