@@ -223,6 +223,8 @@ jobs:
       - name: Verify native authentication regressions
         run: |
           go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
+      - name: Verify opt-in transport observer fixture
+        run: go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s -run '^(TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$' ./internal/transporttrace ./internal/transport ./internal/daemon
       - name: Verify native pinned-fleet enrollment
         run: |
           set -euo pipefail

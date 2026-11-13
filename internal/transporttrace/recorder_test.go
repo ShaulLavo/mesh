@@ -1,3 +1,5 @@
+//go:build mesh_installed_fixture
+
 package transporttrace
 
 import (

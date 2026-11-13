@@ -48,6 +48,10 @@ Render the independent vehicle with:
 python3 scripts/fixtures/transport_lifecycle_vehicle.py /work/path/vehicle.yml
 ```
 
+Recorder construction, configuration and disk writing compile only with the
+`mesh_installed_fixture` tag. The observer tests use that same tag and run in the
+required native-socket CI job. Normal builds keep the inactive hook behavior.
+
 The parent installs that file as the already registered
 `.github/workflows/rollback-proof-investigation.yml` on an independent vehicle
 branch. `source_sha` separately pins the reviewed source commit. The vehicle

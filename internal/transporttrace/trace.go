@@ -69,9 +69,6 @@ type Connection struct {
 
 var configured atomic.Pointer[Recorder]
 
-// Configure is used only by the explicitly enabled installed-fixture entry point.
-func Configure(recorder *Recorder) { configured.Store(recorder) }
-
 func ProcessContext(ctx context.Context) context.Context {
 	if recorder := configured.Load(); recorder != nil {
 		return WithRecorder(ctx, recorder)
