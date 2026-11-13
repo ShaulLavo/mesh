@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from fixtures import installed_catalog_evidence as evidence, installed_cohort, release_workers
+from fixtures import installed_adoption, installed_catalog_evidence as evidence, installed_cohort, release_workers
 
 
 class CatalogEvidenceTests(unittest.TestCase):
@@ -175,6 +175,32 @@ class CatalogEvidenceTests(unittest.TestCase):
         failures = (subprocess.CalledProcessError(7, ["verify"], stderr="original"), subprocess.TimeoutExpired(["verify"], 90))
         for failure in failures:
             self.check_capture_failure(cohort, failure)
+
+    def test_timeout_exports_exact_partial_bytes_before_case_teardown(self):
+        cohort = self.cohort()
+        failure = subprocess.TimeoutExpired(["verify"], 90, output=b"partial stdout\x00", stderr=b"partial stderr\xff" + b"x" * 40000)
+        with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure) as run:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                cohort.verify("before-install")
+        self.assertIs(caught.exception, failure)
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        self.assertTrue(json.loads(self.observer.output.read_bytes())["observerStopped"])
+        self.export_timeout(cohort, failure)
+
+    def export_timeout(self, cohort, failure):
+        output = self.root / "export"
+        output.mkdir()
+        case = Mock(root=self.root, host={"name": "pc"}, cohort=cohort)
+        with patch.object(installed_adoption, "collect_service_snapshot"), patch.object(installed_adoption.installed_native, "retain_logs"):
+            installed_adoption.finish_case(case, {"passed": False, "error": str(failure)}, output)
+        self.assertEqual((output / "pc-cohort.failure.stdout").read_bytes(), failure.stdout)
+        self.assertEqual((output / "pc-cohort.failure.stderr").read_bytes(), failure.stderr)
+        saved = json.loads((output / "pc-cohort.json").read_bytes())["verificationFailure"]
+        self.assertIsNone(saved["returncode"])
+        self.assertEqual(saved["timeoutSeconds"], 90)
+        self.assertTrue(saved["stderr"]["truncated"])
+        self.assertEqual(saved["stderr"]["bytes"], len(failure.stderr))
 
     def check_capture_failure(self, cohort, failure):
         with patch.object(cohort, "environment", return_value={}), patch.object(installed_cohort.subprocess, "run", side_effect=failure), patch.object(self.observer, "stop", side_effect=OSError("disk full")):

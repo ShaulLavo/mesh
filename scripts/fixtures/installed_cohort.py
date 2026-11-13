@@ -103,7 +103,7 @@ class Cohort:
         try:
             result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
                 env=environment, capture_output=True, text=True, check=True, timeout=90)
-        except subprocess.CalledProcessError as error:
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             self.retain_verification_failure(label, error)
             self.finish_catalog(label, error)
             raise
@@ -118,17 +118,22 @@ class Cohort:
         return observed
 
     def retain_verification_failure(self, label, error):
+        def raw(value):
+            return value if isinstance(value, bytes) else (value or "").encode("utf-8")
+
         def tail(value):
-            raw = (value or "").encode("utf-8")
-            return {"tail": raw[-32768:].decode("utf-8", "replace"), "bytes": len(raw), "truncated": len(raw) > 32768}
+            return {"tail": value[-32768:].decode("utf-8", "replace"), "bytes": len(value), "truncated": len(value) > 32768}
 
         try:
+            stdout, stderr = raw(error.stdout), raw(error.stderr)
             record = json.loads(self.record.read_bytes())
-            record["verificationFailure"] = {"label": label, "returncode": error.returncode,
-                                              "stdout": tail(error.stdout), "stderr": tail(error.stderr)}
+            record["verificationFailure"] = {"label": label, "returncode": getattr(error, "returncode", None),
+                                              "stdout": tail(stdout), "stderr": tail(stderr)}
+            if isinstance(error, subprocess.TimeoutExpired):
+                record["verificationFailure"]["timeoutSeconds"] = error.timeout
             release_workers.save(self.record, record)
-            self.record.with_suffix(".failure.stdout").write_text(error.stdout or "")
-            self.record.with_suffix(".failure.stderr").write_text(error.stderr or "")
+            self.record.with_suffix(".failure.stdout").write_bytes(stdout)
+            self.record.with_suffix(".failure.stderr").write_bytes(stderr)
         except (OSError, ValueError) as capture_error:
             error.add_note("cohort verification evidence unavailable: " + type(capture_error).__name__)
 
