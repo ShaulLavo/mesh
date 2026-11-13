@@ -116,6 +116,7 @@ class PreparedTest(unittest.TestCase):
         identity = self.export()
         descriptor, actual = prepared.read_descriptor(self.bundle)
         self.assertEqual(identity, actual)
+        self.assertEqual((self.output / "prepared-descriptor.json").read_bytes(), (self.bundle / "prepared.json").read_bytes())
         self.assertFalse(any(name.startswith(("state/", "build-cache/")) or name == "issuer.key" for name in descriptor["files"]))
         relocated = self.base / "relocated"
         self.bundle.rename(relocated)

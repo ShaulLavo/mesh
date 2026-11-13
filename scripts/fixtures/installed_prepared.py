@@ -102,6 +102,7 @@ def export(releases, host, pair, previous, groups, destination, *, waypoint=Fals
         "exporter": json.loads((releases.output / "fixture-exporter.json").read_bytes())}
     installed_releases.write_json(destination / "prepared.json", value)
     identity = file_digest(destination / "prepared.json")
+    shutil.copy2(destination / "prepared.json", releases.output / "prepared-descriptor.json")
     installed_releases.write_json(releases.output / "prepared-export.json", {"schema": 1, "preparedId": identity,
         "harnessSource": value["harnessSource"], "mode": value["mode"], "groups": value["groups"]})
     return identity

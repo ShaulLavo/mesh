@@ -9,6 +9,18 @@
     },
     "darwin-arm64-oldest": {
       "path": "darwin-arm64-oldest.json"
+    },
+    "linux-amd64-fresh": {
+      "path": "linux-amd64-fresh.json"
+    },
+    "linux-arm64-fresh": {
+      "path": "linux-arm64-fresh.json"
+    },
+    "linux-amd64-adoption-interrupt": {
+      "path": "linux-amd64-adoption-interrupt.json"
+    },
+    "linux-arm64-adoption-interrupt": {
+      "path": "linux-arm64-adoption-interrupt.json"
     }
   }
 }
