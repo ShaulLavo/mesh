@@ -1,0 +1,84 @@
+{
+  "run": 43549723644,
+  "source": "73bae9a6f4c9b058e15fd4966083e4eae5ac56eb",
+  "runHead": "73bae9a6f4c9b058e15fd4966083e4eae5ac56eb",
+  "artifacts": {
+    "linux-amd64": {
+      "id": 14096505507,
+      "name": "update-native-linux-amd64",
+      "size": 1448418252,
+      "digest": "sha256:2c9c0451a5f5f821e830b05f87f53f7e99c74a8b8594b9bafec544592ccaf958"
+    },
+    "linux-arm64": {
+      "id": 14096390325,
+      "name": "update-native-linux-arm64",
+      "size": 1339118374,
+      "digest": "sha256:0f069aba2129143220c1009c3bbe8ac670523e99dc8a1b0c2b56da93671214f1"
+    },
+    "darwin-arm64": {
+      "id": 14096240111,
+      "name": "update-native-darwin-arm64",
+      "size": 1393753522,
+      "digest": "sha256:1fda0a020fd02ae1968c19c5baf2ea7ca769637806369f4ce5b6cf6654c665b2"
+    },
+    "rollback-manifest": {
+      "id": 14096335882,
+      "name": "update-rollback-manifest",
+      "size": 679,
+      "digest": "sha256:c05343842d70fbd78c85a2cb43a9980b89072b59318436084ee8a0f80d718649"
+    }
+  },
+  "actualPreparationSource": "8c7bdb602f0a03b371a71adfe21daf2371130680",
+  "candidateReader": {
+    "build": {
+      "commit": "8c7bdb602f0a03b371a71adfe21daf2371130680",
+      "digest": "800b9728b06c4cac1a2dd8d60f97963fa1302bbbbb8e6cfdc898b2fd786801d5",
+      "modified": false,
+      "platform": {
+        "arch": "amd64",
+        "os": "linux"
+      },
+      "stateVersion": 16,
+      "updateProtocol": 1,
+      "version": "v0.1.310",
+      "workerProtocol": 1
+    },
+    "epoch": 1,
+    "schema": 1
+  },
+  "preparation": {
+    "platform": {
+      "arch": "amd64",
+      "os": "linux"
+    },
+    "schema": 1,
+    "sha256": {
+      "boundary": "8324ac6b86ca0d49355806670a1c809d541ad30e1b14b192b3f6e09c7cb92fe8",
+      "candidate": "800b9728b06c4cac1a2dd8d60f97963fa1302bbbbb8e6cfdc898b2fd786801d5",
+      "startup-fault-candidate": "41f278baee567b6c1ba5a5f727db747c1a7539cd893b23868e1998e6ab1f4843",
+      "worker-probe": "622e3bab6aa49e532c41437507f604c82fe52bbec4c1ff8bdbd1555a1a48d988"
+    },
+    "source": {
+      "clean": true,
+      "commit": "8c7bdb602f0a03b371a71adfe21daf2371130680"
+    }
+  },
+  "registrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
+  "sourceVersion": "v0.1.227",
+  "sourceDigest": "d18e8606607f16895274daf7cf86062d900d01228bcd66e792bec74ba8965026",
+  "sourceBytes": 29180028,
+  "groups": [
+    {
+      "index": 0,
+      "members": 31,
+      "imageBytes": 936288128,
+      "sha256": "3b2f801a58a433bb109adf552fb5da8de457fa64cf3945513c655b58fc227b3e"
+    },
+    {
+      "index": 1,
+      "members": 18,
+      "imageBytes": 559356212,
+      "sha256": "9143568ec09a66126445a66083342c8725c02ee811c5cd588949ae72a07f79fa"
+    }
+  ]
+}

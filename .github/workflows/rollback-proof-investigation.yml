@@ -1,27 +1,14 @@
-name: Installed clock calibration
+name: Diagnostic untraced Linux EPERM vehicle
 
 on:
   workflow_dispatch:
     inputs:
-      producer_run:
-        description: 'Existing complete reviewed native preparation run'
+      driver_source:
+        description: 'Exact independently reviewed diagnostic branch commit; must equal the dispatch SHA'
         required: true
         type: string
-      producer_source:
-        description: 'Exact recorded preparation source SHA'
-        required: true
-        type: string
-      producer_prefix:
-        description: 'Exact native preparation artifact prefix'
-        required: true
-        type: string
-      measurement_scope:
-        description: 'Measure cohorts/support, four consumer recovery slots, or only fresh cache population'
-        default: all
-        type: choice
-        options: [all, cohort, prepared, support, consumer-recovery, fresh-cache]
-      catalog_evidence:
-        description: 'Enable only after composing the reviewed passive catalog source'
+      hosted_sudo_kernel_journal:
+        description: 'Allow the reviewed read-only hosted sudo -n journalctl fallback'
         default: false
         type: boolean
 
@@ -30,86 +17,59 @@ permissions:
   actions: read
 
 concurrency:
-  group: installed-clock-calibration-${{ github.run_id }}
+  group: diagnostic-linux-eperm-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
-  measure:
-    if: inputs.measurement_scope != 'support' && inputs.measurement_scope != 'consumer-recovery' && inputs.measurement_scope != 'fresh-cache'
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
-      calibration_only: true
-      calibration_scope: ${{ inputs.measurement_scope == 'prepared' && 'prepared' || 'cohort' }}
-      catalog_evidence: ${{ inputs.catalog_evidence }}
-
-  support:
-    if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: [adoption-all, adoption-interrupt, fresh]
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      calibration_only: true
-      calibration_support: ${{ matrix.profile }}
-
-  fresh-cache:
-    if: inputs.measurement_scope == 'fresh-cache'
-    uses: ./.github/workflows/installed-catchup.yml
-    with:
-      harness_source: ${{ github.sha }}
-      reusable_call: true
-      calibration_only: true
-      calibration_support: fresh
-
-  recovery-inputs:
-    if: inputs.measurement_scope == 'consumer-recovery'
+  diagnostic:
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Require the original complete producer identity for recovery
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.driver_source }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact dispatch and driver identity
         env:
-          PRODUCER_RUN: ${{ inputs.producer_run }}
-          PRODUCER_SOURCE: ${{ inputs.producer_source }}
-          PRODUCER_PREFIX: ${{ inputs.producer_prefix }}
+          DRIVER_SOURCE: ${{ inputs.driver_source }}
+          DISPATCH_SOURCE: ${{ github.sha }}
         run: |
           set -euo pipefail
-          test "$PRODUCER_RUN" = 43356291036
-          test "$PRODUCER_SOURCE" = 3097dc167bcdcadc8a561fb0f443253b74bfd025
-          test "$PRODUCER_PREFIX" = update-native
-
-  recovery:
-    needs: recovery-inputs
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            mode: chain
-            profile: final
-          - platform: linux/arm64
-            mode: chain
-            profile: none
-          - platform: linux/arm64
-            mode: waypoint
-            profile: final
-          - platform: darwin/arm64
-            mode: chain
-            profile: none
-    uses: ./.github/workflows/installed-prepared.yml
-    with:
-      native_platform: ${{ matrix.platform }}
-      mode: ${{ matrix.mode }}
-      measurement_profile: ${{ matrix.profile }}
-      harness_source: ${{ github.sha }}
-      worker_artifact_prefix: ${{ inputs.producer_prefix }}
-      worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}
-      worker_artifact_source: ${{ inputs.producer_source }}
-      calibration_only: true
+          test "$DRIVER_SOURCE" = "$DISPATCH_SOURCE"
+          test "$(git rev-parse HEAD)" = "$DRIVER_SOURCE"
+      - name: Pure vehicle controls
+        run: python3 scripts/test-linux-eperm-vehicle.py
+      - name: Healthy snapshot control then one original forward-only source
+        env:
+          DRIVER_SOURCE: ${{ inputs.driver_source }}
+          HOSTED_SUDO_KERNEL_JOURNAL: ${{ inputs.hosted_sudo_kernel_journal }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/eperm-diagnostic"
+          mkdir "$root"
+          trap 'python3 scripts/linux-eperm-vehicle.py cleanup "$root"' EXIT
+          flags=()
+          if [[ $HOSTED_SUDO_KERNEL_JOURNAL == true ]]; then
+            flags+=(--hosted-sudo-kernel-journal)
+          fi
+          python3 scripts/linux-eperm-vehicle.py run "$root" --driver-source "$DRIVER_SOURCE" "${flags[@]}" > "$root/vehicle.log" 2>&1
+      - name: Confirm cleanup or preserve payloads when ownership is unknown
+        if: always()
+        run: |
+          if [[ -d $RUNNER_TEMP/eperm-diagnostic ]]; then
+            python3 scripts/linux-eperm-vehicle.py cleanup "$RUNNER_TEMP/eperm-diagnostic"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: diagnostic-linux-eperm-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/eperm-diagnostic/*.json
+            ${{ runner.temp }}/eperm-diagnostic/*.log
+            ${{ runner.temp }}/eperm-diagnostic/proof
+          if-no-files-found: warn
+          retention-days: 7
