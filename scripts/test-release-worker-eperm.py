@@ -29,6 +29,7 @@ class RetryControls(unittest.TestCase):
         self.digest = hashlib.sha256(self.binary.read_bytes()).hexdigest()
         self.path = self.root / "cohort.json"
         self.ledger = self.root / "recurrences.json"
+        self.ledger.write_text(json.dumps({"schema": 1, "cap": 2, "events": []}))
         self.row = {"session": "W010", "pid": 0, "shellPid": 0, "digest": self.digest, "protocol": 1, "version": "v0.1.226"}
         self.record = {"schema": 1, "workers": [], "observations": []}
         self.arguments = [str(self.binary), "session-worker", "--id", "W010", "--", "/bin/sh"]
@@ -93,6 +94,35 @@ class RetryControls(unittest.TestCase):
         self.assertEqual(Path(retained["events"][0]["failure"]["retainedLog"]["path"]).read_text(), LOG)
         self.assertIn("unavailable", retained["events"][0]["failure"]["startupFailure"]["workerAtObservation"])
 
+    def test_normal_ci_three_distinct_workers_retry_successfully_without_count_gate(self):
+        self.ledger.write_text(json.dumps({"schema": 1, "cap": None, "events": []}))
+        for index in range(3):
+            self.row = {"session": f"W{index:03}", "pid": 0, "shellPid": 0, "digest": self.digest, "protocol": 1, "version": "v0.1.226"}
+            self.record = {"schema": 1, "workers": [], "observations": []}
+            self.errors = [RuntimeError("original startup EPERM"), None]
+            self.launch()
+        value = json.loads(self.ledger.read_bytes())
+        self.assertIsNone(value["cap"])
+        self.assertEqual(len(value["events"]), 3)
+        self.assertEqual(len(self.calls), 6)
+        self.assertEqual({row["session"] for row in value["events"]}, {"W000", "W001", "W002"})
+        self.assertEqual([row["retry"]["outcome"] for row in value["events"]], ["started"] * 3)
+        for index in range(0, 6, 2):
+            self.assertIs(self.calls[index][0], self.calls[index + 1][0])
+            self.assertIs(self.calls[index][1], self.calls[index + 1][1])
+            self.assertEqual(self.deadlines[index], self.deadlines[index + 1])
+
+    def test_normal_ci_failed_retry_stops_same_worker_after_two_spawns(self):
+        self.ledger.write_text(json.dumps({"schema": 1, "cap": None, "events": []}))
+        self.errors = [RuntimeError("original startup EPERM"), RuntimeError("second startup EPERM")]
+        with self.assertRaisesRegex(RuntimeError, "second startup EPERM"):
+            self.launch()
+        self.assertEqual(len(self.calls), 2)
+        value = json.loads(self.ledger.read_bytes())
+        self.assertEqual(len(value["events"]), 2)
+        self.assertEqual([row["failure"]["attempt"] for row in value["events"]], [1, 2])
+        self.assertNotIn("retry", value["events"][-1])
+
     def test_second_recurrence_stops_before_third_spawn_and_future_cohorts_share_cap(self):
         self.errors = [RuntimeError("original startup EPERM"), RuntimeError("second startup EPERM")]
         with self.assertRaisesRegex(RuntimeError, "cap reached"):
@@ -126,7 +156,7 @@ class RetryControls(unittest.TestCase):
         self.assertIs(raised.exception, original)
         self.assertEqual(len(self.calls), 1)
         self.diagnostic.assert_not_called()
-        self.assertFalse(self.ledger.exists())
+        self.assertEqual(json.loads(self.ledger.read_bytes())["events"], [])
 
     def test_disabled_unit_preserves_failure_without_retry(self):
         with mock.patch.dict(os.environ, MESH_WORKER_EPERM_LEDGER=""):
@@ -145,6 +175,14 @@ class RetryControls(unittest.TestCase):
         failure = json.loads(self.ledger.read_bytes())["events"][0]["failure"]
         self.assertEqual(failure["snapshot"], {"unavailable": "PermissionError", "errno": 13, "cleanupConfirmed": False})
         self.assertIn("unconfirmed", caught.exception.__notes__[0])
+
+    def test_missing_ledger_refuses_before_spawn_without_recreating_or_resetting(self):
+        self.ledger.unlink()
+        with mock.patch.object(workers, "start_selected") as launch:
+            with self.assertRaises(FileNotFoundError):
+                workers.start_one(None, None, {}, 0, "host", {}, self.path)
+        launch.assert_not_called()
+        self.assertFalse(self.ledger.exists())
 
     def test_ledger_contention_refuses_before_any_worker_spawn(self):
         with mock.patch("fcntl.flock", side_effect=BlockingIOError()) as lock, mock.patch.object(workers, "start_selected") as launch:

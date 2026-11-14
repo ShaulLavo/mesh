@@ -230,13 +230,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
-      - name: Initialize the single AMD64 shard 0 EPERM unit and healthy control
-        if: matrix.platform == 'linux/amd64' && matrix.shard == 0
+      - name: Initialize this AMD64 shard EPERM unit and healthy control
+        if: matrix.platform == 'linux/amd64'
         env:
           MESH_WORKER_EPERM_SUDO: '1'
           PYTHONDONTWRITEBYTECODE: '1'
+          SHARD: ${{ matrix.shard }}
         run: |
-          python3 scripts/native-eperm-policy.py initialize "$RUNNER_TEMP/update-proof"
+          python3 scripts/native-eperm-policy.py initialize "$RUNNER_TEMP/update-proof" --shard "$SHARD"
           printf 'MESH_WORKER_EPERM_LEDGER=%s\nMESH_WORKER_EPERM_SUDO=1\n' "$RUNNER_TEMP/update-proof/eperm-ledger.json" >> "$GITHUB_ENV"
       - name: Create owned excluded native extraction root
         run: |
@@ -288,7 +289,7 @@ jobs:
           python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$count" --manifest "$root/mesh-release-context.json"
       - name: Audit control and diagnostic ownership before removing native payloads
         id: eperm-cleanup
-        if: always() && matrix.platform == 'linux/amd64' && matrix.shard == 0
+        if: always() && matrix.platform == 'linux/amd64'
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/native-eperm-policy.py cleanup "$RUNNER_TEMP/update-proof" "$RUNNER_TEMP/mesh-native.noindex"
@@ -299,12 +300,46 @@ jobs:
           name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/update-proof
           retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: counter-upload
+        if: always() && matrix.platform == 'linux/amd64'
+        with:
+          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/update-proof/eperm-counter.json
+          retention-days: 7
       - name: Remove proof staging
-        if: always() && !(matrix.platform == 'linux/amd64' && matrix.shard == 0)
+        if: always() && matrix.platform != 'linux/amd64'
         run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/update-proof"
       - name: Remove uploaded EPERM proof evidence after confirmed cleanup
-        if: always() && matrix.platform == 'linux/amd64' && matrix.shard == 0 && steps.eperm-cleanup.outcome == 'success' && steps.proof-upload.outcome == 'success'
+        if: always() && matrix.platform == 'linux/amd64' && steps.eperm-cleanup.outcome == 'success' && steps.proof-upload.outcome == 'success' && steps.counter-upload.outcome == 'success'
         run: rm -rf -- "$RUNNER_TEMP/update-proof"
+
+  eperm-summary:
+    needs: prove
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: native-eperm-counter-linux-amd64-*
+          path: ${{ runner.temp }}/eperm-summary/inputs
+      - name: Report all AMD64 recurrences for parent investigation
+        if: always()
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/summarize-native-eperm.py "$RUNNER_TEMP/eperm-summary/inputs" "$RUNNER_TEMP/eperm-summary/result/summary.json" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-eperm-run-summary
+          path: ${{ runner.temp }}/eperm-summary/result
+          retention-days: 7
+      - name: Remove summary staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/eperm-summary"
 
   reader:
     name: Original schema 1 release reader

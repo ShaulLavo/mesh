@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Job-scoped EPERM control and conservative payload cleanup for AMD64 shard 0."""
+"""Job-scoped EPERM control and conservative payload cleanup for each parallel AMD64 shard."""
 import argparse
 import json
 import os
@@ -22,14 +22,18 @@ def require_host():
         raise ValueError("EPERM integration requires Linux AMD64")
 
 
-def initialize(root):
+def initialize(root, shard):
     require_host()
+    if type(shard) is not int or shard not in range(3):
+        raise ValueError("normal AMD64 proof requires shard 0, 1 or 2")
+    provenance = {"run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                  "job": os.environ["GITHUB_JOB"], "platform": "linux/amd64", "shard": shard}
     root.mkdir(parents=True, exist_ok=True)
     # Exclusive creation refuses a second initialization, including an interrupted one.
     with (root / "eperm-state.json").open("x") as stream:
         json.dump({"controlAttempted": True, "proofAttempted": False}, stream)
     with (root / "eperm-ledger.json").open("x") as stream:
-        json.dump({"schema": 1, "cap": eperm.CAP, "events": []}, stream)
+        json.dump({"schema": 1, "cap": None, "provenance": provenance, "events": []}, stream)
     control.positive_control(root / "positive-control.json")
 
 
@@ -59,6 +63,10 @@ def begin(root, scratch):
     expected = root / "eperm-ledger.json"
     if Path(os.environ.get("MESH_WORKER_EPERM_LEDGER", "")) != expected:
         raise ValueError("proof must inherit the single output-root ledger")
+    value = json.loads(expected.read_bytes())
+    eperm.validate_ledger(value)
+    if value["cap"] is not None:
+        raise ValueError("normal CI requires an explicit null count gate")
     audit = eperm.diagnostic_cleanup(expected, required=True)
     if not audit["confirmed"] or audit["events"] != 0:
         raise ValueError("initial shared ledger is missing, corrupt or already used")
@@ -120,7 +128,7 @@ def cleanup(root, native):
     write(root / "eperm-counter.json", counter)
     for recurrence in counter.get("recurrences", []):
         print("EPERM retained recurrence: " + json.dumps(recurrence), flush=True)
-    print(json.dumps({"EPERM": audit.get("events"), "cap": eperm.CAP, "payloadsMayBeRemoved": result["payloadsMayBeRemoved"]}), flush=True)
+    print(json.dumps({"EPERM": audit.get("events"), "cap": counter.get("cap"), "payloadsMayBeRemoved": result["payloadsMayBeRemoved"]}), flush=True)
     if not result["payloadsMayBeRemoved"]:
         raise RuntimeError("cleanup ownership unconfirmed; payloads and proof evidence preserved")
     state = read_state(root)
@@ -135,21 +143,34 @@ def cleanup(root, native):
 
 
 def recurrence_counter(root, audit):
-    result = {"events": audit.get("events"), "cap": eperm.CAP,
+    result = {"schema": 1, "events": audit.get("events"), "investigationThreshold": 2,
               "ledgerConfirmed": audit["confirmed"], "ledgerError": audit.get("error")}
     try:
-        events = json.loads((root / "eperm-ledger.json").read_bytes())["events"]
-        result["recurrences"] = [recurrence_summary(index, event) for index, event in enumerate(events, 1)]
+        ledger = json.loads((root / "eperm-ledger.json").read_bytes())
+        eperm.validate_ledger(ledger)
+        result.update(cap=ledger["cap"], provenance=ledger.get("provenance"), events=len(ledger["events"]))
+        result["recurrences"] = [recurrence_summary(root, index, event) for index, event in enumerate(ledger["events"], 1)]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         result["counterError"] = type(error).__name__ + ": " + str(error)
     return result
 
 
-def recurrence_summary(index, event):
+def recurrence_summary(root, index, event):
     failure = event.get("failure", {})
     return {"index": index, "session": event.get("session"), "version": event.get("version"), "digest": event.get("digest"),
             "originalPid": failure.get("pid"), "originalOutcome": failure.get("outcome"),
-            "originalException": failure.get("exception"), "retry": event.get("retry"), "cohort": failure.get("cohort")}
+            "originalException": failure.get("exception"), "retry": event.get("retry"), "cohort": failure.get("cohort"),
+            "sourceId": source_id(root, failure.get("cohort"))}
+
+
+def source_id(root, cohort):
+    if not isinstance(cohort, str):
+        return None
+    try:
+        parts = Path(cohort).relative_to(root / "proofs/groups").parts
+    except ValueError:
+        return None
+    return parts[0] if len(parts) >= 4 and re.fullmatch(r"[0-9a-f]{64}", parts[0]) else None
 
 
 def main():
@@ -157,10 +178,11 @@ def main():
     parser.add_argument("operation", choices=("initialize", "begin", "returned", "cleanup"))
     parser.add_argument("root", type=Path)
     parser.add_argument("value", nargs="?")
+    parser.add_argument("--shard", type=int)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.operation == "initialize":
-        initialize(root)
+        initialize(root, args.shard)
     if args.operation == "begin":
         begin(root, args.value)
     if args.operation == "returned":

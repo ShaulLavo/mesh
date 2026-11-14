@@ -35,15 +35,23 @@ def ledger():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise RuntimeError("EPERM recurrence ledger is busy; cohort startup refused") from error
-        value = json.loads(path.read_bytes()) if path.exists() else {"schema": 1, "cap": CAP, "events": []}
-        if value.get("schema") != 1 or value.get("cap") != CAP or not isinstance(value.get("events"), list):
-            raise ValueError("invalid shared EPERM recurrence ledger")
+        value = json.loads(path.read_bytes())
+        validate_ledger(value)
         ensure_capacity(value)
         yield (path, value)
 
 
+def validate_ledger(value):
+    if not isinstance(value, dict) or value.get("schema") != 1 or "cap" not in value:
+        raise ValueError("invalid EPERM recurrence ledger")
+    if value["cap"] is not None and (type(value["cap"]) is not int or value["cap"] != CAP):
+        raise ValueError("EPERM cap must be null for normal CI or two for bounded diagnostics")
+    if not isinstance(value.get("events"), list):
+        raise ValueError("invalid EPERM recurrence events")
+
+
 def ensure_capacity(value):
-    if len(value["events"]) >= CAP:
+    if value["cap"] is not None and len(value["events"]) >= value["cap"]:
         raise RuntimeError("EPERM recurrence cap reached; no further worker spawn permitted")
 
 
@@ -68,7 +76,8 @@ def capture(ledger_state, row, error, directory, deadline, save):
     attempt["retainedLog"] = retain_log(directory / "worker.log", path.parent / ("eperm-" + str(len(value["events"])) + ".worker.log"))
     attempt["snapshot"] = safe_snapshot(release_worker_snapshot.capture, row["startupFailure"], deadline)
     save(path, value)
-    print(f"EPERM recurrence {len(value['events'])}/{CAP}: {row['session']} {row['version']} pid {row['pid']}; retained in {path}; original failure: {str(error)[:4096]}", file=sys.stderr)
+    limit = "no count gate" if value["cap"] is None else str(value["cap"])
+    print(f"EPERM recurrence {len(value['events'])}/{limit}: {row['session']} {row['version']} pid {row['pid']}; retained in {path}; original failure: {str(error)[:4096]}", file=sys.stderr)
     return attempt
 
 
@@ -132,8 +141,7 @@ def diagnostic_cleanup(path, required=False):
         return {"confirmed": True, "events": 0}
     try:
         value = json.loads(path.read_bytes())
-        if value.get("schema") != 1 or value.get("cap") != 2 or not isinstance(value.get("events"), list):
-            raise ValueError("invalid diagnostic ownership ledger")
+        validate_ledger(value)
         snapshots = [snapshot_cleanup(event["failure"]["snapshot"]) for event in value["events"]]
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         return {"confirmed": False, "error": type(error).__name__ + ": " + str(error)}
