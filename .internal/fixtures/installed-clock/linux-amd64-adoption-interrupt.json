@@ -113,6 +113,63 @@
           "elapsed_ns": 114541967506,
           "completed": true,
           "cleanup_verified": true
+        },
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+              "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 85081513495,
+              "end_ns": 178881595436,
+              "origin_ns": 85081513495,
+              "command_end_ns": 233288686158
+            }
+          },
+          "workload": {
+            "platform": "linux/amd64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#1",
+                "signer-build:#1",
+                "setup#2",
+                "signer-start#1",
+                "setup#3",
+                "build:v0.1.9001:epoch=1#1",
+                "setup#4",
+                "acquire:v0.1.249#1",
+                "setup#5",
+                "acquire:v0.1.196#1",
+                "setup#6",
+                "acquire:v0.1.248#1",
+                "setup#7",
+                "proof:v0.1.249:v0.1.9001#1",
+                "native-transition:v0.1.249:v0.1.9001#1",
+                "proof:v0.1.249:v0.1.9001#2",
+                "setup#8",
+                "acquire:v0.1.255#1",
+                "setup#9",
+                "acquire:v0.1.196#2",
+                "setup#10",
+                "acquire:v0.1.254#1"
+              ]
+            }
+          },
+          "elapsed_ns": 93800081941,
+          "completed": true,
+          "cleanup_verified": true
         }
       ],
       "telemetry": [
@@ -175,8 +232,46 @@
               "elapsed_ns": 25281541733,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 85081513495,
+                  "end_ns": 86898030131,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#1",
+                    "signer-build:#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1816516636,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#2",
@@ -237,12 +332,50 @@
               "elapsed_ns": 50817553,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 86898030131,
+                  "end_ns": 86948930508,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#2",
+                    "signer-start#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 50900377,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#3",
-          "limit_ns": 56734000000,
+          "limit_ns": 59588000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -299,12 +432,50 @@
               "elapsed_ns": 50429764398,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 86948930508,
+                  "end_ns": 139915657724,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#3",
+                    "build:v0.1.9001:epoch=1#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 52966727216,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#4",
-          "limit_ns": 1065000000,
+          "limit_ns": 1720000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -361,12 +532,50 @@
               "elapsed_ns": 946148377,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 139915657724,
+                  "end_ns": 141444222455,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#4",
+                    "acquire:v0.1.249#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1528564731,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#5",
-          "limit_ns": 1108000000,
+          "limit_ns": 1268000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -423,12 +632,50 @@
               "elapsed_ns": 984351832,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 141444222455,
+                  "end_ns": 142571225482,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#5",
+                    "acquire:v0.1.196#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1127003027,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#6",
-          "limit_ns": 1070000000,
+          "limit_ns": 1328000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -485,8 +732,46 @@
               "elapsed_ns": 950642716,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 142571225482,
+                  "end_ns": 143750906839,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#6",
+                    "acquire:v0.1.248#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1179681357,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#7",
@@ -551,12 +836,52 @@
               "elapsed_ns": 33490968702,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 143750906839,
+                  "end_ns": 176299119234,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#7",
+                    "proof:v0.1.249:v0.1.9001#1",
+                    "native-transition:v0.1.249:v0.1.9001#1",
+                    "proof:v0.1.249:v0.1.9001#2"
+                  ]
+                }
+              },
+              "elapsed_ns": 32548212395,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#8",
-          "limit_ns": 1206000000,
+          "limit_ns": 1324000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -613,8 +938,46 @@
               "elapsed_ns": 1071525975,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 176299119234,
+                  "end_ns": 177475453959,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#8",
+                    "acquire:v0.1.255#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1176334725,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#9",
@@ -675,12 +1038,50 @@
               "elapsed_ns": 344394552,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 177475453959,
+                  "end_ns": 177757584909,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#9",
+                    "acquire:v0.1.196#2"
+                  ]
+                }
+              },
+              "elapsed_ns": 282130950,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#10",
-          "limit_ns": 1116000000,
+          "limit_ns": 1265000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -737,14 +1138,52 @@
               "elapsed_ns": 991811668,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 177757584909,
+                  "end_ns": 178881595436,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#10",
+                    "acquire:v0.1.254#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 1124010527,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         }
       ]
     },
     {
       "key": "span:setup#11",
-      "limit_ns": 34908000000,
+      "limit_ns": 37030000000,
       "workload": {
         "platform": "linux/amd64",
         "host": null,
@@ -821,12 +1260,59 @@
           "elapsed_ns": 31029306177,
           "completed": true,
           "cleanup_verified": true
+        },
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+              "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 178881595436,
+              "end_ns": 211796806971,
+              "origin_ns": 85081513495,
+              "command_end_ns": 233288686158
+            }
+          },
+          "workload": {
+            "platform": "linux/amd64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#11",
+                "proof:v0.1.255:v0.1.9001#1",
+                "native-transition:v0.1.255:v0.1.9001#1",
+                "proof:v0.1.255:v0.1.9001#2",
+                "setup#12",
+                "publish:v0.1.9001#1",
+                "setup#13",
+                "serve:releases#1",
+                "setup#14",
+                "serve:public#1",
+                "setup#15",
+                "head:v0.1.9001#1"
+              ]
+            }
+          },
+          "elapsed_ns": 32915211535,
+          "completed": true,
+          "cleanup_verified": true
         }
       ],
       "telemetry": [
         {
           "key": "span:setup#11",
-          "limit_ns": 34756000000,
+          "limit_ns": 36850000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -887,12 +1373,52 @@
               "elapsed_ns": 30893592687,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 178881595436,
+                  "end_ns": 211636757586,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#11",
+                    "proof:v0.1.255:v0.1.9001#1",
+                    "native-transition:v0.1.255:v0.1.9001#1",
+                    "proof:v0.1.255:v0.1.9001#2"
+                  ]
+                }
+              },
+              "elapsed_ns": 32755162150,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#12",
-          "limit_ns": 107000000,
+          "limit_ns": 122000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -949,12 +1475,50 @@
               "elapsed_ns": 94422490,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 211636757586,
+                  "end_ns": 211745076153,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#12",
+                    "publish:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 108318567,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         },
         {
           "key": "span:setup#13",
-          "limit_ns": 47000000,
+          "limit_ns": 59000000,
           "workload": {
             "platform": "linux/amd64",
             "host": null,
@@ -1019,8 +1583,50 @@
               "elapsed_ns": 41291000,
               "completed": true,
               "cleanup_verified": true
+            },
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+                  "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 211745076153,
+                  "end_ns": 211796806971,
+                  "origin_ns": 85081513495,
+                  "command_end_ns": 233288686158
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": null,
+                "mode": "adoption",
+                "scenario": "interrupt",
+                "grouped": false,
+                "publishedRegistrySha256": null,
+                "catalogEvidence": false,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#13",
+                    "serve:releases#1",
+                    "setup#14",
+                    "serve:public#1",
+                    "setup#15",
+                    "head:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 51730818,
+              "completed": true,
+              "cleanup_verified": true
             }
-          ]
+          ],
+          "telemetry": []
         }
       ]
     },
@@ -1087,8 +1693,48 @@
           "elapsed_ns": 11717955884,
           "completed": true,
           "cleanup_verified": true
+        },
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+              "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 211796806971,
+              "end_ns": 222426996956,
+              "origin_ns": 85081513495,
+              "command_end_ns": 233288686158
+            }
+          },
+          "workload": {
+            "platform": "linux/amd64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#16",
+                "installed-case:pc:interrupt#1",
+                "case-cleanup:pc-interrupt#1",
+                "installed-case:pc:interrupt#2"
+              ]
+            }
+          },
+          "elapsed_ns": 10630189985,
+          "completed": true,
+          "cleanup_verified": true
         }
-      ]
+      ],
+      "telemetry": []
     },
     {
       "key": "span:setup#17",
@@ -1153,8 +1799,48 @@
           "elapsed_ns": 11212859363,
           "completed": true,
           "cleanup_verified": true
+        },
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+              "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 222426996956,
+              "end_ns": 233156803362,
+              "origin_ns": 85081513495,
+              "command_end_ns": 233288686158
+            }
+          },
+          "workload": {
+            "platform": "linux/amd64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#17",
+                "installed-case:vps:interrupt#1",
+                "case-cleanup:vps-interrupt#1",
+                "installed-case:vps:interrupt#2"
+              ]
+            }
+          },
+          "elapsed_ns": 10729806406,
+          "completed": true,
+          "cleanup_verified": true
         }
-      ]
+      ],
+      "telemetry": []
     },
     {
       "key": "span:setup#18",
@@ -1217,12 +1903,51 @@
           "elapsed_ns": 133055944,
           "completed": true,
           "cleanup_verified": true
+        },
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/acceptance-94fd/completed-43562016886-linux-amd64.json",
+              "sha256": "4c458936f898f8846ef1b593c0c8c73c08642984befd1667772022e7a834eca3"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 233156803362,
+              "end_ns": 233288686158,
+              "origin_ns": 85081513495,
+              "command_end_ns": 233288686158
+            }
+          },
+          "workload": {
+            "platform": "linux/amd64",
+            "host": null,
+            "mode": "adoption",
+            "scenario": "interrupt",
+            "grouped": false,
+            "publishedRegistrySha256": null,
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#18",
+                "completion#1",
+                "completion#2"
+              ]
+            }
+          },
+          "elapsed_ns": 131882796,
+          "completed": true,
+          "cleanup_verified": true
         }
-      ]
+      ],
+      "telemetry": []
     }
   ],
   "guards": [],
-  "command_ns": 189716000000,
+  "command_ns": 191838000000,
   "external_ns": 90411000000,
   "external_budget": {
     "key": "external",
@@ -1289,5 +2014,5 @@
   },
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,
-  "eligibility_review": "Independent code and numerical reviews at 55b0f8bd; bootstrap-phase/PACKET.json SHA-256 63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743"
+  "eligibility_review": "Independent GPT numerical review; /work/reports/mesh-auto-update/acceptance-94fd/adoption-candidates/REVIEW.md SHA-256 b49b38ad9db8286f5d09f757319b5753837614627b57d03c08b825c594c9fbfc"
 }
