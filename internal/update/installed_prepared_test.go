@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -26,6 +27,24 @@ type preparedOrigin struct {
 	Certificate []byte            `json:"certificate"`
 	ServingKey  []byte            `json:"servingKey"`
 	Files       map[string][]byte `json:"files"`
+}
+
+func (p *adoptionNativeProxy) putFile(root *os.Root, name, path string) error {
+	info, err := root.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat fixture asset %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("fixture asset %s is not a regular file", path)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.filesOnDisk == nil {
+		p.filesOnDisk = make(map[string]adoptionNativeFile)
+	}
+	p.filesOnDisk[name] = adoptionNativeFile{root: root, path: path, size: info.Size()}
+	delete(p.files, name)
+	return nil
 }
 
 func exportPreparedOrigin(t *testing.T, root *os.Root, proxy *adoptionNativeProxy, name string) {
@@ -157,10 +176,20 @@ func TestPreparedOriginRoundTrip(t *testing.T) {
 	if err != nil || !bytes.Equal(actual, producer.files["tuf/timestamp.json"]) || response.StatusCode != http.StatusOK {
 		t.Fatalf("prepared origin changed its actual HTTPS TUF bytes: %v", err)
 	}
+	archive := bytes.Repeat([]byte("immutable archive"), 8192)
+	installedWrite(t, root, "archive", archive)
+	installedServingPut(t, root, consumer, map[string]string{"v-test/mesh.tar.gz": "archive"})
+	assertPreparedHTTPBytes(t, client, "https://github.com/ShaulLavo/mesh/releases/download/v-test/mesh.tar.gz", archive)
 	assertPreparedSigningRejected(t, root, consumer)
 }
 
 func assertPreparedSigningRejected(t *testing.T, root *os.Root, proxy *adoptionNativeProxy) {
+	t.Helper()
+	assertPreparedAuthorityRejected(t, root, proxy, installedSignRequest{Files: []string{"trusted-root.json"}, Output: "forbidden.json"})
+	assertPreparedAuthorityRejected(t, root, proxy, installedSignRequest{Export: "forbidden.json"})
+}
+
+func assertPreparedAuthorityRejected(t *testing.T, root *os.Root, proxy *adoptionNativeProxy, request installedSignRequest) {
 	t.Helper()
 	client, server := net.Pipe()
 	t.Cleanup(func() { _ = client.Close() })
@@ -169,7 +198,7 @@ func assertPreparedSigningRejected(t *testing.T, root *os.Root, proxy *adoptionN
 	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if err := json.NewEncoder(client).Encode(installedSignRequest{Files: []string{"trusted-root.json"}, Output: "forbidden.json"}); err != nil {
+	if err := json.NewEncoder(client).Encode(request); err != nil {
 		t.Fatal(err)
 	}
 	var reply map[string]string

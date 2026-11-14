@@ -31,8 +31,15 @@ type adoptionNativeProxy struct {
 	server      *httptest.Server
 	mu          sync.Mutex
 	files       map[string][]byte
+	filesOnDisk map[string]adoptionNativeFile
 	connections map[net.Conn]*http.Server
 	certificate tls.Certificate
+}
+
+type adoptionNativeFile struct {
+	root *os.Root
+	path string
+	size int64
 }
 
 func newAdoptionNativeProxy(t *testing.T, signer *signingFixture, root string) *adoptionNativeProxy {
@@ -75,6 +82,7 @@ func (p *adoptionNativeProxy) put(name string, value []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.files[name] = value
+	delete(p.filesOnDisk, name)
 }
 
 func (p *adoptionNativeProxy) installTUF(t *testing.T, fixture *signingFixture) {
@@ -142,12 +150,29 @@ func (p *adoptionNativeProxy) serve(w http.ResponseWriter, request *http.Request
 	}
 	p.mu.Lock()
 	data, exists := p.files[name]
+	file, onDisk := p.filesOnDisk[name]
 	p.mu.Unlock()
+	if onDisk {
+		file.serve(w, request)
+		return
+	}
 	if !exists {
 		http.NotFound(w, request)
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+func (file adoptionNativeFile) serve(w http.ResponseWriter, request *http.Request) {
+	reader, err := file.root.Open(file.path)
+	if err != nil {
+		http.NotFound(w, request)
+		return
+	}
+	defer func() { _ = reader.Close() }()
+	// Keep the byte handler's sniffing, HEAD and ignored Range behavior. Bound
+	// each response to the registered size without materializing the asset.
+	_, _ = io.CopyN(w, reader, file.size)
 }
 
 type adoptionSingleConnection struct {

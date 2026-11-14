@@ -109,11 +109,7 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		installedSignFiles(t, root, fixture, request)
 	}
 	for name, path := range request.Put {
-		data, err := root.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		proxy.put(name, data)
+		installedPutFile(t, root, fixture, proxy, name, path)
 	}
 	if request.Seed != nil {
 		if fixture == nil {
@@ -132,6 +128,23 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		t.Fatal(err)
 	}
 	return request.Stop
+}
+
+func installedPutFile(t *testing.T, root *os.Root, fixture *signingFixture, proxy *adoptionNativeProxy, name, path string) {
+	t.Helper()
+	if fixture == nil {
+		// Prepared inputs stay immutable and rooted until the server stops.
+		// The signing role keeps its byte snapshots and export contract.
+		if err := proxy.putFile(root, name, path); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	data, err := root.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.put(name, data)
 }
 
 func installedInspect(t *testing.T, root *os.Root, request installedSignRequest) {
