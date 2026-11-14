@@ -517,6 +517,34 @@ class ClockTest(unittest.TestCase):
         self.assertTrue(wait.call_args.kwargs["require_absent"])
         ownership.verify.assert_called_once()
 
+    def test_slow_term_probe_still_escalates_inside_cleanup_deadline(self):
+        process, ownership = Mock(pid=123), Mock()
+        ownership.live.return_value = {}
+        deadline = self.now() + 20 * clocks.SECOND
+        states = iter((True, False))
+        def slow_alive(_group):
+            self.now.advance(2010 * clocks.MILLISECOND)
+            return next(states)
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(clocks, "group_alive", side_effect=slow_alive), \
+                patch.object(clocks, "send_group") as send, patch.object(clocks.time, "sleep") as sleep:
+            clocks.stop_group(process, deadline, ownership=ownership)
+        self.assertEqual([call.args for call in send.call_args_list], [(123, signal.SIGTERM), (123, signal.SIGKILL)])
+        self.assertLess(self.now(), deadline)
+        sleep.assert_not_called()
+        ownership.verify.assert_called_once_with(deadline)
+
+    def test_expired_grace_does_not_confirm_a_remaining_process_group(self):
+        process = Mock(pid=123)
+        deadline = self.now() + 20 * clocks.SECOND
+        def slow_alive(_group):
+            self.now.advance(2010 * clocks.MILLISECOND)
+            return True
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(clocks, "group_alive", side_effect=slow_alive), patch.object(clocks.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "cleanup unconfirmed"):
+                clocks.wait_group(process, 123, deadline, 2, require_absent=True)
+
     def test_actual_exited_wrapper_does_not_leave_its_sleep_child(self):
         code = "import subprocess; subprocess.Popen(['/bin/sleep','30'])"
         process = subprocess.Popen([sys.executable, "-c", code], start_new_session=True)

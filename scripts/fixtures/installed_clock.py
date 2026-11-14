@@ -1148,7 +1148,10 @@ def wait_group(process, group, deadline_ns, maximum, require_absent=False):
         process.poll()
         if not group_alive(group):
             return
-        time.sleep(min(0.025, remaining_until(end, 0.025)))
+        remaining = end - time.monotonic_ns()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.025, remaining / SECOND))
     if require_absent and group_alive(group):
         raise RuntimeError("native process-group cleanup unconfirmed; retain its root")
 
