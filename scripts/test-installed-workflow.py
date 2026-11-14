@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 import tarfile
-import time
 from types import SimpleNamespace
 import unittest
 import zipfile
@@ -582,7 +581,13 @@ class AdmissionCleanupControls(unittest.TestCase):
         self.launch = self.control / "fixture-launch.json"
         self.launch.write_text('{"started":true}')
         self.job_clock = self.root / "installed-job-clock.json"
-        self.job = {"run": "42", "job": "prepare", "origin_ns": time.monotonic_ns() - 260 * installed_clock.SECOND,
+        self.now_ns = 1000 * installed_clock.SECOND
+        original_init = installed_clock.Clock.__init__
+        def initialize_clock(clock, *args, **kwargs):
+            kwargs.setdefault("now", lambda: self.now_ns)
+            original_init(clock, *args, **kwargs)
+        self.enterContext(patch.object(installed_clock.Clock, "__init__", initialize_clock))
+        self.job = {"run": "42", "job": "prepare", "origin_ns": self.now_ns - 260 * installed_clock.SECOND,
                     "admission_ns": 900 * installed_clock.SECOND}
         self.job_clock.write_text(json.dumps(self.job))
         preflight = str(self.root / "preflight-root")
@@ -683,10 +688,12 @@ class AdmissionCleanupControls(unittest.TestCase):
         code = '''import runpy, sys
 from contextlib import ExitStack
 from unittest.mock import patch
+now_ns = int(sys.argv.pop(1))
 def git(arguments, **_kwargs):
     assert arguments == ["git", "rev-parse", "HEAD"], arguments
     return "a" * 40
 with ExitStack() as guards:
+    guards.enter_context(patch("time.monotonic_ns", return_value=now_ns))
     guards.enter_context(patch("subprocess.check_output", side_effect=git))
     for name in ("subprocess.run", "subprocess.Popen", "os.execv",
                  "fixtures.installed_paths.create", "fixtures.native_services.positive_control"):
@@ -694,7 +701,7 @@ with ExitStack() as guards:
     runpy.run_path(sys.argv.pop(1), run_name="__main__")
 '''
         environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1", "MESH_HARNESS_SOURCE": "a" * 40}
-        result = subprocess.run([sys.executable, "-c", code, str(ROOT / "scripts/prove-installed-catchup.py")] + argv[1:],
+        result = subprocess.run([sys.executable, "-c", code, str(self.now_ns), str(ROOT / "scripts/prove-installed-catchup.py")] + argv[1:],
                                 env=environment, capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("fixtures.installed_clock.ClockExpired: insufficient live job admission", result.stderr)
@@ -775,7 +782,7 @@ with ExitStack() as guards:
 
     def test_retry_invalidates_old_rejection_before_runtime_and_preserves_error(self):
         self.reject()
-        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": time.monotonic_ns()}))
+        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": self.now_ns}))
         error = installed_clock.ClockExpired("runtime failure must keep all cleanup duties")
 
         def started(*_args):
@@ -789,7 +796,7 @@ with ExitStack() as guards:
         self.retain()
 
     def test_activation_failure_is_a_possible_launch_and_missing_clock_retains(self):
-        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": time.monotonic_ns()}))
+        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": self.now_ns}))
         error = installed_clock.ClockExpired("watchdog activation failed")
         with patch.object(installed_clock.Clock, "activate", side_effect=error), self.assertRaises(installed_clock.ClockExpired) as raised:
             self.cli.main()
