@@ -262,12 +262,14 @@ def cleanup_deadline():
 
 @contextmanager
 def cleanup_handoff():
+    nested = CLEANUP_HANDOFF.get() is not None
     end = cleanup_deadline()
     cleanup_token = CLEANUP_HANDOFF.set(end)
     work_token = HANDOFF.set(end)
     try:
-        with handoff(end, watchdog=True):
+        with handoff(end, watchdog=True, retire_expired_alarm=not nested):
             yield end
+            remaining_until(end, CLEANUP_SECONDS)
     finally:
         HANDOFF.reset(work_token)
         CLEANUP_HANDOFF.reset(cleanup_token)
@@ -294,7 +296,7 @@ class HandoffAlarm:
 
 
 @contextmanager
-def handoff(deadline_ns, *, watchdog=False):
+def handoff(deadline_ns, *, watchdog=False, retire_expired_alarm=False):
     positive(deadline_ns)
     remaining_until(deadline_ns, HANDOFF_SECONDS)
     token = HANDOFF.set(min(deadline_ns, HANDOFF.get() or deadline_ns))
@@ -306,7 +308,7 @@ def handoff(deadline_ns, *, watchdog=False):
     finally:
         HANDOFF.reset(token)
         if alarm.previous is not None:
-            restore_handoff_alarm(alarm.previous)
+            restore_handoff_alarm(alarm.previous, retire_expired=retire_expired_alarm)
 
 
 def start_handoff_alarm(deadline_ns, alarm):
@@ -317,14 +319,21 @@ def start_handoff_alarm(deadline_ns, alarm):
     signal.setitimer(signal.ITIMER_REAL, remaining)
 
 
-def restore_handoff_alarm(previous):
+def restore_handoff_alarm(previous, *, retire_expired=False):
     try:
         signal.setitimer(signal.ITIMER_REAL, 0)
     finally:
         signal.signal(signal.SIGALRM, previous[0])
-        if previous[1]:
-            remaining = previous[1] - (time.monotonic_ns() - previous[2]) / SECOND
-            signal.setitimer(signal.ITIMER_REAL, max(0.000001, remaining))
+        resume_handoff_alarm(previous, retire_expired)
+
+
+def resume_handoff_alarm(previous, retire_expired):
+    if not previous[1]:
+        return
+    remaining = previous[1] - (time.monotonic_ns() - previous[2]) / SECOND
+    if retire_expired and remaining <= 0:
+        return
+    signal.setitimer(signal.ITIMER_REAL, max(0.000001, remaining))
 
 
 def handoff_expired(_number, _frame):

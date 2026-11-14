@@ -13,7 +13,7 @@ import sys
 import threading
 import time
 
-from fixtures import release_workers
+from fixtures import installed_clock, release_workers
 
 MAX_RECORD_BYTES = 4 << 20
 MAX_EVENTS = 1024
@@ -116,6 +116,7 @@ class Observer:
         self.closed, self.identity_reader = False, identity_reader
         self.published, self.previous = {}, None
         self.used, self.started = 0, time.monotonic_ns()
+        self.deadline = installed_clock.parent_deadline(maximum)
         self.record = {"schema": 1, "passive": True, "events": [], "positiveControl": {"passed": False},
                        "limits": {"seconds": maximum, "events": MAX_EVENTS, "bytes": MAX_RECORD_BYTES},
                        "interpretation": "Receipt order only. Added follows commit. Current age/failing describes completion, not scan start. No I/O retry or readiness decision."}
@@ -132,7 +133,7 @@ class Observer:
     def start(self, identity):
         self.record["daemon"] = identity
         self.connection = socket.socket(socket.AF_UNIX)
-        self.connection.settimeout(6)
+        self.connection.settimeout(installed_clock.remaining_until(self.deadline, self.maximum))
         self.connection.connect(str(self.state / "daemon.sock"))
         self.record["watchPeer"] = peer_identity(self.connection)
         if self.record["watchPeer"]["pid"] != identity["pid"]:
@@ -170,7 +171,8 @@ class Observer:
     def prove(self, session, identity, host):
         # This waits only for the already normal original-session control, before cohort startup.
         with self.condition:
-            received = self.condition.wait_for(lambda: session in self.published or self.stopping.is_set(), timeout=6)
+            received = self.condition.wait_for(lambda: session in self.published or self.stopping.is_set(),
+                                               timeout=installed_clock.remaining_until(self.deadline, self.maximum))
         if not received or session not in self.published or identity != self.record["daemon"] or host != self.host:
             raise RuntimeError("catalog observer normal-create positive control failed")
         if not 4 <= len(session) <= 8 or not session.isascii() or not session.isalnum():
@@ -217,7 +219,7 @@ class Observer:
 
     def read_loop(self, buffer):
         while not self.stopping.is_set():
-            if (time.monotonic_ns() - self.started) / 1e9 >= self.maximum:
+            if time.monotonic_ns() >= self.deadline:
                 raise TimeoutError("passive observer lifetime exceeded")
             ready, _, _ = select.select([self.connection], [], [], 0.05)
             if ready:
@@ -248,7 +250,7 @@ class Observer:
         if self.connection:
             self.connection.close()
         if self.thread:
-            self.thread.join(timeout=3)
+            self.thread.join(timeout=installed_clock.remaining_until(installed_clock.cleanup_deadline(), installed_clock.CLEANUP_SECONDS))
         stopped = self.thread is None or not self.thread.is_alive()
         if not stopped:
             raise RuntimeError("owned catalog observer did not stop")

@@ -11,6 +11,37 @@ from fixtures import release_workers
 
 
 class ExactWorkerSelectionTests(unittest.TestCase):
+    def test_cleanup_waits_for_absence_after_slow_reaping(self):
+        elapsed = [0.0]
+
+        def advance(seconds):
+            elapsed[0] += seconds
+
+        with mock.patch.object(release_workers.os, "kill"), \
+                mock.patch.object(release_workers.time, "sleep", side_effect=advance), \
+                mock.patch.object(release_workers, "worker_running", side_effect=lambda _worker: elapsed[0] < 4), \
+                mock.patch.object(release_workers, "process_running", return_value=False):
+            release_workers.stop_one({"pid": 123, "shellPid": 456})
+        self.assertGreaterEqual(elapsed[0], 4)
+
+    def test_cleanup_hang_cap_does_not_restart_while_polling(self):
+        from fixtures import installed_clock
+        now = [100 * installed_clock.SECOND]
+
+        def advance(_seconds):
+            now[0] += 60 * installed_clock.SECOND
+
+        with mock.patch.object(release_workers.os, "kill"), \
+                mock.patch.object(release_workers.time, "sleep", side_effect=advance), \
+                mock.patch.object(release_workers, "worker_running", return_value=True), \
+                mock.patch.object(installed_clock.time, "monotonic_ns", side_effect=lambda: now[0]):
+            self.assert_cleanup_expired(installed_clock)
+        self.assertEqual(now[0], 220 * installed_clock.SECOND)
+
+    def assert_cleanup_expired(self, clock):
+        with self.assertRaises(clock.ClockExpired):
+            release_workers.stop_one({"pid": 123, "shellPid": 456})
+
     def test_observation_retains_actual_image_observer_duration(self):
         result = subprocess.CompletedProcess([], 0, b"--- PASS: TestRetainedWorkerCohortIdentity\n", b"")
         with tempfile.TemporaryDirectory(prefix="worker-time-") as directory:
@@ -31,7 +62,7 @@ class ExactWorkerSelectionTests(unittest.TestCase):
             self.assertIn("actual stderr control", str(error.exception))
             self.assertIn("exited 1", str(error.exception))
             self.assertLess(len(str(error.exception)), 8300)
-            self.assertEqual(command.call_args.kwargs["timeout"], 30)
+            self.assertEqual(command.call_args.kwargs["timeout"], release_workers.HANG_SECONDS)
 
     def test_modern_worker_requires_the_maintained_exporter(self):
         with mock.patch.object(release_workers.subprocess, "check_output", return_value=b"--instance"):

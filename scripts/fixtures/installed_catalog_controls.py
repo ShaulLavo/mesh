@@ -92,7 +92,24 @@ class CatalogEvidenceTests(unittest.TestCase):
         self.assertEqual(control.call_args.args[1], {"type": "state.watch", "requestId": "catalog-evidence", "watch": {"topics": ["host", "sessions"]}})
         connection.connect.assert_called_once_with(str(self.state / "daemon.sock"))
         connection.close.assert_called_once()
-        thread.join.assert_called_once_with(timeout=3)
+        thread.join.assert_called_once()
+        self.assertGreater(thread.join.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(thread.join.call_args.kwargs["timeout"], installed_clock.CLEANUP_SECONDS)
+
+    def test_normal_create_can_arrive_after_six_seconds(self):
+        identity = {"pid": 10}
+        self.observer.record["daemon"] = identity
+        self.insert(session="ORIG")
+
+        def normal_create(_predicate, timeout):
+            if timeout < 7:
+                return False
+            self.observer.consume(self.added())
+            return True
+
+        with patch.object(self.observer.condition, "wait_for", side_effect=normal_create):
+            self.observer.prove("ORIG", identity, "local")
+        self.assertTrue(self.observer.record["positiveControl"]["passed"])
 
     def test_normal_seed_control_requires_same_daemon_exact_event_and_committed_local_row(self):
         identity = {"pid": 10, "sha256": "exact"}

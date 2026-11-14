@@ -770,6 +770,20 @@ class OutcomePolicyTest(unittest.TestCase):
 
 
 class CleanupHandoffTest(unittest.TestCase):
+    def test_cleanup_retires_work_alarm_that_expires_during_teardown(self):
+        now = Time()
+        with patch.object(clocks.time, "monotonic_ns", now), \
+                patch.object(clocks.signal, "getsignal", return_value=signal.SIG_IGN), \
+                patch.object(clocks.signal, "getitimer", return_value=(60, 0)), \
+                patch.object(clocks.signal, "signal"), patch.object(clocks.signal, "setitimer") as timer:
+            self.check_retired_alarm(now, timer)
+
+    def check_retired_alarm(self, now, timer):
+        with clocks.handoff(now() + 60 * clocks.SECOND, watchdog=True):
+            with clocks.cleanup_handoff():
+                now.advance(61 * clocks.SECOND)
+            self.assertEqual(timer.call_args.args, (signal.ITIMER_REAL, 0))
+
     def test_nested_cleanup_reuses_one_deadline_after_work_expired(self):
         now = Time()
         token = clocks.HANDOFF.set(now() - 1)

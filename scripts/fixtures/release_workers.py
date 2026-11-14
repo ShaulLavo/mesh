@@ -41,7 +41,7 @@ def applicable(registry_path, source_version, source_binary):
     source_binary = Path(source_binary).resolve()
     source_digest = hashlib.sha256(source_binary.read_bytes()).hexdigest()
     if not any(item["artifact"]["binarySha256"] == source_digest for item in selected):
-        build = json.loads(subprocess.check_output([str(source_binary), "version", "--json"], timeout=10))
+        build = json.loads(subprocess.check_output([str(source_binary), "version", "--json"], timeout=command_timeout()))
         selected.append({"version": source_version, "protocol": build["workerProtocol"], "binary": str(source_binary),
                          "artifact": {"binarySha256": source_digest, "platform": registry["platform"]}})
     if not selected or len(selected) > 4096:
@@ -52,6 +52,11 @@ def applicable(registry_path, source_version, source_binary):
 def hang_deadline():
     from fixtures import installed_clock
     return min(time.monotonic() + HANG_SECONDS, installed_clock.parent_deadline() / 1_000_000_000)
+
+
+def command_timeout():
+    from fixtures import installed_clock
+    return installed_clock.timeout(HANG_SECONDS)
 
 
 def read_exact(stream, count, deadline=None):
@@ -117,7 +122,7 @@ def check_control(payload):
 
 
 def process_info(pid):
-    output = subprocess.check_output(["ps", "-p", str(pid), "-o", "ppid=,rss="], timeout=5).split()
+    output = subprocess.check_output(["ps", "-p", str(pid), "-o", "ppid=,rss="], timeout=command_timeout()).split()
     if len(output) != 2:
         raise RuntimeError("retained worker or shell disappeared")
     return int(output[0]), int(output[1])
@@ -130,7 +135,7 @@ def save(path, value):
 
 
 def reserve_worker(binary, state, index, environment):
-    help_text = subprocess.check_output([str(binary), "session-worker", "--help"], env=environment, timeout=10, stderr=subprocess.STDOUT).decode()
+    help_text = subprocess.check_output([str(binary), "session-worker", "--help"], env=environment, timeout=command_timeout(), stderr=subprocess.STDOUT).decode()
     if "--instance" not in help_text:
         return {"id": "W" + format(index, "03X")}
     probe = environment.get("MESH_WORKER_PROBE")
@@ -139,7 +144,7 @@ def reserve_worker(binary, state, index, environment):
     output = state / ("cohort-reservation-" + str(index) + ".json")
     child = dict(environment, MESH_COHORT_RESERVE_ROOT=str(state / "s"), MESH_COHORT_RESERVATION=str(output))
     result = subprocess.run([probe, "-test.v", "-test.run=^TestReserveRetainedWorkerCohort$"], env=child,
-                            capture_output=True, timeout=30, check=True)
+                            capture_output=True, timeout=command_timeout(), check=True)
     if b"--- PASS: TestReserveRetainedWorkerCohort" not in result.stdout:
         raise RuntimeError("maintained worker reservation exporter did not run")
     return json.loads(output.read_bytes())
@@ -436,7 +441,7 @@ def verify_images(state, path):
     environment = dict(os.environ, MESH_COHORT_STATE=str(state), MESH_COHORT_RECORD=str(path))
     started = time.monotonic()
     result = subprocess.run([probe, "-test.v", "-test.run=^TestRetainedWorkerCohortIdentity$"],
-                            env=environment, capture_output=True, timeout=30, check=False)
+                            env=environment, capture_output=True, timeout=command_timeout(), check=False)
     elapsed = time.monotonic() - started
     if result.returncode:
         output = (result.stdout[-4096:] + b"\n" + result.stderr[-4096:]).decode(errors="replace")
@@ -465,15 +470,18 @@ def verify_one(state, worker, label, daemon):
 
 
 def stop(path):
+    from fixtures import installed_clock
     path = Path(path)
     if not path.exists():
         return
     record = json.loads(path.read_bytes())
-    for worker in record["workers"]:
-        stop_one(worker)
+    with installed_clock.cleanup_handoff():
+        for worker in record["workers"]:
+            stop_one(worker)
 
 
 def stop_one(worker):
+    from fixtures import installed_clock
     if worker.get("startupReconciled"):
         return
     if worker.get("epermCohort") and worker.get("startupFailure"):
@@ -487,11 +495,12 @@ def stop_one(worker):
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    for _ in range(120):
+    deadline = installed_clock.cleanup_deadline()
+    while True:
+        installed_clock.remaining_until(deadline, installed_clock.CLEANUP_SECONDS)
         if not worker_running(worker) and not process_running(worker["shellPid"]):
             return
-        time.sleep(0.025)
-    raise RuntimeError("cohort process survived teardown")
+        time.sleep(min(0.025, installed_clock.remaining_until(deadline, installed_clock.CLEANUP_SECONDS)))
 
 
 def worker_running(worker):
@@ -501,7 +510,7 @@ def worker_running(worker):
 def process_running(pid):
     if not pid:
         return False
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, timeout=5, check=False)
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, timeout=command_timeout(), check=False)
     return result.returncode == 0 and not result.stdout.strip().startswith(b"Z")
 
 
