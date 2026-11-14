@@ -195,6 +195,7 @@ check_source_contract() {
   python3 scripts/test-release-worker-evidence.py
   python3 scripts/test-release-worker-eperm.py
   python3 scripts/test-release-worker-startup.py
+  MESH_SHORT_TMP=${TMPDIR:-/tmp} python3 -B scripts/bench/test_ssh_command.py
   python3 scripts/test-native-eperm-policy.py
   python3 scripts/test-rollback-context.py
 

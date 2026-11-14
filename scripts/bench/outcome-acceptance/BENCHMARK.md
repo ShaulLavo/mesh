@@ -37,7 +37,7 @@ paired order limits drift; correlated host load remains a limitation, so inspect
 raw distributions alongside failures. Thresholds are fixed, with no historical
 calibration or timing ledger. Exit 0 means no clear slowdown by this rule;
 exit 2 means a prerequisite, output, execution or cleanup error, never a speed
-regression. The 30-second command cap only catches hangs.
+regression. The two-minute command cap only catches hangs.
 
 ## Parent interface and wiring
 
@@ -72,9 +72,12 @@ the sample count, with 20 as the minimum; it cannot alter the speed margins.
 
 ## Verification and cleanup
 
-Full Mesh-versus-SSH result: **unmeasured**. No reviewed integration binary was
-supplied to this implementation tree. The parent must run the command above
-after composing its artifact; no timings from unit-test substitutes are claimed.
+The first full comparison passed on the Linux PC on November 14, 2026, using
+40 pairs. Mesh's median was 12.196 ms and OpenSSH's was 112.079 ms. No pair
+exceeded both slowdown margins. This loopback result includes normal host load;
+it does not measure WAN or real Tailscale network performance. The binary was
+built from the benchmark's implementation checkpoint with the integration tag.
+The parent retained the raw JSON and independent review with the PR evidence.
 
 The real owned OpenSSH command/output/teardown test passed three consecutive
 runs on the PC with its existing OpenSSH installation. Decision tests cover

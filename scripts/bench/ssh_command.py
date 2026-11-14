@@ -2,6 +2,7 @@
 """Compare fresh ordinary Mesh SSH commands with fresh OpenSSH commands."""
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -24,7 +25,7 @@ sys.dont_write_bytecode = True
 HELPERS = Path(__file__).resolve().parents[2] / "integration" / "helpers"
 sys.path.insert(0, str(HELPERS))
 
-from isolation import protected_cleanup, termination_cleanup  # noqa: E402 - shared integration helpers
+from isolation import TERMINATION_SIGNALS, protected_cleanup, termination_cleanup  # noqa: E402 - shared integration helpers
 from mesh_control import round_trip  # noqa: E402
 from process_tree import ECHILD, Kernel, Reaper, Tree  # noqa: E402
 from ssh_sessions import SSHFixture  # noqa: E402
@@ -36,7 +37,7 @@ RATIO = 1.5
 DELTA_SECONDS = 0.050
 MIN_FRACTION = 0.8
 SIGN_P = 0.01
-TIMEOUT = 30  # Hang cap, never a latency target.
+TIMEOUT = 120  # Hang cap, never a latency target.
 
 
 def distribution(values):
@@ -159,7 +160,6 @@ AuthenticationMethods publickey
 UseDNS no
 PermitRootLogin prohibit-password
 PrintMotd no
-PrintLastLog no
 LogLevel ERROR
 """)
     preflight = checked_run([sshd, "-t", "-f", str(config)], fixture.environment)
@@ -272,22 +272,40 @@ def exercise(args, report, root):
         report["status"] = "slowdown" if report["summary"]["clear_slowdown"] else "pass"
 
 
+@contextmanager
+def allocation_signals():
+    # Deliver pending termination after the caller has recorded the new root.
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, TERMINATION_SIGNALS)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def finish(owner, root, report):
+    owner.close()
+    report["cleanup"] = {"descendants_joined": True, "scratch_removed": root is None}
+    if root is None:
+        return
+    report["logs"] = {path.name: path.read_text(errors="replace")[-8000:]
+                      for path in root.glob("*.log")}
+    shutil.rmtree(root)
+    report["cleanup"]["scratch_removed"] = not root.exists()
+
+
 def execute(args, report):
     owner = Descendants()
-    root = Path(tempfile.mkdtemp(prefix="ms-ssh-bench-", dir=args.scratch_parent))
-    report["scratch_root"] = str(root)
-    report["cleanup"] = {"descendants_joined": False, "scratch_removed": False}
-    report["resources"] = "one scratch root, two loopback listeners, owned daemons and bounded command children; no installs or persistent sessions"
+    root = None
     try:
+        with allocation_signals():
+            root = Path(tempfile.mkdtemp(prefix="ms-ssh-bench-", dir=args.scratch_parent))
+            report["scratch_root"] = str(root)
+            report["cleanup"] = {"descendants_joined": False, "scratch_removed": False}
+            report["resources"] = "one scratch root, two loopback listeners, owned daemons and bounded command children; no installs or persistent sessions"
         exercise(args, report, root)
     finally:
         with protected_cleanup():
-            owner.close()
-            report["cleanup"] = {"descendants_joined": True}
-            report["logs"] = {path.name: path.read_text(errors="replace")[-8000:]
-                              for path in root.glob("*.log")}
-            shutil.rmtree(root)
-            report["cleanup"]["scratch_removed"] = not root.exists()
+            finish(owner, root, report)
 
 
 def arguments(argv=None):

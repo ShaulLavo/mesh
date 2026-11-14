@@ -106,6 +106,31 @@ class DecisionTests(unittest.TestCase):
         for terminate in (False, True):
             self.check_cleanup(terminate)
 
+    def test_termination_during_allocation_records_and_removes_root(self):
+        allocate = bench.tempfile.mkdtemp
+        roots = []
+
+        def interrupted_allocation(*args, **kwargs):
+            root = allocate(*args, **kwargs)
+            roots.append(Path(root))
+            os.kill(os.getpid(), bench.signal.SIGTERM)
+            return root
+
+        args = SimpleNamespace(scratch_parent=Path(SCRATCH_PARENT))
+        report = {}
+        with patch.object(bench.tempfile, "mkdtemp", side_effect=interrupted_allocation):
+            self.check_allocation_termination(args, report)
+        self.assertEqual(report["scratch_root"], str(roots[0]))
+        self.assertEqual(report["cleanup"], {"descendants_joined": True, "scratch_removed": True})
+        self.assertFalse(roots[0].exists())
+
+    def check_allocation_termination(self, args, report):
+        with bench.termination_cleanup(), patch.object(bench, "exercise") as exercise:
+            with self.assertRaises(SystemExit) as failure:
+                bench.execute(args, report)
+        self.assertEqual(failure.exception.code, 143)
+        exercise.assert_not_called()
+
     def check_cleanup(self, terminate):
         processes, roots = [], []
 
