@@ -102,10 +102,12 @@ class DecisionTests(unittest.TestCase):
         with patch.object(bench, "execute"), patch.object(Path, "write_text", side_effect=OSError("disk full")):
             self.assertEqual(bench.main([]), 2)
 
+    @unittest.skipUnless(sys.platform == "linux", "needs Linux child subreaping")
     def test_failure_and_termination_join_children_before_removing_root(self):
         for terminate in (False, True):
             self.check_cleanup(terminate)
 
+    @unittest.skipUnless(sys.platform == "linux", "needs Linux child subreaping")
     def test_termination_during_allocation_records_and_removes_root(self):
         allocate = bench.tempfile.mkdtemp
         roots = []
