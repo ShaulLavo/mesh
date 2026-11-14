@@ -194,6 +194,7 @@ check_source_contract() {
   python3 scripts/test-installed-clock.py
   python3 scripts/test-release-worker-evidence.py
   python3 scripts/test-release-worker-eperm.py
+  python3 scripts/test-release-worker-startup.py
   python3 scripts/test-native-eperm-policy.py
   python3 scripts/test-rollback-context.py
 

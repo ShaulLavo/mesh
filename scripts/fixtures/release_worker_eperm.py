@@ -1,4 +1,4 @@
-"""Opt-in fixture-only recurrence ledger and birth-checked failed-attempt cleanup."""
+"""Fixture-only recurrence ledger and birth-checked failed-attempt cleanup."""
 from contextlib import contextmanager
 import json
 import os
@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import signal
 import sys
+import time
 
 from fixtures import release_worker_evidence as evidence
 
@@ -21,13 +22,16 @@ def eligible(row):
 
 
 @contextmanager
-def ledger():
+def ledger(cohort=None):
     name = os.environ.get("MESH_WORKER_EPERM_LEDGER")
+    if name is None and cohort is not None and sys.platform == "linux" and os.uname().machine == "x86_64":
+        name = Path(cohort).with_suffix(".eperm.json")
+        initialize(name)
     if not name:
         yield None
         return
     if sys.platform != "linux" or os.uname().machine != "x86_64":
-        raise ValueError("EPERM unit requires one Linux AMD64 native shard/profile")
+        raise ValueError("EPERM unit requires Linux AMD64")
     import fcntl
     path = Path(name).resolve()
     with path.with_suffix(path.suffix + ".lock").open("a") as lock:
@@ -39,6 +43,15 @@ def ledger():
         validate_ledger(value)
         ensure_capacity(value)
         yield (path, value)
+
+
+def initialize(path):
+    try:
+        with path.open("x") as stream:
+            json.dump({"schema": 1, "cap": None, "events": []}, stream)
+    except FileExistsError:
+        # Reopening a cohort must retain its earlier recurrences.
+        pass
 
 
 def validate_ledger(value):
@@ -70,11 +83,12 @@ def capture(ledger_state, row, error, directory, deadline, save):
                "groupSelection": os.environ.get("MESH_WORKER_GROUP"),
                "arguments": row["startupArguments"], "deadlineMonotonic": row["startupDeadlineMonotonic"],
                "selectedImage": row["startupImage"]}
+    attempt["elapsedSeconds"] = time.monotonic() - row["startupAttemptStartedMonotonic"]
     row.setdefault("startupAttempts", []).append(attempt)
     value["events"].append({"session": row["session"], "version": row["version"], "digest": row["digest"], "failure": attempt})
     # Count and retain the original failure before running any optional diagnostic.
     save(path, value)
-    attempt["retainedLog"] = retain_log(directory / "worker.log", path.parent / ("eperm-" + str(len(value["events"])) + ".worker.log"))
+    attempt["retainedLog"] = retain_log(directory / "worker.log", path.with_name(path.stem + "-" + str(len(value["events"])) + ".worker.log"))
     attempt["snapshot"] = safe_snapshot(release_worker_snapshot.capture, row["startupFailure"], deadline)
     save(path, value)
     limit = "no count gate" if value["cap"] is None else str(value["cap"])
@@ -111,7 +125,12 @@ def verify_image(path, original, row):
         raise RuntimeError("mapped failed worker differs from selected image; retry refused")
 
 
-def reconcile(process, failure):
+def unpublished(directory):
+    if any((directory / name).exists() for name in ("meta.json", "sock")):
+        raise RuntimeError("failed worker published session state; EPERM retry refused")
+
+
+def reconcile(process, failure, deadline=None):
     # The EPERM child never published a shell PID. Do not invent one or kill by a stale PID.
     if process.poll() is not None:
         process.wait(timeout=0)
@@ -122,7 +141,7 @@ def reconcile(process, failure):
         if original is None or actual != original:
             raise RuntimeError("failed worker birth identity unavailable or changed; retry refused")
         os.kill(process.pid, signal.SIGKILL)
-    process.wait(timeout=0.1)
+    process.wait(timeout=120 if deadline is None else max(0, deadline - time.monotonic()))
     return {"worker": "birth-checked and reaped", "shell": "no published child PID"}
 
 

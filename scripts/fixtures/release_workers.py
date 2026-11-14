@@ -14,6 +14,9 @@ import sys
 import time
 
 
+HANG_SECONDS = 120
+
+
 def version(value):
     parts = value.removeprefix("v").split(".")
     if len(parts) != 3 or any(not part.isdecimal() for part in parts):
@@ -46,9 +49,16 @@ def applicable(registry_path, source_version, source_binary):
     return selected
 
 
-def read_exact(stream, count):
+def hang_deadline():
+    from fixtures import installed_clock
+    return min(time.monotonic() + HANG_SECONDS, installed_clock.parent_deadline() / 1_000_000_000)
+
+
+def read_exact(stream, count, deadline=None):
     data = bytearray()
     while len(data) < count:
+        if deadline is not None:
+            stream.settimeout(hang_remaining(deadline))
         block = stream.recv(count - len(data))
         if not block:
             raise RuntimeError("worker closed its protocol stream")
@@ -65,24 +75,32 @@ def control(stream, value):
 
 
 def session_io(endpoint, session, token):
+    deadline = hang_deadline()
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(6)
+        connection.settimeout(hang_remaining(deadline))
         connection.connect(str(endpoint))
         control(connection, {"type": "session.attach", "sessionId": session, "cols": 80, "rows": 24})
         command = f"printf '\\n%s\\n' '{token}'\n".encode()
         frame(connection, 3, session.encode().ljust(8, b"\0") + command)
-        await_token(connection, token)
+        await_token(connection, token, deadline)
         control(connection, {"type": "session.detach", "sessionId": session})
 
 
-def await_token(connection, token):
+def hang_remaining(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("cohort I/O hang cap expired")
+    return remaining
+
+
+def await_token(connection, token, deadline=None):
     output = bytearray()
     for _ in range(256):
-        header = read_exact(connection, 5)
+        header = read_exact(connection, 5, deadline)
         length = struct.unpack(">I", header[1:])[0]
         if length > 4 << 20:
             raise ValueError("worker frame exceeds the existing protocol bound")
-        payload = read_exact(connection, length)
+        payload = read_exact(connection, length, deadline)
         if header[0] == 1:
             check_control(payload)
         if header[0] == 2:
@@ -136,7 +154,7 @@ def worker_arguments(binary, reservation, directory):
 
 def start_one(state, config, item, index, host, record, path):
     from fixtures import release_worker_eperm
-    with release_worker_eperm.ledger() as ledger:
+    with release_worker_eperm.ledger(path) as ledger:
         start_selected(state, config, item, index, host, record, path, ledger)
 
 
@@ -164,7 +182,10 @@ def start_selected(state, config, item, index, host, record, path, ledger):
 def launch_selected(binary, arguments, environment, directory, item, record, row, path, ledger):
     from fixtures import release_worker_eperm
     original = release_worker_eperm.image(binary) if ledger else None
-    deadline = time.monotonic() + 6 if ledger else None
+    started = time.monotonic()
+    deadline = hang_deadline()
+    row["startupStartedMonotonic"] = started
+    row["startupDeadlineMonotonic"] = deadline
     if ledger:
         record["epermRecurrenceLedger"] = str(ledger[0])
         record["epermRecurrenceCount"] = len(ledger[1]["events"])
@@ -177,13 +198,19 @@ def launch_selected(binary, arguments, environment, directory, item, record, row
     process = spawn_selected(arguments, environment, directory, row)
     record["workers"].append(row)
     save(path, record)
+    row["startupAttemptStartedMonotonic"] = started
     try:
         wait_startup(directory, process, item, record, row, path, deadline)
     except Exception as error:
+        row["startupElapsedSeconds"] = time.monotonic() - started
+        row["startupOutcome"] = "failed"
         if ledger is None or not release_worker_eperm.eligible(row):
             raise
         retain_eperm(ledger, process, error, directory, record, row, path, deadline)
         retry_selected(binary, original, arguments, environment, directory, item, record, row, path, ledger, deadline)
+    row["startupElapsedSeconds"] = time.monotonic() - started
+    row["startupOutcome"] = "started"
+    save(path, record)
 
 
 def spawn_selected(arguments, environment, directory, row):
@@ -201,7 +228,7 @@ def retain_eperm(ledger, process, error, directory, record, row, path, deadline)
     from fixtures import release_worker_eperm
     attempt = release_worker_eperm.capture(ledger, row, error, directory, deadline, save)
     save(path, record)
-    attempt["cleanup"] = release_worker_eperm.reconcile(process, row["startupFailure"])
+    attempt["cleanup"] = release_worker_eperm.reconcile(process, row["startupFailure"], deadline)
     row["startupReconciled"] = True
     retained_log = directory / ("worker.startup-" + str(attempt["attempt"]) + ".log")
     (directory / "worker.log").replace(retained_log)
@@ -218,9 +245,11 @@ def retain_eperm(ledger, process, error, directory, record, row, path, deadline)
 def retry_selected(binary, original, arguments, environment, directory, item, record, row, path, ledger, deadline):
     from fixtures import release_worker_eperm
     release_worker_eperm.verify_image(binary, original, row)
+    release_worker_eperm.unpublished(directory)
     if time.monotonic() >= deadline:
         raise RuntimeError("original startup deadline exhausted; EPERM retry refused")
     row.pop("startupFailure")
+    row["startupAttemptStartedMonotonic"] = time.monotonic()
     process = spawn_selected(arguments, environment, directory, row)
     save(path, record)
     try:
@@ -230,7 +259,8 @@ def retry_selected(binary, original, arguments, environment, directory, item, re
         raise
     success = {"attempt": 2, "outcome": "started", "pid": process.pid,
                "shellPid": json.loads((directory / "meta.json").read_bytes())["pid"],
-               "arguments": arguments, "deadlineMonotonic": deadline, "selectedImage": original}
+               "arguments": arguments, "deadlineMonotonic": deadline, "selectedImage": original,
+               "elapsedSeconds": time.monotonic() - row["startupAttemptStartedMonotonic"]}
     row["startupAttempts"].append(success)
     ledger[1]["events"][-1]["retry"] = success
     release_worker_eperm.persist(ledger, save)
@@ -244,7 +274,8 @@ def retain_retry_failure(ledger, process, error, directory, record, row, path, d
         retain_eperm(ledger, process, error, directory, record, row, path, deadline)
         return
     failure = {"attempt": 2, "outcome": "failed", "pid": process.pid, "startupFailure": row.get("startupFailure"),
-               "exception": {"type": type(error).__name__, "message": str(error)[:8192]}}
+               "exception": {"type": type(error).__name__, "message": str(error)[:8192]},
+               "elapsedSeconds": time.monotonic() - row["startupAttemptStartedMonotonic"]}
     row["startupAttempts"].append(failure)
     ledger[1]["events"][-1]["retry"] = failure
     release_worker_eperm.persist(ledger, save)
@@ -263,16 +294,15 @@ def wait_startup(directory, process, item, record, row, path, deadline=None):
 
 def wait_worker(directory, process, deadline=None):
     from fixtures import release_worker_evidence
-    for _ in range(120):
-        if deadline is not None and time.monotonic() >= deadline:
-            break
+    deadline = hang_deadline() if deadline is None else deadline
+    while time.monotonic() < deadline:
         if process.poll() is not None:
             log = release_worker_evidence.log_tail(directory / "worker.log")
             raise RuntimeError(f"retained worker exited: {directory}; {log}")
         if (directory / "sock").is_socket() and (directory / "meta.json").is_file():
             return
-        time.sleep(min(0.05, max(0, deadline - time.monotonic())) if deadline is not None else 0.05)
-    raise RuntimeError("retained worker did not start within the existing proof bound")
+        time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+    raise RuntimeError("retained worker did not publish socket and metadata before the startup hang cap")
 
 
 def start(state, config, selected, path, publish=False):
@@ -486,4 +516,6 @@ def main(arguments):
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    main(sys.argv[1:])
+    from fixtures import installed_clock
+    with installed_clock.inherited_handoff(watchdog=True):
+        main(sys.argv[1:])

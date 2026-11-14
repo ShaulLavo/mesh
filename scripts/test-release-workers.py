@@ -45,7 +45,7 @@ class ExactWorkerSelectionTests(unittest.TestCase):
             process = mock.Mock()
             process.poll.return_value = 1
             with self.assertRaisesRegex(RuntimeError, "reservation missing") as error:
-                release_workers.wait_worker(root, process)
+                release_workers.wait_worker(root, process, deadline=release_workers.time.monotonic() + 120)
             self.assertLess(len(str(error.exception)), 4300)
 
     def test_source_applicability_does_not_require_future_worker_binaries(self):

@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from fixtures import release_worker_eperm as eperm, release_worker_snapshot as snapshot, release_workers as workers
-from fixtures import release_worker_groups
+from fixtures import installed_clock, release_worker_groups
 
 
 LOG = 'worker: start /bin/sh: child-start path="/bin/sh" errno=1 stage=unavailable: fork/exec /bin/sh: operation not permitted\n'
@@ -39,6 +39,7 @@ class RetryControls(unittest.TestCase):
         self.errors = [RuntimeError("original startup EPERM"), None]
         self.failure_log = LOG
         self.addCleanup(mock.patch.stopall)
+        mock.patch.object(installed_clock, "parent_deadline", side_effect=lambda: time.monotonic_ns() + 1200_000_000_000).start()
         mock.patch.dict(os.environ, MESH_WORKER_EPERM_LEDGER=str(self.ledger)).start()
         mock.patch.object(workers, "spawn_selected", side_effect=self.spawn).start()
         mock.patch.object(workers, "wait_startup", side_effect=self.wait).start()
@@ -93,10 +94,67 @@ class RetryControls(unittest.TestCase):
         self.assertEqual(self.record["epermRecurrenceCount"], 1)
         self.assertEqual(Path(retained["events"][0]["failure"]["retainedLog"]["path"]).read_text(), LOG)
         self.assertIn("unavailable", retained["events"][0]["failure"]["startupFailure"]["workerAtObservation"])
+        self.assertGreaterEqual(self.row["startupElapsedSeconds"], 0)
+        self.assertGreaterEqual(retained["events"][0]["failure"]["elapsedSeconds"], 0)
+
+    def test_installed_start_arms_same_uncapped_policy_without_native_environment(self):
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(workers, "start_selected") as launch:
+            workers.start_one(None, None, {}, 0, "host", {}, self.path)
+        selected_ledger = launch.call_args.args[-1]
+        self.assertEqual(selected_ledger[0], self.path.with_suffix(".eperm.json"))
+        self.assertIsNone(selected_ledger[1]["cap"])
+
+    def test_cohort_ledger_reopen_preserves_count_and_corrupt_ledger_refuses_spawn(self):
+        path = self.path.with_suffix(".eperm.json")
+        path.write_text(json.dumps({"schema": 1, "cap": None, "events": [{"retained": True}]}))
+        with mock.patch.dict(os.environ, {}, clear=True), eperm.ledger(self.path) as selected:
+            self.assertEqual(selected[1]["events"], [{"retained": True}])
+        path.write_text("corrupt")
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(workers, "start_selected") as launch:
+            with self.assertRaises(ValueError):
+                workers.start_one(None, None, {}, 0, "host", {}, self.path)
+        launch.assert_not_called()
+
+    def test_published_metadata_refuses_retry_after_retaining_and_reaping_failure(self):
+        (self.root / "meta.json").write_text('{"pid":999}')
+        with self.assertRaisesRegex(RuntimeError, "published session state"):
+            self.launch()
+        self.assertEqual(len(self.calls), 1)
+        self.assertTrue(self.row["startupReconciled"])
+        self.assertEqual(json.loads(self.ledger.read_bytes())["events"][0]["failure"]["cleanup"]["worker"], "reaped")
+
+    def test_startup_wait_accepts_readiness_after_six_seconds(self):
+        process = mock.Mock()
+        process.poll.side_effect = [None, None]
+        with mock.patch.object(workers.time, "monotonic", side_effect=[0, 0, 7]), \
+                mock.patch.object(workers.time, "sleep"), \
+                mock.patch.object(Path, "is_socket", side_effect=[False, True]), \
+                mock.patch.object(Path, "is_file", return_value=True):
+            workers.wait_worker(self.root, process, deadline=120)
+        self.assertEqual(process.poll.call_count, 2)
+
+    def test_startup_hang_cap_rejects_without_retry_or_renewal(self):
+        process = mock.Mock()
+        with mock.patch.object(workers.time, "monotonic", return_value=121):
+            with self.assertRaisesRegex(RuntimeError, "startup hang cap"):
+                workers.wait_worker(self.root, process, deadline=120)
+        process.poll.assert_not_called()
+
+    def test_parent_deadline_clamps_startup_and_partial_io_cannot_renew_it(self):
+        with mock.patch.object(installed_clock, "parent_deadline", return_value=8_000_000_000) as parent, \
+                mock.patch.object(workers.time, "monotonic", return_value=1):
+            self.assertEqual(workers.hang_deadline(), 8)
+        parent.assert_called_once_with()
+        connection = mock.Mock()
+        connection.recv.side_effect = [b"a", b"b"]
+        with mock.patch.object(workers.time, "monotonic", side_effect=[7, 9]):
+            self.assertEqual(workers.read_exact(connection, 2, deadline=10), b"ab")
+        self.assertEqual(connection.settimeout.call_args_list, [mock.call(3), mock.call(1)])
 
     def test_normal_ci_three_distinct_workers_retry_successfully_without_count_gate(self):
         self.ledger.write_text(json.dumps({"schema": 1, "cap": None, "events": []}))
         for index in range(3):
+            (self.root / "meta.json").unlink(missing_ok=True)
             self.row = {"session": f"W{index:03}", "pid": 0, "shellPid": 0, "digest": self.digest, "protocol": 1, "version": "v0.1.226"}
             self.record = {"schema": 1, "workers": [], "observations": []}
             self.errors = [RuntimeError("original startup EPERM"), None]
