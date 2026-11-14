@@ -234,7 +234,23 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
           python3 scripts/fixtures/noindex_paths.py "$RUNNER_TEMP/mesh-native.noindex"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - name: Download native proof inputs
+        id: native-download
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-native-${{ matrix.key }}
+          path: ${{ runner.temp }}/mesh-native.noindex
+      - name: Remove incomplete native inputs before the single retry
+        if: steps.native-download.outcome == 'failure'
+        run: |
+          rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"
+          mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
+      - name: Retry native proof inputs once
+        if: steps.native-download.outcome == 'failure'
+        timeout-minutes: 2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-native-${{ matrix.key }}
           path: ${{ runner.temp }}/mesh-native.noindex
