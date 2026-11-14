@@ -125,3 +125,24 @@ def stop_failed(worker):
         if original is None or original != actual:
             raise RuntimeError("failed worker birth identity unavailable or changed during cleanup")
         os.kill(worker["pid"], signal.SIGKILL)
+
+
+def diagnostic_cleanup(path, required=False):
+    if not required and not path.exists():
+        return {"confirmed": True, "events": 0}
+    try:
+        value = json.loads(path.read_bytes())
+        if value.get("schema") != 1 or value.get("cap") != 2 or not isinstance(value.get("events"), list):
+            raise ValueError("invalid diagnostic ownership ledger")
+        snapshots = [snapshot_cleanup(event["failure"]["snapshot"]) for event in value["events"]]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return {"confirmed": False, "error": type(error).__name__ + ": " + str(error)}
+    return {"confirmed": all(row["confirmed"] for row in snapshots), "events": len(snapshots), "snapshots": snapshots}
+
+
+def snapshot_cleanup(snapshot):
+    commands = [name for name in ("kernelJournal", "kernelDmesg", "hostedSudoKernelJournal") if name in snapshot]
+    records = [{"command": name, "cleanup": snapshot[name].get("cleanup", {})} for name in commands]
+    confirmed = snapshot.get("cleanupConfirmed") is True and "kernelJournal" in commands and all(
+        row["cleanup"].get("reaped") is True and row["cleanup"].get("stdoutClosed") is True for row in records)
+    return {"confirmed": confirmed, "commands": records}

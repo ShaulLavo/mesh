@@ -195,6 +195,7 @@ check_source_contract() {
   python3 scripts/test-installed-spans.py
   python3 scripts/test-release-worker-evidence.py
   python3 scripts/test-release-worker-eperm.py
+  python3 scripts/test-native-eperm-policy.py
   python3 scripts/test-rollback-context.py
 
   [[ -x integration/reboot_simulation.sh ]] || fail 'reboot_simulation.sh is not executable'
