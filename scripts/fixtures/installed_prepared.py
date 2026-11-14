@@ -1,14 +1,26 @@
 """Prepare signed releases once; consume complete installed groups independently."""
+import errno
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
+import stat
 import subprocess
+from pathlib import Path
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_clock
-from fixtures import installed_cohort, installed_origin, installed_releases, installed_slices
-from fixtures import installed_waypoint, release_worker_groups, release_workers
+from fixtures import (
+    fleet_baselines,
+    installed_adoption,
+    installed_chain,
+    installed_clock,
+    installed_cohort,
+    installed_origin,
+    installed_releases,
+    installed_slices,
+    installed_waypoint,
+    release_worker_groups,
+    release_workers,
+)
 
 DOCUMENT_LIMIT = 4 << 20
 
@@ -119,10 +131,34 @@ def prepare_reader_packets(releases, groups):
     return packets
 
 
-def copy_external(source, name, destination, files):
+def copy_immutable(source, target):
+    """Link only closed producer assets whose remaining lifetime is reads/unlink.
+
+    External tools and consumer scratch retain independent copies: neither has
+    the producer's no-further-writes guarantee, including permission changes.
+    """
+    before = Path(source).lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("immutable prepared asset is not a regular file")
+    try:
+        os.link(source, target, follow_symlinks=False)
+    except OSError as error:
+        if error.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EMLINK):
+            raise
+        shutil.copy2(source, target)
+    after = Path(source).lstat()
+    fields = ("st_dev", "st_ino", "st_size", "st_mode", "st_mtime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in fields):
+        raise ValueError("immutable prepared asset changed during export")
+
+
+def copy_external(source, name, destination, files, *, immutable=False):
     target = destination / name
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    if immutable:
+        copy_immutable(source, target)
+    else:
+        shutil.copy2(source, target)
     files[name] = {"sha256": file_digest(target), "size": target.stat().st_size, "executable": bool(target.stat().st_mode & 0o111)}
     return name
 
@@ -130,7 +166,7 @@ def copy_external(source, name, destination, files):
 def copy_asset(root, name, destination, files):
     label = name.as_posix()
     if label not in files:
-        copy_external(local_file(root, label), label, destination, files)
+        copy_external(local_file(root, label), label, destination, files, immutable=True)
     return label
 
 

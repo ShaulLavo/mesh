@@ -1,15 +1,19 @@
 """Offline prepared release transport, exact slices and consumer routing controls."""
 import ast
+import errno
 import json
 import os
-from pathlib import Path
+import shutil
+import stat
 import tempfile
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from fixtures import installed_prepared as prepared, installed_slices as slices
+from fixtures import installed_prepared as prepared
 from fixtures import installed_releases, installed_waypoint, release_worker_groups
+from fixtures import installed_slices as slices
 
 
 def selection(profile="chain-none", groups=(0,), readers=()):
@@ -118,19 +122,32 @@ class PreparedTest(unittest.TestCase):
         self.assertEqual(identity, actual)
         self.assertEqual((self.output / "prepared-descriptor.json").read_bytes(), (self.bundle / "prepared.json").read_bytes())
         self.assertFalse(any(name.startswith(("state/", "build-cache/")) or name == "issuer.key" for name in descriptor["files"]))
+        for name in descriptor["files"]:
+            if name == "worker-probe":
+                continue
+            self.assertTrue(os.path.samefile(self.root / name, self.bundle / name), name)
+            self.assertEqual(stat.S_IMODE((self.root / name).stat().st_mode), stat.S_IMODE((self.bundle / name).stat().st_mode))
+        shutil.rmtree(self.root)
+        prepared.validate_files(self.bundle, descriptor)
         relocated = self.base / "relocated"
         self.bundle.rename(relocated)
         root = self.base / "consumer"
         root.mkdir()
         with patch.object(installed_releases.Releases, "build", side_effect=AssertionError("consumer built")), \
                 patch.object(installed_releases.Releases, "prove", side_effect=AssertionError("consumer ran native preparation")):
-            releases, value, loaded, selected, pair, previous, groups = prepared.load(
+            releases, _value, loaded, selected, _pair, previous, groups = prepared.load(
                 root, self.output, "linux/amd64", relocated, selection(), None)
         self.assertEqual(loaded, identity)
         self.assertEqual([release_worker_groups.public_group(group) for group in groups], descriptor["groups"])
         self.assertTrue(Path(releases.builds[installed_releases.VERSIONS[0]]["path"]).is_relative_to(root))
         self.assertEqual(previous["executable"].read_bytes(), b"actual baseline")
         self.assertEqual(selected, selection())
+        consumer_image = Path(releases.builds[installed_releases.VERSIONS[0]]["path"])
+        bundled_image = relocated / descriptor["builds"][installed_releases.VERSIONS[0]]["path"]
+        self.assertFalse(os.path.samefile(consumer_image, bundled_image))
+        consumer_image.write_bytes(b"consumer mutation")
+        consumer_image.chmod(0o600)
+        prepared.validate_files(relocated, descriptor)
 
     def test_changed_asset_source_or_partition_rejects_before_server(self):
         self.export()
@@ -355,6 +372,82 @@ class StructureTest(unittest.TestCase):
         for module in (prepared, slices):
             tree = ast.parse(Path(module.__file__).read_text())
             self.assertLessEqual(depth(tree), 3, module.__file__)
+
+
+class ImmutableAssetTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="immutable-prepared-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source, self.target = self.root / "source", self.root / "target"
+        self.source.write_bytes(b"exact executable bytes\x00\xff")
+        self.source.chmod(0o751)
+
+    def test_link_keeps_one_payload_and_survives_source_removal(self):
+        with patch.object(prepared.shutil, "copy2", side_effect=AssertionError("duplicate payload")):
+            prepared.copy_immutable(self.source, self.target)
+        self.assertTrue(os.path.samefile(self.source, self.target))
+        self.assertEqual(self.source.stat().st_nlink, 2)
+        expected = self.source.read_bytes()
+        self.source.unlink()
+        self.assertEqual(self.target.read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE(self.target.stat().st_mode), 0o751)
+
+    def test_cross_device_and_unsupported_link_copy_once_with_exact_mode(self):
+        for code in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EMLINK):
+            self.check_fallback(code)
+
+    def check_fallback(self, code):
+        target = self.root / str(code)
+        with patch.object(prepared.os, "link", side_effect=OSError(code, "link unavailable")), \
+                patch.object(prepared.shutil, "copy2", wraps=shutil.copy2) as copied:
+            prepared.copy_immutable(self.source, target)
+        copied.assert_called_once_with(self.source, target)
+        self.assertFalse(os.path.samefile(self.source, target))
+        self.assertEqual(target.read_bytes(), self.source.read_bytes())
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o751)
+
+    def test_unexpected_io_errors_and_expiry_never_enter_copy_fallback(self):
+        errors = [OSError(code, "failed link") for code in (errno.ENOSPC, errno.EIO, errno.EACCES)]
+        errors.append(prepared.installed_clock.ClockExpired("original clock expiry"))
+        for error in errors:
+            with patch.object(prepared.os, "link", side_effect=error), patch.object(prepared.shutil, "copy2") as copied, \
+                    self.assertRaises(type(error)) as caught:
+                prepared.copy_immutable(self.source, self.target)
+            self.assertIs(caught.exception, error)
+            copied.assert_not_called()
+
+    def test_fallback_expiry_is_not_retried(self):
+        error = prepared.installed_clock.ClockExpired("copy expiry")
+        with patch.object(prepared.os, "link", side_effect=OSError(errno.EXDEV, "cross device")), \
+                patch.object(prepared.shutil, "copy2", side_effect=error) as copied, \
+                self.assertRaises(prepared.installed_clock.ClockExpired) as caught:
+            prepared.copy_immutable(self.source, self.target)
+        self.assertIs(caught.exception, error)
+        copied.assert_called_once()
+
+    def test_existing_destination_is_preserved_and_symlink_source_is_rejected(self):
+        self.target.write_bytes(b"prior evidence")
+        with patch.object(prepared.shutil, "copy2") as copied, self.assertRaises(FileExistsError):
+            prepared.copy_immutable(self.source, self.target)
+        copied.assert_not_called()
+        self.assertEqual(self.target.read_bytes(), b"prior evidence")
+        link = self.root / "symlink"
+        link.symlink_to(self.source)
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            prepared.copy_immutable(link, self.root / "not-created")
+
+    def test_writer_during_export_is_rejected_without_publishing_identity(self):
+        link = os.link
+
+        def mutate(source, target, **kwargs):
+            link(source, target, **kwargs)
+            source.write_bytes(b"unexpected writer")
+
+        files = {}
+        with patch.object(prepared.os, "link", side_effect=mutate), self.assertRaisesRegex(ValueError, "changed during export"):
+            prepared.copy_external(self.source, "target", self.root, files, immutable=True)
+        self.assertEqual(files, {})
 
 
 def depth(node, current=0):
