@@ -1,6 +1,6 @@
 # Measured installed clocks
 
-Status: Approved for the exact 36 indexed operation-span workloads after
+Status: Approved for the exact 37 indexed operation-span workloads after
 independent numerical and code reviews on November 13–14, 2026. Numerical
 eligibility does not establish successful frozen or native acceptance.
 
@@ -39,8 +39,12 @@ product/I/O checks, five-second observations and soaks, finite cleanup reserves
 and the 30-minute job ceiling are unchanged. Runtime span deadlines never reset
 on nested operations or resumed leaves.
 
-Only linux-arm64-chain-consume-none remains unindexed pending a completed clean
-measurement and independent review. The original failed records, including the
-frozen smoke setup overrun, remain failures. Publishing a new authoritative
+The last ARM64 chain-none consumer was independently approved from successful
+run 43524814720, attempt 1, actual harness e94fb263. Its 53 completed leaves form
+nine spans with five separate guards. Command 301.788, external 70.592 and reserve
+60 total 432.380 seconds, within its 900-second admission and 15-minute timeout.
+The review is retained at split-budget-reducer/arm64-last-43524814720/REVIEW.md.
+All 37 workload slots are indexed. The original failed records, including the
+frozen smoke setup and signer-build overruns, remain failures. Publishing a new authoritative
 worker registry requires matching recalibration; old sample workloads are never
 relabeled to admit a newly published worker.

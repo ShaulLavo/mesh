@@ -95,7 +95,7 @@ class GrammarTest(unittest.TestCase):
 
     def test_reviewed_activated_files_load_and_unreviewed_copy_stays_blocked(self):
         index = json.loads((controls.ROOT / "index.json").read_text())["plans"]
-        self.assertEqual(len(index), 36)
+        self.assertEqual(len(index), 37)
         for name, entry in index.items():
             plan = clocks.load_plan(controls.ROOT / entry["path"])
             self.assertNotIn("TEST ONLY", plan.eligibility_review)

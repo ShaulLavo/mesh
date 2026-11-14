@@ -201,14 +201,16 @@ class FrozenBudgetTests(unittest.TestCase):
         with patch.dict(os.environ, MESH_CATALOG_EVIDENCE="1"), self.assertRaisesRegex(ValueError, "workload differs from actual invocation"):
             clocks.from_arguments(self.args, "linux/amd64")
 
-    def test_unmeasured_arm64_chain_none_stays_absent(self):
+    def test_all_37_reviewed_workloads_are_indexed(self):
         plans = budgets.read_index(budgets.INDEX)
-        self.assertEqual(len(plans), 36)
-        missing = ("linux-arm64-chain-consume-none",)
-        for key in missing:
-            self.assertNotIn(key, plans)
-            with self.assertRaisesRegex(ValueError, "no independently approved frozen plan"):
-                budgets.select_plan(budgets.INDEX, key, {})
+        keys = [platform.replace("/", "-") for platform in budgets.PLATFORMS]
+        oldest = {key + "-oldest" + ("-catalog" if key.startswith("linux-") else "") for key in keys}
+        support = {key + "-" + profile for key in keys for profile in ("fresh", "adoption-all", "adoption-interrupt")}
+        cases = [key + "-" + mode for key in keys for mode in ("chain", "waypoint")]
+        physical = {case + "-" + role for case in cases for role in ("prepare", "consume-none", "consume-first", "consume-final")}
+        expected = oldest.union(support, physical, {"linux-amd64-order"})
+        self.assertEqual(len(expected), 37)
+        self.assertEqual(set(plans), expected)
 
     def test_reviewed_order_plan_preserves_its_complete_admission(self):
         key, workload = budgets.selection("linux/amd64", "order")

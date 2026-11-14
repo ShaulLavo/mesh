@@ -108,6 +108,9 @@
     },
     "darwin-arm64-chain-consume-none": {
       "path": "darwin-arm64-chain-consume-none.json"
+    },
+    "linux-arm64-chain-consume-none": {
+      "path": "linux-arm64-chain-consume-none.json"
     }
   }
 }
