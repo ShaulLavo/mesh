@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline controls for hosted prepared selections, intake and fail-closed cleanup."""
 import hashlib
+import fnmatch
 import io
 import importlib.util
 import itertools
@@ -392,6 +393,28 @@ class WorkflowControls(unittest.TestCase):
         self.assertIn("PRODUCER_SOURCE: ${{ inputs.worker_artifact_source }}", producer)
         for name in ("prepare", "consume"):
             self.assertIn("ref: ${{ inputs.harness_source }}", job(PREPARED, name))
+
+    def test_small_evidence_uploads_keep_descriptors_without_public_payload(self):
+        for role in ("prepare", "consume"):
+            with self.subTest(role=role):
+                self.check_small_upload(role)
+
+    def check_small_upload(self, role):
+        upload = job(PREPARED, role).split("        if: always()\n        with:\n          name: installed-", 1)[1]
+        paths = upload.split("          path: |\n", 1)[1].split("          compression-level:", 1)[0]
+        patterns = [line.strip().replace("${{ runner.temp }}/", "") for line in paths.splitlines()]
+        names = ("cohort-proof/fixture-ownership.json", "cohort-proof/fixture-clock.json",
+                 "cohort-proof/prepared-descriptor.json", "cohort-control/tools-cleanup-decision.json",
+                 "prepared.noindex/prepared.json", "prepared.noindex/prepared-workers.json", "prepared.noindex/provenance.json")
+        for name in names:
+            self.assertTrue(self.upload_matches(name, patterns), name)
+        payloads = ("prepared.noindex/workers/hash/mesh", "prepared.noindex/releases/version/mesh_linux_arm64.tar.gz",
+                    "prepared.noindex/signer-test", "prepared-transfer.noindex/bundle.tar")
+        for name in payloads:
+            self.assertFalse(self.upload_matches(name, patterns), name)
+
+    def upload_matches(self, name, patterns):
+        return any(fnmatch.fnmatchcase(name, pattern) or name.startswith(pattern + "/") for pattern in patterns)
 
     def test_one_case_mapping_rejects_unknown_context_and_inventory_mismatch(self):
         for platform, mode in (("linux/386", "chain"), ("linux/amd64", "oldest"), ("", "waypoint")):

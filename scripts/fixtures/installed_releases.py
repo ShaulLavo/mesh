@@ -281,8 +281,12 @@ class Releases:
 
     def record_ownership(self, signer_absent=None):
         absent = self.signer is None or self.signer.poll() is not None
-        write_json(self.output / "fixture-ownership.json", {"root": str(self.root), "signerAbsent": absent if signer_absent is None else signer_absent,
+        path = self.output / "fixture-ownership.json"
+        temporary = path.with_suffix(".tmp")
+        # A completion alarm must leave the last committed ownership record readable.
+        write_json(temporary, {"root": str(self.root), "signerAbsent": absent if signer_absent is None else signer_absent,
                    "transitionsAbsent": self.transition_clean})
+        temporary.replace(path)
 
     def transition_clock(self, directory, deadline_ns):
         if self.clock is None:

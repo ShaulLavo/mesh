@@ -162,8 +162,9 @@ jobs:
             ${{ runner.temp }}/installed-job-clock.json
             ${{ runner.temp }}/cohort-control
             ${{ runner.temp }}/cohort-proof
-            ${{ runner.temp }}/prepared.noindex
-            ${{ runner.temp }}/prepared-transfer.noindex
+            ${{ runner.temp }}/prepared.noindex/prepared.json
+            ${{ runner.temp }}/prepared.noindex/prepared-workers.json
+            ${{ runner.temp }}/prepared.noindex/provenance.json
           compression-level: 0
           retention-days: 7
       - name: Record external interval through uploads
@@ -235,8 +236,9 @@ jobs:
             ${{ runner.temp }}/installed-job-clock.json
             ${{ runner.temp }}/cohort-control
             ${{ runner.temp }}/cohort-proof
-            ${{ runner.temp }}/prepared.noindex
-            ${{ runner.temp }}/prepared-transfer.noindex
+            ${{ runner.temp }}/prepared.noindex/prepared.json
+            ${{ runner.temp }}/prepared.noindex/prepared-workers.json
+            ${{ runner.temp }}/prepared.noindex/provenance.json
           compression-level: 0
           retention-days: 7
       - name: Record external interval through upload

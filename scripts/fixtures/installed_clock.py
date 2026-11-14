@@ -266,7 +266,8 @@ def span_reference(observed, part, workload):
     return SampleRef(provenance | {"clock_span": endpoints}, workload, part["elapsed_ns"], True, True)
 
 
-class ClockExpired(TimeoutError):
+class ClockExpired(RuntimeError):
+    # Deadline signals must bypass filesystem-error recovery in shutil and intake.
     pass
 
 

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import tempfile
 import sys
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from fixtures import installed_span_controls as span_controls
+from fixtures import installed_prepared
 from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host, installed_native, installed_accounts, installed_paths, native_services
 
 
@@ -820,6 +822,101 @@ class ClockTest(unittest.TestCase):
             installed_order.teardown(SimpleNamespace(close=lambda: None), [], {"passed": True}, self.root, lambda error: installed_order.latch_failure(self.root, descriptor, error))
         self.assertIs(caught.exception, failure)
         self.assertEqual(json.loads(ticket.read_text())["failure_ns"], 100 * clocks.SECOND)
+
+
+class CompletionEvidenceTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="completion-control-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.output = self.root / "cohort-proof"
+        self.output.mkdir()
+        self.now = Time()
+
+    def test_completion_alarm_preserves_committed_ownership_and_partial_record(self):
+        for prefix in (b"", b'{"root":'):
+            with self.subTest(partial=prefix):
+                self.interrupted_ownership(prefix)
+
+    def interrupted_ownership(self, prefix):
+        clock = clocks.Clock(diagnostic(), now=self.now)
+        with clock.activate():
+            self.interrupt_close(clock, prefix)
+        owned = json.loads((self.output / "fixture-ownership.json").read_bytes())
+        self.assertIs(owned["signerAbsent"], False)
+        self.assertEqual((self.output / "fixture-ownership.tmp").read_bytes(), prefix)
+        (self.output / "fixture-clock.json").write_text('{"provenance":{"retained_root":null}}')
+        with self.assertRaisesRegex(RuntimeError, "ownership unconfirmed"):
+            clocks.cleanup_inputs(self.root)
+        decision = json.loads((self.root / "cohort-control/tools-cleanup-decision.json").read_bytes())
+        self.assertIs(decision["inputsMayBeRemoved"], False)
+        self.assertEqual(decision["reason"], "fixture ownership unconfirmed")
+
+    def interrupt_close(self, clock, prefix):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.output, prepared=True, clock_plan=clock.plan)
+        releases.record_ownership(signer_absent=False)
+        releases.signer = Mock()
+        releases.signer.poll.return_value = 0
+        temporary = self.output / "fixture-ownership.tmp"
+        write = Path.write_bytes
+        def interrupted(path, data):
+            if path not in (temporary, self.output / "fixture-ownership.json"):
+                return write(path, data)
+            write(path, prefix)
+            self.now.value = clock.effective_deadline()
+            clock.check()
+        with patch.object(Path, "write_bytes", interrupted), self.assertRaisesRegex(clocks.ClockExpired, "completion#1"):
+            releases.close()
+        self.assertFalse(releases.closed)
+        self.assertEqual(clock.failures[0]["type"], "ClockExpired")
+
+    def test_interrupted_commit_keeps_previous_ownership(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.output)
+        releases.record_ownership(signer_absent=False)
+        error = clocks.ClockExpired("completion commit expired")
+        with patch.object(Path, "replace", side_effect=error), self.assertRaises(clocks.ClockExpired) as raised:
+            releases.close()
+        self.assertIs(raised.exception, error)
+        self.assertIs(json.loads((self.output / "fixture-ownership.json").read_bytes())["signerAbsent"], False)
+        self.assertIs(json.loads((self.output / "fixture-ownership.tmp").read_bytes())["signerAbsent"], True)
+
+    def test_successful_completion_commits_observed_absence(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.output)
+        releases.record_ownership(signer_absent=False)
+        releases.close()
+        self.assertTrue(releases.closed)
+        self.assertEqual(json.loads((self.output / "fixture-ownership.json").read_bytes()),
+                         {"root": str(self.root), "signerAbsent": True, "transitionsAbsent": True})
+        self.assertFalse((self.output / "fixture-ownership.tmp").exists())
+
+    def test_export_copy_preserves_deadline_identity_and_message(self):
+        for sent in ((), (1,)):
+            with self.subTest(sent=sent):
+                self.interrupt_export_copy(sent)
+
+    def interrupt_export_copy(self, sent):
+        source, target = self.root / "worker", self.root / "copied-worker"
+        source.write_bytes(b"retained worker")
+        files = {}
+        error = clocks.ClockExpired("installed fixture clock expired at prepared-export:#1")
+        with patch.object(shutil, "_USE_CP_SENDFILE", True), patch.object(shutil, "_USE_CP_COPY_FILE_RANGE", False, create=True), \
+                patch.object(shutil.os, "sendfile", side_effect=list(sent) + [error]), self.assertRaises(clocks.ClockExpired) as raised:
+            installed_prepared.copy_external(source, target.name, self.root, files)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(str(error), "installed fixture clock expired at prepared-export:#1")
+        self.assertEqual(files, {})
+        self.assertTrue(target.exists())
+
+    def test_root_removal_preserves_deadline_and_remaining_files(self):
+        owned = self.root / "owned"
+        owned.mkdir()
+        (owned / "remaining").write_bytes(b"partial cleanup evidence")
+        error = clocks.ClockExpired("installed fixture clock expired at completion#2")
+        with patch.object(shutil.os, "unlink", side_effect=error), self.assertRaises(clocks.ClockExpired) as raised:
+            shutil.rmtree(owned)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(str(error), "installed fixture clock expired at completion#2")
+        self.assertTrue((owned / "remaining").exists())
 
 
 class NativeOwnershipTest(unittest.TestCase):
