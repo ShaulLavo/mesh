@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import shutil
+import shlex
 import subprocess
 import tempfile
 import sys
@@ -167,9 +168,6 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(clock.workload["publishedRegistrySha256"], "a" * 64)
 
     def prepared_arguments(self):
-        origin = self.root / "job-origin.json"
-        origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "run", "job": "job",
-                                      "admission_ns": 900 * clocks.SECOND}))
         bundle = self.root / "bundle"
         bundle.mkdir()
         (bundle / "prepared.json").write_text(json.dumps({"schema": 1, "native": "linux/amd64", "host": {"name": "pc"},
@@ -195,7 +193,7 @@ class ClockTest(unittest.TestCase):
 
     def test_job_finish_uses_explicit_support_fixture_clock(self):
         origin = self.root / "job-origin.json"
-        origin.write_text(json.dumps({"origin_ns": clocks.SECOND, "admission_ns": 900 * clocks.SECOND}))
+        origin.write_text(json.dumps({"origin_ns": clocks.SECOND}))
         fixture = self.root / "fresh-clock.json"
         fixture.write_text(json.dumps({"origin_ns": 2 * clocks.SECOND, "end_ns": 3 * clocks.SECOND,
                                        "duration_record_only": True}))
@@ -382,12 +380,18 @@ class ClockTest(unittest.TestCase):
         self.assertTrue(wait.call_args.kwargs["require_absent"])
         ownership.verify.assert_called_once()
 
+    def test_group_probe_uses_its_absolute_cleanup_deadline(self):
+        deadline = self.now() + 15 * clocks.SECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), patch.object(clocks.subprocess, "run", return_value=Mock(stdout="")) as probe:
+            self.assertFalse(clocks.group_alive(123, deadline))
+        self.assertEqual(probe.call_args.kwargs["timeout"], 15)
+
     def test_slow_term_probe_still_escalates_inside_cleanup_deadline(self):
         process, ownership = Mock(pid=123), Mock()
         ownership.live.return_value = {}
         deadline = self.now() + 20 * clocks.SECOND
         states = iter((True, False))
-        def slow_alive(_group):
+        def slow_alive(_group, _deadline=None):
             self.now.advance(2010 * clocks.MILLISECOND)
             return next(states)
         with patch.object(clocks.time, "monotonic_ns", self.now), \
@@ -402,7 +406,7 @@ class ClockTest(unittest.TestCase):
     def test_expired_grace_does_not_confirm_a_remaining_process_group(self):
         process = Mock(pid=123)
         deadline = self.now() + 20 * clocks.SECOND
-        def slow_alive(_group):
+        def slow_alive(_group, _deadline=None):
             self.now.advance(2010 * clocks.MILLISECOND)
             return True
         with patch.object(clocks.time, "monotonic_ns", self.now), \
@@ -582,7 +586,7 @@ class ClockTest(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired) as caught:
                 installed_account_run.recover(ticket)
         self.assertIs(caught.exception, failure)
-        self.assertEqual(process.wait.call_args_list[0].kwargs["timeout"], 28)
+        self.assertEqual(process.wait.call_args_list[0].kwargs["timeout"], 58)
         self.assertIn("signal-recovery", signal_owner.call_args.args[0])
         self.assertLessEqual(signal_owner.call_args.kwargs["timeout"], 2)
 
@@ -745,6 +749,84 @@ class OutcomePolicyTest(unittest.TestCase):
         for value in ("0", "-1", "not-an-integer"):
             with patch.dict(os.environ, {clocks.HANDOFF_ENV: value}), self.assertRaises(ValueError), clocks.inherited_handoff():
                 self.fail("invalid parent dispatched work")
+
+
+    def test_direct_script_import_and_negative_cleanup_need_no_pythonpath(self):
+        source = Path(clocks.__file__).resolve()
+        environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        result = subprocess.run([sys.executable, "-B", "-c", "import runpy,sys; runpy.run_path(sys.argv[1], run_name='import_probe')", str(source)],
+                                env=environment, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tempfile.TemporaryDirectory(prefix="outcome-cleanup-cli-") as directory:
+            root = Path(directory)
+            (root / "cohort-proof").mkdir()
+            (root / "cohort-proof/fixture-ownership.json").write_text('{"signerAbsent":false,"transitionsAbsent":false}')
+            result = subprocess.run([sys.executable, "-B", str(source), "cleanup-inputs", str(root)],
+                                    env=environment, capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(json.loads((root / "cohort-control/tools-cleanup-decision.json").read_text())["inputsMayBeRemoved"])
+
+
+
+class CleanupHandoffTest(unittest.TestCase):
+    def test_nested_cleanup_reuses_one_deadline_after_work_expired(self):
+        now = Time()
+        token = clocks.HANDOFF.set(now() - 1)
+        self.addCleanup(clocks.HANDOFF.reset, token)
+        with patch.object(clocks.time, "monotonic_ns", now), clocks.cleanup_handoff() as deadline:
+            self.assertEqual(deadline, now() + clocks.CLEANUP_SECONDS * clocks.SECOND)
+            now.advance(clocks.SECOND)
+            with clocks.cleanup_handoff() as nested:
+                self.assertEqual(nested, deadline)
+                self.assertEqual(clocks.parent_deadline(), deadline)
+        self.assertEqual(clocks.HANDOFF.get(), now() - clocks.SECOND - 1)
+
+    def test_direct_cohort_stop_gets_cleanup_context_after_work_expired(self):
+        from fixtures import installed_cohort
+        cohort = installed_cohort.Cohort.__new__(installed_cohort.Cohort)
+        cohort.record = Path("/unused-cohort")
+        token = clocks.HANDOFF.set(1)
+        observed = []
+        try:
+            with patch.object(installed_cohort.release_workers, "stop", side_effect=lambda record: observed.append((record, clocks.timeout()))):
+                cohort.close()
+        finally:
+            clocks.HANDOFF.reset(token)
+        self.assertEqual(observed[0][0], cohort.record)
+        self.assertGreater(observed[0][1], 0)
+        self.assertLessEqual(observed[0][1], clocks.CLEANUP_SECONDS)
+
+    def test_shell_trap_passes_one_cleanup_endpoint_and_preserves_exit(self):
+        with tempfile.TemporaryDirectory(prefix="cleanup-handoff-") as temporary:
+            self.shell_trap(Path(temporary))
+
+    def shell_trap(self, root):
+        transition, output = root / "transition", root / "evidence"
+        transition.mkdir()
+        output.mkdir()
+        (transition / "cohort.json").write_text('{}')
+        deadline = clocks.time.monotonic_ns() + 60 * clocks.SECOND
+        handoff = root / "parent.json"
+        handoff.write_text(json.dumps({"cleanup_deadline_ns": deadline}))
+        receipt, tool = root / "stop.json", root / "stop.py"
+        tool.write_text("from fixtures import installed_clock as c; import json,os; from pathlib import Path; " +
+                        "exec('with c.inherited_handoff(watchdog=True):\\n Path(os.environ[\"STOP_RECEIPT\"]).write_text(json.dumps({\"deadline\":c.parent_deadline()}))')")
+        source = (Path(clocks.__file__).parents[1] / "prove-release-transition.sh").read_text()
+        cleanup = source.split("cleanup() {", 1)[1].split("trap cleanup EXIT", 1)[0]
+        script = "set -euo pipefail\ncleanup() {" + cleanup + "trap cleanup EXIT\n"
+        values = {"test_root": transition, "output_directory": output, "cohort_tool": tool,
+                  "cohort": transition / "cohort.json", "state": transition / "state"}
+        setup = "\n".join(key + "=" + shlex.quote(str(value)) for key, value in values.items())
+        setup += "\nold_daemon= candidate_daemon= client= session= shell_pid= worker_pid= helper_pid= original_worker= original_shell=\n"
+        setup += "discover_owned_session_processes() { :; }\n"
+        environment = os.environ | {"PYTHONPATH": str(Path(clocks.__file__).parents[1]), "PYTHONDONTWRITEBYTECODE": "1",
+            clocks.HANDOFF_ENV: "1", "MESH_INSTALLED_CLOCK_HANDOFF": str(handoff), "STOP_RECEIPT": str(receipt)}
+        result = subprocess.run(["bash", "-c", setup + script + "exit 7\n"], env=environment,
+                                capture_output=True, text=True, timeout=180)
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(json.loads(receipt.read_text())["deadline"], deadline)
+        self.assertFalse(transition.exists())
 
 
 class CompletionEvidenceTest(unittest.TestCase):

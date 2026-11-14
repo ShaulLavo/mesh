@@ -154,4 +154,5 @@ class Cohort:
             primary.add_note("catalog evidence unavailable: " + type(error).__name__)
 
     def close(self):
-        release_workers.stop(self.record)
+        with installed_clock.cleanup_handoff():
+            release_workers.stop(self.record)

@@ -105,6 +105,8 @@ cap. Operations and child processes share the original absolute monotonic
 work deadline. `fixtures.installed_clock.parent_deadline()` returns nanoseconds;
 `timeout()` returns remaining seconds. `handoff_environment()` passes the deadline
 through `MESH_FIXTURE_DEADLINE_NS`; child dispatch enters `inherited_handoff()`.
+Cleanup uses `cleanup_handoff()` to replace an expired work deadline once for
+the teardown owner and pass the same endpoint to every child stop.
 Polling may use shorter intervals, and process termination uses a short TERM
 grace before KILL. Neither grants a new work deadline. Product expiry,
 cancellation and predecessor soak rules retain their functional checks.

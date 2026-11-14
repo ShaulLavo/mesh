@@ -55,8 +55,12 @@ cleanup() {
     mkdir -p "$output_directory/failures" && cp "$cohort" "$output_directory/failures/${source_version:-unknown}.cohort.json" ||
       echo 'transition proof: could not retain failed cohort startup evidence' >&2
   fi
-  local cleanup_status=0
-  [[ ! -f $cohort ]] || python3 "$cohort_tool" stop "$cohort" || cleanup_status=1
+  local cleanup_status=0 cleanup_deadline_ns
+  cleanup_deadline_ns=$(python3 -m fixtures.installed_clock cleanup-deadline) || cleanup_status=1
+  if [[ -n $cleanup_deadline_ns ]]; then
+    export MESH_FIXTURE_DEADLINE_NS=$cleanup_deadline_ns
+    [[ ! -f $cohort ]] || python3 "$cohort_tool" stop "$cohort" || cleanup_status=1
+  fi
   discover_owned_session_processes
   [[ ! -f $test_root/managed-daemon.pid ]] || old_daemon=$(cat "$test_root/managed-daemon.pid")
   [[ -z $helper_pid ]] || kill -9 "$helper_pid" 2>/dev/null || true
@@ -72,16 +76,17 @@ import subprocess
 import sys
 import time
 
+from fixtures import installed_clock
+
 root, *pids = sys.argv[1:]
-for _ in range(120):
-    result = subprocess.check_output(["ps", "-axww", "-o", "pid=,stat=,command="], text=True, timeout=5)
+deadline = int(__import__("os").environ["MESH_FIXTURE_DEADLINE_NS"])
+while True:
+    result = subprocess.check_output(["ps", "-axww", "-o", "pid=,stat=,command="], text=True, timeout=installed_clock.remaining_until(deadline, installed_clock.CLEANUP_SECONDS))
     owned = [line for line in result.splitlines() if line.split()[0] in pids and not line.split()[1].startswith("Z")]
     workers = [line for line in result.splitlines() if "session-worker" in line and root + "/state/s/" in line]
     if not owned and not workers:
         break
-    time.sleep(0.025)
-else:
-    raise RuntimeError("native group process cleanup unconfirmed")
+    time.sleep(installed_clock.remaining_until(deadline, 0.025))
 PYCLEAN
   if (( cleanup_status != 0 )); then
     echo "transition proof: cleanup unconfirmed; retained $test_root" >&2

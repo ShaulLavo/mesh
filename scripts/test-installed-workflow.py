@@ -134,6 +134,17 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(command.kwargs["timeout"], installed_clock.HANG_SECONDS)
         self.assertEqual(timeout.call_count, 2)
 
+    def test_complete_native_support_matrix_survives_timing_policy_removal(self):
+        adoption = job(CATCHUP, "native-adoption")
+        fresh = job(CATCHUP, "fresh-managed")
+        self.assertEqual(matrix_values(adoption, "scenario"), ["all", "interrupt"])
+        self.assertEqual(matrix_values(adoption, "platform"), list(workflow.RUNNERS))
+        for source in (adoption, fresh):
+            self.assertEqual(re.findall(r"^          - platform: (.+)$", source, re.M), list(workflow.RUNNERS))
+        self.assertIn('if [[ -n $PAIRED_SCENARIO ]]; then extra=(--scenario "$PAIRED_SCENARIO"); fi', adoption)
+        self.assertIn("--fresh-managed", fresh)
+
+
     def test_three_profiles_cover_actual_partition_and_waypoint_readers_once(self):
         for mode, count in (("chain", 2), ("waypoint", 7)):
             directory = self.root / mode
@@ -393,6 +404,47 @@ class WorkflowControls(unittest.TestCase):
         run.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", None, Path("/bundle"), Path("/slice"))
 
 
+    def test_prepared_cli_forwards_only_to_the_selected_worker_role(self):
+        spec = importlib.util.spec_from_file_location("prepared_budget_proof", ROOT / "scripts/prove-installed-catchup.py")
+        proof = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(proof)
+        worker = SimpleNamespace(run_prepare=unittest.mock.Mock(), run_slice=unittest.mock.Mock())
+        args = SimpleNamespace(export_prepared=Path("/export"), prepared_releases=None, source_host="pc",
+            worker_registry=Path("/registry"), worker_probe=Path("/probe"), installed_slice=Path("/slice"),
+            native_helper=unittest.mock.Mock(), format_waypoint=True)
+        import fixtures
+        with patch.dict(sys.modules, {"fixtures.installed_prepared": worker}), \
+                patch.object(fixtures, "installed_prepared", worker, create=True):
+            proof.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64")
+            self.assertEqual(worker.run_prepare.call_args.args[3]["name"], "pc")
+            self.assertTrue(worker.run_prepare.call_args.kwargs["format_waypoint"])
+            self.assertEqual(worker.run_prepare.call_args.kwargs["preparer"], args.native_helper.resolve.return_value)
+            worker.run_slice.assert_not_called()
+            args.export_prepared, args.prepared_releases = None, Path("/bundle")
+            proof.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64")
+            worker.run_slice.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", args.native_helper.resolve.return_value,
+                                                     Path("/bundle"), Path("/slice"))
+
+
+    def test_prepared_cli_rejects_incomplete_and_mixed_roles(self):
+        spec = importlib.util.spec_from_file_location("prepared_argument_proof", ROOT / "scripts/prove-installed-catchup.py")
+        proof = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(proof)
+        args = {"export_prepared": None, "prepared_releases": Path("/bundle"), "installed_slice": Path("/slice"),
+            "installed_adoption": True, "signed_chain": True, "format_waypoint": False, "ordered_hosts": False, "fresh_managed": False,
+            "scenario": None, "prepare_only": False, "publication_version": None, "publication_source": None,
+            "native_helper": Path("/preparer")}
+        parser = unittest.mock.Mock()
+        parser.error.side_effect = ValueError("invalid prepared CLI")
+        proof.validate_prepared_arguments(parser, SimpleNamespace(**args))
+        parser.error.assert_not_called()
+        for changes in ({"installed_slice": None}, {"fresh_managed": True}, {"publication_source": "a" * 40},
+                        {"installed_adoption": False}, {"format_waypoint": True}, {"export_prepared": Path("/export")}):
+            with self.assertRaisesRegex(ValueError, "invalid prepared CLI"):
+                proof.validate_prepared_arguments(parser, SimpleNamespace(**(args | changes)))
+
+
+
 class LaunchCleanupControls(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="launch-cleanup-")
@@ -440,6 +492,30 @@ class LaunchCleanupControls(unittest.TestCase):
         workflow.cleanup(self.root, True)
         self.assertTrue(all(not (self.root / name).exists() for name in self.names))
         self.assertTrue(self.launch.exists())
+
+    def test_cold_cli_validation_and_cleanup_do_not_launch_any_payload(self):
+        script = """
+import importlib.util, sys
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location('cold_cli', sys.argv[1])
+cli = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cli)
+primary = ValueError('cold prepared identity failure')
+with patch.object(cli, 'run_owned', side_effect=AssertionError('runtime launched')), patch.object(cli, 'validate_invocation', side_effect=primary):
+    sys.argv = ['proof', sys.argv[2], '--native-preflight', '--fresh-managed', '--launch-record', sys.argv[3]]
+    try:
+        cli.main()
+    except ValueError as error:
+        assert error is primary
+"""
+        environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1"}
+        subprocess.run([sys.executable, "-c", script, str(ROOT / "scripts/prove-installed-catchup.py"), str(self.output), str(self.launch)],
+                       env=environment, check=True, capture_output=True, timeout=180)
+        self.assertEqual(installed_launch.document(self.launch)["state"], "validation-failed")
+        subprocess.run([sys.executable, str(ROOT / "scripts/fixtures/installed_workflow.py"), "cleanup", str(self.root)],
+                       env=environment, check=True, capture_output=True, timeout=180)
+        self.assertTrue(all(not (self.root / name).exists() for name in self.names[:2]))
+        self.assertTrue(all((self.root / name).exists() for name in self.names[2:]))
 
     def test_runtime_possible_or_unconfirmed_ownership_retains_inputs(self):
         self.fail_validation()

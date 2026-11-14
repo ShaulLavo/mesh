@@ -72,6 +72,7 @@ on:
       - 'scripts/fixtures/release_worker_eperm.py'
       - 'scripts/fixtures/release_worker_snapshot.py'
       - 'scripts/test-release-worker-eperm.py'
+      - 'scripts/test-release-worker-startup.py'
       - 'scripts/fixtures/noindex_paths.py'
       - 'scripts/test-release-worker-groups.py'
       - 'scripts/fixtures/installed_chain.py'
@@ -306,12 +307,14 @@ jobs:
 
   native-adoption:
     if: inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
-    name: Installed native adoption (${{ matrix.platform }})
+    name: Installed native adoption (${{ matrix.platform }}, ${{ matrix.scenario }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        scenario: [all, interrupt]
         include:
           - platform: linux/amd64
             key: linux-amd64
@@ -350,7 +353,7 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
-          PAIRED_SCENARIO: ${{ github.workflow == 'Installed catch-up' && 'interrupt' || '' }}
+          PAIRED_SCENARIO: ${{ matrix.scenario == 'interrupt' && 'interrupt' || '' }}
         run: |
           extra=()
           if [[ -n $PAIRED_SCENARIO ]]; then extra=(--scenario "$PAIRED_SCENARIO"); fi

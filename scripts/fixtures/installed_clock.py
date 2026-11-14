@@ -1,5 +1,5 @@
 """Outcome coverage, elapsed observations and bounded fixture teardown."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 import functools
@@ -19,10 +19,11 @@ SECOND = 1_000_000_000
 MILLISECOND = 1_000_000
 HANG_SECONDS = 1200
 CLEANUP_SECONDS = 120
-MAX_JOB_NS = (HANG_SECONDS + CLEANUP_SECONDS) * SECOND
+HANDOFF_SECONDS = HANG_SECONDS + CLEANUP_SECONDS
 ACTIVE = ContextVar("installed_fixture_clock", default=None)
 HANDOFF_ENV = "MESH_FIXTURE_DEADLINE_NS"
 HANDOFF = ContextVar("installed_fixture_parent_deadline", default=None)
+CLEANUP_HANDOFF = ContextVar("installed_fixture_cleanup_deadline", default=None)
 
 
 def positive(value):
@@ -243,6 +244,37 @@ def parent_deadline(maximum=HANG_SECONDS):
     return min(end, HANDOFF.get()) if HANDOFF.get() is not None else end
 
 
+def cleanup_deadline():
+    if CLEANUP_HANDOFF.get() is not None:
+        return CLEANUP_HANDOFF.get()
+    clock = current()
+    if clock:
+        clock.begin_cleanup()
+    end = time.monotonic_ns() + CLEANUP_SECONDS * SECOND
+    if clock and clock.cleanup_deadline_ns is not None:
+        end = min(end, clock.cleanup_deadline_ns)
+    path = os.environ.get("MESH_INSTALLED_CLOCK_HANDOFF")
+    if path:
+        value = json.loads(Path(path).read_text())
+        end = min(end, positive(value["cleanup_deadline_ns"]))
+    return end
+
+
+@contextmanager
+def cleanup_handoff():
+    end = cleanup_deadline()
+    cleanup_token = CLEANUP_HANDOFF.set(end)
+    work_token = HANDOFF.set(end)
+    try:
+        with handoff(end, watchdog=True):
+            yield end
+    finally:
+        HANDOFF.reset(work_token)
+        CLEANUP_HANDOFF.reset(cleanup_token)
+        if current():
+            current().arm_cleanup()
+
+
 def handoff_environment(deadline_ns=None):
     end = parent_deadline() if deadline_ns is None else min(positive(deadline_ns), parent_deadline())
     return {HANDOFF_ENV: str(end)}
@@ -264,7 +296,7 @@ class HandoffAlarm:
 @contextmanager
 def handoff(deadline_ns, *, watchdog=False):
     positive(deadline_ns)
-    remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
+    remaining_until(deadline_ns, HANDOFF_SECONDS)
     token = HANDOFF.set(min(deadline_ns, HANDOFF.get() or deadline_ns))
     alarm = HandoffAlarm()
     try:
@@ -279,7 +311,7 @@ def handoff(deadline_ns, *, watchdog=False):
 
 def start_handoff_alarm(deadline_ns, alarm):
     previous = (signal.getsignal(signal.SIGALRM), signal.getitimer(signal.ITIMER_REAL)[0], time.monotonic_ns())
-    remaining = remaining_until(deadline_ns, MAX_JOB_NS / SECOND)
+    remaining = remaining_until(deadline_ns, HANDOFF_SECONDS)
     alarm.previous = previous
     signal.signal(signal.SIGALRM, handoff_expired)
     signal.setitimer(signal.ITIMER_REAL, remaining)
@@ -441,7 +473,8 @@ def timed_function(function, kind, identity):
         name = kind + ":" + identity(*args, **kwargs)
         if kind == "case-cleanup":
             cleanup()
-        with operation(name):
+        context = cleanup_handoff() if kind == "case-cleanup" else nullcontext()
+        with context, operation(name):
             return function(*args, **kwargs)
     return call
 
@@ -722,7 +755,7 @@ def entry_is_directory(entry):
 
 def process_snapshot(deadline_ns):
     result = subprocess.run(["ps", "-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,stat="], capture_output=True, text=True,
-                            check=True, timeout=remaining_until(deadline_ns, 2))
+                            check=True, timeout=remaining_until(deadline_ns, HANG_SECONDS))
     rows = [line.split() for line in result.stdout.splitlines()]
     return {int(row[0]): {"pid": int(row[0]), "parent": int(row[1]), "group": int(row[2]), "uid": int(row[3]),
                          "birth": " ".join(row[3:-1])} for row in rows if len(row) == 10 and not row[-1].startswith("Z")}
@@ -736,8 +769,8 @@ def stop_group(process, deadline_ns, roots=(), *, ownership=None):
     wait_group(process, group, deadline_ns, 2)
     send_group(group, signal.SIGKILL)
     signal_descendants(owned, signal.SIGKILL, deadline_ns)
-    process.wait(timeout=remaining_until(deadline_ns, 10))
-    wait_group(process, group, deadline_ns, 10, require_absent=True)
+    process.wait(timeout=remaining_until(deadline_ns, CLEANUP_SECONDS))
+    wait_group(process, group, deadline_ns, CLEANUP_SECONDS, require_absent=True)
     if ownership is None:
         raise RuntimeError("native launch-time ownership unavailable; retain owned root")
     ownership.verify(deadline_ns)
@@ -745,7 +778,7 @@ def stop_group(process, deadline_ns, roots=(), *, ownership=None):
 
 def process_birth(pid, deadline_ns):
     result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=,lstart=,stat="], capture_output=True, text=True,
-                            check=False, timeout=remaining_until(deadline_ns, 2))
+                            check=False, timeout=remaining_until(deadline_ns, HANG_SECONDS))
     fields = result.stdout.split()
     if not fields or fields[-1].startswith("Z"):
         return None
@@ -778,23 +811,26 @@ def wait_group(process, group, deadline_ns, maximum, require_absent=False):
     end = min(deadline_ns, time.monotonic_ns() + maximum * SECOND)
     while time.monotonic_ns() < end:
         process.poll()
-        if not group_alive(group):
+        if not group_alive(group, deadline_ns):
             return
         remaining = end - time.monotonic_ns()
         if remaining <= 0:
             break
         time.sleep(min(0.025, remaining / SECOND))
-    if require_absent and group_alive(group):
+    if require_absent and group_alive(group, deadline_ns):
         raise RuntimeError("native process-group cleanup unconfirmed; retain its root")
 
 
-def group_alive(group):
-    result = subprocess.run(["ps", "-ax", "-o", "pgid=,stat="], capture_output=True, text=True, check=True, timeout=2)
+def group_alive(group, deadline_ns=None):
+    deadline_ns = parent_deadline() if deadline_ns is None else deadline_ns
+    result = subprocess.run(["ps", "-ax", "-o", "pgid=,stat="], capture_output=True, text=True, check=True, timeout=remaining_until(deadline_ns, HANG_SECONDS))
     return any(line.split()[0] == str(group) and not line.split()[1].startswith("Z") for line in result.stdout.splitlines())
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "cleanup-inputs":
+    if sys.argv[1] == "cleanup-deadline":
+        print(cleanup_deadline())
+    elif sys.argv[1] == "cleanup-inputs":
         cleanup_inputs(sys.argv[2])
     else:
         job_record(*sys.argv[1:])

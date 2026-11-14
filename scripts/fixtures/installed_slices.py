@@ -1,4 +1,4 @@
-"""Exact installed profile partitions shared by admission, execution and closure."""
+"""Exact installed profile partitions shared by execution and closure."""
 import json
 from pathlib import Path
 

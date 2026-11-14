@@ -360,7 +360,7 @@ class Releases:
 
 
 def stop_transition(process, roots=(), *, ownership=None):
-    installed_clock.stop_group(process, installed_clock.parent_deadline(20), roots, ownership=ownership)
+    installed_clock.stop_group(process, installed_clock.parent_deadline(installed_clock.CLEANUP_SECONDS), roots, ownership=ownership)
 
 
 def wait_transition(process, command, deadline_ns, ownership):

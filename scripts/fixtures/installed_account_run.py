@@ -128,7 +128,7 @@ def record_failure(ticket_path, output, error):
 
 
 def stop_owner(process, ticket_path, signal_owner):
-    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(20))
+    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(installed_clock.CLEANUP_SECONDS))
     signal_owner(ticket_path, signal.SIGTERM)
     try:
         process.wait(timeout=installed_clock.remaining_until(deadline_ns, 10))
@@ -148,13 +148,13 @@ def privileged_signal(ticket_path, number):
 
 
 def recover(ticket_path):
-    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(30))
-    remaining = installed_clock.remaining_until(deadline_ns, 30)
+    deadline_ns = min(json.loads(ticket_path.read_text())["cleanup_deadline_ns"], installed_clock.parent_deadline(installed_clock.CLEANUP_SECONDS))
+    remaining = installed_clock.remaining_until(deadline_ns, installed_clock.CLEANUP_SECONDS)
     execution_ns = deadline_ns - int(min(2, remaining / 4) * installed_clock.SECOND)
     arguments = privileged_arguments("recover", ticket_path, str(execution_ns))
     process = subprocess.Popen(arguments, start_new_session=True)
     try:
-        status = process.wait(timeout=installed_clock.remaining_until(execution_ns, 30))
+        status = process.wait(timeout=installed_clock.remaining_until(execution_ns, installed_clock.CLEANUP_SECONDS))
         if status:
             raise subprocess.CalledProcessError(status, arguments)
     except BaseException as error:
@@ -235,7 +235,7 @@ def root_action(arguments):
     if operation != "recover" or alive(owner):
         raise RuntimeError("refusing recovery while the bound account owner may be running")
     deadline_ns = min(ticket["cleanup_deadline_ns"], int(values[0]))
-    installed_clock.remaining_until(deadline_ns, 30)
+    installed_clock.remaining_until(deadline_ns, installed_clock.CLEANUP_SECONDS)
     resources = Path(ticket["output"]) / "account-resources.json"
     if not resources.exists() or resources.stat().st_uid != 0:
         raise RuntimeError("account resource ownership is missing; retaining scratch")
