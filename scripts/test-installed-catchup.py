@@ -798,11 +798,110 @@ class ChainObservationTest(unittest.TestCase):
             self.observe()
         self.assert_unobserved()
 
-    def test_incomplete_response_propagates(self):
+    def test_empty_header_is_only_an_unobserved_sample(self):
         connection = self.connection()
         connection.recv.side_effect = [b""]
         self.socket_factory.return_value = connection
-        with self.assertRaisesRegex(RuntimeError, "incomplete response"):
+        self.assertFalse(self.observe())
+        self.socket_factory.assert_called_once_with(socket.AF_UNIX)
+        connection.recv.assert_called_once_with(5)
+        connection.__exit__.assert_called_once()
+        self.ledger_reader.assert_not_called()
+        self.assert_unobserved()
+
+    def test_receive_classifies_only_zero_byte_header_close(self):
+        connection = Mock()
+        connection.recv.return_value = b""
+        with self.assertRaises(installed_native.controls.EmptyResponse):
+            installed_native.controls.receive(connection, 5, response_header=True)
+        with self.assertRaises(RuntimeError) as caught:
+            installed_native.controls.receive(connection, 5)
+        self.assertNotIsInstance(caught.exception, installed_native.controls.EmptyResponse)
+
+    def test_partial_header_and_body_closes_propagate(self):
+        header = b"\x01" + struct.pack(">I", 2)
+        for size in range(1, len(header)):
+            self.check_frame_error([header[:size], b""], RuntimeError)
+        self.check_frame_error([header, b""], RuntimeError)
+        self.check_frame_error([header, b"{", b""], RuntimeError)
+
+    def test_malformed_frames_propagate(self):
+        self.check_frame_error([b"\x02" + struct.pack(">I", 2)], RuntimeError)
+        self.check_frame_error([b"\x01" + struct.pack(">I", (4 << 20) + 1)], RuntimeError)
+        self.check_frame_error([b"\x01" + struct.pack(">I", 0)], json.JSONDecodeError)
+        self.check_frame_error([b"\x01" + struct.pack(">I", 1), b"{"], json.JSONDecodeError)
+        self.check_frame_error([b"\x01" + struct.pack(">I", 1), b"\xff"], UnicodeDecodeError)
+
+    def check_frame_error(self, chunks, expected):
+        connection = self.connection()
+        connection.recv.side_effect = chunks
+        self.socket_factory.return_value = connection
+        with self.assertRaises(expected) as caught:
+            self.observe()
+        self.assertNotIsInstance(caught.exception, installed_native.controls.EmptyResponse)
+        self.ledger_reader.assert_not_called()
+        self.assert_unobserved()
+
+    def test_send_and_receive_errors_propagate(self):
+        for operation in ("sendall", "recv"):
+            self.check_exchange_error(operation, OSError("exchange failed"))
+            self.check_exchange_error(operation, RuntimeError("control failed"))
+
+    def check_exchange_error(self, operation, error):
+        connection = self.connection()
+        getattr(connection, operation).side_effect = error
+        self.socket_factory.return_value = connection
+        with self.assertRaises(type(error)) as caught:
+            self.observe()
+        self.assertIs(caught.exception, error)
+        self.assert_unobserved()
+
+    def test_empty_then_complete_response_still_requires_all_target_evidence(self):
+        empty = self.connection()
+        empty.recv.side_effect = [b""]
+        missing = self.connection(error=FileNotFoundError(2, "socket absent"))
+        self.socket_factory.side_effect = [missing, empty, self.connection(self.source),
+                                         self.connection(self.middle), self.connection(self.middle), self.connection(self.middle)]
+        for _ in range(3):
+            self.assertFalse(self.observe())
+            self.assert_unobserved()
+        self.ledger["entries"] = []
+        self.assertFalse(self.observe())
+        self.assert_unobserved()
+        self.helper_reader.assert_not_called()
+        self.ledger["entries"] = [{"version": self.middle, "origin": "host"}]
+        self.helper_reader.return_value = None
+        self.assertFalse(self.observe())
+        self.assert_unobserved()
+        self.helper_reader.return_value = self.image
+        self.assertTrue(self.observe())
+        self.assertEqual(self.socket_factory.call_count, 6)
+        self.case.inspect_retained.assert_called_once_with()
+        self.checkpoint.assert_called_once_with(self.case, self.middle, "observed intermediate hop")
+        self.case.cohort.verify.assert_called_once_with("native-hop-" + self.middle)
+        self.assertEqual(self.record["hops"], [{"version": self.middle, "helper": self.image, "workers": ["retained-worker"]}])
+        self.assertEqual(json.loads(self.case.fault.read_text()), {"daemon": []})
+
+    def test_proof_errors_propagate_without_accepting_a_hop(self):
+        for boundary in (self.ledger_reader, self.helper_reader, self.case.inspect_retained,
+                         self.checkpoint, self.case.cohort.verify):
+            self.check_proof_error(boundary)
+
+    def check_proof_error(self, boundary):
+        error = RuntimeError("real proof failed")
+        boundary.side_effect = error
+        self.socket_factory.return_value = self.connection(self.middle)
+        with self.assertRaises(RuntimeError) as caught:
+            self.observe()
+        self.assertIs(caught.exception, error)
+        self.assertEqual(self.record, {"hops": []})
+        self.assertEqual(json.loads(self.case.fault.read_text())["holdHelper"], [self.middle])
+        boundary.side_effect = None
+
+    def test_empty_response_type_is_not_caught_from_proof_checks(self):
+        self.socket_factory.return_value = self.connection(self.middle)
+        self.helper_reader.side_effect = installed_native.controls.EmptyResponse("proof error")
+        with self.assertRaises(installed_native.controls.EmptyResponse):
             self.observe()
         self.assert_unobserved()
 
@@ -814,7 +913,30 @@ class ChainObservationTest(unittest.TestCase):
         self.assert_unobserved()
 
     def test_missing_socket_cannot_extend_the_existing_chain_bound(self):
-        self.socket_factory.return_value = self.connection(error=FileNotFoundError(2, "still absent"))
+        self.check_chain_bound(self.connection(error=FileNotFoundError(2, "still absent")))
+
+    def test_empty_header_cannot_extend_the_existing_chain_bound(self):
+        connection = self.connection()
+        connection.recv.side_effect = [b""]
+        self.check_chain_bound(connection)
+
+    def test_empty_header_cannot_restart_the_absolute_exchange_deadline(self):
+        connection = self.connection()
+        connection.recv.side_effect = [b""]
+        self.socket_factory.return_value = connection
+        with patch.object(installed_clock.time, "monotonic_ns", return_value=0) as now, \
+                installed_clock.handoff(installed_clock.SECOND):
+            self.assertFalse(self.observe())
+            self.assert_unobserved()
+            self.assertTrue(all(call.args[0] == 1 for call in connection.settimeout.call_args_list))
+            now.return_value = installed_clock.SECOND
+            with self.assertRaises(installed_clock.ClockExpired):
+                self.observe()
+        self.socket_factory.assert_called_once_with(socket.AF_UNIX)
+        self.assert_unobserved()
+
+    def check_chain_bound(self, connection):
+        self.socket_factory.return_value = connection
         with patch.object(installed_chain, "read_journal", return_value={}), \
                 patch.object(installed_chain.time, "monotonic", side_effect=[0, 0, 150]), \
                 patch.object(installed_chain.time, "sleep") as pause:
@@ -827,6 +949,16 @@ class ChainObservationTest(unittest.TestCase):
         self.socket_factory.return_value = self.connection(error=FileNotFoundError(2, "final daemon absent"))
         self.ledger["entries"].append({"version": self.final, "origin": "host"})
         with self.assertRaises(FileNotFoundError):
+            installed_chain.validate_terminal(self.case, self.record, {"phase": "committed"},
+                                             {self.middle}, self.middle, self.final, False)
+        self.assertNotIn("running", self.record)
+
+    def test_final_graded_host_info_still_rejects_an_empty_response(self):
+        connection = self.connection()
+        connection.recv.side_effect = [b""]
+        self.socket_factory.return_value = connection
+        self.ledger["entries"].append({"version": self.final, "origin": "host"})
+        with self.assertRaises(installed_native.controls.EmptyResponse):
             installed_chain.validate_terminal(self.case, self.record, {"phase": "committed"},
                                              {self.middle}, self.middle, self.final, False)
         self.assertNotIn("running", self.record)

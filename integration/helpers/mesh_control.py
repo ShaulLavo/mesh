@@ -9,6 +9,10 @@ import time
 import uuid
 
 
+class EmptyResponse(RuntimeError):
+    """The daemon closed before sending any response header byte."""
+
+
 def remaining_socket_time(deadline_ns):
     remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
     if remaining <= 0:
@@ -16,12 +20,14 @@ def remaining_socket_time(deadline_ns):
     return remaining
 
 
-def receive(connection, length, *, deadline_ns=None):
+def receive(connection, length, *, deadline_ns=None, response_header=False):
     result = b""
     while len(result) < length:
         if deadline_ns is not None:
             connection.settimeout(remaining_socket_time(deadline_ns))
         chunk = connection.recv(length - len(result))
+        if not chunk and response_header and not result:
+            raise EmptyResponse("daemon closed before response header")
         if not chunk:
             raise RuntimeError("daemon closed an incomplete response")
         result += chunk
@@ -39,7 +45,7 @@ def round_trip(socket_path, request, *, timeout=10, deadline_ns=None):
         connection.connect(socket_path)
         connection.settimeout(remaining_socket_time(deadline_ns))
         connection.sendall(b"\x01" + struct.pack(">I", len(payload)) + payload)
-        header = receive(connection, 5, deadline_ns=deadline_ns)
+        header = receive(connection, 5, deadline_ns=deadline_ns, response_header=True)
         if header[0] != 1:
             raise RuntimeError(f"unexpected response kind {header[0]}")
         length = struct.unpack(">I", header[1:])[0]

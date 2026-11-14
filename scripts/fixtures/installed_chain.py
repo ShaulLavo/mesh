@@ -117,10 +117,10 @@ def read_journal(case):
 
 def observe_hop(case, record, version):
     # Activation stops the source daemon; one sample cannot promise a second
-    # connection will still find its socket before the target starts.
+    # connection will find its socket or receive a header before the target starts.
     try:
         response = case.control("host.info")
-    except FileNotFoundError:
+    except (FileNotFoundError, installed_native.controls.EmptyResponse):
         return False
     if response.get("type") != "host.info.result":
         return False
