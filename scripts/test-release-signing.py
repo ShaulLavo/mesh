@@ -95,7 +95,7 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
 
     def test_action_failure_cannot_be_ignored(self):
         signing = WORKFLOW[WORKFLOW.index("      - name: Attest final manifest and archives"):]
-        signing = signing[:signing.index("      - name: Remove signed draft document staging")]
+        signing = signing[:signing.index("      - name: Remove signed draft intake staging")]
         self.assertIn("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", signing)
         self.assertNotIn("continue-on-error", signing)
         self.assertNotIn("always()", signing)

@@ -5,10 +5,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
 import time
+
+from fixtures import draft_intake
 
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -137,13 +140,20 @@ def main(args):
         paths.append(str(binary))
         (binary.parent / "source.json").write_text(json.dumps(item, sort_keys=True) + "\n")
     prepare_workers(selection, dict(zip(("os", "arch"), platform.split("/"), strict=True)), output, cache)
-    for name, digest in pinned_assets(frozen, platform).items():
-        cached = acquire(candidate, name, digest, output, cache)
+    custom = pinned_assets(frozen, platform)
+    intake = custom_intake(candidate, frozen) if custom else None
+    for name in custom:
         binary = output / name
-        binary.write_bytes(cached.read_bytes())
+        shutil.copyfile(intake / name, binary)
         binary.chmod(0o755)
         paths.append(str(binary))
     Path(output_list).write_text("\n".join(sorted(set(paths))) + "\n")
+
+
+def custom_intake(candidate, frozen):
+    intake = Path(os.environ["MESH_DRAFT_INTAKE"])
+    draft_intake.verify(intake, candidate, os.environ["MESH_DRAFT_SOURCE"], baselines=frozen, run=int(os.environ["GITHUB_RUN_ID"]))
+    return intake
 
 
 if __name__ == "__main__":
