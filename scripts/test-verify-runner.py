@@ -433,6 +433,38 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(len(self.scene.run_roots()), 1, "the run root was deleted before the launcher exited")
 
 
+class ScratchEnvironmentTests(RunnerCase):
+    def test_runner_temp_reaches_entries_and_survives_success_and_failure(self):
+        self.scene.tmp.chmod(0o1777)
+        runner_temp = self.scene.root / "runner-temp"
+        runner_temp.mkdir(mode=0o700)
+        marker = runner_temp / "caller-owned"
+        marker.write_text("preserve")
+        capture = self.scene.root / "environment"
+        for status in (0, 7):
+            entry = self.scene.root / "integration/probe.sh"
+            entry.write_text(f'#!/bin/bash\n{PRELUDE}\nenv > "$PWD/environment"\nexit {status}\n')
+            self.scene.start([], RUNNER_TEMP=str(runner_temp), MESH_SHORT_TMP=str(self.scene.tmp))
+            self.finish(0 if status == 0 else 1)
+            child = dict(line.split("=", 1) for line in capture.read_text().splitlines())
+            self.assertEqual(child["RUNNER_TEMP"], str(runner_temp))
+            self.assertEqual(child["TMPDIR"], str(self.scene.tmp))
+            self.assertEqual(child["MESH_SHORT_TMP"], str(self.scene.tmp))
+            self.assertEqual(marker.read_text(), "preserve")
+            self.assertEqual(list(runner_temp.iterdir()), [marker])
+            self.assert_clean()
+
+    def test_runner_temp_in_live_defaults_is_refused_before_setup(self):
+        unsafe = self.scene.root / "home/.config/mesh"
+        unsafe.mkdir(parents=True)
+        self.scene.start([("one", "pass")], RUNNER_TEMP=str(unsafe))
+        _, errors = self.finish(1)
+        self.assertIn("integration isolation refuses RUNNER_TEMP", errors)
+        self.assertFalse((self.scene.root / "builds").exists())
+        self.assertEqual(list(unsafe.iterdir()), [])
+        self.assert_clean()
+
+
 class ResultTests(RunnerCase):
     def test_failed_benchmark_build_declines_all_entries(self):
         build = self.scene.root / "scripts/bench/build.sh"

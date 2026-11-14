@@ -118,6 +118,26 @@ class DashboardMetricsControlTest(unittest.TestCase):
 
 
 class IsolationPolicyPermissionsTest(unittest.TestCase):
+    def test_runner_temp_is_refused_by_owner_setup_and_reentry(self):
+        from isolation import check_environment, prepare_isolation
+        from owned_command import SetupFailed
+        with tempfile.TemporaryDirectory(prefix="m-runner-temp-guard-") as temporary:
+            root = Path(temporary)
+            home = root / "caller-home"
+            unsafe = home / ".config/mesh"
+            owner = SimpleNamespace(root=root, name="unsafe-temp", admission={"isolation": {}})
+            environment = {"HOME": str(home), "RUNNER_TEMP": str(unsafe),
+                           "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
+            with patch.dict(os.environ, environment, clear=True):
+                self.check_unsafe_runner_temp(check_environment, prepare_isolation, owner, SetupFailed)
+            self.assertEqual(list(root.iterdir()), [], "refusal must precede owner setup")
+
+    def check_unsafe_runner_temp(self, check_environment, prepare_isolation, owner, failure):
+        with self.assertRaisesRegex(RuntimeError, "integration isolation refuses RUNNER_TEMP"):
+            check_environment()
+        with self.assertRaises(failure):
+            prepare_isolation(owner)
+
     def test_policy_is_private_under_the_hosted_umask(self):
         from isolation import prepare_isolation
         previous = os.umask(0o022)
@@ -324,12 +344,16 @@ class IsolationBoundaryTest(unittest.TestCase):
             default.mkdir(parents=True)
             probe = root / "probe.sh"
             probe.write_text('printf "%s\\n" "$HOME"\n')
-            environment = {"PATH": os.defpath, "HOME": str(home), "TMPDIR": str(default)}
-            result = subprocess.run([sys.executable, str(helper), "/bin/bash", str(probe)],
-                                    env=environment, capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("integration isolation refuses TMPDIR", result.stderr)
+            for variable in ("TMPDIR", "RUNNER_TEMP"):
+                self.check_unsafe_scratch(helper, probe, home, default, variable)
             self.assertEqual(list(default.iterdir()), [])
+
+    def check_unsafe_scratch(self, helper, probe, home, default, variable):
+        environment = {"PATH": os.defpath, "HOME": str(home), variable: str(default)}
+        result = subprocess.run([sys.executable, str(helper), "/bin/bash", str(probe)],
+                                env=environment, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"integration isolation refuses {variable}", result.stderr)
 
     def test_caller_isolated_directories_are_preserved(self):
         helper = Path(__file__).with_name("isolation.py")
@@ -340,14 +364,17 @@ class IsolationBoundaryTest(unittest.TestCase):
             probe = root / "probe.sh"
             probe.write_text('env > "$1"\n')
             capture = root / "environment"
-            environment = {"PATH": os.defpath, "HOME": str(home), "TMPDIR": str(root),
+            runner_temp = root / "runner-temp"
+            runner_temp.mkdir(mode=0o700)
+            environment = {"PATH": os.defpath, "HOME": str(home), "TMPDIR": str(root), "RUNNER_TEMP": str(runner_temp),
                            "MESH_STATE_DIR": str(root / "state"), "MESH_CONFIG_DIR": str(root / "config")}
             result = subprocess.run([sys.executable, str(helper), "/bin/bash", str(probe), str(capture)],
                                     env=environment, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             child = dict(line.split("=", 1) for line in capture.read_text().splitlines())
-            for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR"):
+            for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR", "RUNNER_TEMP", "TMPDIR"):
                 self.assertEqual(child[name], environment[name])
+            self.assertTrue(runner_temp.is_dir(), "the entry must preserve its caller's scratch parent")
             self.assertNotEqual(child["HOME"], environment["HOME"])
             self.assertTrue(Path(child["HOME"]).is_relative_to(root))
             self.assertFalse(Path(child["HOME"]).parent.exists(), "wrapper scratch must be cleaned after the child exits")
