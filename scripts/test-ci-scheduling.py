@@ -56,6 +56,47 @@ def check_test_gate(ci):
         assert (STATUS(command, environment) == 0) == (race == integration == "success"), (race, integration)
 
 
+def publication_allowed(condition, environment, ancestors):
+    # GitHub inserts success() unless the expression has a status function.
+    if not re.search(r"\b(?:always|cancelled|failure|success)\(\)", condition):
+        if any(result != "success" for result in ancestors):
+            return False
+    expression = condition.removeprefix("${{").removesuffix("}}")
+    for original, replacement in (
+        ("cancelled()", '( "$CANCELLED" == true )'),
+        ("needs.gate.result", '"$GATE"'),
+        ("github.event_name", '"$EVENT"'),
+        ("github.ref", '"$REF"'),
+    ):
+        expression = expression.replace(original, replacement)
+    return STATUS("[[ " + expression + " ]]", dict(os.environ, **environment)) == 0
+
+
+def check_publication_schedule(ci):
+    publication = JOB(ci, "publish")
+    assert re.findall(r"^    needs: (.+)$", publication, re.M) == ["gate"]
+    conditions = re.findall(r"^    if: (.+)$", publication, re.M)
+    assert conditions == [CONTRACT["PUBLICATION_FILTER"]]
+    condition = conditions[0]
+    main = dict(CANCELLED="false", GATE="success", EVENT="push", REF="refs/heads/main")
+    for ancestors in (("success",), ("success", "skipped", "skipped")):
+        assert publication_allowed(condition, main, ancestors), ancestors
+    for draft in ("true", "false"):
+        environment = dict(main, EVENT="pull_request", DRAFT=draft)
+        assert not publication_allowed(condition, environment, ("success", "skipped")), draft
+    for variable, rejected in (
+        ("GATE", ("failure", "cancelled", "skipped", "pending", "")),
+        ("CANCELLED", ("true",)),
+        ("EVENT", ("pull_request", "workflow_dispatch", "pull_request_target")),
+        ("REF", ("refs/heads/topic", "refs/pull/1/merge", "refs/tags/v0.1.400")),
+    ):
+        for value in rejected:
+            assert not publication_allowed(condition, dict(main, **{variable: value}), ("success", "skipped")), (variable, value)
+    legacy = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    assert publication_allowed(legacy, main, ("success",))
+    assert not publication_allowed(legacy, main, ("success", "skipped", "skipped"))
+
+
 def check_schedule(ci, recovery):
     race = check_phase(ci, "race", "go test -race ./...")
     integration = check_phase(ci, "integration", "./scripts/verify.sh")
@@ -68,6 +109,7 @@ def check_schedule(ci, recovery):
     check_test_gate(ci)
     assert REQUIRED <= set(dependencies(JOB(ci, "gate")))
     CONTRACT["check_gate"](ci, recovery)
+    check_publication_schedule(ci)
 
 
 def reject_mutation(ci, recovery, mutated):
@@ -95,6 +137,12 @@ def check_mutations(ci, recovery):
         ci.replace("go test -race ./...", "go test -race ./internal/cli", 1),
         ci.replace("        run: ./scripts/verify.sh", "        run: ./scripts/verify.sh\n      - run: ./scripts/verify.sh", 1),
         ci.replace("        run: ./scripts/verify.sh", "        if: false\n        run: ./scripts/verify.sh", 1),
+        ci.replace("!cancelled() && ", "", 1),
+        ci.replace("needs.gate.result == 'success' && ", "", 1),
+        ci.replace("!cancelled()", "true", 1),
+        ci.replace("!cancelled()", "always()", 1),
+        ci.replace("github.event_name == 'push'", "true", 1),
+        ci.replace("github.ref == 'refs/heads/main'", "true", 1),
     )
     for mutated in mutations:
         reject_mutation(ci, recovery, mutated)
@@ -106,7 +154,7 @@ def main():
     check_schedule(ci, recovery)
     check_mutations(ci, recovery)
     CONTRACT["check_mutations"](ci, recovery)
-    print("PASS independent race and integration jobs, unchanged budgets and caches, both blocking aggregates and mutation controls")
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal and mutation controls")
 
 
 if __name__ == "__main__":

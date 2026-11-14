@@ -109,7 +109,7 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
                 self.assertNotIn(grant, earlier)
                 self.assertIn(grant, guarded)
         caller = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", caller[caller.index("\n  publish:\n"):])
+        self.assertIn("if: ${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}", caller[caller.index("\n  publish:\n"):])
 
     def test_original_reader_jobs_are_required_before_finalization(self):
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CODE_FILTER = "${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 DRAFT_FILTER = "github.event_name == 'pull_request' && github.event.pull_request.draft"
 FILTERED = {"app-pill", "socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
+PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
 def job(source, name):
@@ -106,7 +107,7 @@ def check_gate(ci, recovery):
     publication = job(ci, "publish")
     assert "needs: gate" in publication and "uses: ./.github/workflows/release.yml" in publication
     assert "source_sha: ${{ github.sha }}" in publication
-    assert re.search(r"^    if: github.event_name == 'push' && github.ref == 'refs/heads/main'$", publication, re.M)
+    assert re.findall(r"^    if: (.+)$", publication, re.M) == [PUBLICATION_FILTER]
 
 
 def without_gate_dependency(ci, dependency):

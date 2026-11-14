@@ -510,7 +510,7 @@ jobs:
   publish:
     name: Publish tested main commit
     needs: gate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       actions: write
       statuses: write
