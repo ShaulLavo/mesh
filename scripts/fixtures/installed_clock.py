@@ -904,16 +904,21 @@ def cleanup_inputs(root):
     control, proof = root / "cohort-control", root / "cohort-proof"
     control.mkdir(exist_ok=True)
     launch, ownership, clock = control / "fixture-launch.json", proof / "fixture-ownership.json", proof / "fixture-clock.json"
-    prelaunch = not any(path.exists() for path in (launch, ownership, clock))
+    present = {path for path in (launch, ownership, clock) if path.exists() or path.is_symlink()}
+    prelaunch = not proof.exists() and not proof.is_symlink() and not present
     value = {"inputsMayBeRemoved": prelaunch, "reason": "no fixture launch attempted" if prelaunch else "fixture ownership unconfirmed"}
     try:
-        owned = json.loads(ownership.read_text()) if ownership.exists() else {}
-        final = json.loads(clock.read_text()) if clock.exists() else {}
+        from fixtures import installed_launch
+        dispatched = installed_launch.document(launch) if launch in present else {}
+        if ownership not in present and clock not in present and installed_launch.rejected_before_runtime(root, dispatched):
+            value.update(inputsMayBeRemoved=True, reason="admission rejected before fixture runtime; native preflight cleanup confirmed")
+        owned = json.loads(ownership.read_text()) if ownership in present else {}
+        final = json.loads(clock.read_text()) if clock in present else {}
         absent = owned.get("signerAbsent") is True and owned.get("transitionsAbsent") is True
         root_removed = "retained_root" in final.get("provenance", {}) and final["provenance"]["retained_root"] is None
         if absent and root_removed:
             value.update(inputsMayBeRemoved=True, reason="fixture owners and root confirmed absent")
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
         value.update(inputsMayBeRemoved=False, reason="fixture ownership evidence unreadable")
     value["retained"] = [] if value["inputsMayBeRemoved"] else [str(root / name) for name in ("native-worker-input.noindex", "native-tools.noindex")]
     (control / "tools-cleanup-decision.json").write_text(json.dumps(value, indent=2) + "\n")

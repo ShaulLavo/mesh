@@ -9,14 +9,16 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import tarfile
+import time
 from types import SimpleNamespace
 import unittest
 import zipfile
 from unittest.mock import patch
 
-from fixtures import installed_clock, installed_releases, installed_slices, installed_span_controls, installed_workflow as workflow
+from fixtures import installed_clock, installed_launch, installed_releases, installed_slices, installed_span_controls, installed_workflow as workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -545,6 +547,252 @@ class WorkflowControls(unittest.TestCase):
         with patch("fixtures.installed_prepared.run_slice") as run:
             cli.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "plan")
         run.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", None, Path("/bundle"), Path("/slice"), clock_plan="plan")
+
+
+class AdmissionCleanupControls(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="admission-cleanup-")
+        self.root = Path(temporary.name)
+        self.addCleanup(self.remove_temporary, temporary)
+        self.control, self.output = self.root / "cohort-control", self.root / "cohort-proof"
+        self.control.mkdir()
+        self.launch = self.control / "fixture-launch.json"
+        self.launch.write_text('{"started":true}')
+        self.job_clock = self.root / "installed-job-clock.json"
+        self.job = {"run": "42", "job": "prepare", "origin_ns": time.monotonic_ns() - 260 * installed_clock.SECOND,
+                    "admission_ns": 900 * installed_clock.SECOND}
+        self.job_clock.write_text(json.dumps(self.job))
+        preflight = str(self.root / "preflight-root")
+        self.manager = {"schema": 1, "passed": True, "created": {"root": preflight}, "cleanup": {"serviceAbsent": True, "processAbsent": True}}
+        (self.control / "native-manager.json").write_text(json.dumps(self.manager))
+        (self.control / "scratch-cleanup.json").write_text(json.dumps({"root": preflight, "absent": True}))
+        self.names = ("native-worker-input.noindex", "native-tools.noindex", "prepared.noindex", "prepared-transfer.noindex")
+        for name in self.names:
+            directory = self.root / name
+            directory.mkdir()
+            (directory / "payload").write_bytes(b"must never execute")
+        registry = self.root / self.names[0] / "workers.json"
+        registry.write_text('{"workers":[]}')
+        self.argv = ["proof", str(self.output), "--native-preflight", "--installed-adoption", "--signed-chain",
+            "--worker-registry", str(registry), "--worker-probe", str(registry.parent / "probe"), "--source-host", "pc",
+            "--export-prepared", str(self.root / "export.noindex"), "--launch-record", str(self.launch),
+            "--clock-mode", "diagnostic", "--clock-job-start", str(self.job_clock),
+            "--clock-job-seconds", "900", "--clock-command-seconds", "600",
+            "--clock-external-seconds", "240", "--clock-emergency-seconds", "60"]
+        spec = importlib.util.spec_from_file_location("admission_cleanup_cli", ROOT / "scripts/prove-installed-catchup.py")
+        self.cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.cli)
+        self.enterContext(patch.dict(os.environ, GITHUB_RUN_ID="42", GITHUB_JOB="prepare", MESH_HARNESS_SOURCE="",
+                                     INSTALLED_CATCHUP_PLATFORM="linux/amd64", MESH_TRANSPORT_LIFECYCLE=""))
+        self.enterContext(patch.object(sys, "argv", self.argv))
+        self.enterContext(patch.object(self.cli.platform, "system", return_value="Linux"))
+        self.enterContext(patch.object(self.cli.platform, "machine", return_value="x86_64"))
+        self.enterContext(patch.object(self.cli.signal, "signal"))
+        self.create = self.enterContext(patch.object(self.cli.installed_paths, "create", side_effect=AssertionError("unexpected fixture root")))
+        self.native = self.enterContext(patch.object(self.cli.native_services, "positive_control", side_effect=AssertionError("unexpected manager")))
+        self.run = self.enterContext(patch.object(self.cli, "run_owned", side_effect=AssertionError("unexpected runtime")))
+
+    def remove_temporary(self, temporary):
+        temporary.cleanup()
+        self.assertFalse(self.root.exists())
+
+    def reject(self):
+        with self.assertRaisesRegex(installed_clock.ClockExpired, "insufficient live job admission") as raised:
+            self.cli.main()
+        self.run.assert_not_called()
+        self.create.assert_not_called()
+        self.native.assert_not_called()
+        self.assertFalse((self.output / "fixture-clock.json").exists())
+        self.assertFalse((self.output / "fixture-ownership.json").exists())
+        return raised.exception
+
+    def retain(self):
+        with self.assertRaisesRegex(RuntimeError, "ownership unconfirmed"):
+            workflow.cleanup(self.root, True)
+        self.assertTrue(all((self.root / name / "payload").exists() for name in self.names))
+
+    def test_actual_cli_admission_rejection_removes_only_this_jobs_inputs(self):
+        original = self.job_clock.read_bytes()
+        with patch.object(subprocess, "run", side_effect=AssertionError("unexpected executable")), \
+                patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected child")), \
+                patch.object(subprocess, "check_output", side_effect=AssertionError("unexpected probe")):
+            self.reject()
+        receipt = installed_launch.document(self.launch)
+        self.assertEqual(receipt["state"], "admission-rejected")
+        self.assertEqual(receipt["errorType"], "ClockExpired")
+        self.assertEqual(receipt["jobClockSha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(self.job_clock.read_bytes(), original)
+        workflow.cleanup(self.root)
+        self.assertTrue(all(not (self.root / name).exists() for name in self.names[:2]))
+        self.assertTrue(all((self.root / name).exists() for name in self.names[2:]))
+        self.assertTrue(self.output.exists())
+        self.assertTrue(self.launch.exists())
+        workflow.cleanup(self.root, True)
+        workflow.cleanup(self.root, True)
+        self.assertTrue(all(not (self.root / name).exists() for name in self.names))
+
+    def test_cold_cli_imports_and_cleanup_command_never_launch_payloads(self):
+        consumer = self.consumer_arguments()
+        for argv in (self.argv, consumer):
+            self.cold_cli(argv)
+        environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/fixtures/installed_workflow.py"), "cleanup", str(self.root)],
+                                env=environment, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(not (self.root / name).exists() for name in self.names[:2]))
+        self.assertTrue(all((self.root / name).exists() for name in self.names[2:]))
+
+    def consumer_arguments(self):
+        directory = self.root / "consumer-bundle"
+        value = bundle(directory, 2, "chain")
+        value.update(native="linux/amd64", host={"name": "pc"})
+        (directory / "prepared.json").write_text(json.dumps(value))
+        selection = self.control / "installed-slice.json"
+        selection.write_text(json.dumps(workflow.selection(directory, "none")))
+        argv = self.argv.copy()
+        for flag in ("--export-prepared", "--worker-registry", "--worker-probe"):
+            index = argv.index(flag)
+            del argv[index:index + 2]
+        argv.extend(["--prepared-releases", str(directory), "--installed-slice", str(selection)])
+        return argv
+
+    def cold_cli(self, argv):
+        code = '''import runpy, sys
+from contextlib import ExitStack
+from unittest.mock import patch
+def git(arguments, **_kwargs):
+    assert arguments == ["git", "rev-parse", "HEAD"], arguments
+    return "a" * 40
+with ExitStack() as guards:
+    guards.enter_context(patch("subprocess.check_output", side_effect=git))
+    for name in ("subprocess.run", "subprocess.Popen", "os.execv",
+                 "fixtures.installed_paths.create", "fixtures.native_services.positive_control"):
+        guards.enter_context(patch(name, side_effect=AssertionError("unexpected runtime operation: " + name)))
+    runpy.run_path(sys.argv.pop(1), run_name="__main__")
+'''
+        environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1", "MESH_HARNESS_SOURCE": "a" * 40}
+        result = subprocess.run([sys.executable, "-c", code, str(ROOT / "scripts/prove-installed-catchup.py")] + argv[1:],
+                                env=environment, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("fixtures.installed_clock.ClockExpired: insufficient live job admission", result.stderr)
+        self.assertNotIn("unexpected runtime operation", result.stderr)
+        self.assertEqual(installed_launch.document(self.launch)["state"], "admission-rejected")
+
+    def test_rejection_requires_intact_job_bound_lifecycle_and_preflight_evidence(self):
+        self.reject()
+        receipt = self.launch.read_bytes()
+        bad = [{}, [], {"started": True}]
+        value = json.loads(receipt)
+        bad.extend(value | change for change in ({"schema": 2}, {"schema": True}, {"state": "admission-pending"}, {"state": "runtime-possible"},
+            {"errorType": "ValueError"}, {"error": ""}, {"output": "/another-job/cohort-proof"},
+            {"jobClockSha256": "0" * 64}, {"run": "43"}, {"job": "consume"}))
+        for changed in bad:
+            with self.subTest(changed=changed):
+                self.launch.write_text(json.dumps(changed))
+                self.retain()
+        for raw in (b"{", b"null"):
+            self.launch.write_bytes(raw)
+            self.retain()
+        self.launch.unlink()
+        self.retain()
+        self.launch.symlink_to(self.control / "missing-launch-record")
+        self.retain()
+        self.launch.unlink()
+        self.launch.write_bytes(receipt)
+        paths = (self.job_clock, self.control / "native-manager.json", self.control / "scratch-cleanup.json")
+        for path in paths:
+            original = path.read_bytes()
+            path.unlink()
+            self.retain()
+            for raw in (b"{", b"[]", b"{}"):
+                path.write_bytes(raw)
+                self.retain()
+            path.write_bytes(original)
+        self.manager["cleanup"]["processAbsent"] = False
+        paths[1].write_text(json.dumps(self.manager))
+        self.retain()
+        self.manager["cleanup"]["processAbsent"] = True
+        for change in ({"schema": True}, {"schema": 2}, {"passed": False}, {"cleanup": []}, {"created": {"root": "/another-root"}}):
+            paths[1].write_text(json.dumps(self.manager | change))
+            self.retain()
+
+    def test_original_dispatch_marker_and_absent_runtime_root_do_not_grant_cleanup(self):
+        self.output.mkdir()
+        (self.output / "harness-source.json").write_text('{"actual":"verified source"}')
+        self.assertFalse(Path(self.manager["created"]["root"]).exists())
+        self.retain()
+
+    def test_possible_runtime_and_unconfirmed_ownership_veto_rejection(self):
+        self.reject()
+        for name in ("fixture-clock.json", "fixture-ownership.json"):
+            path = self.output / name
+            for value in ("{", "{}", '{"signerAbsent":false,"transitionsAbsent":true}'):
+                path.write_text(value)
+                self.retain()
+            path.unlink()
+        self.output.joinpath("fixture-ownership.json").write_text('{"signerAbsent":true,"transitionsAbsent":true}')
+        self.retain()
+        self.output.joinpath("fixture-clock.json").write_text('{"provenance":{"retained_root":"/possibly-live"}}')
+        self.retain()
+        self.output.joinpath("fixture-clock.json").write_text('{"provenance":{"retained_root":null}}')
+        workflow.cleanup(self.root, True)
+        self.assertTrue(all(not (self.root / name).exists() for name in self.names))
+
+    def test_missing_clock_and_invalid_admission_never_create_rejection_exemption(self):
+        for raw in (None, "{", "{}", json.dumps(self.job | {"run": "another"}), json.dumps(self.job | {"admission_ns": 1})):
+            if raw is None:
+                self.job_clock.unlink()
+            else:
+                self.job_clock.write_text(raw)
+            with self.assertRaises((ValueError, KeyError, FileNotFoundError)):
+                self.cli.main()
+            self.assertEqual(installed_launch.document(self.launch)["state"], "admission-pending")
+            self.retain()
+        self.run.assert_not_called()
+
+    def test_retry_invalidates_old_rejection_before_runtime_and_preserves_error(self):
+        self.reject()
+        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": time.monotonic_ns()}))
+        error = installed_clock.ClockExpired("runtime failure must keep all cleanup duties")
+
+        def started(*_args):
+            self.assertEqual(installed_launch.document(self.launch)["state"], "runtime-possible")
+            raise error
+
+        self.run.side_effect = started
+        with self.assertRaises(installed_clock.ClockExpired) as raised:
+            self.cli.main()
+        self.assertIs(raised.exception, error)
+        self.retain()
+
+    def test_activation_failure_is_a_possible_launch_and_missing_clock_retains(self):
+        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": time.monotonic_ns()}))
+        error = installed_clock.ClockExpired("watchdog activation failed")
+        with patch.object(installed_clock.Clock, "activate", side_effect=error), self.assertRaises(installed_clock.ClockExpired) as raised:
+            self.cli.main()
+        self.assertIs(raised.exception, error)
+        self.run.assert_not_called()
+        self.assertEqual(installed_launch.document(self.launch)["state"], "runtime-possible")
+        self.retain()
+
+    def test_failed_rejection_record_preserves_original_clock_expired(self):
+        original_write = Path.write_text
+
+        def write(path, data, *args, **kwargs):
+            if path == self.launch and '"admission-rejected"' in data:
+                raise OSError("disk control failure")
+            return original_write(path, data, *args, **kwargs)
+
+        with patch.object(Path, "write_text", write):
+            error = self.reject()
+        self.assertIn("disk control failure", error.__notes__[0])
+        self.assertEqual(installed_launch.document(self.launch)["state"], "admission-pending")
+        self.retain()
+
+    def test_hosted_commands_pass_the_same_dispatch_record_to_cli(self):
+        for source in (job(PREPARED, "prepare"), job(PREPARED, "consume"), job(CATCHUP, "signed-cohort-chain")):
+            self.assertEqual(source.count('--launch-record "$RUNNER_TEMP/cohort-control/fixture-launch.json"'), 1)
+            self.assertLess(source.index('printf \'{"started":true}'), source.index("--launch-record"))
 
 
 if __name__ == "__main__":

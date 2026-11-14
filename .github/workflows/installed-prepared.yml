@@ -136,6 +136,7 @@ jobs:
           fi
           printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" --native-preflight --installed-adoption \
+            --launch-record "$RUNNER_TEMP/cohort-control/fixture-launch.json" \
             --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" --worker-registry "$input/retained/workers.json" \
             --worker-probe "$input/tools/worker-probe" --source-host "$SOURCE_HOST" "${mode[@]}" "${clock[@]}" \
             --export-prepared "$RUNNER_TEMP/prepared.noindex"
@@ -220,6 +221,7 @@ jobs:
           fi
           printf '{"started":true}\n' > "$RUNNER_TEMP/cohort-control/fixture-launch.json"
           python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/cohort-proof" --native-preflight --installed-adoption \
+            --launch-record "$RUNNER_TEMP/cohort-control/fixture-launch.json" \
             --source-host "$SOURCE_HOST" "${mode[@]}" "${clock[@]}" \
             --prepared-releases "$RUNNER_TEMP/prepared.noindex" --installed-slice "$RUNNER_TEMP/cohort-control/installed-slice.json"
       - name: Remove bundled payload only after actual runtime teardown

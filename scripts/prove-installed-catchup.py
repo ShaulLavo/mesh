@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from fixtures import fleet_baselines, installed_paths, native_services, installed_clock, installed_budgets
+from fixtures import fleet_baselines, installed_paths, native_services, installed_clock, installed_budgets, installed_launch
 
 
 def interrupted(number, _frame):
@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
     parser.add_argument("--publication-task", help="one complete task ID from publication-jobs.py inventory")
+    parser.add_argument("--launch-record", type=Path, help="job-owned command dispatch and fixture admission lifecycle record")
     installed_clock.arguments(parser)
     parser.add_argument("--clock-plan-index", type=Path, default=installed_budgets.INDEX,
                         help="index of independently approved per-platform/profile frozen plans")
@@ -48,6 +49,7 @@ def main():
         parser.error("publication task requires real draft mode without supplemental or diagnostic execution")
     validate_prepared_arguments(parser, arguments)
     output = arguments.output.resolve()
+    launch = installed_launch.Launch(arguments.launch_record, output)
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get("MESH_HARNESS_SOURCE"):
         from fixtures import installed_artifacts
@@ -60,7 +62,12 @@ def main():
     signal.signal(signal.SIGINT, interrupted)
     installed_budgets.bind(arguments, native)
     clocked = arguments.installed_adoption or arguments.fresh_managed or arguments.export_prepared or arguments.prepared_releases
-    clock = installed_clock.from_arguments(arguments, native) if clocked else None
+    try:
+        clock = installed_clock.from_arguments(arguments, native) if clocked else None
+    except installed_clock.ClockExpired as error:
+        launch.rejected(error, arguments.clock_job_start)
+        raise
+    launch.runtime_possible()
     if clock:
         with clock.activate(watchdog=True):
             run_owned(arguments, output, native, clock)
