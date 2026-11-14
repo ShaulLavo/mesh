@@ -144,6 +144,41 @@ class ExporterFormatTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "empty exporter reply"):
                 installed_chain.read_ledger(case)
 
+    def test_producer_log_export_enumerates_each_directory_once(self):
+        root, output = self.root / "producer", self.root / "output"
+        output.mkdir()
+        for name in ("root.log", ".hidden.log", "one/one.log", "one/deep/deep.log", "two/two.log", "two/deep/deep.log"):
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+        (root / "linked.log").symlink_to(root / "root.log")
+        (root / "linked-directory").symlink_to(root / "one", target_is_directory=True)
+        proof = root / "proofs/nested/receipt.json"
+        proof.parent.mkdir(parents=True)
+        proof.write_text('{"receipt":true}')
+        expected = list(root.rglob("*.log"))
+        directories = [root] + [path for path in root.rglob("*") if path.is_dir() and not path.is_symlink()]
+        with patch.object(installed_adoption.os, "scandir", wraps=os.scandir) as scans, \
+                patch.object(installed_native, "copy_log_tail", wraps=installed_native.copy_log_tail) as copy:
+            installed_adoption.retain_producer_logs(root, output)
+        self.assertEqual([call.args[0] for call in copy.call_args_list], expected)
+        enumerated = [Path(call.args[0]) for call in scans.call_args_list]
+        for directory in directories:
+            if directory == root / "proofs" or root / "proofs" in directory.parents:
+                continue
+            self.assertEqual(enumerated.count(directory), 1, str(directory))
+        for path in expected:
+            destination = output / ("producer-" + str(path.relative_to(root)).replace("/", "-"))
+            self.assertEqual(destination.read_bytes(), path.read_bytes())
+        self.assertEqual((output / "measured-proofs/nested/receipt.json").read_bytes(), proof.read_bytes())
+
+    def test_producer_log_discovery_keeps_directory_and_broken_link_matches(self):
+        directory = self.root / "directory.log"
+        directory.mkdir()
+        (directory / "nested.log").write_text("nested")
+        (self.root / "broken.log").symlink_to(self.root / "absent")
+        self.assertEqual(installed_adoption.producer_log_paths(self.root), list(self.root.rglob("*.log")))
+
 
 class SocketPathsTest(unittest.TestCase):
     def setUp(self):
