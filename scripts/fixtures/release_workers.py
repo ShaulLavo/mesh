@@ -135,6 +135,12 @@ def worker_arguments(binary, reservation, directory):
 
 
 def start_one(state, config, item, index, host, record, path):
+    from fixtures import release_worker_eperm
+    with release_worker_eperm.ledger() as ledger:
+        start_selected(state, config, item, index, host, record, path, ledger)
+
+
+def start_selected(state, config, item, index, host, record, path, ledger):
     binary = Path(item["binary"])
     binary.chmod(0o755)
     environment = dict(os.environ, MESH_STATE_DIR=str(state), MESH_CONFIG_DIR=str(config), MESH_HOST_ID=host)
@@ -143,13 +149,10 @@ def start_one(state, config, item, index, host, record, path):
     directory = state / "s" / session
     if "instance" not in reservation:
         directory.mkdir(mode=0o700)
-    with (directory / "worker.log").open("wb") as log:
-        process = subprocess.Popen(worker_arguments(binary, reservation, directory), env=environment, stdout=log, stderr=log)
-    row = {"session": session, "pid": process.pid, "shellPid": 0, "digest": item["artifact"]["binarySha256"],
+    row = {"session": session, "pid": 0, "shellPid": 0, "digest": item["artifact"]["binarySha256"],
            "protocol": item["protocol"], "version": item["version"]}
-    record["workers"].append(row)
-    save(path, record)
-    wait_startup(directory, process, item, record, row, path)
+    arguments = worker_arguments(binary, reservation, directory)
+    launch_selected(binary, arguments, environment, directory, item, record, row, path, ledger)
     meta = json.loads((directory / "meta.json").read_bytes())
     row["shellPid"] = meta["pid"]
     save(path, record)
@@ -158,25 +161,114 @@ def start_one(state, config, item, index, host, record, path):
         raise RuntimeError("worker cohort shell belongs to another process")
 
 
-def wait_startup(directory, process, item, record, row, path):
+def launch_selected(binary, arguments, environment, directory, item, record, row, path, ledger):
+    from fixtures import release_worker_eperm
+    original = release_worker_eperm.image(binary) if ledger else None
+    deadline = time.monotonic() + 6 if ledger else None
+    if ledger:
+        record["epermRecurrenceLedger"] = str(ledger[0])
+        record["epermRecurrenceCount"] = len(ledger[1]["events"])
+        row["epermCohort"] = str(path.resolve())
+        row["startupArguments"] = arguments
+        row["startupDeadlineMonotonic"] = deadline
+        row["startupImage"] = original
+        if original["sha256"] != row["digest"]:
+            raise RuntimeError("selected original EPERM worker image changed; launch refused")
+    process = spawn_selected(arguments, environment, directory, row)
+    record["workers"].append(row)
+    save(path, record)
+    try:
+        wait_startup(directory, process, item, record, row, path, deadline)
+    except Exception as error:
+        if ledger is None or not release_worker_eperm.eligible(row):
+            raise
+        retain_eperm(ledger, process, error, directory, record, row, path, deadline)
+        retry_selected(binary, original, arguments, environment, directory, item, record, row, path, ledger, deadline)
+
+
+def spawn_selected(arguments, environment, directory, row):
+    from fixtures import release_worker_evidence
+    if row.get("epermCohort"):
+        row["startupLaunchContext"] = release_worker_evidence.attempt(release_worker_evidence.launcher_snapshot)
+    with (directory / "worker.log").open("wb") as log:
+        process = subprocess.Popen(arguments, env=environment, stdout=log, stderr=log)
+    row["pid"] = process.pid
+    row.pop("startupReconciled", None)
+    return process
+
+
+def retain_eperm(ledger, process, error, directory, record, row, path, deadline):
+    from fixtures import release_worker_eperm
+    attempt = release_worker_eperm.capture(ledger, row, error, directory, deadline, save)
+    save(path, record)
+    attempt["cleanup"] = release_worker_eperm.reconcile(process, row["startupFailure"])
+    row["startupReconciled"] = True
+    retained_log = directory / ("worker.startup-" + str(attempt["attempt"]) + ".log")
+    (directory / "worker.log").replace(retained_log)
+    attempt["logPath"] = str(retained_log)
+    release_worker_eperm.persist(ledger, save)
+    record["epermRecurrenceCount"] = len(ledger[1]["events"])
+    save(path, record)
+    release_worker_eperm.ensure_capacity(ledger[1])
+
+
+def retry_selected(binary, original, arguments, environment, directory, item, record, row, path, ledger, deadline):
+    from fixtures import release_worker_eperm
+    release_worker_eperm.verify_image(binary, original, row)
+    if time.monotonic() >= deadline:
+        raise RuntimeError("original startup deadline exhausted; EPERM retry refused")
+    row.pop("startupFailure")
+    process = spawn_selected(arguments, environment, directory, row)
+    save(path, record)
+    try:
+        wait_startup(directory, process, item, record, row, path, deadline)
+    except Exception as error:
+        retain_retry_failure(ledger, process, error, directory, record, row, path, deadline)
+        raise
+    success = {"attempt": 2, "outcome": "started", "pid": process.pid,
+               "shellPid": json.loads((directory / "meta.json").read_bytes())["pid"],
+               "arguments": arguments, "deadlineMonotonic": deadline, "selectedImage": original}
+    row["startupAttempts"].append(success)
+    ledger[1]["events"][-1]["retry"] = success
+    release_worker_eperm.persist(ledger, save)
+    save(path, record)
+    print(f"EPERM retry started: {row['session']} pid {process.pid}; recurrence count remains {len(ledger[1]['events'])}", file=sys.stderr)
+
+
+def retain_retry_failure(ledger, process, error, directory, record, row, path, deadline):
+    from fixtures import release_worker_eperm
+    if release_worker_eperm.eligible(row):
+        retain_eperm(ledger, process, error, directory, record, row, path, deadline)
+        return
+    failure = {"attempt": 2, "outcome": "failed", "pid": process.pid, "startupFailure": row.get("startupFailure"),
+               "exception": {"type": type(error).__name__, "message": str(error)[:8192]}}
+    row["startupAttempts"].append(failure)
+    ledger[1]["events"][-1]["retry"] = failure
+    release_worker_eperm.persist(ledger, save)
+    save(path, record)
+
+
+def wait_startup(directory, process, item, record, row, path, deadline=None):
     from fixtures import release_worker_evidence
     with release_worker_evidence.Startup(process.pid) as observed:
         try:
-            wait_worker(directory, process)
+            wait_worker(directory, process, deadline)
         except BaseException:
             release_worker_evidence.publish(record, row, observed, item, directory, path, save)
             raise
 
 
-def wait_worker(directory, process):
+def wait_worker(directory, process, deadline=None):
     from fixtures import release_worker_evidence
     for _ in range(120):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         if process.poll() is not None:
             log = release_worker_evidence.log_tail(directory / "worker.log")
             raise RuntimeError(f"retained worker exited: {directory}; {log}")
         if (directory / "sock").is_socket() and (directory / "meta.json").is_file():
             return
-        time.sleep(0.05)
+        time.sleep(min(0.05, max(0, deadline - time.monotonic())) if deadline is not None else 0.05)
     raise RuntimeError("retained worker did not start within the existing proof bound")
 
 
@@ -339,6 +431,12 @@ def stop(path):
 
 
 def stop_one(worker):
+    if worker.get("startupReconciled"):
+        return
+    if worker.get("epermCohort") and worker.get("startupFailure"):
+        from fixtures import release_worker_eperm
+        release_worker_eperm.stop_failed(worker)
+        return
     for pid in (worker["shellPid"], worker["pid"]):
         if not pid:
             continue

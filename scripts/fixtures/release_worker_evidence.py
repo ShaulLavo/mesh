@@ -68,7 +68,8 @@ def snapshot(root):
     readers = {"stat": process_stat, "status": status, "terminals": terminals,
                "cgroup": lambda fd: read_at(fd, "cgroup"), "label": lambda fd: read_at(fd, "attr/current", 4096),
                "uidMap": lambda fd: read_at(fd, "uid_map"), "gidMap": lambda fd: read_at(fd, "gid_map"),
-               "setgroups": lambda fd: read_at(fd, "setgroups", 128), "namespaces": namespaces}
+               "setgroups": lambda fd: read_at(fd, "setgroups", 128), "namespaces": namespaces,
+               "cwd": lambda fd: os.readlink("cwd", dir_fd=fd)}
     for name, reader in readers.items():
         result[name] = attempt(reader, root)
     return result
@@ -136,6 +137,14 @@ class Startup:
         self.close()
 
 
+def launcher_snapshot():
+    root = os.open("/proc/self", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        return snapshot(root)
+    finally:
+        os.close(root)
+
+
 def stop_control(process):
     if process.poll() is None:
         process.kill()
@@ -195,6 +204,8 @@ def publish(record, row, observed, item, directory, path, save):
     try:
         selected = {"version": item["version"], "sha256": item["artifact"]["binarySha256"]}
         row["startupFailure"] = observed.failure(selected, attempt(log_tail, directory / "worker.log"))
+        if "startupLaunchContext" in row:
+            row["startupFailure"]["launcherAtLaunch"] = row["startupLaunchContext"]
         save(path, record)
     except Exception as error:
         print("retained worker startup evidence unavailable: " + type(error).__name__, file=sys.stderr)
