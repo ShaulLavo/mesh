@@ -176,11 +176,19 @@ func TestUpdateHelperPublicationWaitsForTerminalJournal(t *testing.T) {
 
 func TestUpdateHelperPublicationConcurrentReplayIsIdempotent(t *testing.T) {
 	root, journal, store := helperPublicationFixture(t, updateinstall.Committed)
-	var workers sync.WaitGroup
+	var ready, workers sync.WaitGroup
 	results := make(chan error, 8)
+	start := make(chan struct{})
+	ready.Add(cap(results))
 	for range cap(results) {
-		workers.Go(func() { results <- update.PublishHostResult(t.Context(), root) })
+		workers.Go(func() {
+			ready.Done()
+			<-start
+			results <- update.PublishHostResult(t.Context(), root)
+		})
 	}
+	ready.Wait()
+	close(start)
 	workers.Wait()
 	close(results)
 	for err := range results {
