@@ -26,7 +26,12 @@ type recoveryFixture struct {
 
 func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	t.Helper()
-	f := newFixture(t)
+	return recoveryFixtureFrom(t, newFixture(t))
+}
+
+func recoveryFixtureFrom(t *testing.T, f *fixture) *recoveryFixture {
+	t.Helper()
+	f.engine.cfg.Service = &recoveryFixtureService{manager: f.manager}
 	f.engine.cfg.ServiceSpec = ServiceSpec{Kind: "systemd", Name: "mesh.service"}
 	f.engine.cfg.Probe = func(ctx context.Context) (Health, error) {
 		health, err := f.manager.probe(ctx)
@@ -48,6 +53,7 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	if err == nil || status.Phase != RolledBack {
 		t.Fatalf("fixture rollback = %s, %v", status.Phase, err)
 	}
+	f.engine.cfg.Service = f.manager
 	root := t.TempDir()
 	tools := filepath.Join(root, "tools")
 	if err = os.MkdirAll(tools, 0700); err != nil {
@@ -84,6 +90,17 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 	r := &recoveryFixture{fixture: f, request: request, prior: prior, events: events, tools: tools}
 	r.publishReplacement(t, "v0.3.0", "exit 0")
 	return r
+}
+
+func TestHelperRecoveryFixtureWaitsForOriginalReport(t *testing.T) {
+	// Keep the original daemon's report incomplete beyond the health budget.
+	old := []byte(strings.Replace(string(testExecutable("v0.1.0")), "health=$2",
+		"health=$2\n: > \"$health\"\nsleep 0.4", 1))
+	f := recoveryFixtureFrom(t, newFixtureWithOriginal(t, old))
+	if f.engine.cfg.HealthTimeout != 300*time.Millisecond {
+		t.Fatalf("fixture changed the health budget: %s", f.engine.cfg.HealthTimeout)
+	}
+	f.roundTrip()
 }
 
 func (f *recoveryFixture) publishReplacement(t *testing.T, version, journalCheck string) {
@@ -308,21 +325,15 @@ func TestHelperRecoveryJournalProbeCancellationHasNoServiceMutation(t *testing.T
 	f.assertNoServiceMutation(t)
 }
 
-type failRestorationStart struct {
-	manager  *processService
-	original string
-	failed   bool
+type recoveryFixtureService struct {
+	manager *processService
 }
 
-func (s *failRestorationStart) Stop(ctx context.Context) error { return s.manager.Stop(ctx) }
-func (s *failRestorationStart) Start(ctx context.Context) error {
+func (s *recoveryFixtureService) Stop(ctx context.Context) error { return s.manager.Stop(ctx) }
+func (s *recoveryFixtureService) Start(ctx context.Context) error {
 	digest, err := fileDigest(s.manager.executable)
 	if err != nil {
 		return err
-	}
-	if !s.failed && digest == s.original && s.manager.stops >= 2 {
-		s.failed = true
-		return errors.New("fixture rejected original service restart")
 	}
 	if s.manager.process == nil {
 		if err = clearRecoveryFixtureReport(s.manager.healthPath); err != nil {
@@ -333,6 +344,24 @@ func (s *failRestorationStart) Start(ctx context.Context) error {
 		return err
 	}
 	return awaitRecoveryFixtureReport(ctx, s.manager.healthPath, digest)
+}
+
+type failRestorationStart struct {
+	recoveryFixtureService
+	original string
+	failed   bool
+}
+
+func (s *failRestorationStart) Start(ctx context.Context) error {
+	digest, err := fileDigest(s.manager.executable)
+	if err != nil {
+		return err
+	}
+	if !s.failed && digest == s.original && s.manager.stops >= 2 {
+		s.failed = true
+		return errors.New("fixture rejected original service restart")
+	}
+	return s.recoveryFixtureService.Start(ctx)
 }
 
 func clearRecoveryFixtureReport(path string) error {
@@ -374,7 +403,7 @@ func newFailedRollbackRecoveryFixture(t *testing.T) *recoveryFixture {
 	if _, err := f.engine.Retry(t.Context(), f.request.Expected.Operation, f.request.Expected.Generation); err != nil {
 		t.Fatal(err)
 	}
-	f.engine.cfg.Service = &failRestorationStart{manager: f.manager, original: f.request.Expected.OriginalDigest}
+	f.engine.cfg.Service = &failRestorationStart{recoveryFixtureService: recoveryFixtureService{manager: f.manager}, original: f.request.Expected.OriginalDigest}
 	if _, err := f.engine.Grant(t.Context(), f.request.Expected.Operation, f.request.Expected.Generation); err != nil {
 		t.Fatal(err)
 	}
