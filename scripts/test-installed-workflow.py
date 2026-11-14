@@ -18,7 +18,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-from fixtures import installed_clock, installed_launch, installed_releases, installed_slices, installed_span_controls, installed_workflow as workflow
+from fixtures import installed_clock, installed_launch, installed_releases, installed_slices, installed_workflow as workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
@@ -33,7 +33,10 @@ def job(source, name):
 
 def step(source, name):
     value = source.split("      - name: " + name + "\n", 1)[1].split("      - ", 1)[0]
-    return "\n".join(line[10:] for line in value.split("        run: |\n", 1)[1].splitlines())
+    command = value.split("        run: ", 1)[1]
+    if not command.startswith("|\n"):
+        return command.strip()
+    return "\n".join(line[10:] for line in command[2:].splitlines())
 
 
 def matrix_values(source, name):
@@ -116,41 +119,20 @@ class WorkflowControls(unittest.TestCase):
             self.assertEqual(output.read_text().splitlines(), ["key=setup-go-" + expected + "go-1.27.4-" + "a" * 64,
                                                              "modules=/public modules", "build=/public build"])
 
-    def test_registered_fresh_cache_vehicle_is_current_source_diagnostic_and_bounded(self):
-        source = (WORKFLOWS / "installed-clock-calibration.yml").read_text()
-        vehicle = job(source, "fresh-cache")
-        self.assertIn("workflow_dispatch:", source)
-        self.assertIn("fresh-cache]", source)
-        self.assertIn("if: inputs.measurement_scope == 'fresh-cache'", vehicle)
-        self.assertIn("inputs.measurement_scope != 'fresh-cache'", job(source, "measure"))
-        self.assertEqual(source, (WORKFLOWS / "rollback-proof-investigation.yml").read_text())
-        self.assertNotIn("pull_request:", vehicle)
-        self.assertIn("uses: ./.github/workflows/installed-catchup.yml", vehicle)
-        self.assertIn("harness_source: ${{ github.sha }}", vehicle)
-        self.assertIn("calibration_only: true", vehicle)
-        self.assertIn("calibration_support: fresh", vehicle)
-        self.assertNotIn("worker_artifact", vehicle)
-        self.assertNotIn("release_", vehicle)
-        fresh = job(CATCHUP, "fresh-managed")
-        self.assertEqual(re.findall(r"platform: ([^\n]+)", fresh), ["linux/amd64", "linux/arm64", "darwin/arm64"])
-        self.assertEqual(fresh.count("inputs.calibration_only && 15"), 2)
-        self.assertIn('--clock-job-seconds 900 --clock-command-seconds 600 --clock-external-seconds 240 --clock-emergency-seconds 60', fresh)
-        self.assertLess(fresh.index("Record original job clock"), fresh.index("uses: actions/checkout"))
-        self.assertLess(fresh.index('test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"'), fresh.index("uses: ./.github/actions/installed-go"))
 
-    def test_actual_signer_build_keeps_tagged_test_graph_and_180_second_guard(self):
+    def test_actual_signer_build_keeps_tagged_test_graph_and_parent_hang_cap(self):
         releases = installed_releases.Releases(self.root, "linux/amd64", self.root)
         self.addCleanup(releases.close)
         with patch.object(releases, "exporter_overlay", return_value=[]) as overlay, \
                 patch.object(installed_releases.subprocess, "run") as run, \
-                patch.object(installed_clock, "timeout", side_effect=lambda seconds: seconds) as timeout:
+                patch.object(installed_clock, "timeout", return_value=installed_clock.HANG_SECONDS) as timeout:
             releases.prepare_signer.__wrapped__(releases)
         overlay.assert_called_once_with()
         command = run.call_args_list[0]
         self.assertEqual(command.args[0], ["go", "test", "-c", "-tags", "mesh_installed_fixture",
                                           "-o", str(self.root / "signer-test"), "./internal/update"])
-        self.assertEqual(command.kwargs["timeout"], 180)
-        self.assertEqual([call.args[0] for call in timeout.call_args_list], [180, 15])
+        self.assertEqual(command.kwargs["timeout"], installed_clock.HANG_SECONDS)
+        self.assertEqual(timeout.call_count, 2)
 
     def test_three_profiles_cover_actual_partition_and_waypoint_readers_once(self):
         for mode, count in (("chain", 2), ("waypoint", 7)):
@@ -262,70 +244,17 @@ class WorkflowControls(unittest.TestCase):
         workflow.cleanup(self.root, True)
         self.assertTrue(all(not (self.root / name).exists() for name in names))
 
-    def test_diagnostic_physical_planning_never_reads_an_index(self):
-        with patch.object(workflow.installed_budgets, "select_plan") as select:
-            result = workflow.physical_plans(self.root / "absent.json", True, "linux/amd64", "chain")
-        select.assert_not_called()
-        self.assertEqual(len(result["minutes"]), 4)
-        self.assertEqual(set(result["minutes"].values()), {30})
-        self.assertEqual(set(result["plans"].values()), {""})
-        with self.assertRaisesRegex(ValueError, "inactive"):
-            workflow.physical_plans(self.root / "absent.json", False, "linux/amd64", "chain")
 
-    def test_frozen_physical_roles_require_independent_plans_and_round_admission(self):
-        index = self.root / "index.json"
-        entries = {}
-        self.write_physical_plans(index, entries, "linux/amd64", "chain")
-        index.write_text(json.dumps({"schema": 1, "plans": entries}))
-        with patch.object(workflow.installed_budgets, "ROOT", self.root):
-            result = workflow.physical_plans(index, False, "linux/amd64", "chain")
-        self.assertEqual(len(result["plans"]), 4)
-        self.assertEqual(set(result["minutes"].values()), {20})
-        self.assertEqual(result["profiles"], list(workflow.PROFILES))
-        path = self.root / result["plans"]["linux-amd64-chain-consume-first"]
-        wrong_profile = self.physical_plan("linux/amd64", "chain", "consume", "final")
-        installed_span_controls.write_plan(path, wrong_profile)
-        with patch.object(workflow.installed_budgets, "ROOT", self.root), self.assertRaisesRegex(ValueError, "another profile"):
-            workflow.physical_plans(index, False, "linux/amd64", "chain")
-
-    def write_physical_plans(self, index, entries, platform, mode):
-        for role, profile in (("prepare", None), ("consume", "none"), ("consume", "first"), ("consume", "final")):
-            key = workflow.physical_key(platform, mode, role, profile)
-            installed_span_controls.write_plan(index.parent / (key + ".json"), self.physical_plan(platform, mode, role, profile))
-            entries[key] = {"path": key + ".json"}
-
-    def physical_plan(self, platform, mode, role, profile):
-        template = installed_span_controls.reviewed_for_test(workflow.physical_key(platform, mode, role, "first" if profile else None))
-        workload = dict(template.workload)
-        if profile:
-            workload["installedSlice"] = {"schema": 1, "select": [{"profile": "chain-" + profile,
-                "group_indices": list(range(5))}], "readers": list(range(5)) if mode == "waypoint" and profile == "none" else []}
-        external = installed_clock.PhaseBudget("external", installed_clock.bound(installed_clock.SECOND), workload,
-            (installed_clock.SampleRef({"testOnly": True}, workload, installed_clock.SECOND, True, True),))
-        return installed_span_controls.synthetic_plan(workload, external)
-
-    def test_unsplit_selection_preserves_three_oldest_order_and_support(self):
-        args = SimpleNamespace(diagnostic=False, publication=False, cohort=True, adoption_scenario=None,
-                               catalog=True, index=self.root / "index.json")
-        with patch.object(workflow.installed_budgets, "select_plan", return_value=(None, SimpleNamespace(admission_ns=900 * installed_clock.SECOND))) as select:
-            result = workflow.unsplit_plans(args)
-        self.assertEqual(len(result), 10)
-        self.assertEqual(sum("oldest" in key for key in result), 3)
-        self.assertIn("linux-amd64-order", result)
-        self.assertFalse(any("-chain" in key or "-waypoint" in key for key in result))
-        self.assertEqual(select.call_count, 10)
-
-    def test_job_graph_and_consumer_commands_preserve_original_clock_and_no_builds(self):
-        for name, command, external in (("prepare", 1380, 360), ("consume", 900, 840)):
+    def test_job_graph_and_consumer_commands_keep_complete_profiles_and_no_builds(self):
+        for name in ("prepare", "consume"):
             source = job(PREPARED, name)
-            self.assertLess(source.index("Record original job clock"), source.index("uses: actions/checkout"))
+            self.assertLess(source.index("Record job duration"), source.index("uses: actions/checkout"))
             self.assertEqual(source.count('open(p,"x")'), 1)
-            self.assertIn("needs.plans.outputs.minutes", source)
-            self.assertIn("--clock-plan", source)
-            self.assertIn(f"--clock-job-seconds 1800 --clock-command-seconds {command} --clock-external-seconds {external} --clock-emergency-seconds 60", source)
+            self.assertIn("timeout-minutes: 30", source)
+            self.assertNotIn("--clock-", source)
         consumer = job(PREPARED, "consume")
-        self.assertIn("needs: [plans, prepare]", consumer)
-        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", consumer)
+        self.assertIn("needs: [selection, prepare]", consumer)
+        self.assertIn("profile: ${{ fromJSON(needs.selection.outputs.profiles) }}", consumer)
         self.assertNotIn("setup-go", consumer)
         self.assertNotIn("go build", consumer)
         self.assertNotIn("--native-helper", consumer)
@@ -336,13 +265,13 @@ class WorkflowControls(unittest.TestCase):
         self.assertIn("for profile in none first final", aggregate)
         self.assertNotIn("continue-on-error", PREPARED)
 
-    def test_actual_consumer_shell_emits_explicit_mode_role_and_diagnostic_bounds(self):
+    def test_actual_consumer_shell_emits_complete_mode_and_role(self):
         script = step(job(PREPARED, "consume"), "Run one complete authoritative installed profile using bundled helper")
         control = self.root / "cohort-control"
         control.mkdir()
         for mode in workflow.MODES:
             environment = os.environ | {"RUNNER_TEMP": str(self.root), "SOURCE_HOST": "pc", "PROOF_MODE": mode,
-                "CLOCK_CALIBRATION": "true", "CLOCK_PLAN": "", "PYTHONDONTWRITEBYTECODE": "1"}
+                "PYTHONDONTWRITEBYTECODE": "1"}
             result = subprocess.run(["bash", "-c", "python3() { printf '%s\\n' \"$@\"; };\n" + script],
                 env=environment, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -351,38 +280,7 @@ class WorkflowControls(unittest.TestCase):
             self.assertIn("--installed-adoption", args)
             self.assertIn("--prepared-releases", args)
             self.assertIn("--installed-slice", args)
-            self.assertEqual(args[args.index("--clock-command-seconds") + 1], "900")
-            self.assertEqual(args[args.index("--clock-external-seconds") + 1], "840")
-            self.assertEqual(sum(int(args[args.index(flag) + 1]) for flag in
-                ("--clock-command-seconds", "--clock-external-seconds", "--clock-emergency-seconds")), 1800)
-            self.assertNotIn("--clock-plan", args)
-
-    def test_diagnostic_consumer_admits_measured_transfer_without_extending_job(self):
-        common = {"mode": "diagnostic", "workload": {"platform": "linux/arm64", "mode": "chain"},
-                  "emergency_ns": 60 * installed_clock.SECOND, "admission_ns": 1800 * installed_clock.SECOND}
-        previous = installed_clock.ClockPlan(**common, command_ns=1380 * installed_clock.SECOND,
-                                             external_ns=360 * installed_clock.SECOND)
-        with self.assertRaisesRegex(installed_clock.ClockExpired, "insufficient live job admission"):
-            installed_clock.Clock(previous, origin_ns=451 * installed_clock.SECOND, job_origin_ns=installed_clock.SECOND)
-        current = installed_clock.ClockPlan(**common, command_ns=900 * installed_clock.SECOND,
-                                            external_ns=840 * installed_clock.SECOND)
-        clock = installed_clock.Clock(current, origin_ns=451 * installed_clock.SECOND, job_origin_ns=installed_clock.SECOND)
-        self.assertEqual(clock.deadline_ns, 1351 * installed_clock.SECOND)
-        self.assertLessEqual(clock.deadline_ns + current.emergency_ns, clock.job_deadline_ns)
-
-    def test_calibration_alias_and_all_nine_support_profiles_are_preserved(self):
-        source = (WORKFLOWS / "installed-clock-calibration.yml").read_text()
-        self.assertEqual(source, (WORKFLOWS / "rollback-proof-investigation.yml").read_text())
-        self.assertIn("profile: [adoption-all, adoption-interrupt, fresh]", job(source, "support"))
-        self.assertIn("calibration_only: true", job(source, "support"))
-        self.assertIn("inputs.calibration_support, inputs.calibration_scope", CATCHUP)
-        self.assertIn("name: installed-catchup-${{ inputs.calibration_support || 'ordinary' }}-", CATCHUP)
-        self.assertIn("mode: [oldest, order]", job(CATCHUP, "signed-cohort-chain"))
-        self.assertIn("uses: ./.github/workflows/installed-prepared.yml", job(CATCHUP, "prepared-cohort"))
-        ci = (WORKFLOWS / "ci.yml").read_text()
-        for script in ("test-installed-prepared.py", "test-installed-workflow.py"):
-            self.assertIn("python3 scripts/" + script, ci)
-            self.assertIn("scripts/" + script, CATCHUP)
+            self.assertFalse(any(argument.startswith("--clock-") for argument in args))
 
     def test_harness_and_original_preparation_sources_remain_distinct(self):
         self.assertIn("MESH_HARNESS_SOURCE: ${{ inputs.harness_source }}", PREPARED)
@@ -431,27 +329,27 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual({row["host"] for row in rows}, {"pc", "pi", "mac"})
         for name in ("prepare", "aggregate"):
             source = job(PREPARED, name)
-            self.assertIn("matrix: ${{ fromJSON(needs.plans.outputs.case) }}", source)
+            self.assertIn("matrix: ${{ fromJSON(needs.selection.outputs.case) }}", source)
             self.assertNotIn("platform: [", source)
             self.assertNotIn("mode: [", source)
         consumers = job(PREPARED, "consume")
-        self.assertIn("include: ${{ fromJSON(needs.plans.outputs.case).include }}", consumers)
-        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", consumers)
-        profiles = workflow.physical_plans(None, True, "linux/amd64", "chain")["profiles"]
+        self.assertIn("include: ${{ fromJSON(needs.selection.outputs.case).include }}", consumers)
+        self.assertIn("profile: ${{ fromJSON(needs.selection.outputs.profiles) }}", consumers)
+        profiles = workflow.workflow_case("linux/amd64", "chain")["profiles"]
         self.assertEqual(profiles, ["none", "first", "final"])
         actual = {(row["platform"], row["mode"], profile) for row in rows for profile in profiles}
         self.assertEqual(actual, set(itertools.product(workflow.RUNNERS, workflow.MODES, workflow.PROFILES)))
         self.assertEqual(len(actual), 18)
-        self.assertIn("needs: [plans, prepare]", consumers)
-        self.assertIn("needs: [plans, prepare, consume]", job(PREPARED, "aggregate"))
-        self.assertIn("needs: plans", job(PREPARED, "prepare"))
+        self.assertIn("needs: [selection, prepare]", consumers)
+        self.assertIn("needs: [selection, prepare, consume]", job(PREPARED, "aggregate"))
+        self.assertIn("needs: selection", job(PREPARED, "prepare"))
         self.assertIn("fail-fast: false", job(CATCHUP, "prepared-cohort"))
         self.assertIn("mode: [oldest, order]", job(CATCHUP, "signed-cohort-chain"))
         self.assertEqual(job(CATCHUP, "signed-cohort-chain").count("            mode: order"), 2)
 
     def test_linux_consumers_are_ready_when_mac_preparations_are_cancelled(self):
         cases = outer_cases()
-        completed = {(case, "plans") for case in cases} | {(case, "prepare") for case in cases if case[0].startswith("linux/")}
+        completed = {(case, "selection") for case in cases} | {(case, "prepare") for case in cases if case[0].startswith("linux/")}
         needs = re.search(r"^    needs: \[(.+)\]$", job(PREPARED, "consume"), re.M).group(1).split(", ")
         ready = [case for case in cases if all((case, dependency) in completed for dependency in needs)]
         self.assertEqual(set(ready), {case for case in cases if case[0].startswith("linux/")})
@@ -471,95 +369,19 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(len(groups), 6)
         self.assertIn("cancel-in-progress: false", PREPARED)
 
-    def test_actual_plan_step_selects_only_its_case_without_loading_diagnostic_budgets(self):
-        command = step(job(PREPARED, "plans"), "Require independently reviewed physical job plans or explicit measurement")
+    def test_actual_selection_step_requires_its_case_and_all_profiles(self):
+        command = step(job(PREPARED, "selection"), "Select native case and all complete profiles")
         for platform, mode in outer_cases():
             output = self.root / (platform.replace("/", "-") + "-" + mode)
             environment = os.environ | {"GITHUB_OUTPUT": str(output), "PYTHONDONTWRITEBYTECODE": "1",
-                "PYTHONPATH": str(ROOT / "scripts"), "DIAGNOSTIC": "true", "NATIVE_PLATFORM": platform,
-                "PROOF_MODE": mode, "MEASUREMENT_PROFILE": ""}
+                "PYTHONPATH": str(ROOT / "scripts"), "NATIVE_PLATFORM": platform,
+                "PROOF_MODE": mode}
             result = subprocess.run(["bash", "-c", command], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
             observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
             self.assertEqual(json.loads(observed["case"]), workflow.case_matrix(platform, mode))
-            self.assertEqual(len(json.loads(observed["minutes"])), 4)
-            key = workflow.installed_budgets.PLATFORMS[platform][0] + "-" + mode + "-"
-            self.assertTrue(all(name.startswith(key) for name in json.loads(observed["plans"])))
-            self.assertEqual(set(json.loads(observed["plans"]).values()), {""})
             self.assertEqual(json.loads(observed["profiles"]), list(workflow.PROFILES))
 
-    def test_filter_is_one_diagnostic_profile_and_cannot_select_frozen_plans(self):
-        for profile in workflow.PROFILES:
-            with patch.object(workflow.installed_budgets, "select_plan") as select:
-                value = workflow.physical_plans(None, True, "linux/arm64", "waypoint", profile)
-            select.assert_not_called()
-            self.assertEqual(value["profiles"], [profile])
-            self.assertEqual(set(value["minutes"]), {"linux-arm64-waypoint-prepare", "linux-arm64-waypoint-consume-" + profile})
-            with self.assertRaisesRegex(ValueError, "explicit diagnostic measurement"):
-                workflow.physical_plans(None, False, "linux/arm64", "waypoint", profile)
-        for invalid in ("all", "none,final", "chain-none", "unknown"):
-            with self.assertRaises(ValueError):
-                workflow.physical_plans(None, True, "linux/arm64", "chain", invalid)
-
-    def test_filtered_cli_fails_before_outputs_without_measurement_and_rejects_unknown_profile(self):
-        command = step(job(PREPARED, "plans"), "Require independently reviewed physical job plans or explicit measurement")
-        output = self.root / "filtered-output"
-        base = os.environ | {"GITHUB_OUTPUT": str(output), "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPATH": str(ROOT / "scripts"), "NATIVE_PLATFORM": "linux/amd64", "PROOF_MODE": "chain"}
-        for diagnostic, profile, status in (("false", "final", 1), ("true", "unknown", 2), ("true", "final", 0)):
-            result = subprocess.run(["bash", "-c", command], cwd=ROOT,
-                env=base | {"DIAGNOSTIC": diagnostic, "MEASUREMENT_PROFILE": profile},
-                capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, status, result.stderr)
-            if status:
-                self.assertFalse(output.exists())
-                continue
-            observed = dict(line.split("=", 1) for line in output.read_text().splitlines())
-            self.assertEqual(json.loads(observed["profiles"]), ["final"])
-            self.assertEqual(len(json.loads(observed["minutes"])), 2)
-
-    def test_filtered_workflow_never_runs_aggregate_and_ordinary_call_keeps_all_profiles(self):
-        self.assertIn("inputs.measurement_profile == ''", job(PREPARED, "aggregate"))
-        self.assertIn("measurement_profile:\n        default: ''\n        type: string", PREPARED)
-        self.assertNotIn("measurement_profile:", job(CATCHUP, "prepared-cohort"))
-        self.assertEqual(workflow.selected_profiles(False, ""), ["none", "first", "final"])
-        self.assertEqual(workflow.selected_profiles(True, ""), ["none", "first", "final"])
-
-    def test_registered_recovery_selects_only_four_missing_full_profiles(self):
-        source = (WORKFLOWS / "rollback-proof-investigation.yml").read_text()
-        recovery = job(source, "recovery")
-        rows = re.findall(r"          - platform: (\S+)\n            mode: (\S+)\n            profile: (\S+)", recovery)
-        self.assertEqual(rows, [("linux/amd64", "chain", "final"), ("linux/arm64", "chain", "none"),
-                                ("linux/arm64", "waypoint", "final"), ("darwin/arm64", "chain", "none")])
-        self.assertIn("needs: recovery-inputs", recovery)
-        self.assertIn("uses: ./.github/workflows/installed-prepared.yml", recovery)
-        for key, expression in (("native_platform", "matrix.platform"), ("mode", "matrix.mode"),
-                                ("measurement_profile", "matrix.profile"), ("harness_source", "github.sha")):
-            self.assertIn(key + ": ${{ " + expression + " }}", recovery)
-        self.assertIn("calibration_only: true", recovery)
-        self.assertIn("inputs.measurement_scope != 'consumer-recovery'", job(source, "measure"))
-        self.assertIn("if: inputs.measurement_scope == 'all' || inputs.measurement_scope == 'support'", job(source, "support"))
-        self.assertNotIn("observer", source + PREPARED)
-        for platform, mode, profile in rows:
-            planned = workflow.physical_plans(None, True, platform, mode, profile)
-            self.assertEqual(planned["case"], workflow.case_matrix(platform, mode))
-            self.assertEqual(planned["profiles"], [profile])
-            directory = self.root / (platform.replace("/", "-") + mode)
-            bundle(directory, 7, mode)
-            selected = workflow.selection(directory, profile)
-            self.assertEqual(selected["select"], [{"profile": "chain-" + profile, "group_indices": list(range(7))}])
-            self.assertEqual(selected["readers"], [])
-
-    def test_recovery_input_gate_rejects_every_wrong_producer_field(self):
-        source = (WORKFLOWS / "rollback-proof-investigation.yml").read_text()
-        gate = job(source, "recovery-inputs")
-        self.assertIn("if: inputs.measurement_scope == 'consumer-recovery'", gate)
-        command = step(gate, "Require the original complete producer identity for recovery")
-        environment = os.environ | {"PRODUCER_RUN": "43356291036",
-            "PRODUCER_SOURCE": "3097dc167bcdcadc8a561fb0f443253b74bfd025", "PRODUCER_PREFIX": "update-native"}
-        for change in ({}, {"PRODUCER_RUN": "43356291037"}, {"PRODUCER_SOURCE": "a" * 40}, {"PRODUCER_PREFIX": "replacement"}):
-            result = subprocess.run(["bash", "-c", command], env=environment | change, capture_output=True, text=True, timeout=5)
-            self.assertEqual(result.returncode, 1 if change else 0, result.stderr)
 
     def test_cli_bundled_preparer_is_optional_and_waypoint_is_forwarded(self):
         spec = importlib.util.spec_from_file_location("prepared_workflow_cli", ROOT / "scripts/prove-installed-catchup.py")
@@ -567,262 +389,116 @@ class WorkflowControls(unittest.TestCase):
         spec.loader.exec_module(cli)
         args = SimpleNamespace(native_helper=None, export_prepared=None, prepared_releases=Path("/bundle"), installed_slice=Path("/slice"))
         with patch("fixtures.installed_prepared.run_slice") as run:
-            cli.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64", "plan")
-        run.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", None, Path("/bundle"), Path("/slice"), clock_plan="plan")
+            cli.run_prepared_requested(args, Path("/root"), Path("/out"), "linux/amd64")
+        run.assert_called_once_with(Path("/root"), Path("/out"), "linux/amd64", None, Path("/bundle"), Path("/slice"))
 
 
-class AdmissionCleanupControls(unittest.TestCase):
+class LaunchCleanupControls(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="admission-cleanup-")
+        temporary = tempfile.TemporaryDirectory(prefix="launch-cleanup-")
+        self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.addCleanup(self.remove_temporary, temporary)
-        self.control, self.output = self.root / "cohort-control", self.root / "cohort-proof"
+        self.control = self.root / "cohort-control"
         self.control.mkdir()
+        self.output = self.root / "cohort-proof"
         self.launch = self.control / "fixture-launch.json"
-        self.launch.write_text('{"started":true}')
-        self.job_clock = self.root / "installed-job-clock.json"
-        self.now_ns = 1000 * installed_clock.SECOND
-        original_init = installed_clock.Clock.__init__
-        def initialize_clock(clock, *args, **kwargs):
-            kwargs.setdefault("now", lambda: self.now_ns)
-            original_init(clock, *args, **kwargs)
-        self.enterContext(patch.object(installed_clock.Clock, "__init__", initialize_clock))
-        self.job = {"run": "42", "job": "prepare", "origin_ns": self.now_ns - 260 * installed_clock.SECOND,
-                    "admission_ns": 900 * installed_clock.SECOND}
-        self.job_clock.write_text(json.dumps(self.job))
-        preflight = str(self.root / "preflight-root")
-        self.manager = {"schema": 1, "passed": True, "created": {"root": preflight}, "cleanup": {"serviceAbsent": True, "processAbsent": True}}
+        preflight = str(self.root / "preflight")
+        self.manager = {"schema": 1, "passed": True, "created": {"root": preflight},
+                        "cleanup": {"serviceAbsent": True, "processAbsent": True}}
         (self.control / "native-manager.json").write_text(json.dumps(self.manager))
         (self.control / "scratch-cleanup.json").write_text(json.dumps({"root": preflight, "absent": True}))
         self.names = ("native-worker-input.noindex", "native-tools.noindex", "prepared.noindex", "prepared-transfer.noindex")
         for name in self.names:
             directory = self.root / name
             directory.mkdir()
-            (directory / "payload").write_bytes(b"must never execute")
-        registry = self.root / self.names[0] / "workers.json"
-        registry.write_text('{"workers":[]}')
-        self.argv = ["proof", str(self.output), "--native-preflight", "--installed-adoption", "--signed-chain",
-            "--worker-registry", str(registry), "--worker-probe", str(registry.parent / "probe"), "--source-host", "pc",
-            "--export-prepared", str(self.root / "export.noindex"), "--launch-record", str(self.launch),
-            "--clock-mode", "diagnostic", "--clock-job-start", str(self.job_clock),
-            "--clock-job-seconds", "900", "--clock-command-seconds", "600",
-            "--clock-external-seconds", "240", "--clock-emergency-seconds", "60"]
-        spec = importlib.util.spec_from_file_location("admission_cleanup_cli", ROOT / "scripts/prove-installed-catchup.py")
+            (directory / "payload").write_bytes(b"never execute")
+        spec = importlib.util.spec_from_file_location("outcome_cleanup_cli", ROOT / "scripts/prove-installed-catchup.py")
         self.cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.cli)
-        self.enterContext(patch.dict(os.environ, GITHUB_RUN_ID="42", GITHUB_JOB="prepare", MESH_HARNESS_SOURCE="",
-                                     INSTALLED_CATCHUP_PLATFORM="linux/amd64", MESH_TRANSPORT_LIFECYCLE=""))
-        self.enterContext(patch.object(sys, "argv", self.argv))
-        self.enterContext(patch.object(self.cli.platform, "system", return_value="Linux"))
-        self.enterContext(patch.object(self.cli.platform, "machine", return_value="x86_64"))
-        self.enterContext(patch.object(self.cli.signal, "signal"))
-        self.create = self.enterContext(patch.object(self.cli.installed_paths, "create", side_effect=AssertionError("unexpected fixture root")))
-        self.native = self.enterContext(patch.object(self.cli.native_services, "positive_control", side_effect=AssertionError("unexpected manager")))
-        self.run = self.enterContext(patch.object(self.cli, "run_owned", side_effect=AssertionError("unexpected runtime")))
+        self.argv = ["proof", str(self.output), "--native-preflight", "--fresh-managed", "--launch-record", str(self.launch)]
 
-    def remove_temporary(self, temporary):
-        temporary.cleanup()
-        self.assertFalse(self.root.exists())
-
-    def reject(self):
-        with self.assertRaisesRegex(installed_clock.ClockExpired, "insufficient live job admission") as raised:
+    def fail_validation(self):
+        primary = ValueError("prepared identity validation failed")
+        with patch.object(sys, "argv", self.argv), patch.object(self.cli, "validate_invocation", side_effect=primary), \
+                patch.object(self.cli, "run_owned") as run, self.assertRaises(ValueError) as caught:
             self.cli.main()
-        self.run.assert_not_called()
-        self.create.assert_not_called()
-        self.native.assert_not_called()
-        self.assertFalse((self.output / "fixture-clock.json").exists())
-        self.assertFalse((self.output / "fixture-ownership.json").exists())
-        return raised.exception
+        self.assertIs(caught.exception, primary)
+        run.assert_not_called()
+        return primary
 
     def retain(self):
         with self.assertRaisesRegex(RuntimeError, "ownership unconfirmed"):
             workflow.cleanup(self.root, True)
         self.assertTrue(all((self.root / name / "payload").exists() for name in self.names))
 
-    def test_actual_cli_admission_rejection_removes_only_this_jobs_inputs(self):
-        original = self.job_clock.read_bytes()
-        with patch.object(subprocess, "run", side_effect=AssertionError("unexpected executable")), \
-                patch.object(subprocess, "Popen", side_effect=AssertionError("unexpected child")), \
-                patch.object(subprocess, "check_output", side_effect=AssertionError("unexpected probe")):
-            self.reject()
-        receipt = installed_launch.document(self.launch)
-        self.assertEqual(receipt["state"], "admission-rejected")
-        self.assertEqual(receipt["errorType"], "ClockExpired")
-        self.assertEqual(receipt["jobClockSha256"], hashlib.sha256(original).hexdigest())
-        self.assertEqual(self.job_clock.read_bytes(), original)
+    def test_early_validation_failure_cleans_only_owned_inputs_without_job_clock(self):
+        self.fail_validation()
         workflow.cleanup(self.root)
         self.assertTrue(all(not (self.root / name).exists() for name in self.names[:2]))
         self.assertTrue(all((self.root / name).exists() for name in self.names[2:]))
-        self.assertTrue(self.output.exists())
-        self.assertTrue(self.launch.exists())
         workflow.cleanup(self.root, True)
         workflow.cleanup(self.root, True)
         self.assertTrue(all(not (self.root / name).exists() for name in self.names))
+        self.assertTrue(self.launch.exists())
 
-    def test_cold_cli_imports_and_cleanup_command_never_launch_payloads(self):
-        consumer = self.consumer_arguments()
-        for argv in (self.argv, consumer):
-            self.cold_cli(argv)
-        environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1"}
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/fixtures/installed_workflow.py"), "cleanup", str(self.root)],
-                                env=environment, capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(all(not (self.root / name).exists() for name in self.names[:2]))
-        self.assertTrue(all((self.root / name).exists() for name in self.names[2:]))
-
-    def consumer_arguments(self):
-        directory = self.root / "consumer-bundle"
-        value = bundle(directory, 2, "chain")
-        value.update(native="linux/amd64", host={"name": "pc"})
-        (directory / "prepared.json").write_text(json.dumps(value))
-        selection = self.control / "installed-slice.json"
-        selection.write_text(json.dumps(workflow.selection(directory, "none")))
-        argv = self.argv.copy()
-        for flag in ("--export-prepared", "--worker-registry", "--worker-probe"):
-            index = argv.index(flag)
-            del argv[index:index + 2]
-        argv.extend(["--prepared-releases", str(directory), "--installed-slice", str(selection)])
-        return argv
-
-    def cold_cli(self, argv):
-        code = '''import runpy, sys
-from contextlib import ExitStack
-from unittest.mock import patch
-now_ns = int(sys.argv.pop(1))
-def git(arguments, **_kwargs):
-    assert arguments == ["git", "rev-parse", "HEAD"], arguments
-    return "a" * 40
-with ExitStack() as guards:
-    guards.enter_context(patch("time.monotonic_ns", return_value=now_ns))
-    guards.enter_context(patch("subprocess.check_output", side_effect=git))
-    for name in ("subprocess.run", "subprocess.Popen", "os.execv",
-                 "fixtures.installed_paths.create", "fixtures.native_services.positive_control"):
-        guards.enter_context(patch(name, side_effect=AssertionError("unexpected runtime operation: " + name)))
-    runpy.run_path(sys.argv.pop(1), run_name="__main__")
-'''
-        environment = os.environ | {"PYTHONPATH": str(ROOT / "scripts"), "PYTHONDONTWRITEBYTECODE": "1", "MESH_HARNESS_SOURCE": "a" * 40}
-        result = subprocess.run([sys.executable, "-c", code, str(self.now_ns), str(ROOT / "scripts/prove-installed-catchup.py")] + argv[1:],
-                                env=environment, capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("fixtures.installed_clock.ClockExpired: insufficient live job admission", result.stderr)
-        self.assertNotIn("unexpected runtime operation", result.stderr)
-        self.assertEqual(installed_launch.document(self.launch)["state"], "admission-rejected")
-
-    def test_rejection_requires_intact_job_bound_lifecycle_and_preflight_evidence(self):
-        self.reject()
-        receipt = self.launch.read_bytes()
-        bad = [{}, [], {"started": True}]
-        value = json.loads(receipt)
-        bad.extend(value | change for change in ({"schema": 2}, {"schema": True}, {"state": "admission-pending"}, {"state": "runtime-possible"},
-            {"errorType": "ValueError"}, {"error": ""}, {"output": "/another-job/cohort-proof"},
-            {"jobClockSha256": "0" * 64}, {"run": "43"}, {"job": "consume"}))
-        for changed in bad:
-            with self.subTest(changed=changed):
-                self.launch.write_text(json.dumps(changed))
-                self.retain()
-        for raw in (b"{", b"null"):
-            self.launch.write_bytes(raw)
-            self.retain()
-        self.launch.unlink()
-        self.retain()
-        self.launch.symlink_to(self.control / "missing-launch-record")
-        self.retain()
-        self.launch.unlink()
-        self.launch.write_bytes(receipt)
-        paths = (self.job_clock, self.control / "native-manager.json", self.control / "scratch-cleanup.json")
-        for path in paths:
-            original = path.read_bytes()
-            path.unlink()
-            self.retain()
-            for raw in (b"{", b"[]", b"{}"):
-                path.write_bytes(raw)
-                self.retain()
-            path.write_bytes(original)
-        self.manager["cleanup"]["processAbsent"] = False
-        paths[1].write_text(json.dumps(self.manager))
-        self.retain()
-        self.manager["cleanup"]["processAbsent"] = True
-        for change in ({"schema": True}, {"schema": 2}, {"passed": False}, {"cleanup": []}, {"created": {"root": "/another-root"}}):
-            paths[1].write_text(json.dumps(self.manager | change))
-            self.retain()
-
-    def test_original_dispatch_marker_and_absent_runtime_root_do_not_grant_cleanup(self):
+    def test_runtime_possible_or_unconfirmed_ownership_retains_inputs(self):
+        self.fail_validation()
         self.output.mkdir()
-        (self.output / "harness-source.json").write_text('{"actual":"verified source"}')
-        self.assertFalse(Path(self.manager["created"]["root"]).exists())
-        self.retain()
-
-    def test_possible_runtime_and_unconfirmed_ownership_veto_rejection(self):
-        self.reject()
         for name in ("fixture-clock.json", "fixture-ownership.json"):
             path = self.output / name
-            for value in ("{", "{}", '{"signerAbsent":false,"transitionsAbsent":true}'):
+            for value in ("{", "{}"):
                 path.write_text(value)
                 self.retain()
             path.unlink()
-        self.output.joinpath("fixture-ownership.json").write_text('{"signerAbsent":true,"transitionsAbsent":true}')
+        installed_launch.Launch(self.launch, self.output).runtime_possible()
         self.retain()
-        self.output.joinpath("fixture-clock.json").write_text('{"provenance":{"retained_root":"/possibly-live"}}')
-        self.retain()
-        self.output.joinpath("fixture-clock.json").write_text('{"provenance":{"retained_root":null}}')
-        workflow.cleanup(self.root, True)
-        self.assertTrue(all(not (self.root / name).exists() for name in self.names))
 
-    def test_missing_clock_and_invalid_admission_never_create_rejection_exemption(self):
-        for raw in (None, "{", "{}", json.dumps(self.job | {"run": "another"}), json.dumps(self.job | {"admission_ns": 1})):
-            if raw is None:
-                self.job_clock.unlink()
-            else:
-                self.job_clock.write_text(raw)
-            with self.assertRaises((ValueError, KeyError, FileNotFoundError)):
-                self.cli.main()
-            self.assertEqual(installed_launch.document(self.launch)["state"], "admission-pending")
+    def test_validation_evidence_requires_matching_preflight_and_output(self):
+        self.fail_validation()
+        valid = self.launch.read_bytes()
+        launch = json.loads(valid)
+        for change in ({"schema": True}, {"output": "/other-job/cohort-proof"}, {"state": "runtime-possible"},
+                       {"error": ""}, {"errorType": ""}):
+            self.launch.write_text(json.dumps(launch | change))
             self.retain()
-        self.run.assert_not_called()
-
-    def test_retry_invalidates_old_rejection_before_runtime_and_preserves_error(self):
-        self.reject()
-        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": self.now_ns}))
-        error = installed_clock.ClockExpired("runtime failure must keep all cleanup duties")
-
-        def started(*_args):
-            self.assertEqual(installed_launch.document(self.launch)["state"], "runtime-possible")
-            raise error
-
-        self.run.side_effect = started
-        with self.assertRaises(installed_clock.ClockExpired) as raised:
-            self.cli.main()
-        self.assertIs(raised.exception, error)
+        self.launch.write_bytes(valid)
+        for path in (self.control / "native-manager.json", self.control / "scratch-cleanup.json"):
+            original = path.read_bytes()
+            for value in ("{", "[]", "{}"):
+                path.write_text(value)
+                self.retain()
+            path.unlink()
+            self.retain()
+            path.write_bytes(original)
+        self.manager["cleanup"]["processAbsent"] = False
+        (self.control / "native-manager.json").write_text(json.dumps(self.manager))
         self.retain()
 
-    def test_activation_failure_is_a_possible_launch_and_missing_clock_retains(self):
-        self.job_clock.write_text(json.dumps(self.job | {"origin_ns": self.now_ns}))
-        error = installed_clock.ClockExpired("watchdog activation failed")
-        with patch.object(installed_clock.Clock, "activate", side_effect=error), self.assertRaises(installed_clock.ClockExpired) as raised:
+    def test_activation_failure_records_possible_runtime_and_preserves_error(self):
+        primary = installed_clock.ClockExpired("watchdog activation failed")
+        clock = installed_clock.Clock({})
+        with patch.object(sys, "argv", self.argv), patch.object(self.cli, "validate_invocation", return_value=("linux/amd64", clock)), \
+                patch.object(clock, "activate", side_effect=primary), self.assertRaises(installed_clock.ClockExpired) as caught:
             self.cli.main()
-        self.assertIs(raised.exception, error)
-        self.run.assert_not_called()
+        self.assertIs(caught.exception, primary)
         self.assertEqual(installed_launch.document(self.launch)["state"], "runtime-possible")
         self.retain()
 
-    def test_failed_rejection_record_preserves_original_clock_expired(self):
+    def test_failed_pre_runtime_record_keeps_original_error(self):
         original_write = Path.write_text
-
         def write(path, data, *args, **kwargs):
-            if path == self.launch and '"admission-rejected"' in data:
-                raise OSError("disk control failure")
+            if path == self.launch and '"validation-failed"' in data:
+                raise OSError("evidence disk failure")
             return original_write(path, data, *args, **kwargs)
-
         with patch.object(Path, "write_text", write):
-            error = self.reject()
-        self.assertIn("disk control failure", error.__notes__[0])
-        self.assertEqual(installed_launch.document(self.launch)["state"], "admission-pending")
+            error = self.fail_validation()
+        self.assertIn("evidence disk failure", error.__notes__[0])
         self.retain()
 
-    def test_hosted_commands_pass_the_same_dispatch_record_to_cli(self):
+    def test_hosted_dispatches_pass_the_same_launch_record(self):
         for source in (job(PREPARED, "prepare"), job(PREPARED, "consume"), job(CATCHUP, "signed-cohort-chain")):
             self.assertEqual(source.count('--launch-record "$RUNNER_TEMP/cohort-control/fixture-launch.json"'), 1)
-            self.assertLess(source.index('printf \'{"started":true}'), source.index("--launch-record"))
+            self.assertLess(source.index('printf'), source.index("--launch-record"))
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from fixtures import installed_adoption, installed_catalog_evidence as evidence, installed_cohort, release_workers
+from fixtures import installed_clock, installed_adoption, installed_catalog_evidence as evidence, installed_cohort, release_workers
 
 
 class CatalogEvidenceTests(unittest.TestCase):
@@ -160,7 +160,7 @@ class CatalogEvidenceTests(unittest.TestCase):
                 cohort.verify("before-install")
         self.assertIs(caught.exception, failure)
         run.assert_called_once()
-        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        self.assertEqual(run.call_args.kwargs["timeout"], installed_clock.HANG_SECONDS)
         self.assertEqual(cohort.record.with_suffix(".failure.stderr").read_text(), failure.stderr)
         self.assertEqual(cohort.record.with_suffix(".failure.stdout").read_text(), failure.stdout)
         saved = json.loads(self.observer.output.read_text())
@@ -183,7 +183,7 @@ class CatalogEvidenceTests(unittest.TestCase):
                 cohort.verify("before-install")
         self.assertIs(caught.exception, failure)
         run.assert_called_once()
-        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        self.assertEqual(run.call_args.kwargs["timeout"], installed_clock.HANG_SECONDS)
         self.assertTrue(json.loads(self.observer.output.read_bytes())["observerStopped"])
         self.export_timeout(cohort, failure)
 
@@ -252,12 +252,12 @@ class CatalogEvidenceTests(unittest.TestCase):
 
         def run(arguments, **kwargs):
             if arguments[2] in ("start", "start-published"):
-                self.assertEqual(kwargs["timeout"], 90)
+                self.assertEqual(kwargs["timeout"], installed_clock.HANG_SECONDS)
                 with patch.dict(os.environ, kwargs["env"]):
                     release_workers.main(arguments[2:])
                 return subprocess.CompletedProcess(arguments, 0, "", "")
             self.assertEqual(arguments[2], "verify")
-            self.assertEqual(kwargs["timeout"], 90)
+            self.assertEqual(kwargs["timeout"], installed_clock.HANG_SECONDS)
             self.assertFalse(messages, "graded I/O preceded the complete publication boundary")
             calls.append("original-verifier")
             raise failure
@@ -437,7 +437,7 @@ class CatalogEvidenceTests(unittest.TestCase):
                 cohort.start()
         self.assertIs(caught.exception, failure)
         run.assert_called_once()
-        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        self.assertEqual(run.call_args.kwargs["timeout"], installed_clock.HANG_SECONDS)
         verify.assert_not_called()
 
     def test_startup_refusal_and_timeout_export_full_streams_and_original_exception(self):
@@ -457,7 +457,7 @@ class CatalogEvidenceTests(unittest.TestCase):
                 cohort.start()
         self.assertIs(caught.exception, failure)
         run.assert_called_once()
-        self.assertEqual(run.call_args.kwargs["timeout"], 90)
+        self.assertEqual(run.call_args.kwargs["timeout"], installed_clock.HANG_SECONDS)
         verify.assert_not_called()
         output = self.root / ("startup-" + type(failure).__name__)
         output.mkdir()

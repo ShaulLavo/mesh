@@ -290,7 +290,7 @@ def probe(output):
         for account in accounts.create():
             script = source / "scripts/prove-installed-catchup.py"
             accounts.run(account, [sys.executable, script, Path(account["home"]) / "control", "--native-preflight"],
-                         check=True, timeout=30, env=os.environ | {"MESH_SHORT_TMP": "/tmp"})
+                         check=True, timeout=installed_clock.timeout(), env=os.environ | {"MESH_SHORT_TMP": "/tmp"})
     finally:
         try:
             retain_controls(root, output)

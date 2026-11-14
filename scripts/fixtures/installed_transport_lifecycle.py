@@ -30,7 +30,7 @@ def configure(case):
     if not enabled():
         return
     clock = installed_clock.current()
-    if clock is None or clock.plan.mode != "diagnostic" or clock.plan.workload.get("transportLifecycle") != MARKER:
+    if clock is None or clock.workload.get("transportLifecycle") != MARKER:
         raise CoverageIncomplete("transport lifecycle observer requires its marked diagnostic clock")
     directory = case.root / "transport-lifecycle"
     directory.mkdir(mode=0o700)
@@ -117,7 +117,7 @@ def prove(case, bootstrap, boundary="post-adoption before selected cohort"):
     image = images[daemon]
     if image["sha256"] != bootstrap["running"]["digest"]:
         raise CoverageIncomplete("coverage gate daemon differs from the actual adopted image")
-    deadline = time.monotonic() + installed_clock.timeout(1)
+    deadline = time.monotonic() + installed_clock.timeout()
     observed = await_original(case, daemon, bootstrap, deadline)
     if (observed["remote"], observed["local"]) not in original_sockets(case.terminal.pid) or case.terminal.poll() is not None:
         raise CoverageIncomplete("covered session does not belong to the live original client's TCP socket")

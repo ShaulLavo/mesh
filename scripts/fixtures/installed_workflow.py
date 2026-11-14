@@ -6,77 +6,27 @@ from pathlib import Path
 import shutil
 import tarfile
 
-from fixtures import fleet_baselines, installed_artifacts, installed_budgets, installed_clock, installed_storage
+from fixtures import fleet_baselines, installed_artifacts, installed_clock, installed_storage
 
 PROFILES = ("none", "first", "final")
 MODES = ("chain", "waypoint")
+PLATFORMS = {"linux/amd64": ("linux-amd64", "pc"), "linux/arm64": ("linux-arm64", "pi"),
+             "darwin/arm64": ("darwin-arm64", "mac")}
 RUNNERS = {"linux/amd64": "ubuntu-24.04", "linux/arm64": "ubuntu-24.04-arm", "darwin/arm64": "macos-15"}
 
 
 def case_matrix(platform, mode):
     if platform not in RUNNERS or mode not in MODES:
         raise ValueError("prepared workflow needs one supported native platform and mode")
-    key, host = installed_budgets.PLATFORMS[platform]
+    key, host = PLATFORMS[platform]
     hosts = [row for row in fleet_baselines.load()["hosts"] if row["name"] == host and row["platform"] == platform]
     if len(hosts) != 1:
         raise ValueError("prepared workflow host mapping differs from the actual native inventory")
     return {"include": [{"platform": platform, "key": key, "host": host, "runner": RUNNERS[platform], "mode": mode}]}
 
 
-def physical_key(platform, mode, role, profile=None):
-    key = installed_budgets.PLATFORMS[platform][0] + "-" + mode + "-" + role
-    return key + "-" + profile if profile else key
-
-
-def physical_plans(index, diagnostic, platform, mode, measurement_profile=""):
-    profiles = selected_profiles(diagnostic, measurement_profile)
-    matrix = case_matrix(platform, mode)
-    values, paths = {}, {}
-    add_physical_plans(values, paths, index, diagnostic, platform, mode, profiles)
-    return {"minutes": values, "plans": paths, "case": matrix, "profiles": profiles}
-
-
-def selected_profiles(diagnostic, measurement_profile):
-    if not measurement_profile:
-        return list(PROFILES)
-    if not diagnostic or measurement_profile not in PROFILES:
-        raise ValueError("profile filtering requires explicit diagnostic measurement and one supported profile")
-    return [measurement_profile]
-
-
-def add_physical_plans(values, paths, index, diagnostic, platform, mode, profiles):
-    host = installed_budgets.PLATFORMS[platform][1]
-    roles = [("prepare", None)] + [("consume", profile) for profile in profiles]
-    for role, profile in roles:
-        key = physical_key(platform, mode, role, profile)
-        if diagnostic:
-            values[key], paths[key] = 30, ""
-            continue
-        context = {"platform": platform, "host": host, "mode": mode, "preparedRole": role,
-                   "grouped": True, "scenario": None, "catalogEvidence": False}
-        path, plan = installed_budgets.select_plan(index, key, context)
-        validate_profile(plan.workload, role, profile)
-        values[key], paths[key] = installed_budgets.workflow_minutes(plan), str(path.relative_to(installed_budgets.ROOT))
-
-
-def validate_profile(workload, role, profile):
-    if role == "prepare":
-        return
-    selected = workload.get("installedSlice", {}).get("select", [])
-    if len(selected) != 1 or selected[0].get("profile") != "chain-" + profile:
-        raise ValueError("reviewed prepared plan selects another profile")
-
-
-def unsplit_plans(args):
-    if args.diagnostic or args.publication:
-        return {}
-    profiles = installed_budgets.required_profiles(False, True, args.adoption_scenario, args.catalog)
-    if args.cohort:
-        profiles += [installed_budgets.selection(platform, "oldest", catalog=args.catalog and platform.startswith("linux/"))
-                     for platform in installed_budgets.PLATFORMS]
-        profiles.append(installed_budgets.selection("linux/amd64", "order"))
-    return {key: installed_budgets.workflow_minutes(installed_budgets.select_plan(args.index, key, context)[1])
-            for key, context in profiles}
+def workflow_case(platform, mode):
+    return {"case": case_matrix(platform, mode), "profiles": list(PROFILES)}
 
 
 def selection(bundle, profile):
@@ -174,7 +124,7 @@ def cleanup(root, bundle=False):
             raise RuntimeError("owned payload remains after cleanup: " + str(path))
 
 
-def write_plans_output(value):
+def write_case_output(value):
     with open(os.environ["GITHUB_OUTPUT"], "a") as output:
         for key, data in value.items():
             output.write(key + "=" + json.dumps(data, separators=(",", ":")) + "\n")
@@ -183,19 +133,9 @@ def write_plans_output(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    plans = commands.add_parser("plans")
-    plans.add_argument("--index", type=Path, default=installed_budgets.INDEX)
-    plans.add_argument("--diagnostic", action="store_true")
-    plans.add_argument("--platform", choices=tuple(RUNNERS), required=True)
-    plans.add_argument("--mode", choices=MODES, required=True)
-    plans.add_argument("--measurement-profile", choices=PROFILES, default="")
-    unsplit = commands.add_parser("unsplit")
-    unsplit.add_argument("--index", type=Path, default=installed_budgets.INDEX)
-    unsplit.add_argument("--diagnostic", action="store_true")
-    unsplit.add_argument("--publication", action="store_true")
-    unsplit.add_argument("--cohort", action="store_true")
-    unsplit.add_argument("--catalog", action="store_true")
-    unsplit.add_argument("--adoption-scenario", choices=installed_budgets.SCENARIOS)
+    case = commands.add_parser("case")
+    case.add_argument("--platform", choices=tuple(RUNNERS), required=True)
+    case.add_argument("--mode", choices=MODES, required=True)
     select = commands.add_parser("select")
     select.add_argument("bundle", type=Path)
     select.add_argument("profile", choices=PROFILES)
@@ -215,10 +155,8 @@ def main():
     args = parser.parse_args()
     if args.command == "select":
         args.output.write_text(json.dumps(selection(args.bundle, args.profile)) + "\n")
-    elif args.command == "plans":
-        write_plans_output(physical_plans(args.index, args.diagnostic, args.platform, args.mode, args.measurement_profile))
-    elif args.command == "unsplit":
-        print(json.dumps(unsplit_plans(args), separators=(",", ":")))
+    elif args.command == "case":
+        write_case_output(workflow_case(args.platform, args.mode))
     elif args.command == "fetch":
         fetch(args.repository, args.run, args.name, args.destination, args.output)
     elif args.command == "pack":

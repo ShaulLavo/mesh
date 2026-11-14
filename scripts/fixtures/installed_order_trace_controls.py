@@ -531,7 +531,7 @@ class OrderTraceTest(unittest.TestCase):
                 def dispatch(self, operation, value):
                     return value["fixtureDeadlineNs"]
             endpoint = Endpoint()
-            self.assertEqual(endpoint.call("inspect", fixtureDeadlineNs=123), (123, 30))
+            self.assertEqual(endpoint.call("inspect", fixtureDeadlineNs=123), (123, installed_clock.HANG_SECONDS))
             self.assertEqual(endpoint.dispatch("inspect", {"fixtureDeadlineNs": 123}), 123)
             for row in endpoint.diagnostics.events.values():
                 self.assertEqual(row["last"]["details"]["fixtureDeadlineNs"], 123)

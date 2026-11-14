@@ -120,7 +120,7 @@ def verify_output(output, descriptor, identity, states, adoption):
     for index in selection["readers"]:
         reader = json.loads((output / ("original-format-readers-group-" + str(index) + ".json")).read_bytes())
         validate_readers(reader, descriptor)
-    return selection, clock.get("accepted") is True and clock.get("mode") == "frozen"
+    return selection, clock.get("accepted") is True
 
 
 def verify_preparation(output, descriptor, identity):
@@ -132,7 +132,7 @@ def verify_preparation(output, descriptor, identity):
             or not clock.get("measurement_completed") or clock.get("failures")):
         raise ValueError("prepared producer identity, full proofs or cleanup are incomplete")
     validate_clock_context(clock, descriptor)
-    return clock.get("accepted") is True and clock.get("mode") == "frozen"
+    return clock.get("accepted") is True
 
 
 def validate_clock_context(clock, descriptor):

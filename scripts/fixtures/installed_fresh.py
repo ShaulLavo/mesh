@@ -9,12 +9,12 @@ import time
 from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_native, installed_releases, installed_clock
 
 
-def prove(root, output, native, *, clock_plan=None):
+def prove(root, output, native):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
         raise RuntimeError("fresh installed fixture needs 4 GiB free before builds and acquisition")
-    releases = installed_releases.Releases(root, native, output, clock_plan=clock_plan)
+    releases = installed_releases.Releases(root, native, output)
     try:
         releases.start_signer()
         from fixtures import installed_origin
@@ -79,7 +79,7 @@ class FreshCase(installed_adoption.AdoptionCase):
 
     def production_install_command(self, operation, flags):
         result = subprocess.run([str(self.binary), "daemon", operation, *flags], env=self.environment,
-                                capture_output=True, text=True, check=False, timeout=75)
+                                capture_output=True, text=True, check=False, timeout=installed_clock.timeout())
         (self.root / (operation + ".log")).write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError("fresh production " + operation + " failed: " + result.stderr[-4096:])
@@ -156,7 +156,7 @@ def run_fresh_case(root, output, releases, origin, target):
 
 
 def await_commit(case, target):
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + installed_clock.timeout()
     while time.monotonic() < deadline:
         ledger = installed_chain.read_ledger(case)
         entries = [entry for entry in ledger["entries"] if entry["version"] == target]

@@ -75,10 +75,10 @@ def run_groups(root, output, host, pair, preparer, origin, releases, previous, f
     if failure == "final":
         expected.append("native-failed-edge-restart")
     for group in groups:
-        releases.check_budget()
+        releases.check_running()
         directory = output / "groups" / (host["name"] + "-chain-" + failure) / str(group["index"])
         run_one_group(root, directory, host, pair, preparer, origin, releases, previous, failure, group, expected)
-        releases.check_budget()
+        releases.check_running()
     installed_adoption.complete_installed_groups(output / "groups" / (host["name"] + "-chain-" + failure), groups, expected,
                                                 installed_adoption.original_source(pair["daemon"]))
 
@@ -94,7 +94,7 @@ def run_one_group(root, directory, host, pair, preparer, origin, releases, previ
 
 
 def await_chain(case, record, intermediate, final, fail_final):
-    deadline = time.monotonic() + 150
+    deadline = time.monotonic() + installed_clock.timeout()
     seen = set()
     while time.monotonic() < deadline:
         journal = read_journal(case)
@@ -161,7 +161,7 @@ def ready_helper(case, version):
 
 
 def await_first_rollback(case, record, source, target):
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + installed_clock.timeout()
     while time.monotonic() < deadline:
         journal = read_journal(case)
         rolled_back = journal.get("phase") == "rolled_back" and journal.get("request", {}).get("manifest", {}).get("version") == target
@@ -249,7 +249,7 @@ def verify_failed_restart(case, record, source, target):
     modified = state_file.stat().st_mtime_ns
     case.units.stop("daemon")
     case.units.start("daemon")
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + installed_clock.timeout()
     while time.monotonic() < deadline:
         ledger = read_ledger(case)
         reconciled = state_file.stat().st_mtime_ns != modified and not ledger["state"].get("owned")

@@ -5,9 +5,9 @@ and vehicle review, then the parent runs one focused Linux AMD64 chain-final pro
 
 `mesh_installed_fixture` builds enable this tooling only when the fixture sets
 `MESH_TRANSPORT_LIFECYCLE_DIR`. Ordinary binaries never configure it. Fixture
-drivers opt in with `MESH_TRANSPORT_LIFECYCLE=1` and an explicitly diagnostic clock.
+drivers opt in with `MESH_TRANSPORT_LIFECYCLE=1` and its explicitly marked observer workload.
 The workload and provenance carry `transportLifecycle`. Such measurements cannot
-be frozen or grant installed acceptance, including through `SampleRef.eligible`.
+grant installed acceptance.
 Exported instrumented samples have `eligible: false`; `diagnostic_complete`
 separately records completed, cleaned diagnostic measurements.
 
@@ -32,7 +32,7 @@ original client's post-adoption attachment. The gate checks its captured publish
 image, live PID, adopted daemon mapped image, matching process metadata, successful
 TLS/authorization/acceptance/attach events and the original client's TCP socket
 inode/tuple. It uses the existing successful marker/I/O result. Its at-most-one-second
-passive log wait consumes the existing diagnostic clock; it never retries a marker.
+passive log wait consumes the existing parent hang cap; it never retries a marker.
 Successful later inspections repeat coverage checks for each replacement daemon,
 with each process image hash cached after its first observation.
 

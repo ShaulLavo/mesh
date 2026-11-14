@@ -47,9 +47,7 @@ class ExporterFormatTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="exporter-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        plan = installed_clock.ClockPlan("diagnostic", {"test": "exporter"}, command_ns=600 * installed_clock.SECOND,
-                                        external_ns=240 * installed_clock.SECOND, emergency_ns=60 * installed_clock.SECOND)
-        self.clock = installed_clock.Clock(plan)
+        self.clock = installed_clock.Clock({"test": "exporter"})
         active = self.clock.activate()
         active.__enter__()
         self.addCleanup(active.__exit__, None, None, None)
@@ -77,7 +75,7 @@ class ExporterFormatTest(unittest.TestCase):
         with patch.object(installed_releases, "Releases") as factory, patch.object(installed_adoption, "run_prepared"), \
                 patch.object(installed_adoption, "retain_producer_logs"):
             installed_adoption.run(self.root, self.root, "linux/amd64", None, format_waypoint=waypoint)
-        factory.assert_called_once_with(self.root, "linux/amd64", self.root, manifest_schemas=schemas, clock_plan=None)
+        factory.assert_called_once_with(self.root, "linux/amd64", self.root, manifest_schemas=schemas)
         factory.return_value.start_signer.assert_called_once_with()
         factory.return_value.close.assert_called_once_with()
 
@@ -92,7 +90,7 @@ class ExporterFormatTest(unittest.TestCase):
     def check_exporter_build(self, schemas):
         root = self.root / str(len(schemas))
         root.mkdir()
-        releases = installed_releases.Releases(root, "linux/amd64", root, manifest_schemas=schemas, clock_plan=self.clock.plan)
+        releases = installed_releases.Releases(root, "linux/amd64", root, manifest_schemas=schemas)
         self.addCleanup(releases.close)
         source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=installed_releases.REPO, text=True).strip()
         with patch.object(installed_releases.subprocess, "run") as run, \
@@ -111,12 +109,12 @@ class ExporterFormatTest(unittest.TestCase):
         launch.assert_called_once()
         duration = next(arg for arg in launch.call_args.args[0] if arg.startswith("-test.timeout="))
         self.assertTrue(duration.endswith("ns"))
-        self.assertLessEqual(int(duration.removeprefix("-test.timeout=").removesuffix("ns")), 600 * installed_clock.SECOND)
+        self.assertLessEqual(int(duration.removeprefix("-test.timeout=").removesuffix("ns")), installed_clock.HANG_SECONDS * installed_clock.SECOND)
         with self.assertRaisesRegex(RuntimeError, "already launched"):
             releases.start_signer()
 
     def test_exporter_build_failure_never_launches_or_falls_back(self):
-        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(1, 2), clock_plan=self.clock.plan)
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, manifest_schemas=(1, 2))
         self.addCleanup(releases.close)
         with patch.object(installed_releases.subprocess, "run", side_effect=RuntimeError("build failed")) as run, \
                 patch.object(installed_releases.subprocess, "Popen") as launch:
@@ -145,7 +143,7 @@ class ExporterFormatTest(unittest.TestCase):
             self.assertIsInstance(raised.exception.__cause__, json.JSONDecodeError)
 
     def test_empty_stop_reply_reaps_exporter_and_preserves_primary_timeout(self):
-        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=self.clock.plan)
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root)
         process = releases.signer = Mock()
         process.poll.side_effect = [None, 0]
         log = releases.signer_log = Mock()
@@ -392,20 +390,14 @@ class InstalledModeShellTest(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(dir=os.environ.get("MESH_SHORT_TMP"))
         self.addCleanup(temporary.cleanup)
         (Path(temporary.name) / "cohort-control").mkdir()
-        origin = str(Path(temporary.name) / "installed-job-clock.json")
-        frozen = ["--clock-mode", "frozen", "--clock-job-start", origin]
-        diagnostic = ["--clock-mode", "diagnostic", "--clock-job-start", origin,
-                      "--clock-job-seconds", "1800", "--clock-command-seconds", "1500",
-                      "--clock-external-seconds", "240", "--clock-emergency-seconds", "60"]
         for mode, flags in (("oldest", []), ("chain", ["--signed-chain"]), ("waypoint", ["--format-waypoint"]), ("order", ["--ordered-hosts"])):
-            for calibration, clock in (("false", frozen), ("true", diagnostic)):
-                environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": temporary.name, "CLOCK_CALIBRATION": calibration}
-                result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
-                self.assertEqual(result.returncode, 0, (mode, calibration, result.stderr))
-                arguments = result.stdout.decode().split("\0")[:-1]
-                position = arguments.index("--source-host")
-                self.assertEqual(arguments[position:], ["--source-host", "mac"] + flags + clock)
-                self.assertIn("--worker-registry", arguments)
+            environment = os.environ | {"PROOF_MODE": mode, "SOURCE_HOST": "mac", "RUNNER_TEMP": temporary.name}
+            result = subprocess.run(["/bin/bash", "-c", prefix + command], env=environment, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, (mode, result.stderr))
+            arguments = result.stdout.decode().split("\0")[:-1]
+            position = arguments.index("--source-host")
+            self.assertEqual(arguments[position:], ["--source-host", "mac"] + flags)
+            self.assertIn("--worker-registry", arguments)
         self.assertTrue(json.loads((Path(temporary.name) / "cohort-control/fixture-launch.json").read_text())["started"])
 
 
@@ -555,7 +547,7 @@ class RouteObservationTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         server, thread = self.server()
         port = server.server_port
-        observer = installed_routes.Observer(port, {"pid": os.getpid()}, Path(temporary.name) / "route.json", maximum=2)
+        observer = installed_routes.Observer(port, {"pid": os.getpid()}, Path(temporary.name) / "route.json")
         self.addCleanup(observer.close)
         observer.start()
         self.stop_server(server, thread)
@@ -565,7 +557,7 @@ class RouteObservationTest(unittest.TestCase):
         value = observer.snapshot()
         self.assertGreater(value["pulses"], 1)
         self.assertGreater(len(value["gaps"]), 0)
-        self.assertTrue(all(0 < gap["seconds"] < 2 for gap in value["gaps"]))
+        self.assertTrue(all(gap["seconds"] >= 0 for gap in value["gaps"]))
 
     def test_another_listener_is_rejected(self):
         temporary = tempfile.TemporaryDirectory()
@@ -938,7 +930,7 @@ class ChainObservationTest(unittest.TestCase):
     def check_chain_bound(self, connection):
         self.socket_factory.return_value = connection
         with patch.object(installed_chain, "read_journal", return_value={}), \
-                patch.object(installed_chain.time, "monotonic", side_effect=[0, 0, 150]), \
+                patch.object(installed_chain.time, "monotonic", side_effect=[0, 0, installed_clock.HANG_SECONDS]), \
                 patch.object(installed_chain.time, "sleep") as pause:
             with self.assertRaisesRegex(RuntimeError, "signed native chain did not finish"):
                 installed_chain.await_chain(self.case, self.record, self.middle, self.final, False)

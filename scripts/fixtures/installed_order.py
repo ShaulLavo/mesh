@@ -44,7 +44,7 @@ class Driver:
             raise
 
     @order_trace.calls
-    def call(self, operation, timeout=30, **fields):
+    def call(self, operation, timeout=installed_clock.HANG_SECONDS, **fields):
         parent = self.cleanup_deadline_ns if operation == "close" else self.fixture_deadline_ns
         deadline_ns = min(parent, installed_clock.parent_deadline(timeout))
         installed_clock.remaining_until(deadline_ns, timeout)
@@ -93,7 +93,7 @@ class Driver:
         root = Path(account["home"]) / (account["role"] + "-ordered")
         script = accounts.source / "scripts/fixtures/installed_order_host.py"
         result = accounts.run(account, [sys.executable, script, "--logs", root],
-            capture_output=True, text=True, timeout=10, env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
+            capture_output=True, text=True, timeout=installed_clock.timeout(), env=os.environ | {"PYTHONPATH": str(accounts.source / "scripts")})
         if result.returncode:
             raise RuntimeError("ordered account evidence export failed: " + account["role"] + ": " + result.stderr[-4096:])
         publish_logs(result.stdout, accounts.output, account["role"] + "-ordered", order_trace.trace(self))
@@ -199,7 +199,7 @@ def bootstrap(drivers, record):
         configured = driver.call("configure", peers=members, after=after, soak=5_000_000_000)
         record.setdefault("baselineInitialization", {})[driver.account["role"]] = configured["baselineInitialization"]
     for driver in drivers:
-        result = driver.call("adopt", timeout=120, version=installed_releases.VERSIONS[0])
+        result = driver.call("adopt", timeout=installed_clock.timeout(), version=installed_releases.VERSIONS[0])
         record.setdefault("adopted", {})[driver.account["role"]] = result
     record["peers"] = members
 
@@ -213,11 +213,11 @@ def scenarios(root, drivers, descriptor, record):
     canary.call("fault", versions=[failed])
     origin.head(directory, failed)
     restart(canary)
-    failed_state = await_version(canary, first, "rolled_back", 90)
+    failed_state = await_version(canary, first, "rolled_back")
     if not any(edge["version"] == failed for edge in failed_state["failed"]):
         raise RuntimeError("failed native canary did not retain its failed edge")
     started = opportunity(direct)
-    held = await_opportunity(direct, first, failed, started, 45)
+    held = await_opportunity(direct, first, failed, started)
     require_failed_canary_read(held, failed_state, canary.account["id"])
     record["observations"].append({"canaryFailure": bounded(failed_state), "awakeDirectHold": bounded(held)})
     canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold = release_latest(origin, directory, drivers, record)
@@ -255,7 +255,7 @@ def release_latest_owned(origin, directory, drivers, record):
             order_trace.event(canary, "exposure.reply")
             canary.call("fault", versions=[])
             restart(canary)
-            canary_latest = await_version(canary, latest, "committed", 90, partial(order_trace.publish, canary, canary_commit))
+            canary_latest = await_version(canary, latest, "committed", committed=partial(order_trace.publish, canary, canary_commit))
             order_trace.event(canary, "direct.collect.begin")
             direct_latest, direct_hold = direct_result.result()
             order_trace.event(canary, "direct.collect.end")
@@ -320,8 +320,8 @@ def fresh_opportunity(value, started):
     return bool(reads) and max(reads) >= started and written >= started and value["state"]["phase"] == "waiting"
 
 
-def await_opportunity(driver, source, target, started, timeout, cutoff=None):
-    deadline = time.monotonic() + timeout
+def await_opportunity(driver, source, target, started, timeout=installed_clock.HANG_SECONDS, cutoff=None):
+    deadline = time.monotonic() + installed_clock.timeout(timeout)
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
         assert_held(value, source, target)
@@ -354,9 +354,9 @@ def exercise_soak(driver, predecessor, source, target, committed=None):
         raise RuntimeError("fixture missed the pre-expiry opportunity; no soak proof recorded")
     order_trace.event(driver, "guard.open")
     started = opportunity(driver)
-    held = await_opportunity(driver, source, target, started, 45, cutoff)
+    held = await_opportunity(driver, source, target, started, cutoff=cutoff)
     order_trace.event(driver, "hold.completed", peers=held["peers"], stateWrittenAt=held["stateWrittenAt"])
-    deadline = time.monotonic() + 90
+    deadline = time.monotonic() + installed_clock.timeout()
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
         if time.time_ns() < cutoff:
@@ -405,8 +405,8 @@ def validated_soaked_commit(driver, target, cutoff):
     return observed
 
 
-def await_version(driver, version, phase, timeout, committed=None):
-    deadline = time.monotonic() + timeout
+def await_version(driver, version, phase, timeout=installed_clock.HANG_SECONDS, committed=None):
+    deadline = time.monotonic() + installed_clock.timeout(timeout)
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
         journal = value.get("journal") or {}
@@ -432,8 +432,8 @@ def inspect_full(driver):
         return driver.call("inspect")
 
 
-def await_held(driver, version, timeout):
-    deadline = time.monotonic() + timeout
+def await_held(driver, version, timeout=installed_clock.HANG_SECONDS):
+    deadline = time.monotonic() + installed_clock.timeout(timeout)
     while time.monotonic() < deadline:
         value = driver.call("inspect", active=False)
         held = value["state"]["phase"] == "waiting" and not value["state"].get("owned")

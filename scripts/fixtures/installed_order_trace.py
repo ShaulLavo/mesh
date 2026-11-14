@@ -265,7 +265,7 @@ def span(owner, phase, **details):
 
 def calls(method):
     @wraps(method)
-    def observed(self, operation, timeout=30, **fields):
+    def observed(self, operation, timeout=installed_clock.HANG_SECONDS, **fields):
         with span(trace(self), "call", operation=operation, active=fields.get("active", True), fixtureDeadlineNs=fields.get("fixtureDeadlineNs")):
             return method(self, operation, timeout=timeout, **fields)
     return observed

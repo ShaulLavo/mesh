@@ -61,7 +61,7 @@ def execute(releases, source, value, label):
     environment = os.environ | {"MESH_STATE_DIR": str(blocked), "MESH_CONFIG_DIR": str(blocked),
         "HTTP_PROXY": "http://127.0.0.1:1", "HTTPS_PROXY": "http://127.0.0.1:1", "NO_PROXY": ""}
     result = subprocess.run([releases.builds[source]["path"], "update-reader", "-input", str(path), "-trust-cache", str(cache)],
-        env=environment, capture_output=True, text=True, timeout=15, check=False)
+        env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
     if list(cache.iterdir()) or blocked.read_text() != "preserve read-only user paths":
         raise RuntimeError("original reader changed offline trust or user configuration")
     return result

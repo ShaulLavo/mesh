@@ -31,7 +31,7 @@ def file_digest(path):
 
 
 def source_pin():
-    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=installed_releases.REPO, text=True, timeout=10).strip()
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=installed_releases.REPO, text=True, timeout=installed_clock.timeout()).strip()
 
 
 def local_file(root, name):
@@ -194,12 +194,12 @@ def encode_pair(pair, root):
     return {role: encode_image(image, root) for role, image in pair.items()}
 
 
-def run_prepare(root, output, native, host, registry, probe, export_path, *, clock_plan=None, format_waypoint=False, preparer=None):
+def run_prepare(root, output, native, host, registry, probe, export_path, format_waypoint=False, preparer=None):
     if host["platform"] != native or registry is None or probe is None:
         raise ValueError("prepared chain requires its exact native host, registry and observer")
     require_space(root, output, 4 << 30)
     releases = installed_releases.Releases(root, native, output,
-        manifest_schemas=(1, 2) if format_waypoint else (1,), clock_plan=clock_plan)
+        manifest_schemas=(1, 2) if format_waypoint else (1,))
     try:
         releases.published_registry_sha256 = file_digest(registry)
         releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
@@ -249,9 +249,8 @@ def decode_image(image, root):
 
 class PreparedReleases(installed_releases.Releases):
     def start_prepared_server(self):
-        if self.signer_started is not None or self.clock is None or self.clock.plan is not self.clock_plan:
+        if self.signer_started is not None or self.clock is None:
             raise RuntimeError("prepared origin requires the original active command clock")
-        self.clock_plan.validate()
         self.server_kind = "prepared-origin"
         self.signer_log = (self.root / "prepared-origin.log").open("wb")
         with installed_clock.operation("prepared-server-start"):
@@ -259,7 +258,7 @@ class PreparedReleases(installed_releases.Releases):
 
 
 @installed_clock.timed("prepared-load")
-def load(root, output, native, bundle_path, slice_path, clock_plan):
+def load(root, output, native, bundle_path, slice_path):
     bundle = Path(bundle_path)
     value, identity = read_descriptor(bundle)
     selection = installed_slices.parse_slice(slice_path)
@@ -272,7 +271,7 @@ def load(root, output, native, bundle_path, slice_path, clock_plan):
         destination = root / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local_file(bundle, name), destination)
-    releases = PreparedReleases(root, native, output, clock_plan=clock_plan, prepared=True,
+    releases = PreparedReleases(root, native, output, prepared=True,
         manifest_schemas=(1, 2) if value["mode"] == "waypoint" else (1,))
     initialize_prepared(releases, root, output, value)
     pair = {role: decode_image(image, root) for role, image in value["pair"].items()}
@@ -292,8 +291,8 @@ def initialize_prepared(releases, root, output, value):
     installed_releases.write_json(output / "fixture-exporter.json", value["exporter"])
 
 
-def run_slice(root, output, native, preparer, bundle_path, slice_path, *, clock_plan=None):
-    releases, value, identity, selection, pair, previous, groups = load(root, output, native, bundle_path, slice_path, clock_plan)
+def run_slice(root, output, native, preparer, bundle_path, slice_path):
+    releases, value, identity, selection, pair, previous, groups = load(root, output, native, bundle_path, slice_path)
     try:
         if releases.clock is None or releases.clock.provenance.get("preparedId") != identity:
             raise ValueError("prepared bytes changed after clock admission")
@@ -312,15 +311,15 @@ def run_slice(root, output, native, preparer, bundle_path, slice_path, *, clock_
             installed_adoption.retain_producer_logs(root, output)
     installed_releases.write_json(output / "prepared-slice.json", {"schema": 1, "preparedId": identity,
         "harnessSource": value["harnessSource"], "selection": selection, "completed": True,
-        "kind": "diagnostic-installed-measurement" if clock_plan.mode == "diagnostic" else "installed-slice"})
+        "kind": "installed-slice"})
 
 
 def validate_clock_workload(clock, value, selection):
     expected = {"preparedRole": "consume", "installedSlice": selection, "platform": value["native"],
                 "host": value["host"]["name"], "mode": value["mode"]}
-    if any(clock.plan.workload.get(key) != row for key, row in expected.items()):
+    if any(clock.workload.get(key) != row for key, row in expected.items()):
         raise ValueError("prepared invocation differs from its admitted clock workload")
-    registry = clock.plan.workload.get("publishedRegistrySha256")
+    registry = clock.workload.get("publishedRegistrySha256")
     if registry is not None and registry != value["publishedRegistrySha256"]:
         raise ValueError("prepared authoritative registry differs from its admitted workload")
 

@@ -60,7 +60,6 @@ jobs:
               - 'scripts/**'
               - '.github/workflows/*'
               - '.github/actions/installed-go/**'
-              - '.internal/fixtures/installed-clock/**'
 
   app-pill:
     needs: changes
@@ -346,7 +345,7 @@ jobs:
       - name: Verify installed release gate wiring
         run: |
           python3 scripts/test-installed-gate-wiring.py
-          python3 scripts/test-installed-budgets.py
+          python3 scripts/test-installed-clock.py
           python3 scripts/test-installed-prepared.py
           python3 scripts/test-installed-workflow.py
           python3 scripts/test-publication-jobs.py

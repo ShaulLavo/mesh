@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from fixtures import installed_prepared as prepared
 from fixtures import installed_releases, installed_waypoint, release_worker_groups
@@ -136,7 +136,7 @@ class PreparedTest(unittest.TestCase):
         with patch.object(installed_releases.Releases, "build", side_effect=AssertionError("consumer built")), \
                 patch.object(installed_releases.Releases, "prove", side_effect=AssertionError("consumer ran native preparation")):
             releases, _value, loaded, selected, _pair, previous, groups = prepared.load(
-                root, self.output, "linux/amd64", relocated, selection(), None)
+                root, self.output, "linux/amd64", relocated, selection())
         self.assertEqual(loaded, identity)
         self.assertEqual([release_worker_groups.public_group(group) for group in groups], descriptor["groups"])
         self.assertTrue(Path(releases.builds[installed_releases.VERSIONS[0]]["path"]).is_relative_to(root))
@@ -156,7 +156,7 @@ class PreparedTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "asset changed"):
             prepared.validate_files(self.bundle, value)
         with patch.object(prepared, "source_pin", return_value="c" * 40), self.assertRaisesRegex(ValueError, "source or platform"):
-            prepared.load(self.base / "not-created", self.output, "linux/amd64", self.bundle, selection(), None)
+            prepared.load(self.base / "not-created", self.output, "linux/amd64", self.bundle, selection())
 
     def test_waypoint_negative_packets_are_signed_only_during_preparation(self):
         negative = {"pre-signed": "negative reader packet"}
@@ -192,18 +192,17 @@ class PreparedTest(unittest.TestCase):
         value, _ = prepared.read_descriptor(self.bundle)
         workload = {"preparedRole": "consume", "installedSlice": selection(), "platform": value["native"],
                     "host": self.host["name"], "mode": value["mode"], "publishedRegistrySha256": value["publishedRegistrySha256"]}
-        prepared.validate_clock_workload(SimpleNamespace(plan=SimpleNamespace(workload=workload)), value, selection())
+        prepared.validate_clock_workload(SimpleNamespace(workload=workload), value, selection())
         for change in ({"mode": "waypoint"}, {"installedSlice": selection("chain-final")}, {"publishedRegistrySha256": "wrong"}):
             with self.subTest(change=change), self.assertRaises(ValueError):
-                prepared.validate_clock_workload(SimpleNamespace(plan=SimpleNamespace(workload=workload | change)), value, selection())
+                prepared.validate_clock_workload(SimpleNamespace(workload=workload | change), value, selection())
 
     def test_prepared_server_uses_remaining_original_command_without_build(self):
-        plan = SimpleNamespace(validate=Mock())
-        clock = SimpleNamespace(plan=plan, deadline_ns=42000100)
+        clock = SimpleNamespace(deadline_ns=42000100)
         consumer_root = self.base / "consumer"
         consumer_root.mkdir()
         with patch.object(prepared.installed_clock, "current", return_value=clock):
-            releases = prepared.PreparedReleases(consumer_root, "linux/amd64", self.output, clock_plan=plan)
+            releases = prepared.PreparedReleases(consumer_root, "linux/amd64", self.output)
         self.addCleanup(lambda: releases.signer_log.close() if releases.signer_log else None)
         with patch.object(installed_releases.time, "monotonic_ns", return_value=100), \
                 patch.object(installed_releases.subprocess, "Popen") as launch, \
@@ -232,14 +231,14 @@ class PreparedTest(unittest.TestCase):
         root = self.base / "consumer"
         root.mkdir()
         with self.assertRaisesRegex(ValueError, "partition differs"):
-            prepared.load(root, self.output, "linux/amd64", self.bundle, selection(), None)
+            prepared.load(root, self.output, "linux/amd64", self.bundle, selection())
 
     def aggregate_inputs(self, *, diagnostic=False, waypoint=False):
         self.export(waypoint=waypoint)
         descriptor, identity = prepared.read_descriptor(self.bundle)
         common = {"platform": descriptor["native"], "host": self.host["name"], "mode": descriptor["mode"],
                   "publishedRegistrySha256": descriptor["publishedRegistrySha256"]}
-        clock = {"mode": "diagnostic" if diagnostic else "frozen", "accepted": not diagnostic,
+        clock = {"accepted": not diagnostic,
                  "measurement_completed": True, "failures": [], "provenance": {"preparedId": identity,
                  "harness": self.pin, "preparation": self.preparation_pin, "exporter": descriptor["exporter"]}}
         producer = self.base / "preparation-output"

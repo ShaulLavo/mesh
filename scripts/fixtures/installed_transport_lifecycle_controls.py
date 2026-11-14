@@ -143,14 +143,8 @@ class LifecycleControls(unittest.TestCase):
             self.assertIsNone(lifecycle.prove(SimpleNamespace(), {}))
             self.assertIsNone(lifecycle.retain(SimpleNamespace(), self.root, "off"))
 
-    def test_clock_cannot_freeze_instrumented_samples_or_plan(self):
-        workload = {"transportLifecycle": lifecycle.MARKER}
-        sample = installed_clock.SampleRef({"source": "mock"}, workload, 1, True, True)
-        self.assertFalse(sample.eligible(workload))
-        plan = installed_clock.ClockPlan(mode="frozen", workload=workload)
-        with self.assertRaisesRegex(ValueError, "cannot freeze"):
-            plan.validate()
-        clock = SimpleNamespace(plan=SimpleNamespace(mode="frozen", workload=workload))
+    def test_observer_requires_explicit_instrumented_workload(self):
+        clock = SimpleNamespace(workload={})
         with patch.object(installed_clock, "current", return_value=clock):
             with self.assertRaisesRegex(lifecycle.CoverageIncomplete, "diagnostic"):
                 lifecycle.configure(SimpleNamespace(root=self.root, environment={}))
@@ -165,12 +159,9 @@ class LifecycleControls(unittest.TestCase):
         self.assertTrue((output / "case-transport-lifecycle" / self.path.name).exists())
         self.assertFalse(result["accepted"])
 
-    def test_completed_instrumented_exports_are_ineligible_for_budgets(self):
+    def test_completed_instrumented_exports_are_cannot_grant_acceptance(self):
         now = [100 * installed_clock.SECOND]
-        plan = installed_clock.ClockPlan(mode="diagnostic", workload={"transportLifecycle": lifecycle.MARKER},
-            command_ns=600 * installed_clock.SECOND, external_ns=240 * installed_clock.SECOND,
-            emergency_ns=60 * installed_clock.SECOND)
-        clock = installed_clock.Clock(plan, now=lambda: now[0])
+        clock = installed_clock.Clock({"transportLifecycle": lifecycle.MARKER}, now=lambda: now[0])
         with clock.operation("observed"):
             now[0] += installed_clock.SECOND
         clock.switch("completion")
@@ -217,7 +208,7 @@ class LifecycleControls(unittest.TestCase):
         from fixtures import transport_lifecycle_vehicle
         import re
         vehicle = transport_lifecycle_vehicle.render()
-        self.assertEqual(re.findall(r"^  ([a-z]+):$", vehicle.split("\njobs:\n", 1)[1], re.M), ["plans", "prepare", "consume"])
+        self.assertEqual(re.findall(r"^  ([a-z]+):$", vehicle.split("\njobs:\n", 1)[1], re.M), ["selection", "prepare", "consume"])
         self.assertIn("profile: [final]", vehicle)
         self.assertNotIn("profile: [none, first, final]", vehicle)
         self.assertIn("MESH_TRANSPORT_LIFECYCLE: '1'", vehicle)

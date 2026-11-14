@@ -41,7 +41,7 @@ class Origin(installed_origin.Origin):
     def read_process(self, environment):
         with order_trace.span(self.diagnostics, "native.reader", operation=environment["MESH_INSTALLED_READ_KIND"]):
             return subprocess.run([str(self.root / "signer-test"), "-test.run=^TestInstalledHostRead$"],
-                                env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(15), check=False)
+                                env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
 
 
 class Host:
@@ -95,7 +95,7 @@ class Host:
         case = self.case
         for peer in value["peers"]:
             subprocess.run([str(case.binary), "device", "approve", "--allow-root", "--", peer["id"]],
-                           env=case.environment, capture_output=True, check=True, timeout=10)
+                           env=case.environment, capture_output=True, check=True, timeout=installed_clock.timeout())
         fleet = {"version": 1, "name": "installed-order", "revision": 1, "members": value["peers"]}
         (Path(case.environment["MESH_CONFIG_DIR"]) / "fleet.json").write_text(json.dumps(fleet))
         case.adoption_policy = {"schema": 1, "revision": 1, "mode": "automatic", "after": value["after"], "soak": value["soak"]}

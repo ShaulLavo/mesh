@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from fixtures import release_workers, release_worker_groups
+from fixtures import release_workers, release_worker_groups, installed_clock
 
 
 def stage(registry, destination, platform):
@@ -73,11 +73,11 @@ class Cohort:
             return
         script = "import json,sys; from fixtures.release_workers import applicable; print(json.dumps(applicable(*sys.argv[1:])))"
         environment = self.environment() | {"PYTHONPATH": str(Path(release_workers.__file__).parent.parent)}
-        data = subprocess.check_output([os.sys.executable, "-c", script, str(registry), version, str(binary)], env=environment, timeout=90)
+        data = subprocess.check_output([os.sys.executable, "-c", script, str(registry), version, str(binary)], env=environment, timeout=installed_clock.timeout())
         self.selected = json.loads(data)
 
     def environment(self):
-        environment = os.environ | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
+        environment = os.environ | installed_clock.handoff_environment() | {"MESH_WORKER_PROBE": str(self.probe), "MESH_STATE_DIR": str(self.state), "MESH_CONFIG_DIR": str(self.config)}
         if self.original is not None:
             environment["MESH_GROUP_ORIGINAL"] = json.dumps(self.original)
         if self.catalog and not self.catalog.closed:
@@ -94,7 +94,7 @@ class Cohort:
         try:
             subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "start-published", str(self.state), str(self.config),
                 str(self.registry), self.version, str(self.binary), str(self.record)], env=environment,
-                capture_output=True, text=True, check=True, timeout=90)
+                capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             self.retain_verification_failure("startup-publication", error)
             self.finish_catalog("startup-publication", error)
@@ -107,7 +107,7 @@ class Cohort:
             self.catalog.checkpoint("before-original-verification")
         try:
             result = subprocess.run([os.sys.executable, str(Path(release_workers.__file__)), "verify", str(self.state), str(self.record), label],
-                env=environment, capture_output=True, text=True, check=True, timeout=90)
+                env=environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             self.retain_verification_failure(label, error)
             self.finish_catalog(label, error)

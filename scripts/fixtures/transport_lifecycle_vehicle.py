@@ -55,19 +55,18 @@ def render():
         "inputs.worker_artifact_run": "fromJSON(inputs.producer_run)",
         "inputs.worker_artifact_source": "inputs.producer_source",
         "inputs.worker_artifact_prefix": "inputs.producer_prefix",
-        "inputs.calibration_only": "true",
         "inputs.native_platform": "'linux/amd64'",
         "inputs.mode": "'chain'",
-        "profile: [none, first, final]": "profile: [final]",
+        "profile: ${{ fromJSON(needs.selection.outputs.profiles) }}": "profile: [final]",
         "  consume:\n": "  consume:\n    env:\n      MESH_TRANSPORT_LIFECYCLE: '1'\n",
         '          python3 scripts/fixtures/installed_workflow.py select "$RUNNER_TEMP/prepared.noindex" "$PROFILE" "$RUNNER_TEMP/cohort-control/installed-slice.json"': '''          python3 -c 'import os; from pathlib import Path; from fixtures.installed_prepared import read_descriptor; d,_=read_descriptor(Path(os.environ["RUNNER_TEMP"])/"prepared.noindex"); assert d["native"]=="linux/amd64" and d["mode"]=="chain" and d["pair"]["daemon"]["version"]=="v0.1.249"'
           python3 scripts/fixtures/installed_workflow.py select "$RUNNER_TEMP/prepared.noindex" "$PROFILE" "$RUNNER_TEMP/cohort-control/installed-slice.json"''',
-        "      - name: Require independently reviewed physical job plans or explicit measurement": """      - name: Require exact independently reviewed source pin
+        "      - name: Select native case and all complete profiles": """      - name: Require exact independently reviewed source pin
         run: |
           set -euo pipefail
           [[ $MESH_HARNESS_SOURCE =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
-      - name: Require independently reviewed physical job plans or explicit measurement""",
+      - name: Select native case and all complete profiles""",
     }
     for before, after in replacements.items():
         if before not in jobs:

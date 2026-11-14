@@ -9,7 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from fixtures import fleet_baselines, installed_paths, native_services, installed_clock, installed_budgets, installed_launch
+from fixtures import fleet_baselines, installed_paths, native_services, installed_clock, installed_launch
 
 
 def interrupted(number, _frame):
@@ -38,18 +38,29 @@ def main():
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
     parser.add_argument("--publication-task", help="one complete task ID from publication-jobs.py inventory")
-    parser.add_argument("--launch-record", type=Path, help="job-owned command dispatch and fixture admission lifecycle record")
-    installed_clock.arguments(parser)
-    parser.add_argument("--clock-plan-index", type=Path, default=installed_budgets.INDEX,
-                        help="index of independently approved per-platform/profile frozen plans")
+    parser.add_argument("--launch-record", type=Path, help="job-owned command dispatch and fixture launch lifecycle record")
     arguments = parser.parse_args()
     if arguments.publication_task is not None and (not arguments.publication_version or not arguments.publication_source
-            or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only or arguments.clock_mode == "diagnostic"
+            or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only
             or arguments.signed_chain or arguments.format_waypoint or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
-        parser.error("publication task requires real draft mode without supplemental or diagnostic execution")
-    validate_prepared_arguments(parser, arguments)
+        parser.error("publication task requires real draft mode without supplemental execution")
     output = arguments.output.resolve()
     launch = installed_launch.Launch(arguments.launch_record, output)
+    try:
+        native, clock = validate_invocation(parser, arguments, output)
+    except BaseException as error:
+        launch.not_started(error)
+        raise
+    launch.runtime_possible()
+    if clock:
+        with clock.activate(watchdog=True):
+            run_owned(arguments, output, native, clock)
+        return
+    run_owned(arguments, output, native, None)
+
+
+def validate_invocation(parser, arguments, output):
+    validate_prepared_arguments(parser, arguments)
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get("MESH_HARNESS_SOURCE"):
         from fixtures import installed_artifacts
@@ -60,19 +71,9 @@ def main():
         raise RuntimeError(f"native platform is {native}; required {required}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
-    installed_budgets.bind(arguments, native)
     clocked = arguments.installed_adoption or arguments.fresh_managed or arguments.export_prepared or arguments.prepared_releases
-    try:
-        clock = installed_clock.from_arguments(arguments, native) if clocked else None
-    except installed_clock.ClockExpired as error:
-        launch.rejected(error, arguments.clock_job_start)
-        raise
-    launch.runtime_possible()
-    if clock:
-        with clock.activate(watchdog=True):
-            run_owned(arguments, output, native, clock)
-        return
-    run_owned(arguments, output, native, None)
+    clock = installed_clock.from_arguments(arguments, native) if clocked else None
+    return native, clock
 
 
 def validate_prepared_arguments(parser, args):
@@ -97,7 +98,7 @@ def run_owned(arguments, output, native, clock):
         (output / "noindex-setup.json").write_text(json.dumps(noindex_paths.require(root) | {"before": noindex_paths.observation()}) + "\n")
         (output / "socket-paths.json").write_text(json.dumps(installed_paths.validate(root), indent=2) + "\n")
         native_services.positive_control(root, output / "native-manager.json")
-        run_requested(arguments, root, output, native, clock_plan=clock.plan if clock else None)
+        run_requested(arguments, root, output, native)
     except BaseException as error:
         failure = error
         installed_clock.failure(error)
@@ -121,7 +122,7 @@ def finish_with_primary(root, output, clock, primary):
 def finish_owned(root, output, clock):
     cleaned = root is None
     try:
-        installed_clock.cleanup()
+        installed_clock.cleanup(final=True)
         if clock:
             clock.switch("completion")
         if root is not None:
@@ -139,9 +140,9 @@ def finish_owned(root, output, clock):
             clock.export(output / "fixture-clock.json", cleaned, provenance)
 
 
-def run_requested(arguments, root, output, native, *, clock_plan=None):
+def run_requested(arguments, root, output, native):
     if arguments.export_prepared or arguments.prepared_releases:
-        run_prepared_requested(arguments, root, output, native, clock_plan)
+        run_prepared_requested(arguments, root, output, native)
         return
     if arguments.publication_version is not None or arguments.publication_source is not None:
         if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
@@ -153,7 +154,7 @@ def run_requested(arguments, root, output, native, *, clock_plan=None):
         return
     if arguments.fresh_managed:
         from fixtures import installed_fresh
-        installed_fresh.prove(root, output, native, clock_plan=clock_plan)
+        installed_fresh.prove(root, output, native)
         return
     if arguments.installed_adoption:
         if arguments.native_helper is None and not arguments.prepare_only:
@@ -162,13 +163,13 @@ def run_requested(arguments, root, output, native, *, clock_plan=None):
         preparer = arguments.native_helper.resolve(strict=True) if arguments.native_helper else None
         installed_adoption.run(root, output, native, preparer, arguments.prepare_only,
             arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain or arguments.format_waypoint,
-            arguments.format_waypoint, arguments.ordered_hosts, arguments.scenario, clock_plan=clock_plan)
+            arguments.format_waypoint, arguments.ordered_hosts, arguments.scenario)
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
 
 
-def run_prepared_requested(args, root, output, native, clock_plan):
+def run_prepared_requested(args, root, output, native):
     from fixtures import installed_prepared
     preparer = args.native_helper.resolve(strict=True) if args.native_helper else None
     if args.export_prepared:
@@ -176,11 +177,11 @@ def run_prepared_requested(args, root, output, native, clock_plan):
         if len(hosts) != 1:
             raise ValueError("prepared export needs one exact inventory source host on this platform")
         installed_prepared.run_prepare(root, output, native, hosts[0], args.worker_registry, args.worker_probe,
-                                       args.export_prepared, clock_plan=clock_plan,
+                                       args.export_prepared,
                                        format_waypoint=args.format_waypoint, preparer=preparer)
         return
     installed_prepared.run_slice(root, output, native, preparer, args.prepared_releases,
-                                args.installed_slice, clock_plan=clock_plan)
+                                args.installed_slice)
 
 
 def clean_scratch(root, output):

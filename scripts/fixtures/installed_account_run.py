@@ -63,7 +63,7 @@ def claim(root, output, operation):
 
 
 @installed_clock.timed("ordered-owner")
-def launch(root, output, arguments, timeout=480):
+def launch(root, output, arguments, timeout=installed_clock.HANG_SECONDS):
     operation = uuid.uuid4().hex
     ticket_path = root / "account-run.json"
     if ticket_path.exists():

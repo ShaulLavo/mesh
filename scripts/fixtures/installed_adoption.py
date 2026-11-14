@@ -48,7 +48,7 @@ class AdoptionCase(installed_native.Installation):
         return self.process_stamps[self.worker] + ":" + str(self.worker) + ":" + str(self.root)
 
     def original_protocol(self):
-        result = subprocess.check_output([str(self.pair["daemon"]["executable"]), "version", "--json"], env=self.environment, timeout=10)
+        result = subprocess.check_output([str(self.pair["daemon"]["executable"]), "version", "--json"], env=self.environment, timeout=installed_clock.timeout())
         return json.loads(result)["workerProtocol"]
 
     def seed_prior(self):
@@ -79,7 +79,7 @@ class AdoptionCase(installed_native.Installation):
         before = self.retained()
         binary = self.releases.builds[installed_releases.VERSIONS[0]]["path"]
         result = subprocess.run([str(binary), "daemon", "installation-check"], env=self.environment,
-                                capture_output=True, text=True, check=False, timeout=75)
+                                capture_output=True, text=True, check=False, timeout=installed_clock.timeout())
         (self.root / "baseline-initialization.log").write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError("ordered production installation-check failed: " + result.stderr[-4096:])
@@ -125,7 +125,7 @@ class AdoptionCase(installed_native.Installation):
         if self.scenario == "interrupt":
             self.write_fault({"holdHelper": [version]})
         result = subprocess.run([side, "update", "adopt", "start", "--local", "--release", version, "--json"],
-            input=json.dumps(input_data), env=self.environment, capture_output=True, text=True, timeout=90, check=False)
+            input=json.dumps(input_data), env=self.environment, capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
         (self.root / "adopt-cli.log").write_text(result.stdout + result.stderr)
         if result.returncode and not (self.state / "updates/host-adoption.json").exists():
             raise RuntimeError("adopt CLI rejected before canonical operation creation: " + result.stderr.strip())
@@ -159,13 +159,13 @@ class AdoptionCase(installed_native.Installation):
             return
         pid = installed_native.peer_pid(self.state / "daemon.sock")
         result = subprocess.run(["/usr/bin/systemctl", "--user", "whoami", str(pid)], env=self.environment,
-            capture_output=True, text=True, timeout=10, check=False)
+            capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
         (self.root / "manager-context.log").write_text(result.stdout + result.stderr)
         if result.returncode or result.stdout.strip() != "mesh.service":
             raise RuntimeError("actual side-process native manager context failed: " + result.stderr.strip())
 
     def await_result(self, version):
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + installed_clock.timeout()
         last = {}
         while time.monotonic() < deadline:
             last = self.adoption_status()
@@ -335,7 +335,7 @@ def collect_service_snapshot(case):
         case.origin.inspect(case.state, case.root / "service-after.json")
 
 
-def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None, *, clock_plan=None):
+def run(root, output, native, preparer, prepare_only=False, registry=None, probe=None, host_name=None, signed_chain=False, format_waypoint=False, ordered_hosts=False, scenario=None):
     space = shutil.disk_usage(root)
     (output / "storage-preflight.json").write_text(json.dumps({"root": str(root), "freeBytes": space.free, "requiredFreeBytes": 4 << 30}) + "\n")
     if space.free < 4 << 30:
@@ -347,7 +347,7 @@ def run(root, output, native, preparer, prepare_only=False, registry=None, probe
         raise RuntimeError("exact worker-cohort mode requires one actual source host and the once-built native observer")
     if (signed_chain or ordered_hosts) and registry is None:
         raise RuntimeError("signed chain requires the authoritative exact worker cohort")
-    releases = installed_releases.Releases(root, native, output, manifest_schemas=(1, 2) if format_waypoint else (1,), clock_plan=clock_plan)
+    releases = installed_releases.Releases(root, native, output, manifest_schemas=(1, 2) if format_waypoint else (1,))
     if registry:
         releases.registry = installed_cohort.stage(registry, root / "workers", dict(zip(("os", "arch"), native.split("/"))))
         releases.probe = probe
@@ -430,10 +430,10 @@ def run_grouped_adoption(root, output, host, pair, previous, preparer, origin, r
     installed_clock.expect_samples("installed-group:" + host["name"] + ":" + scenario + ":" + str(group["index"]) + "#1" for group in groups)
     destination = output / "groups" / (host["name"] + "-" + scenario)
     for group in groups:
-        releases.check_budget()
+        releases.check_running()
         directory = destination / str(group["index"])
         run_adoption_group(root, directory, host, pair, previous, preparer, origin, releases, scenario, group)
-        releases.check_budget()
+        releases.check_running()
     complete_installed_groups(destination, groups, ["before-install", "after-" + scenario], original_source(pair["daemon"]))
 
 
@@ -481,7 +481,7 @@ def complete_installed_groups(destination, selected, labels, source):
         entries.append({"group": release_worker_groups.public_group(group), "stateRun": original["stateRun"],
             "result": release_worker_completion.asset(destination, records[0]),
             "observations": release_worker_completion.asset(destination, cohorts[0])})
-    name = "diagnostic-installed-groups.json" if installed_clock.current() and installed_clock.current().plan.mode == "diagnostic" else "installed-groups.json"
+    name = "installed-groups.json"
     (destination / name).write_bytes(release_worker_groups.encode({"schema": 1, "requiredLabels": labels, "groups": entries}))
 
 
@@ -531,9 +531,9 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
         return
     descriptor = root / "ordered-input.json"
     descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
-        "fixtureDeadlineNs": installed_clock.parent_deadline(480),
-        "fixtureCleanupDeadlineNs": min(releases.clock.deadline_ns + releases.clock.plan.emergency_ns, releases.clock.job_deadline_ns),
-        "fixtureEmergencyNs": releases.clock.plan.emergency_ns,
+        "fixtureDeadlineNs": installed_clock.parent_deadline(),
+        "fixtureCleanupDeadlineNs": releases.clock.deadline_ns + installed_clock.CLEANUP_SECONDS * installed_clock.SECOND,
+        "fixtureEmergencyNs": installed_clock.CLEANUP_SECONDS * installed_clock.SECOND,
         "preparer": str(preparer), "releases": {"directory": str(releases.directory), "builds": releases.builds, "native": native}}, default=str))
     arguments = ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT", "env",
         "PYTHONPATH=" + str(Path(__file__).parents[1]), "PYTHONDONTWRITEBYTECODE=1", sys.executable,

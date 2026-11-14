@@ -41,7 +41,7 @@ def future_manifest_overlay(root):
 def source_build(source, environment, native):
     source = Path(source)
     result = subprocess.run([str(source), "version", "--json"], env=environment,
-                            capture_output=True, text=True, check=True, timeout=10)
+                            capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
     build = json.loads(result.stdout)
     with source.open("rb") as stream:
         actual = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -60,11 +60,11 @@ def rollback_context(manifest, source):
 
 
 class Releases:
-    def __init__(self, root, native, output, *, manifest_schemas=(1,), clock_plan=None, prepared=False):
+    def __init__(self, root, native, output, *, manifest_schemas=(1,), prepared=False):
         if manifest_schemas not in ((1,), (1, 2)):
             raise ValueError("unsupported fixture exporter manifest capability")
         self.manifest_schemas = manifest_schemas
-        self.clock_plan, self.clock = clock_plan, installed_clock.current()
+        self.clock = installed_clock.current()
         self.root, self.native, self.output = Path(root), native, Path(output)
         self.directory = self.root / "releases"
         self.directory.mkdir(exist_ok=prepared)
@@ -85,9 +85,8 @@ class Releases:
     def start_signer(self):
         if self.signer_started is not None:
             raise RuntimeError("installed fixture exporter was already launched")
-        if self.clock_plan is None or self.clock is None or self.clock.plan is not self.clock_plan:
-            raise RuntimeError("executable fixture exporter requires an active explicit clock plan")
-        self.clock_plan.validate()
+        if self.clock is None:
+            raise RuntimeError("executable fixture exporter requires an active fixture hang cap")
         self.prepare_signer()
         with installed_clock.operation("signer-start"):
             self.launch_signer()
@@ -99,10 +98,10 @@ class Releases:
         binary = self.root / "signer-test"
         with (self.root / "signer-build.log").open("wb") as output:
             subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture"] + flags + ["-o", str(binary), "./internal/update"],
-                cwd=REPO, env=self.environment(), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout(180))
+                cwd=REPO, env=self.environment(), stdout=output, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout())
         environment = self.environment() | {"MESH_INSTALLED_FIXTURE_DIR": str(self.root)}
         subprocess.run([str(binary), "-test.run=^TestInstalledEmptyLedgerBoundary$"], env=environment,
-                       capture_output=True, check=True, timeout=installed_clock.timeout(15))
+                       capture_output=True, check=True, timeout=installed_clock.timeout())
 
     def launch_signer(self):
         self.launch_server("TestInstalledFixtureExport", "MESH_INSTALLED_FIXTURE_DIR")
@@ -135,7 +134,7 @@ class Releases:
             raise RuntimeError("installed signature exporter exited: " + (self.root / "signer.log").read_text()[-8192:])
         return (self.root / "control.sock").exists()
 
-    def check_budget(self, phase=None):
+    def check_running(self):
         if self.clock is None:
             raise RuntimeError("installed fixture requires an active clock")
         if self.clock.failures:
@@ -152,7 +151,7 @@ class Releases:
             artifacts.append(self.build_platform(version, platform, overlay))
         native = next(row for row in artifacts if row["platform"] == dict(zip(("os", "arch"), self.native.split("/"))))
         binary = self.root / "build" / version / self.native.replace("/", "-") / "mesh"
-        result = subprocess.run([str(binary), "version", "--json"], env=self.environment(), capture_output=True, text=True, check=True, timeout=10)
+        result = subprocess.run([str(binary), "version", "--json"], env=self.environment(), capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         build = json.loads(result.stdout)
         if build["modified"] or build["version"] != version or build["digest"] != native["binarySha256"]:
             raise RuntimeError("supplemental source build identity differs from its compiled image")
@@ -168,7 +167,7 @@ class Releases:
         directory = self.root / "startup" / version
         directory.mkdir(parents=True)
         subprocess.run([sys.executable, str(REPO / "scripts/fixtures/release_transition.py"), "startup-overlay", str(REPO), str(directory)],
-            cwd=REPO, env=self.environment(), check=True, timeout=10)
+            cwd=REPO, env=self.environment(), check=True, timeout=installed_clock.timeout())
         combined = json.loads(overlay.read_text())["Replace"]
         combined.update(json.loads((directory / "overlay.json").read_text())["Replace"])
         write_json(directory / "combined.json", {"Replace": combined})
@@ -176,11 +175,11 @@ class Releases:
         with (directory / "build.log").open("wb") as output:
             subprocess.run(["go", "build", "-trimpath", "-tags", "mesh_installed_fixture", "-overlay", str(directory / "combined.json"),
                 "-ldflags=-X github.com/shaul/mesh/internal/release.Version=" + version, "-o", str(image), "./cmd/mesh"],
-                cwd=REPO, env=self.environment() | {"CGO_ENABLED": "0"}, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
+                cwd=REPO, env=self.environment() | {"CGO_ENABLED": "0"}, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout())
         self.startup[version] = image
         if not (self.root / "boundary").exists():
             subprocess.run(["go", "build", "-trimpath", "-o", str(self.root / "boundary"), "./internal/storage/cmd/boundary"],
-                cwd=REPO, env=self.environment(), capture_output=True, check=True, timeout=120)
+                cwd=REPO, env=self.environment(), capture_output=True, check=True, timeout=installed_clock.timeout())
 
     def overlay(self, epoch):
         replacements = {str(REPO / "internal/release/trust" / name): str(self.root / name)
@@ -216,7 +215,7 @@ class Releases:
         with log.open("wb") as output:
             subprocess.run(["go", "build", "-trimpath", "-tags", "mesh_installed_fixture", "-overlay", str(overlay),
                 "-ldflags=-X github.com/shaul/mesh/internal/release.Version=" + version, "-o", str(binary), "./cmd/mesh"],
-                env=environment, cwd=REPO, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=180)
+                env=environment, cwd=REPO, stdout=output, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout())
         directory = self.directory / version
         directory.mkdir(exist_ok=True)
         name = "mesh_" + system + "_" + architecture + ".tar.gz"
@@ -258,7 +257,7 @@ class Releases:
     @installed_clock.timed("native-transition", lambda self, source, target, *_args: Path(source).parent.name + ":" + target)
     def run_transition(self, source, target, directory, environment, output):
         command = ["bash", str(REPO / "scripts/prove-release-transition.sh"), str(source), self.builds[target]["path"], self.native, str(directory)]
-        deadline_ns = installed_clock.parent_deadline(600 if self.registry else 180)
+        deadline_ns = installed_clock.parent_deadline()
         environment = environment | self.transition_clock(directory, deadline_ns)
         self.transition_clean = False
         self.record_ownership()
@@ -292,10 +291,9 @@ class Releases:
         if self.clock is None:
             return {}
         path = directory / "fixture-clock-handoff.json"
-        write_json(path, {"deadline_ns": deadline_ns, "cleanup_deadline_ns": min(self.clock.deadline_ns + self.clock.plan.emergency_ns, self.clock.job_deadline_ns),
-                          "prefix": self.clock.active_key, "mode": self.clock.plan.mode,
-                          "guards": {row.key: {"limit_ns": row.limit_ns, "workload": row.workload} for row in self.clock.plan.guards}})
-        return {"MESH_INSTALLED_CLOCK_HANDOFF": str(path)}
+        write_json(path, {"deadline_ns": deadline_ns, "cleanup_deadline_ns": self.clock.deadline_ns + installed_clock.CLEANUP_SECONDS * installed_clock.SECOND,
+                          "prefix": self.clock.active_key})
+        return {"MESH_INSTALLED_CLOCK_HANDOFF": str(path)} | installed_clock.handoff_environment(deadline_ns)
 
     def retain_transition_clock(self, directory):
         path = directory / "fixture-group-clock.json"
@@ -335,7 +333,7 @@ class Releases:
     def close(self):
         if self.closed:
             return
-        installed_clock.cleanup()
+        installed_clock.cleanup(final=True)
         if self.clock:
             self.clock.switch("completion")
         if self.clock:
@@ -358,7 +356,7 @@ class Releases:
             name = "signer-lifetime.json" if self.server_kind == "signer" else "prepared-origin-lifetime.json"
             write_json(self.output / name, {"seconds": time.monotonic() - self.signer_started,
                 "start_ns": self.signer_started_ns, "end_ns": time.monotonic_ns(),
-                "commandDeadlineNs": self.clock.deadline_ns, "mode": self.clock_plan.mode, "reaped": self.signer.poll() is not None})
+                "commandDeadlineNs": self.clock.deadline_ns, "reaped": self.signer.poll() is not None})
 
 
 def stop_transition(process, roots=(), *, ownership=None):

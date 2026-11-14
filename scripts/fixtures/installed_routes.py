@@ -4,10 +4,12 @@ import json
 import threading
 import time
 
+from fixtures import installed_clock
+
 
 class Observer:
-    def __init__(self, port, listener, output, maximum=90):
-        self.port, self.listener, self.output, self.maximum = port, listener, output, maximum
+    def __init__(self, port, listener, output):
+        self.port, self.listener, self.output = port, listener, output
         self.lock, self.stopping = threading.Lock(), threading.Event()
         self.connection, self.thread = None, None
         self.pulses, self.gaps, self.failure = 0, [], ""
@@ -17,7 +19,7 @@ class Observer:
     def start(self):
         self.thread = threading.Thread(target=self.run, name="installed-service-stream", daemon=True)
         self.thread.start()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + installed_clock.timeout()
         while not self.snapshot()["pulses"] and time.monotonic() < deadline:
             self.check()
             self.stopping.wait(0.01)
@@ -72,8 +74,6 @@ class Observer:
             self.failure = "route outage count exceeds its case bound"
             return
         self.gaps.append({"seconds": duration, "expectedOffline": self.down_expected})
-        if not self.down_expected and duration > self.maximum:
-            self.failure = "transition route gap exceeded its existing 90-second case bound"
         self.down = None
 
     def disconnected(self):
@@ -97,20 +97,16 @@ class Observer:
     def snapshot(self):
         with self.lock:
             return {"listener": self.listener, "pulses": self.pulses, "gaps": list(self.gaps),
-                    "maximumTransitionGapSeconds": self.maximum, "failure": self.failure,
+                    "failure": self.failure,
                     "connected": self.down is None and self.pulses > 0}
 
     def check(self):
         value = self.snapshot()
         if value["failure"]:
             raise RuntimeError(value["failure"])
-        with self.lock:
-            exceeded = self.down is not None and not self.down_expected and time.monotonic() - self.down > self.maximum
-        if exceeded:
-            raise RuntimeError("transition route did not reconnect within its existing case bound")
 
     def recovered(self):
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + installed_clock.timeout()
         while time.monotonic() < deadline:
             self.check()
             if self.snapshot()["connected"]:

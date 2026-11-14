@@ -12,7 +12,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
+from fixtures import installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
 
 
 def require_main():
@@ -25,7 +25,7 @@ def stage(root, output, native, version, source):
     if not re.fullmatch(r"v\d+\.\d+\.\d+", version) or not re.fullmatch(r"[0-9a-f]{40}", source):
         raise RuntimeError("publication requires an exact real draft version and source SHA")
     result = subprocess.run(["gh", "release", "view", version, "--repo", "ShaulLavo/mesh", "--json", "isDraft,tagName,assets,url"],
-                            capture_output=True, text=True, check=False, timeout=30)
+                            capture_output=True, text=True, check=False, timeout=installed_clock.timeout())
     if result.returncode:
         raise RuntimeError("required main-only signed draft does not exist or is not readable yet")
     release = json.loads(result.stdout)
@@ -42,7 +42,7 @@ def stage(root, output, native, version, source):
     directory = root / "releases" / version
     directory.mkdir(parents=True)
     downloaded = subprocess.run(["gh", "release", "download", version, "--repo", "ShaulLavo/mesh", "--pattern", "*.json", "--pattern", "mesh_*.tar.gz", "--dir", str(directory)],
-                                capture_output=True, check=False, timeout=90)
+                                capture_output=True, check=False, timeout=installed_clock.timeout())
     if downloaded.returncode:
         raise RuntimeError("real signed draft asset acquisition failed")
     return load_draft(root, output, directory, native, version, source, release["url"])
@@ -65,7 +65,7 @@ def load_draft(root, output, directory, native, version, source, url):
     binary.write_bytes(published_releases.archive_binary((directory / artifact["archive"]).read_bytes(), artifact))
     binary.chmod(0o755)
     environment = os.environ | {"MESH_STATE_DIR": str(root / "inspect-state"), "MESH_CONFIG_DIR": str(root / "inspect-config")}
-    build = json.loads(subprocess.check_output([str(binary), "version", "--json"], env=environment, timeout=10))
+    build = json.loads(subprocess.check_output([str(binary), "version", "--json"], env=environment, timeout=installed_clock.timeout()))
     if build["modified"] or build["commit"] != source or build["version"] != version or build["digest"] != artifact["binarySha256"] or build["platform"] != platform:
         raise RuntimeError("actual unmodified native draft image differs from its authenticated manifest")
     harness = os.environ["MESH_HARNESS_SOURCE"]
@@ -84,19 +84,19 @@ def load_draft(root, output, directory, native, version, source, url):
 
 def verify_signature(root, output, envelope, subjects):
     verifier = root / "real-release-verifier"
-    subprocess.run(["go", "build", "-o", str(verifier), "./cmd/mesh-release-sign"], check=True, timeout=180)
+    subprocess.run(["go", "build", "-o", str(verifier), "./cmd/mesh-release-sign"], check=True, timeout=installed_clock.timeout())
     cache = os.environ.get("MESH_PUBLICATION_TRUST_CACHE", str(root / "production-trust"))
     environment = os.environ | {"MESH_RELEASE_TRUST_CACHE": cache}
     with (output / "real-signature-verification.log").open("wb") as log:
         refresh_trust(verifier, environment, log)
         subprocess.run([str(verifier), "verify", str(envelope), *map(str, subjects)], env=environment,
-                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
+                       stdout=log, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout())
 
 
 def refresh_trust(verifier, environment, log):
     for _pass in range(4):
         result = subprocess.run([str(verifier), "refresh", environment["MESH_RELEASE_TRUST_CACHE"]], env=environment,
-                                stdout=log, stderr=subprocess.STDOUT, check=False, timeout=60)
+                                stdout=log, stderr=subprocess.STDOUT, check=False, timeout=installed_clock.timeout())
         if result.returncode != 75:
             break
     if result.returncode:
@@ -123,7 +123,7 @@ class PortFault:
                 self.socket.close()
 
     def observe(self):
-        deadline = time.monotonic() + 90
+        deadline = time.monotonic() + installed_clock.timeout()
         while not self.stopping.is_set() and time.monotonic() < deadline:
             journal = installed_chain.read_journal(self.case)
             if self.bound and journal.get("phase") == "rolling_back":
@@ -197,7 +197,7 @@ def prove(root, output, native, version, source, preparer, registry=None, probe=
     inventory = release_worker_completion.task_inventory(directory, native, os.environ["MESH_HARNESS_SOURCE"]) if task_id is not None else None
     task = release_worker_completion.select_task(inventory, task_id) if inventory else None
     inspector = root / "publication-reader"
-    subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(inspector), "./internal/update"], check=True, timeout=180)
+    subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(inspector), "./internal/update"], check=True, timeout=installed_clock.timeout())
     origin = publication_origin.Origin(root, releases.directory, inspector)
     try:
         origin.start()
@@ -308,7 +308,7 @@ def run_first_published(root, output, version, releases, origin, registry, probe
     platform = dict(zip(("os", "arch"), releases.native.split("/")))
     baseline = fleet_baselines.acquire(root / "public", first, platform)
     environment = os.environ | {"MESH_STATE_DIR": str(root / "baseline-inspect-state"), "MESH_CONFIG_DIR": str(root / "baseline-inspect-config")}
-    build = json.loads(subprocess.check_output([str(baseline["executable"]), "version", "--json"], env=environment, timeout=10))
+    build = json.loads(subprocess.check_output([str(baseline["executable"]), "version", "--json"], env=environment, timeout=installed_clock.timeout()))
     if build["modified"] or build["digest"] != baseline["artifact"]["binarySha256"] or build["version"] != first:
         raise RuntimeError("original published updater image differs from its published baseline")
     releases.builds[first] = build | {"path": str(baseline["executable"])}
@@ -357,12 +357,12 @@ def published_route(root, output, first, target, releases, origin, registry, pro
         record["baselineInitialization"] = case.initialize_preserved_baseline()
         record["cohort"] = case.start_cohort(registry, probe)
         policy = subprocess.run([str(case.binary), "update", "policy", "set", "--expected-revision", "0", "--json"],
-                                env=case.environment, capture_output=True, text=True, check=True, timeout=15)
+                                env=case.environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         record["explicitPolicy"] = json.loads(policy.stdout)
         if record["explicitPolicy"].get("mode") != "automatic" or record["explicitPolicy"].get("revision") != 1:
             raise RuntimeError("original published updater did not accept its explicit automatic policy")
         case.snapshots = case.retained()
-        deadline = time.monotonic() + 150
+        deadline = time.monotonic() + installed_clock.timeout()
         if via is not None:
             record["updates"].append(run_published_update(case, via, fault, False, deadline))
         record["updates"].append(run_published_update(case, target, fault, rollback, deadline))
@@ -415,7 +415,7 @@ def verify_restarted_published_helper(case, record, previous):
 def await_published_route(case, record, first, target, fault, rollback, *, deadline=None):
     if "expectedHops" not in record or not record.get("authenticatedTarget"):
         raise RuntimeError("original published route lacks its authenticated intended route")
-    deadline, seen = deadline if deadline is not None else time.monotonic() + 150, set()
+    deadline, seen = deadline if deadline is not None else time.monotonic() + installed_clock.timeout(), set()
     while time.monotonic() < deadline:
         observe_published_hop(case, record, first, target, seen)
         ledger = installed_chain.read_ledger(case)
@@ -486,7 +486,7 @@ def validate_published_route(case, record, journal, ledger, target, fault, rollb
 
 def read_route_plan(case, target):
     result = subprocess.run([str(case.binary), "update", "--local", "--check", "--version", target, "--json"],
-                            env=case.environment, capture_output=True, text=True, check=True, timeout=30)
+                            env=case.environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
     plan = json.loads(result.stdout)
     current = case.control("host.info")["host"]["build"]
     prefix = "/ShaulLavo/mesh/releases/download/" + target + "/"

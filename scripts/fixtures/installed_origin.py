@@ -26,7 +26,7 @@ class Origin:
         request(self.root, {"put": {"/ShaulLavo/mesh/releases/latest/download/mesh-update-root.json": str(path.relative_to(self.root))}})
 
     def seed(self, state, version):
-        request(self.root, {"seed": {"state": str(state), "version": version}}, timeout=90)
+        request(self.root, {"seed": {"state": str(state), "version": version}}, timeout=installed_clock.timeout())
 
     def inspect(self, state, output):
         request(self.root, {"inspect": str(state), "output": str(output.relative_to(self.root))})
@@ -35,7 +35,7 @@ class Origin:
         request(self.root, {"ledger": str(state), "output": str(output.relative_to(self.root))})
 
 
-def request(root, value, timeout=15):
+def request(root, value, timeout=installed_clock.HANG_SECONDS):
     with socket.socket(socket.AF_UNIX) as connection:
         deadline_ns = installed_clock.parent_deadline(timeout)
         connection.settimeout(installed_clock.remaining_until(deadline_ns, timeout))

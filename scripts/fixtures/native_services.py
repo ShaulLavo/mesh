@@ -13,7 +13,7 @@ from pathlib import Path
 
 def command(arguments, environment=None, check=True):
     from fixtures import installed_clock
-    result = subprocess.run(arguments, env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(10), check=False)
+    result = subprocess.run(arguments, env=environment, capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
     if check and result.returncode:
         raise RuntimeError(f"native command {arguments!r} exited {result.returncode}: {result.stderr.strip()} {result.stdout.strip()}")
     return result
@@ -21,14 +21,14 @@ def command(arguments, environment=None, check=True):
 
 def wait_for(predicate, message):
     from fixtures import installed_clock
-    deadline = installed_clock.parent_deadline(10)
+    deadline = installed_clock.parent_deadline()
     while time.monotonic_ns() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(installed_clock.remaining_until(deadline, 0.05))
     try:
-        installed_clock.timeout(10)
+        installed_clock.timeout()
     except installed_clock.ClockExpired as error:
         error.add_note(message)
         raise

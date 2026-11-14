@@ -1,4 +1,4 @@
-"""Pure/mocked fixture clock, handoff, cleanup and calibration controls."""
+"""Pure/mocked fixture observations, hang caps, handoff and cleanup controls."""
 import io
 import hashlib
 import json
@@ -13,7 +13,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from fixtures import installed_span_controls as span_controls
 from fixtures import installed_prepared
 from fixtures import installed_clock as clocks, installed_account_run, installed_releases, installed_order, installed_order_trace, installed_order_host, installed_native, installed_accounts, installed_paths, native_services
 
@@ -29,32 +28,24 @@ class Time:
         self.value += duration
 
 
-def diagnostic(**changes):
-    return clocks.ClockPlan(**({"mode": "diagnostic", "workload": {"scenario": "chain"},
-        "command_ns": 600 * clocks.SECOND, "external_ns": 240 * clocks.SECOND, "emergency_ns": 60 * clocks.SECOND} | changes))
-
-
-def budget(key, elapsed=clocks.SECOND):
-    workload = {"operation": key}
-    sample = clocks.SampleRef({"harness": "calibration source", "memberSha256": "a" * 64}, workload, elapsed, True, True)
-    return clocks.PhaseBudget(key, clocks.bound(elapsed), workload, (sample,))
-
-
 class ClockTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="clock-control-")
         self.addCleanup(self.temp.cleanup)
         self.root, self.now = Path(self.temp.name), Time()
 
-    def clock(self, plan=None, **kwargs):
-        return clocks.Clock(plan or diagnostic(), now=self.now, **kwargs)
+    def clock(self, **kwargs):
+        clock = clocks.Clock({"scenario": "chain"}, now=self.now)
+        if "hang_ns" in kwargs:
+            clock.deadline_ns = self.now() + kwargs["hang_ns"]
+        return clock
 
     def test_native_wait_preserves_parent_clock_expiry(self):
-        clock = self.clock(diagnostic(command_ns=109 * clocks.MILLISECOND))
+        clock = self.clock(hang_ns=109 * clocks.MILLISECOND)
         predicate = Mock(return_value=False)
         with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), \
                 patch.object(native_services.time, "sleep", side_effect=self.advance_wait):
-            with self.assertRaisesRegex(clocks.ClockExpired, "installed fixture clock expired") as raised:
+            with self.assertRaisesRegex(clocks.ClockExpired, "installed fixture hang cap reached") as raised:
                 native_services.wait_for(predicate, "installed signature exporter did not start")
         self.assertEqual(raised.exception.__notes__, ["installed signature exporter did not start"])
         self.assertEqual(clock.failures[0]["type"], "ClockExpired")
@@ -68,7 +59,7 @@ class ClockTest(unittest.TestCase):
                 native_services.wait_for(lambda: False, "handoff wait did not finish")
 
     def test_native_mapping_wait_preserves_exact_phase_expiry(self):
-        clock = self.clock(diagnostic(command_ns=109 * clocks.MILLISECOND))
+        clock = self.clock(hang_ns=109 * clocks.MILLISECOND)
         observed, record = [], {}
         def expired_mapping(*_args):
             self.now.advance(110 * clocks.MILLISECOND)
@@ -97,7 +88,7 @@ class ClockTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "^local wait did not finish$") as raised:
                 native_services.wait_for(lambda: False, "local wait did not finish")
         self.assertIs(type(raised.exception), RuntimeError)
-        self.assertEqual(self.now() - start, 10 * clocks.SECOND)
+        self.assertEqual(self.now() - start, clocks.HANG_SECONDS * clocks.SECOND)
 
     def advance_wait(self, seconds):
         self.now.advance(round(seconds * clocks.SECOND))
@@ -132,84 +123,26 @@ class ClockTest(unittest.TestCase):
     def export(self, clock, cleaned=True):
         return clock.export(self.root / "clock.json", cleaned, {"source": "exact tested source"})
 
-    def test_exact_integer_rounding(self):
-        self.assertEqual(clocks.bound(206_560_223_778), 232_381_000_000)
-        self.assertEqual(clocks.bound(84_348_697_836), 94_893_000_000)
-        self.assertEqual(clocks.bound(79_585_554_795), 89_534_000_000)
-        self.assertEqual(clocks.bound(8_000_000), 9_000_000)
-        self.assertEqual(clocks.bound(8_000_001), 10_000_000)
-        for invalid in (0, -1, 1.25, True):
-            with self.assertRaises(ValueError):
-                clocks.bound(invalid)
 
-    def test_unbound_and_missing_executable_plan_fail_closed(self):
-        with self.assertRaisesRegex(ValueError, "unbound"):
-            clocks.ClockPlan().validate()
+    def test_missing_executable_clock_fails_closed(self):
+        with self.assertRaises(ValueError):
+            clocks.positive(0)
         releases = installed_releases.Releases(self.root, "linux/amd64", self.root)
         with patch.object(installed_releases.subprocess, "run") as run:
-            with self.assertRaisesRegex(RuntimeError, "explicit clock"):
+            with self.assertRaisesRegex(RuntimeError, "active fixture"):
                 releases.start_signer()
         run.assert_not_called()
         releases.close()
 
-    def test_signer_uses_run_deadline_not_the_short_startup_phase(self):
-        clock = self.clock()
-        clock.stack.append({"key": "startup", "deadline_ns": self.now() + clocks.SECOND})
-        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_releases.subprocess, "Popen") as launch, patch.object(installed_releases.native_services, "wait_for"):
-            releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=clock.plan)
-            releases.launch_signer()
-        self.assertIn("-test.timeout=600000000000ns", launch.call_args.args[0])
-        launch.assert_called_once()
 
-    def test_approved_measurement_envelope_is_explicit_and_never_accepts(self):
-        plan = diagnostic(command_ns=1500 * clocks.SECOND, admission_ns=1800 * clocks.SECOND)
-        clock = self.clock(plan)
-        self.assertEqual(clock.job_deadline_ns - clock.job_origin_ns, 1800 * clocks.SECOND)
-        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_releases.subprocess, "Popen") as launch, patch.object(installed_releases.native_services, "wait_for"):
-            releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=plan)
-            releases.launch_signer()
-        self.assertIn("-test.timeout=1500000000000ns", launch.call_args.args[0])
-        self.assertFalse(self.export(clock)["accepted"])
-
-    def test_default_measurement_and_absolute_job_ceiling_cannot_grow_implicitly(self):
-        with self.assertRaises(ValueError):
-            diagnostic(command_ns=700 * clocks.SECOND, external_ns=100 * clocks.SECOND).validate()
-        with self.assertRaises(ValueError):
-            diagnostic(command_ns=1500 * clocks.SECOND, admission_ns=1801 * clocks.SECOND).validate()
-
-    def test_prepared_io_allocation_keeps_job_ceiling_and_cannot_accept(self):
-        plan = diagnostic(command_ns=1380 * clocks.SECOND, external_ns=360 * clocks.SECOND, admission_ns=1800 * clocks.SECOND)
-        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 1800 * clocks.SECOND)
-        clock = self.clock(plan)
-        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), patch.object(installed_releases.subprocess, "Popen") as launch, patch.object(installed_releases.native_services, "wait_for"):
-            releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=plan)
-            releases.launch_signer()
-        self.assertIn("-test.timeout=1380000000000ns", launch.call_args.args[0])
-        self.assertFalse(self.export(clock)["accepted"])
-
-    def test_extended_measurement_must_fit_the_original_job_declaration(self):
-        origin = self.root / "job-origin.json"
-        job = {"origin_ns": clocks.time.monotonic_ns(), "run": "owned-run", "job": "owned-job", "admission_ns": 900 * clocks.SECOND}
-        origin.write_text(json.dumps(job))
-        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
-            clock_command_seconds=1500, clock_job_seconds=1800, clock_external_seconds=240, clock_emergency_seconds=60,
-            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=False)
-        with patch.dict(os.environ, GITHUB_RUN_ID="owned-run", GITHUB_JOB="owned-job"):
-            with self.assertRaisesRegex(ValueError, "original job"):
-                clocks.from_arguments(args, "linux/amd64")
-            job["admission_ns"] = 1800 * clocks.SECOND
-            origin.write_text(json.dumps(job))
-            self.assertEqual(clocks.from_arguments(args, "linux/amd64").plan.admission_ns, 1800 * clocks.SECOND)
-
-    def test_diagnostic_never_self_sizes_or_accepts(self):
+    def test_outcomes_accept_without_timing_plan(self):
         clock = self.clock()
         with clock.activate():
             with clocks.operation("build:v9001"):
                 self.now.advance(clocks.SECOND)
         value = self.export(clock)
-        self.assertFalse(value["accepted"])
+        self.assertTrue(value["accepted"])
         self.assertTrue(value["measurement_completed"])
-        self.assertEqual(clock.plan.phases, ())
         self.assertEqual(value["disjoint_ns"], value["command_ns"])
         self.assertEqual(value["leaves"][0]["end_ns"], value["leaves"][1]["start_ns"])
 
@@ -227,11 +160,11 @@ class ClockTest(unittest.TestCase):
             clock = clocks.from_arguments(args, "linux/amd64")
         identity = hashlib.sha256((args.prepared_releases / "prepared.json").read_bytes()).hexdigest()
         self.assertEqual(clock.provenance["preparedId"], identity)
-        self.assertNotIn("preparedId", clock.plan.workload)
-        self.assertEqual(clock.plan.workload["preparedRole"], "consume")
-        self.assertEqual(clock.plan.workload["installedSlice"], selection)
-        self.assertTrue(clock.plan.workload["grouped"])
-        self.assertEqual(clock.plan.workload["publishedRegistrySha256"], "a" * 64)
+        self.assertNotIn("preparedId", clock.workload)
+        self.assertEqual(clock.workload["preparedRole"], "consume")
+        self.assertEqual(clock.workload["installedSlice"], selection)
+        self.assertTrue(clock.workload["grouped"])
+        self.assertEqual(clock.workload["publishedRegistrySha256"], "a" * 64)
 
     def prepared_arguments(self):
         origin = self.root / "job-origin.json"
@@ -245,9 +178,7 @@ class ClockTest(unittest.TestCase):
         selection = {"schema": 1, "select": [{"profile": "chain-none", "group_indices": [0]}], "readers": []}
         selected = self.root / "slice.json"
         selected.write_text(json.dumps(selection))
-        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, clock_mode="diagnostic", clock_plan=None,
-            clock_command_seconds=600, clock_job_seconds=900, clock_external_seconds=240, clock_emergency_seconds=60,
-            clock_job_start=origin, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=True,
+        args = SimpleNamespace(source_host="pc", scenario=None, worker_registry=None, fresh_managed=False, ordered_hosts=False, format_waypoint=False, signed_chain=True,
             export_prepared=None, prepared_releases=bundle, installed_slice=selected)
         return args, selection
 
@@ -267,7 +198,7 @@ class ClockTest(unittest.TestCase):
         origin.write_text(json.dumps({"origin_ns": clocks.SECOND, "admission_ns": 900 * clocks.SECOND}))
         fixture = self.root / "fresh-clock.json"
         fixture.write_text(json.dumps({"origin_ns": 2 * clocks.SECOND, "end_ns": 3 * clocks.SECOND,
-                                       "external_budget_ns": 3 * clocks.SECOND}))
+                                       "duration_record_only": True}))
         output = io.StringIO()
         with patch.object(clocks.time, "monotonic_ns", return_value=4 * clocks.SECOND), patch("sys.stdout", output):
             clocks.job_record("job-finish", origin, fixture)
@@ -275,57 +206,6 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(interval["external_observed_ns"], 2 * clocks.SECOND)
         self.assertFalse(interval["external_complete"])
 
-    def test_frozen_exact_sequence_and_derived_total(self):
-        clock = self.clock(self.fresh_plan())
-        for key in span_controls.leaf_keys(clock.plan)[1:]:
-            self.now.advance(1)
-            clock.switch(key.rsplit("#", 1)[0])
-        self.assertTrue(self.export(clock)["accepted"])
-
-    def fresh_plan(self):
-        return span_controls.reviewed_for_test()
-
-    def test_frozen_switch_checks_the_timestamp_it_records(self):
-        clock = self.clock(self.fresh_plan())
-        deadline = clock.effective_deadline()
-        clock.now = Mock(side_effect=(deadline - 1, deadline + 1))
-        clock.switch("signer-build:")
-        self.assertEqual(clock.rows[-1]["end_ns"], deadline - 1)
-        self.assertLess(clock.rows[-1]["elapsed_ns"], clock.plan.phases[0].limit_ns)
-        clock.now.assert_called_once()
-
-    def test_setup_and_operation_share_an_absolute_span_without_a_floor(self):
-        clock = self.clock(self.fresh_plan())
-        deadline = clock.effective_deadline()
-        self.now.advance(clocks.MILLISECOND)
-        clock.switch("signer-build:")
-        self.assertEqual(clock.effective_deadline(), deadline)
-        self.now.value = deadline
-        with self.assertRaisesRegex(clocks.ClockExpired, "signer-build"):
-            clock.switch("setup")
-        self.assertEqual(clock.active_key, "signer-build:#1")
-        self.assertEqual(clock.cleanup_deadline_ns, self.now() + clock.plan.emergency_ns)
-
-    def test_operation_finish_checks_guard_before_popping_it(self):
-        clock = self.clock()
-        clock.stack.append({"key": "nested#1", "deadline_ns": self.now() + clocks.SECOND})
-        start = self.now()
-        self.now.advance(clocks.SECOND)
-        with self.assertRaises(clocks.ClockExpired):
-            clock.finish_operation("nested#1", start, "setup")
-        self.assertEqual(clock.stack, [])
-        self.assertFalse(clock.samples[-1]["completed"])
-        self.assertFalse(self.export(clock)["measurement_completed"])
-
-    def test_operation_finish_before_guard_keeps_one_shared_boundary(self):
-        clock = self.clock()
-        start = self.now()
-        clock.stack.append({"key": "nested#1", "deadline_ns": start + clocks.SECOND})
-        self.now.advance(clocks.SECOND - 1)
-        clock.finish_operation("nested#1", start, "setup")
-        self.assertEqual(clock.samples[-1]["end_ns"], clock.rows[-1]["end_ns"])
-        self.assertEqual(clock.started_ns, clock.samples[-1]["end_ns"])
-        self.assertTrue(self.export(clock)["measurement_completed"])
 
     def test_operation_sample_starts_at_its_leaf_boundary(self):
         clock = self.clock()
@@ -338,44 +218,6 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(clock.samples[0]["start_ns"], clock.rows[1]["start_ns"])
         self.assertEqual(clock.samples[0]["end_ns"], clock.rows[1]["end_ns"])
 
-    def test_reviewed_fresh_sequence_can_complete_with_controlled_time(self):
-        clock = self.clock(self.fresh_plan())
-        for key in span_controls.leaf_keys(clock.plan)[1:]:
-            self.now.advance(1)
-            clock.switch(key.rsplit("#", 1)[0])
-        value = self.export(clock)
-        self.assertTrue(value["accepted"])
-        self.assertEqual(value["disjoint_ns"], value["command_ns"])
-
-    def test_reviewed_completion_export_overrun_is_censored(self):
-        clock = self.clock(self.fresh_plan())
-        for key in span_controls.leaf_keys(clock.plan)[1:]:
-            clock.switch(key.rsplit("#", 1)[0])
-        write = Path.write_text
-        def slow(path, data, *args, **kwargs):
-            self.now.advance(clock.plan.phases[-1].limit_ns)
-            return write(path, data, *args, **kwargs)
-        with patch.object(Path, "write_text", slow):
-            value = self.export(clock)
-        persisted = json.loads((self.root / "clock.json").read_text())
-        self.assertFalse(value["accepted"])
-        self.assertFalse(persisted["measurement_completed"])
-        self.assertTrue(persisted["leaves"][-1]["censored"])
-
-    def test_censored_wrong_workload_and_changed_bound_are_rejected(self):
-        row = budget("setup#1")
-        censored = clocks.SampleRef({"source": "same"}, row.workload, clocks.SECOND, False, True)
-        invalid = clocks.PhaseBudget(row.key, row.limit_ns, row.workload, (censored,))
-        for value in (invalid, clocks.PhaseBudget(row.key, row.limit_ns + 1, row.workload, row.samples),
-                      clocks.PhaseBudget(row.key, row.limit_ns, {"operation": "changed"}, row.samples)):
-            with self.assertRaises(ValueError):
-                value.validate()
-
-    def test_job_admission_includes_external_and_emergency(self):
-        with self.assertRaisesRegex(clocks.ClockExpired, "admission"):
-            self.clock(job_origin_ns=self.now() - 241 * clocks.SECOND)
-        with self.assertRaises(ValueError):
-            diagnostic(emergency_ns=61 * clocks.SECOND).validate()
 
     def test_wall_clock_changes_do_not_change_elapsed(self):
         clock = self.clock()
@@ -388,14 +230,14 @@ class ClockTest(unittest.TestCase):
         clock = self.clock()
         clock.watchdog = True
         with patch.object(clocks.signal, "setitimer") as timer:
-            self.now.advance(600 * clocks.SECOND)
+            self.now.advance(clocks.HANG_SECONDS * clocks.SECOND)
             with self.assertRaises(clocks.ClockExpired):
                 clock.check()
             first = clock.cleanup_deadline_ns
             clock.fail(RuntimeError("cleanup also failed"))
         self.assertEqual(clock.cleanup_deadline_ns, first)
         timer.assert_any_call(signal.ITIMER_REAL, 0)
-        timer.assert_called_with(signal.ITIMER_REAL, 60)
+        timer.assert_called_with(signal.ITIMER_REAL, clocks.CLEANUP_SECONDS)
         value = self.export(clock, False)
         self.assertEqual(value["failures"][0]["type"], "ClockExpired")
         self.assertFalse(value["measurement_completed"])
@@ -404,7 +246,7 @@ class ClockTest(unittest.TestCase):
         def ticks():
             self.now.advance(101)
             return self.now()
-        clock = clocks.Clock(diagnostic(), now=ticks)
+        clock = clocks.Clock({"scenario": "chain"}, now=ticks)
         with clock.operation("observed"):
             self.now.advance(1000)
         row = clock.samples[-1]
@@ -625,7 +467,7 @@ class ClockTest(unittest.TestCase):
                 driver.call("inspect")
         decode.assert_not_called()
         request = json.loads(driver.write_request.call_args.args[0])
-        self.assertEqual(request["fixtureDeadlineNs"], self.now() + 30 * clocks.SECOND)
+        self.assertEqual(request["fixtureDeadlineNs"], driver.fixture_deadline_ns)
 
     def test_order_trace_sends_once_at_first_ready_write_with_injected_deadline(self):
         driver = installed_order.Driver.__new__(installed_order.Driver)
@@ -633,7 +475,7 @@ class ClockTest(unittest.TestCase):
         driver.account, driver.process = {"role": "control"}, Mock()
         driver.process.poll.return_value = None
         driver.diagnostics = installed_order_trace.Trace("control")
-        delivered, writes, expected_deadline = bytearray(), [], self.now() + 30 * clocks.SECOND
+        delivered, writes, expected_deadline = bytearray(), [], driver.fixture_deadline_ns
 
         def ready(reads, writes, errors, timeout):
             self.now.advance(clocks.SECOND // 100)
@@ -672,26 +514,6 @@ class ClockTest(unittest.TestCase):
         self.assertIsNone(clocks.HANDOFF.get())
         self.assertIn("dispatch:inspect:True:", owner.events)
 
-    def test_calibration_vehicle_has_full_matrix_and_no_dispatch_on_change(self):
-        workflow = Path(".github/workflows/installed-clock-calibration.yml").read_text()
-        reusable = Path(".github/workflows/installed-catchup.yml").read_text()
-        self.assertIn("workflow_dispatch:", workflow)
-        self.assertNotIn("pull_request:", workflow)
-        self.assertIn("calibration_only: true", workflow)
-        self.assertIn("worker_artifact_run: ${{ fromJSON(inputs.producer_run) }}", workflow)
-        self.assertIn("required: true\n        type: string", workflow.split("producer_run:", 1)[1].split("producer_source:", 1)[0])
-        self.assertIn("platform: [linux/amd64, linux/arm64, darwin/arm64]", reusable)
-        self.assertIn("mode: [oldest, order]", reusable)
-        prepared = Path(".github/workflows/installed-prepared.yml").read_text()
-        self.assertIn("mode: [chain, waypoint]", reusable)
-        self.assertIn("native_platform: ${{ matrix.platform }}", reusable)
-        self.assertIn("matrix: ${{ fromJSON(needs.plans.outputs.case) }}", prepared)
-        self.assertIn("profile: ${{ fromJSON(needs.plans.outputs.profiles) }}", prepared)
-        self.assertIn("uses: ./.github/workflows/installed-prepared.yml", reusable)
-        self.assertIn("timeout-minutes: 15", reusable)
-        self.assertIn("--clock-job-seconds 1800 --clock-command-seconds 1500 --clock-external-seconds 240 --clock-emergency-seconds 60", reusable)
-        self.assertIn("timeout-minutes: ${{ inputs.calibration_only && 30 || fromJSON(needs.frozen-budgets.outputs.minutes)", reusable)
-        self.assertIn("(inputs.catalog_evidence || !inputs.calibration_only) && startsWith(matrix.platform, 'linux/') && matrix.mode == 'oldest'", reusable)
 
     def test_cleanup_alarm_cannot_launch_another_action_after_absolute_expiry(self):
         deadline = self.now() + clocks.SECOND
@@ -875,6 +697,56 @@ class ClockTest(unittest.TestCase):
         self.assertEqual(json.loads(ticket.read_text())["failure_ns"], 100 * clocks.SECOND)
 
 
+class OutcomePolicyTest(unittest.TestCase):
+    def test_slow_completed_operation_accepts_without_a_phase_limit(self):
+        now = Time()
+        clock = clocks.Clock({}, now=now)
+        with clock.operation("slow-functional-outcome"):
+            now.advance(500 * clocks.SECOND)
+        with tempfile.TemporaryDirectory() as root:
+            value = clock.export(Path(root) / "result.json", True, {})
+        self.assertTrue(value["accepted"])
+        self.assertEqual(value["samples"][0]["elapsed_ns"], 500 * clocks.SECOND)
+
+    def test_successful_case_cleanup_keeps_work_cap_and_final_cleanup_is_bounded_once(self):
+        now = Time()
+        clock = clocks.Clock({}, now=now)
+        clock.begin_cleanup()
+        self.assertIsNone(clock.cleanup_deadline_ns)
+        clock.begin_cleanup(final=True)
+        deadline = now() + clocks.CLEANUP_SECONDS * clocks.SECOND
+        now.advance(clocks.SECOND)
+        clock.begin_cleanup(final=True)
+        clock.fail(ValueError("original failure"))
+        self.assertEqual(clock.cleanup_deadline_ns, deadline)
+        now.value = deadline
+        with self.assertRaises(clocks.ClockExpired):
+            clock.check()
+        self.assertEqual(clock.failures[0]["error"], "original failure")
+
+    def test_unresolved_partition_cannot_accept_completed_timestamps(self):
+        clock = clocks.Clock({"grouped": True, "mode": "chain"})
+        with tempfile.TemporaryDirectory() as root:
+            value = clock.export(Path(root) / "result.json", True, {})
+        self.assertFalse(value["accepted"])
+        self.assertEqual(value["unresolved_key_sets"], ["installed-partition-and-scenarios"])
+
+    def test_exec_inherits_one_absolute_parent_deadline(self):
+        deadline = clocks.time.monotonic_ns() + 180 * clocks.SECOND
+        script = "from fixtures import installed_clock as c; " + \
+            "exec('with c.inherited_handoff(watchdog=True):\\n print(c.parent_deadline())')"
+        environment = os.environ | clocks.handoff_environment(deadline) | {
+            "PYTHONPATH": str(Path(clocks.__file__).parents[1]), "PYTHONDONTWRITEBYTECODE": "1"}
+        result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True,
+                                text=True, check=True, timeout=180)
+        self.assertEqual(int(result.stdout), deadline)
+
+    def test_invalid_inherited_deadline_never_dispatches(self):
+        for value in ("0", "-1", "not-an-integer"):
+            with patch.dict(os.environ, {clocks.HANDOFF_ENV: value}), self.assertRaises(ValueError), clocks.inherited_handoff():
+                self.fail("invalid parent dispatched work")
+
+
 class CompletionEvidenceTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="completion-control-")
@@ -890,7 +762,7 @@ class CompletionEvidenceTest(unittest.TestCase):
                 self.interrupted_ownership(prefix)
 
     def interrupted_ownership(self, prefix):
-        clock = clocks.Clock(diagnostic(), now=self.now)
+        clock = clocks.Clock({"scenario": "chain"}, now=self.now)
         with clock.activate():
             self.interrupt_close(clock, prefix)
         owned = json.loads((self.output / "fixture-ownership.json").read_bytes())
@@ -904,7 +776,7 @@ class CompletionEvidenceTest(unittest.TestCase):
         self.assertEqual(decision["reason"], "fixture ownership unconfirmed")
 
     def interrupt_close(self, clock, prefix):
-        releases = installed_releases.Releases(self.root, "linux/amd64", self.output, prepared=True, clock_plan=clock.plan)
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.output, prepared=True, )
         releases.record_ownership(signer_absent=False)
         releases.signer = Mock()
         releases.signer.poll.return_value = 0
@@ -949,12 +821,12 @@ class CompletionEvidenceTest(unittest.TestCase):
         source, target = self.root / "worker", self.root / "copied-worker"
         source.write_bytes(b"retained worker")
         files = {}
-        error = clocks.ClockExpired("installed fixture clock expired at prepared-export:#1")
+        error = clocks.ClockExpired("installed fixture hang cap reached at prepared-export:#1")
         with patch.object(shutil, "_USE_CP_SENDFILE", True), patch.object(shutil, "_USE_CP_COPY_FILE_RANGE", False, create=True), \
                 patch.object(shutil.os, "sendfile", side_effect=list(sent) + [error]), self.assertRaises(clocks.ClockExpired) as raised:
             installed_prepared.copy_external(source, target.name, self.root, files)
         self.assertIs(raised.exception, error)
-        self.assertEqual(str(error), "installed fixture clock expired at prepared-export:#1")
+        self.assertEqual(str(error), "installed fixture hang cap reached at prepared-export:#1")
         self.assertEqual(files, {})
         self.assertTrue(target.exists())
 
@@ -962,11 +834,11 @@ class CompletionEvidenceTest(unittest.TestCase):
         owned = self.root / "owned"
         owned.mkdir()
         (owned / "remaining").write_bytes(b"partial cleanup evidence")
-        error = clocks.ClockExpired("installed fixture clock expired at completion#2")
+        error = clocks.ClockExpired("installed fixture hang cap reached at completion#2")
         with patch.object(shutil.os, "unlink", side_effect=error), self.assertRaises(clocks.ClockExpired) as raised:
             shutil.rmtree(owned)
         self.assertIs(raised.exception, error)
-        self.assertEqual(str(error), "installed fixture clock expired at completion#2")
+        self.assertEqual(str(error), "installed fixture hang cap reached at completion#2")
         self.assertTrue((owned / "remaining").exists())
 
 

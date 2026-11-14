@@ -41,7 +41,7 @@ def cleanup_all(actions, on_error=None):
     failures = []
     for action in actions:
         try:
-            installed_clock.timeout(10)
+            installed_clock.timeout()
         except installed_clock.ClockExpired as error:
             cleanup_failure(error, on_error)
             failures.append(str(error))
@@ -67,7 +67,7 @@ def cleanup_failure(error, on_error):
 
 def peer_pid(path):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(installed_clock.timeout(2))
+        connection.settimeout(installed_clock.timeout())
         connection.connect(str(path))
         if sys.platform == "darwin":
             return connection.getsockopt(0, 2)
@@ -139,7 +139,7 @@ class Units:
         link.symlink_to(path)
 
     def gui_command(self, arguments):
-        return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=installed_clock.timeout(10), check=False)
+        return subprocess.run(["/bin/launchctl", *arguments], capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
 
     def set_gui_environment(self):
         if os.environ.get("GITHUB_ACTIONS") != "true":
@@ -265,7 +265,7 @@ class Installation:
         self.render_daemon(daemon_path)
         kind, domain = ("launchd", manager.domain) if sys.platform == "darwin" else ("systemd", "")
         result = subprocess.run([str(self.preparer), str(self.state), str(self.pair["helper"]["executable"]),
-            str(directory), kind, domain], capture_output=True, text=True, check=True, timeout=20)
+            str(directory), kind, domain], capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         helper = json.loads(result.stdout)
         self.helper = helper
         self.units.register("daemon", daemon_path)
@@ -298,8 +298,8 @@ class Installation:
         path.write_text(template)
 
     def control(self, operation, **fields):
-        deadline_ns = installed_clock.parent_deadline(10)
-        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields}, timeout=installed_clock.timeout(10), deadline_ns=deadline_ns)
+        deadline_ns = installed_clock.parent_deadline()
+        return controls.round_trip(str(self.state / "daemon.sock"), {"type": operation, "requestId": "installed-native", **fields}, timeout=installed_clock.timeout(), deadline_ns=deadline_ns)
 
     def ready(self):
         try:
@@ -320,7 +320,7 @@ class Installation:
     def seed(self):
         client_environment = self.prepare_client()
         self.terminal = terminal_module.Terminal([str(self.binary), self.remote_id, "--", str(HELPERS / "window_shell.sh")],
-            client_environment, self.root, timeout=10)
+            client_environment, self.root, timeout=installed_clock.timeout())
         self.terminal.expect(terminal_module.PROMPT)
         sessions = self.control("session.list")["sessions"]
         if len(sessions) != 1:
@@ -355,10 +355,10 @@ class Installation:
         config.mkdir()
         environment = self.environment | {"MESH_STATE_DIR": str(self.root / "c"), "MESH_CONFIG_DIR": str(config)}
         result = subprocess.run([str(self.binary), "device", "identity", "--json"], env=environment,
-            capture_output=True, text=True, check=True, timeout=10)
+            capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         client_id = json.loads(result.stdout)["id"]
         subprocess.run([str(self.binary), "device", "approve", "--allow-root", "--", client_id],
-            env=self.environment, capture_output=True, text=True, check=True, timeout=10)
+            env=self.environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
         host = self.control("host.info")["host"]
         self.remote_id = host["id"]
         path = config / "hosts.json"
@@ -467,7 +467,7 @@ class Installation:
         if path.exists():
             if peer_pid(path) != self.worker:
                 raise RuntimeError("refusing cleanup through a worker socket with unknown ownership")
-            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session}, timeout=installed_clock.timeout(10), deadline_ns=installed_clock.parent_deadline(10))
+            response = controls.round_trip(str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": self.session}, timeout=installed_clock.timeout(), deadline_ns=installed_clock.parent_deadline())
             if response.get("type") != "ok":
                 raise RuntimeError("owned worker rejected session cleanup: " + json.dumps(response))
             return
@@ -517,7 +517,7 @@ class Installation:
 
 
 def process_stamp(pid):
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart="], capture_output=True, text=True, timeout=installed_clock.timeout(5), check=False)
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "uid=", "-o", "lstart="], capture_output=True, text=True, timeout=installed_clock.timeout(), check=False)
     if result.returncode == 1 and not native_services.alive(pid):
         return None
     if result.returncode or not result.stdout.strip().startswith(str(os.getuid()) + " "):

@@ -15,7 +15,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from fixtures import installed_account_run, installed_accounts, installed_order, installed_order_host, installed_native, installed_publication, installed_releases, native_services, installed_fresh, installed_adoption
+from fixtures import installed_clock, installed_account_run, installed_accounts, installed_order, installed_order_host, installed_native, installed_publication, installed_releases, native_services, installed_fresh, installed_adoption
 
 
 class Clock:
@@ -643,7 +643,7 @@ class OrderedLifecycleTest(unittest.TestCase):
                 case.stop_worker()
         control.assert_called_once()
         self.assertEqual(control.call_args.args, (str(path), {"type": "session.kill", "requestId": "installed-cleanup", "sessionId": "owned"}))
-        self.assertEqual(control.call_args.kwargs["timeout"], 10)
+        self.assertEqual(control.call_args.kwargs["timeout"], installed_clock.HANG_SECONDS)
         self.assertIsInstance(control.call_args.kwargs["deadline_ns"], int)
         kill.assert_not_called()
 
