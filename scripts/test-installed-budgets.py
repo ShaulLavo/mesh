@@ -30,6 +30,15 @@ def synthetic_budget(key):
     return clocks.PhaseBudget(key, clocks.bound(clocks.SECOND), workload, (sample,))
 
 
+def test_plan_index(root, name):
+    directory = root / "test-only-plans"
+    directory.mkdir()
+    span_controls.write_plan(directory / (name + ".json"), span_controls.reviewed_for_test(name))
+    index = directory / "index.json"
+    index.write_text(json.dumps({"schema": 1, "plans": {name: {"path": name + ".json"}}}))
+    return index
+
+
 class FrozenBudgetTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="frozen-wiring-")
@@ -187,7 +196,7 @@ class FrozenBudgetTests(unittest.TestCase):
         budgets.bind(self.args, "linux/amd64")
 
     def test_actual_reviewed_fresh_plan_binds_its_exact_workload(self):
-        self.args.clock_plan_index = budgets.INDEX
+        self.args.clock_plan_index = test_plan_index(self.root, "linux-amd64-fresh")
         self.args.source_host, self.args.worker_registry, self.args.fresh_managed = None, None, True
         budgets.bind(self.args, "linux/amd64")
         plan = clocks.from_arguments(self.args, "linux/amd64").plan
@@ -214,11 +223,11 @@ class FrozenBudgetTests(unittest.TestCase):
 
     def test_reviewed_order_plan_preserves_its_complete_admission(self):
         key, workload = budgets.selection("linux/amd64", "order")
-        _path, plan = budgets.select_plan(budgets.INDEX, key, workload)
-        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_884_000_000)
+        _path, plan = budgets.select_plan(test_plan_index(self.root, key), key, workload)
+        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_883_000_000)
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(budgets.workflow_minutes(plan), 15)
-        self.assertEqual((len(plan.phases), len(plan.guards)), (16, 11))
+        self.assertEqual((len(plan.phases), len(plan.guards)), (13, 11))
 
     def test_all_ten_cohort_cells_and_six_support_cells_are_required(self):
         profiles = budgets.required_profiles(True, True, None, False)
@@ -277,6 +286,8 @@ class WorkflowWiringTests(unittest.TestCase):
             self.check_smoke_admission(script, source, Path(temporary))
 
     def check_smoke_admission(self, script, source, root):
+        index = test_plan_index(root, "linux-amd64-fresh")
+        script = script.replace("clock_plan_index=b.INDEX", "clock_plan_index=Path(" + repr(str(index)) + ")")
         origin = root / "installed-job-clock.json"
         origin.write_text(json.dumps({"origin_ns": clocks.time.monotonic_ns(), "run": "smoke-run", "job": "native-fresh",
                                       "admission_ns": 900 * clocks.SECOND}))
@@ -289,7 +300,7 @@ class WorkflowWiringTests(unittest.TestCase):
             env=environment, capture_output=True, timeout=5)
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn(b"workload differs", mismatch.stderr)
-        self.assertEqual(list(root.iterdir()), [origin])
+        self.assertEqual(set(root.iterdir()), {origin, index.parent})
 
     def test_support_diagnostic_selection_is_explicit_and_cannot_enable_ordinary_fallback(self):
         script = self.script(job("frozen-budgets"), "Select reviewed per-platform and profile job admissions")

@@ -1,7 +1,7 @@
 """Fixture-only monotonic clocks; calibration never supplies acceptance bounds."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 import functools
 import hashlib
 import importlib
@@ -55,6 +55,7 @@ class PhaseBudget:
     limit_ns: int
     workload: dict
     samples: tuple
+    telemetry: tuple = ()
 
     def validate(self):
         if not self.samples or any(not sample.eligible(self.workload) for sample in self.samples):
@@ -122,7 +123,40 @@ def validate_spans(plan):
             raise ValueError("span key/workload projection differs")
     if any("clockSpan" in row.workload for row in plan.guards):
         raise ValueError("guards cannot contain span membership")
+    if any(row.telemetry for row in plan.phases[1:] + plan.guards):
+        raise ValueError("only bootstrap may contain span telemetry")
+    validate_bootstrap(plan.phases[0], keys, plan.workload)
     validate_span_samples(plan.phases)
+
+
+def validate_bootstrap(phase, keys, workload):
+    parts = spans.bootstrap_parts(spans.operation_leaf_keys(keys, workload), workload)
+    if [row.workload.get("clockSpan", {}).get("leaves") for row in phase.telemetry] != parts:
+        raise ValueError("bootstrap telemetry differs from complete canonical membership")
+    if not parts:
+        return
+    for row, part in zip(phase.telemetry, parts):
+        if row.telemetry or row.key != "span:" + part[0] or row.workload != workload | {"clockSpan": {"leaves": part}}:
+            raise ValueError("bootstrap telemetry projection differs")
+        row.validate()
+    validate_bootstrap_sources(phase)
+
+
+def validate_bootstrap_sources(phase):
+    cursors, sources = {}, None
+    for row in phase.telemetry:
+        current = validate_span_sources(row, cursors, False)
+        if sources is not None and sources != current:
+            raise ValueError("bootstrap telemetry mixes invocations")
+        sources = current
+    aggregate = {span_sample(sample)[0]: sample for sample in phase.samples}
+    if set(aggregate) != sources:
+        raise ValueError("bootstrap telemetry sources differ from aggregate")
+    for sample in phase.telemetry[0].samples:
+        source, start, _end, _origin, _terminal = span_sample(sample)
+        outer = span_sample(aggregate[source])
+        if outer[1] != start or outer[2] != cursors[source]:
+            raise ValueError("bootstrap endpoints differ from original member spans")
 
 
 def validate_span_samples(phases):
@@ -175,7 +209,16 @@ def load_plan(path):
 
 
 def load_budget(value):
-    return PhaseBudget(**(value | {"samples": tuple(SampleRef(**row) for row in value["samples"])}))
+    return PhaseBudget(**(value | {"samples": tuple(SampleRef(**row) for row in value["samples"]),
+                                   "telemetry": tuple(load_budget(row) for row in value.get("telemetry", []))}))
+
+
+def budget_value(budget):
+    value = {"key": budget.key, "limit_ns": budget.limit_ns, "workload": budget.workload,
+             "samples": [asdict(sample) for sample in budget.samples]}
+    if budget.telemetry:
+        value["telemetry"] = [budget_value(row) for row in budget.telemetry]
+    return value
 
 
 def reduce_span_budgets(observations):
@@ -189,13 +232,22 @@ def reduce_span_budgets(observations):
     parts = [[part["leaves"] for part in rows] for rows in intervals]
     if any(part != parts[0] for part in parts):
         raise ValueError("span reduction mixes membership")
+    result = reduce_intervals(observations, intervals, workload)
+    if workload.get("preparedRole") != "consume":
+        individual = reduce_intervals(observations, [span_intervals(row["fixture"], telemetry=True) for row in observations], workload)
+        count = len(spans.bootstrap_parts([row.workload["clockSpan"]["leaves"] for row in individual], workload))
+        result[0] = replace(result[0], telemetry=tuple(individual[:count]))
+    validate_span_samples(result)
+    return tuple(result)
+
+
+def reduce_intervals(observations, intervals, workload):
     result = []
     for index, part in enumerate(intervals[0]):
         context = workload | {"clockSpan": {"leaves": part["leaves"]}}
         samples = tuple(span_reference(row, rows[index], context) for row, rows in zip(observations, intervals))
         result.append(PhaseBudget(part["key"], bound(max(row.elapsed_ns for row in samples)), context, samples))
-    validate_span_samples(result)
-    return tuple(result)
+    return result
 
 
 def span_reference(observed, part, workload):
@@ -414,6 +466,7 @@ class Clock:
                  "expected_sample_keys": sorted(self.expected_samples),
                  "missing_sample_keys": missing, "unresolved_key_sets": sorted(self.unresolved)}
         value["spans"] = self.recorded_spans(leaves)
+        self.add_telemetry(value)
         self.persist(path, value)
         return value
 
@@ -421,20 +474,20 @@ class Clock:
         return [key for row in self.plan.phases for key in row.workload["clockSpan"]["leaves"]]
 
     def recorded_spans(self, leaves):
-        result, offset = [], 0
-        for phase in self.plan.phases:
-            part = phase.workload["clockSpan"]["leaves"]
-            rows = leaves[offset:offset + len(part)]
-            if not rows:
-                break
-            if [row["key"] for row in rows] != part[:len(rows)]:
-                break
-            result.append({"key": phase.key, "leaves": [row["key"] for row in rows],
-                           "start_ns": rows[0]["start_ns"], "end_ns": rows[-1]["end_ns"],
-                           "elapsed_ns": rows[-1]["end_ns"] - rows[0]["start_ns"], "limit_ns": phase.limit_ns,
-                           "completed": len(rows) == len(part) and all(row["eligible"] for row in rows)})
-            offset += len(part)
-        return result
+        return recorded_intervals(self.plan.phases, leaves)
+
+    def recorded_telemetry(self, leaves):
+        if not self.plan.phases or not self.plan.phases[0].telemetry:
+            return []
+        return [row | {"enforced": False, "bootstrap_deadline_ns": self.origin_ns + self.plan.phases[0].limit_ns}
+                for row in recorded_intervals(self.plan.phases[0].telemetry, leaves)]
+
+    def add_telemetry(self, value):
+        telemetry = self.recorded_telemetry(value["leaves"])
+        if not telemetry:
+            return
+        value["telemetry_spans"] = telemetry
+        value["spans"][0].update(enforced=True, deadline_ns=self.origin_ns + self.plan.phases[0].limit_ns)
 
     def persist(self, path, value):
         path = Path(path)
@@ -449,6 +502,7 @@ class Clock:
         value.update(end_ns=now, command_ns=now - self.origin_ns,
                      disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
         value["spans"] = self.recorded_spans(value["leaves"])
+        self.add_telemetry(value)
         value["measurement_write_epilogue"] = {"start_ns": now, "charged_to": "completion", "final_absolute_guard": True}
         value["accepted"] = accepted
         path.write_text(json.dumps(value, indent=2) + "\n")
@@ -465,7 +519,25 @@ class Clock:
             value.update(end_ns=now, command_ns=now - self.origin_ns,
                          disjoint_ns=sum(row["elapsed_ns"] for row in value["leaves"]))
             value["spans"] = self.recorded_spans(value["leaves"])
+            self.add_telemetry(value)
             path.write_text(json.dumps(value, indent=2) + "\n")
+
+
+def recorded_intervals(phases, leaves):
+    result, offset = [], 0
+    for phase in phases:
+        part = phase.workload["clockSpan"]["leaves"]
+        rows = leaves[offset:offset + len(part)]
+        if not rows:
+            break
+        if [row["key"] for row in rows] != part[:len(rows)]:
+            break
+        result.append({"key": phase.key, "leaves": [row["key"] for row in rows],
+                       "start_ns": rows[0]["start_ns"], "end_ns": rows[-1]["end_ns"],
+                       "elapsed_ns": rows[-1]["end_ns"] - rows[0]["start_ns"], "limit_ns": phase.limit_ns,
+                       "completed": len(rows) == len(part) and all(row["eligible"] for row in rows)})
+        offset += len(part)
+    return result
 
 
 def qualify(row, cleaned):

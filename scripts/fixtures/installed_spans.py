@@ -168,7 +168,7 @@ def number_names(names, counts):
     return result
 
 
-def partition_leaf_keys(keys, workload):
+def operation_leaf_keys(keys, workload):
     """Validate exact operation identities/ownership, then fuse release serving."""
     keys = list(keys)
     chunks = canonical_chunks(workload)
@@ -183,6 +183,22 @@ def partition_leaf_keys(keys, workload):
         result.append(list(chunk))
         serving_phase = kind == "serve"
     return result
+
+
+def bootstrap_parts(parts, workload):
+    """The existing startup prefix ends at its last original-image acquisition."""
+    if workload.get("preparedRole") == "consume":
+        return []
+    last = max(index for index, part in enumerate(parts) if part[1].startswith("acquire:"))
+    return parts[:last + 1]
+
+
+def partition_leaf_keys(keys, workload):
+    parts = operation_leaf_keys(keys, workload)
+    bootstrap = bootstrap_parts(parts, workload)
+    if not bootstrap:
+        return parts
+    return [[key for part in bootstrap for key in part]] + parts[len(bootstrap):]
 
 
 def completed_leaves(record):
@@ -224,9 +240,10 @@ def validate_operations(record, leaves):
                 and by_key[chunk[-1]]["start_ns"] <= end <= by_key[chunk[-1]]["end_ns"], "span operation lies outside its owning chunk")
 
 
-def span_intervals(record):
+def span_intervals(record, *, telemetry=False):
     leaves = completed_leaves(record)
-    parts = partition_leaf_keys([row["key"] for row in leaves], record["workload"])
+    partition = operation_leaf_keys if telemetry else partition_leaf_keys
+    parts = partition([row["key"] for row in leaves], record["workload"])
     by_key = {row["key"]: row for row in leaves}
     result = []
     for part in parts:

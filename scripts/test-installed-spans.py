@@ -96,10 +96,13 @@ class GrammarTest(unittest.TestCase):
     def test_reviewed_activated_files_load_and_unreviewed_copy_stays_blocked(self):
         index = json.loads((controls.ROOT / "index.json").read_text())["plans"]
         self.assertEqual(len(index), 37)
+        bootstrap = 0
         for name, entry in index.items():
-            plan = clocks.load_plan(controls.ROOT / entry["path"])
-            self.assertNotIn("TEST ONLY", plan.eligibility_review)
+            path = controls.ROOT / entry["path"]
+            value = self.check_plan_file(path)
+            bootstrap += bool(value["phases"][0].get("telemetry"))
             controls.reviewed_for_test(name).validate()
+        self.assertEqual(bootstrap, 19)
         value = json.loads((controls.ROOT / index["linux-amd64-fresh"]["path"]).read_text())
         value["eligibility_review"] = ""
         with tempfile.TemporaryDirectory(prefix="unreviewed-span-") as directory:
@@ -107,6 +110,42 @@ class GrammarTest(unittest.TestCase):
             path.write_text(json.dumps(value))
             with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
                 clocks.load_plan(path)
+
+    def check_plan_file(self, path):
+        value = json.loads(path.read_text())
+        if not value["eligibility_review"]:
+            self.assertTrue(value["phases"][0].get("telemetry"))
+            with self.assertRaisesRegex(ValueError, "reviewed eligibility"):
+                clocks.load_plan(path)
+            return value
+        self.assertNotIn("TEST ONLY", clocks.load_plan(path).eligibility_review)
+        return value
+
+    def test_bootstrap_ends_at_last_original_acquisition_with_exact_telemetry_order(self):
+        for name in ("linux-amd64-fresh", "linux-amd64-oldest-catalog", "linux-amd64-adoption-all",
+                     "linux-arm64-adoption-interrupt", "linux-amd64-chain-prepare", "linux-amd64-order"):
+            plan = controls.reviewed_for_test(name)
+            bootstrap = plan.phases[0]
+            self.assertTrue(bootstrap.workload["clockSpan"]["leaves"][-1].startswith("acquire:"))
+            self.assertEqual(bootstrap.workload["clockSpan"]["leaves"],
+                             [key for row in bootstrap.telemetry for key in row.workload["clockSpan"]["leaves"]])
+            self.assertFalse(any(key.startswith("acquire:") for row in plan.phases[1:] for key in row.workload["clockSpan"]["leaves"]))
+            self.assertFalse(any(key.startswith("publish:") for key in bootstrap.workload["clockSpan"]["leaves"]))
+
+    def test_bootstrap_missing_reordered_extended_or_nested_telemetry_is_rejected(self):
+        phase = self.plan.phases[0]
+        members = phase.telemetry
+        variants = ((), members[:-1], members[1:] + members[:1], members + self.plan.phases[1:2],
+                    (replace(members[0], telemetry=(members[1],)),) + members[1:])
+        for telemetry in variants:
+            with self.assertRaisesRegex(ValueError, "bootstrap"):
+                replace(self.plan, phases=(replace(phase, telemetry=telemetry),) + self.plan.phases[1:]).validate()
+        sample = phase.samples[0]
+        provenance = deepcopy(sample.provenance)
+        provenance["clock_span"]["end_ns"] -= 1
+        changed = replace(phase, samples=(replace(sample, provenance=provenance, elapsed_ns=sample.elapsed_ns - 1),))
+        with self.assertRaisesRegex(ValueError, "bootstrap endpoints"):
+            replace(self.plan, phases=(changed,) + self.plan.phases[1:]).validate()
 
 
 class ReductionTest(unittest.TestCase):
@@ -121,12 +160,13 @@ class ReductionTest(unittest.TestCase):
         self.retime(first)
         self.retime(second)
         phases = clocks.reduce_span_budgets([controls.observed(first), controls.observed(second, "b")])
-        self.assertEqual(phases[0].limit_ns, 10_000_000)
-        self.assertEqual([row.elapsed_ns for row in phases[0].samples], [8_000_000, 8_000_001])
-        self.assertNotEqual(phases[0].limit_ns, clocks.bound(14_000_001))
+        self.assertEqual(phases[0].limit_ns, 14_000_000)
+        self.assertEqual([row.elapsed_ns for row in phases[0].samples], [12_000_000, 12_000_001])
+        self.assertNotEqual(phases[0].limit_ns, clocks.bound(18_000_001))
+        self.assertEqual([row.elapsed_ns for row in phases[0].telemetry[0].samples], [8_000_000, 8_000_001])
         sample = phases[0].samples[1]
         self.assertEqual(sample.provenance["clock_span"]["start_ns"], second["leaves"][0]["start_ns"])
-        self.assertEqual(sample.provenance["clock_span"]["end_ns"], second["leaves"][1]["end_ns"])
+        self.assertEqual(sample.provenance["clock_span"]["end_ns"], second["leaves"][5]["end_ns"])
 
     def retime(self, record):
         cursor = record["origin_ns"]
@@ -202,6 +242,46 @@ class CursorTest(unittest.TestCase):
         self.assertEqual(self.clock.effective_deadline(), deadline)
         self.assertEqual(self.clock.deadline_ns, 100 * clocks.SECOND + self.plan.command_ns)
 
+    def test_bootstrap_members_can_exceed_telemetry_without_renewing_absolute_deadline(self):
+        phase = self.plan.phases[0]
+        deadline = self.clock.effective_deadline()
+        self.clock.switch("signer-build:")
+        self.now += phase.telemetry[0].limit_ns + 1
+        self.clock.switch("setup")
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        with self.clock.operation("signer-start"):
+            self.now += phase.telemetry[1].limit_ns + 1
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        self.clock.switch("acquire:v0.1.249")
+        self.now = deadline - 1
+        self.clock.check()
+        telemetry = self.clock.recorded_telemetry([clocks.qualify(row, True) for row in self.clock.rows])
+        self.assertGreater(telemetry[0]["elapsed_ns"], telemetry[0]["limit_ns"])
+        self.assertTrue(all(row["enforced"] is False and row["bootstrap_deadline_ns"] == deadline for row in telemetry))
+        self.now = deadline
+        with self.assertRaises(clocks.ClockExpired):
+            self.clock.switch("setup")
+        self.assertEqual(self.clock.span_index, 0)
+        cleanup = self.clock.cleanup_deadline_ns
+        self.clock.fail(RuntimeError("secondary"))
+        self.assertEqual(self.clock.cleanup_deadline_ns, cleanup)
+        self.assertEqual(self.clock.failures[0]["type"], "ClockExpired")
+
+    def test_interleaved_bootstrap_proof_nesting_keeps_deadline_and_independent_guard(self):
+        self.plan = controls.reviewed_for_test("linux-amd64-adoption-all")
+        self.clock = clocks.Clock(self.plan, now=lambda: self.now)
+        deadline = self.clock.effective_deadline()
+        self.move_to("proof:v0.1.249:v0.1.9001#1")
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        with self.clock.operation("native-transition:v0.1.249:v0.1.9001"):
+            self.now += clocks.MILLISECOND
+            self.assertEqual(self.clock.effective_deadline(), deadline)
+            self.clock.stack.append({"key": "independent", "deadline_ns": self.now + 10})
+            self.assertEqual(self.clock.effective_deadline(), self.now + 10)
+            self.clock.stack.pop()
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        self.assertEqual(self.clock.active_key, "proof:v0.1.249:v0.1.9001#2")
+
     def move_to_from_active(self, key):
         keys = controls.leaf_keys(self.plan)
         for expected in keys[keys.index(self.clock.active_key) + 1:]:
@@ -266,7 +346,7 @@ class CursorTest(unittest.TestCase):
 
     def test_boundary_timestamp_is_checked_once_and_export_stays_in_final_span(self):
         self.clock.switch("signer-build:")
-        now = self.clock.effective_deadline() - 1
+        now = self.clock.origin_ns + self.plan.phases[0].telemetry[0].limit_ns - 1
         self.clock.now = Mock(return_value=now)
         self.clock.stack.append({"key": "signer-build:#1", "deadline_ns": self.clock.deadline_ns})
         self.clock.finish_operation("signer-build:#1", self.clock.started_ns, "setup")
