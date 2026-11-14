@@ -7761,10 +7761,10 @@
     }
   ],
   "command_ns": 945298000000,
-  "external_ns": 172955000000,
+  "external_ns": 316293000000,
   "external_budget": {
     "key": "external",
-    "limit_ns": 172955000000,
+    "limit_ns": 316293000000,
     "workload": {
       "workload": {
         "platform": "darwin/arm64",
@@ -7824,10 +7824,55 @@
         "elapsed_ns": 153737314250,
         "completed": true,
         "cleanup_verified": true
+      },
+      {
+        "provenance": {
+          "sources": {
+            "metadata": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/consumer-43504503722/darwin-arm64-chain-prepare.provider-job.json",
+              "sha256": "07b015a3bc3b8779662d02d4bb896c42561fe25f639212accf4e86371f466a38"
+            },
+            "job_interval": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/consumer-43504503722/darwin-arm64-chain-prepare.job-interval.json",
+              "sha256": "5b863561f9387cba82375a0d7d56781f70c0118a660bc3224cf1adc3efb147a9"
+            },
+            "log": {
+              "path": "/work/reports/mesh-auto-update/consumer-recovery-current/snapshot-43504503722-3/logs/132158647874.log",
+              "sha256": "a54bb1a47fe96993102e5dd6a25cb9299e4620c5b1fa6e6d2159c1a790cd20a0"
+            }
+          },
+          "fixture_record": {
+            "path": "/work/reports/mesh-auto-update/consumer-recovery-current/snapshot-43504503722-3/proof-14076347091/cohort-proof/fixture-clock.json",
+            "sha256": "b34f95c9b300ffad499a9c2eed796d0090aa2917efb25bac1498e032fed95e6b"
+          },
+          "job_id": 132158647874,
+          "method": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+        },
+        "workload": {
+          "workload": {
+            "platform": "darwin/arm64",
+            "host": "mac",
+            "mode": "chain",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "ae475ff818c10b37e04e0ee3f044e9b8854da74a3e73adac28bfae476ead89be",
+            "catalogEvidence": false,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "preparedRole": "prepare"
+          },
+          "kind": "external-job-overhead",
+          "basis": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+        },
+        "elapsed_ns": 281148562958,
+        "completed": true,
+        "cleanup_verified": true
       }
     ]
   },
   "emergency_ns": 60000000000,
-  "admission_ns": 1200000000000,
-  "eligibility_review": "Independent code and numerical reviews at 55b0f8bd; bootstrap-phase/PACKET.json SHA-256 63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743"
+  "admission_ns": 1380000000000,
+  "eligibility_review": "External-only independent review: /work/reports/mesh-auto-update/acceptance-cf472/admission-diagnosis/REVIEW.md SHA-256 235b19a2dd6e027a99d4a3ff8fa8e48d8d157676735137826d363b5c7b351aab"
 }
