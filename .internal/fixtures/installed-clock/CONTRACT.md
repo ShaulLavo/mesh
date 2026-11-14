@@ -1,10 +1,9 @@
 # Installed frozen plan selection
 
-The 33 indexed numeric files are local operation-span drafts. Their empty
-`eligibility_review` deliberately blocks execution. Fresh independent numerical
-and code reviews must approve the new grouping before the parent activates it.
-Historical leaf-plan approvals do not approve span semantics. Index selections,
-external observations, admissions, reserves and all 201 guard objects are unchanged.
+The index selects 37 reviewed operation-span plans. Each selected plan must carry
+its established nonempty `eligibility_review` marker and match the invocation
+workload. During the earlier 33-plan span migration, index selections, external
+observations, admissions, reserves and all 201 guard objects were unchanged.
 
 Each phase key is `span:<first raw leaf key>`. Its workload is the invocation
 workload plus `clockSpan: {leaves: [...]}`. The strict pure grammar in

@@ -69,3 +69,15 @@ Command, external and reserve total 500.828 seconds within the unchanged
 900-second admission. All independent guards remain unchanged; diagnostic
 acceptance stays false. See acceptance-ae2a/darwin-fresh-candidate/REVIEW.md in
 the retained lane reports.
+
+The separately reviewed Mesh 435 measured resets retain both complete source
+streams. Darwin oldest totals 1194.383 seconds with a 1200-second admission;
+AMD64 waypoint preparation totals 889.849 seconds with a 900-second admission.
+Their candidate SHA-256 hashes are dd6a89b1e5b5f2e76e78001c78cc04d69252ecfdcf745a6af1d0be2f7ac52472
+and 8e96b19559d7740043c99293aa0a14f2ca4c788efa9b2b4dc8c7d6103a3cdb4d,
+respectively. The numerical review is oldest-diagnosis/CANDIDATE-REVIEW.md in
+the retained acceptance-cf472 reports, SHA-256
+050e695aaf3327b391d57f35afcf3d187f1ff93e853ff204e828fd13e9ef4b8b.
+Independent source and group caps remain 600 seconds; product and I/O checks,
+soaks, coverage and index selection are unchanged. This reset does not establish
+runtime acceptance.
