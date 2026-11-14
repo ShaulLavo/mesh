@@ -191,8 +191,10 @@ class PublicationJobsTests(unittest.TestCase):
     def test_tampered_case_is_not_coverage(self):
         self.configure()
         self.emit()
-        receipt = next(self.inputs.rglob("publication-task.json"))
+        number, task = next((number, task) for number, task in enumerate(self.inventory["tasks"]) if "case" in task)
+        receipt = self.inputs / str(number) / "publication-task.json"
         value = json.loads(receipt.read_bytes())
+        self.assertEqual(value["case"]["name"], task["case"])
         leaf = receipt.parent / value["case"]["name"]
         leaf.write_bytes(leaf.read_bytes() + b"\n")
         with self.assertRaisesRegex(ValueError, "changed"):

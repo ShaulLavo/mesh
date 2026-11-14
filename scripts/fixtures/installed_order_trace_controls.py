@@ -44,11 +44,15 @@ class OrderFailureEvidenceTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.deadline = time.monotonic_ns() + 10_000_000_000
+        self.native_command = self.enterContext(patch.object(native_services, "command",
+            side_effect=AssertionError("pure control invoked a native command")))
 
     def mapping_error(self):
         expected = SimpleNamespace(st_dev=11, st_ino=22)
         mapped = SimpleNamespace(st_dev=11, st_ino=33)
-        with patch.object(Path, "resolve", return_value=Path("/expected/helper")), patch.object(Path, "stat", side_effect=[expected, mapped]) as reads:
+        with patch.object(native_services.platform, "system", return_value="Linux"), \
+                patch.object(Path, "resolve", return_value=Path("/expected/helper")), \
+                patch.object(Path, "stat", side_effect=[expected, mapped]) as reads:
             with self.assertRaisesRegex(RuntimeError, "^native service mapped another executable inode$") as caught:
                 native_services.mapped_image(1234, "/receipt/helper")
         self.assertEqual(reads.call_count, 2)
@@ -133,7 +137,8 @@ class OrderFailureEvidenceTest(unittest.TestCase):
 
     def test_success_keeps_mapped_result_and_performs_no_failure_capture(self):
         expected = SimpleNamespace(st_dev=11, st_ino=22)
-        with patch.object(Path, "resolve", return_value=Path("/expected/helper")), patch.object(Path, "stat", return_value=expected):
+        with patch.object(native_services.platform, "system", return_value="Linux"), \
+                patch.object(Path, "resolve", return_value=Path("/expected/helper")), patch.object(Path, "stat", return_value=expected):
             with patch.object(Path, "open", return_value=io.BytesIO(b"helper")):
                 image = native_services.mapped_image(1234, "/receipt/helper")
         self.assertEqual(image, {"pid": 1234, "inode": 22, "device": 11, "sha256": hashlib.sha256(b"helper").hexdigest()})
@@ -143,6 +148,24 @@ class OrderFailureEvidenceTest(unittest.TestCase):
             self.assertEqual(host.inspect(True)["helper"], image)
         capture.assert_not_called()
         self.assertEqual(host.diagnostics.reserved, {})
+
+    def test_mapped_image_selects_platform_path_without_native_commands(self):
+        expected = SimpleNamespace(st_dev=11, st_ino=22)
+        for system, image_path in (("Linux", Path("/proc/1234/exe")), ("Darwin", Path("/darwin/helper"))):
+            with self.subTest(system=system), patch.object(native_services.platform, "system", return_value=system), \
+                    patch.object(native_services, "darwin_image", return_value=Path("/darwin/helper")) as darwin, \
+                    patch.object(Path, "resolve", return_value=Path("/expected/helper")), \
+                    patch.object(Path, "stat", autospec=True, return_value=expected) as reads, \
+                    patch.object(Path, "open", autospec=True, return_value=io.BytesIO(b"helper")) as opened:
+                image = native_services.mapped_image(1234, "/receipt/helper")
+                self.assertEqual([call.args[0] for call in reads.call_args_list], [Path("/expected/helper"), image_path])
+                opened.assert_called_once_with(image_path, "rb")
+                self.assertEqual(image, {"pid": 1234, "inode": 22, "device": 11, "sha256": hashlib.sha256(b"helper").hexdigest()})
+            if system == "Darwin":
+                darwin.assert_called_once_with(1234, expected)
+            else:
+                darwin.assert_not_called()
+        self.native_command.assert_not_called()
 
     def test_observed_exit_records_status_or_signal_without_polling_again(self):
         for returncode in (1, -15, 143):
