@@ -951,5 +951,5 @@
   },
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,
-  "eligibility_review": ""
+  "eligibility_review": "Independent code and numerical reviews at 55b0f8bd; bootstrap-phase/PACKET.json SHA-256 63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743"
 }

@@ -26,9 +26,10 @@ Every span and guard bound is its completed same-invocation measurement
 multiplied by 1.125 and rounded up to milliseconds. Exact canonical membership,
 source hashes and leaf endpoints are retained. Only disjoint spans enter the
 command sum; nested guards remain independently enforced. Incomplete, unclean,
-censored, failed and instrumented records do not size any active plan.
+censored, failed and instrumented records do not size command plans. The narrow
+external exception is described below.
 
-The external observation is the successful terminal provider job duration plus
+The external observation is the terminal provider job duration plus
 two seconds for endpoint precision, minus that VM's monotonic command duration.
 Approval assumes ordinary UTC/monotonic elapsed-rate comparability with no
 material clock step. Raw external_complete remains false. No unmeasured segment
@@ -48,3 +49,13 @@ All 37 workload slots are indexed. The original failed records, including the
 frozen smoke setup and signer-build overruns, remain failures. Publishing a new authoritative
 worker registry requires matching recalibration; old sample workloads are never
 relabeled to admit a newly published worker.
+
+The 19 bootstrap and preparation producer drafts were independently reviewed at
+55b0f8bd. Their packet SHA-256 is
+63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743.
+For Linux ARM64 adoption interrupt only, an explicit owner exception approves
+the external interval from terminal failed job 132309161661. Its command and
+acquisition remain incomplete, and its raw external record remains incomplete.
+The reviewed external overlay SHA-256 is
+a89f8f16b834f633a7314dbe7083f4b718051ecedc7740acd7fdfc2a3fb5eb29.
+The future successful cache-save tail remains unmeasured.

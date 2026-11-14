@@ -885,10 +885,10 @@
   ],
   "guards": [],
   "command_ns": 205227000000,
-  "external_ns": 53524000000,
+  "external_ns": 69200000000,
   "external_budget": {
     "key": "external",
-    "limit_ns": 53524000000,
+    "limit_ns": 69200000000,
     "workload": {
       "workload": {
         "platform": "linux/arm64",
@@ -909,22 +909,127 @@
     "samples": [
       {
         "provenance": {
+          "source": "73bae9a6f4c9b058e15fd4966083e4eae5ac56eb",
+          "run": 43549723359,
+          "job_id": 132309161661,
+          "job": "native-adoption",
+          "attempt": 1,
+          "artifact_id": 14094684476,
+          "fixture_member": "pairs/fixture-clock.json",
+          "fixture_sha256": "fa908209a37316ae7c6a966c80871c9d8426efde1576528414f4806eb60b78f1",
+          "runner": "GitHub Actions 1000162449",
+          "cache": {
+            "key": "setup-go-Linux-arm64-ubuntu24-arm64-go-1.27.4-09b311c0247c0d39d7a12d6c4d2aa03024f3619d4f18027c8b979b90f9663657",
+            "bytes": 869521046,
+            "restore_start_utc": "2026-11-14T03:05:41.4035935Z",
+            "restore_end_utc": "2026-11-14T03:05:57.4384626Z",
+            "restore_elapsed_ns": 16034869100
+          },
           "sources": {
-            "metadata": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/evidence-43451015125/linux-arm64-adoption-interrupt/provider-job.json",
-              "sha256": "f3dad9e9ead209e1aacde98fbea5507bc6b15ad0b4636456c02c69aad9f639d3"
+            "adoption-arm64.zip": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/adoption-arm64.zip",
+              "sha256": "cd76e76061835c7a5f21a74c91f78535433dd4158018e27c48c41e868d7e7aad",
+              "bytes": 10256
             },
-            "job_interval": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-budget-reducer/evidence-43451015125/linux-arm64-adoption-interrupt/job-interval.json",
-              "sha256": "58cb1a8e907e2c264d0b5cdfacbf94e0f2dbb5fdd906dd26634b35bbc7472956"
+            "adoption-arm64-job.json": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/adoption-arm64-job.json",
+              "sha256": "d4de2d454f3938086b4d35e480a143e1fd54971ee71d1fede59f548ea29babd3",
+              "bytes": 3592
             },
-            "log": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/split-current-evidence/131972959798.log",
-              "sha256": "16fba29d86809d47a3c0365ece5e4a5a3b6ad9aa3d0d43712149b23ce66ae9e0"
+            "job-132309161661.log": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/job-132309161661.log",
+              "sha256": "d5120c275d97ab794b5c7c0836b803fdd77636c7590cdcbdfcce09687e800573",
+              "bytes": 35882
+            },
+            "artifacts-later.json": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/artifacts-later.json",
+              "sha256": "e867a029a9deb53e94ac740298668f5ae4c11ea7f93e38b5e4fe5d0d284055de",
+              "bytes": 4954
+            },
+            "ADOPTION-OUTSIDE-BOOTSTRAP.md": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/ADOPTION-OUTSIDE-BOOTSTRAP.md",
+              "sha256": "21f0de5052fc8acaa62238f36b7073ea0f67aa68f4b0583b7620af078db151d2",
+              "bytes": 10871
+            },
+            "check-adoption-outside-bootstrap.py": {
+              "path": "/work/reports/mesh-auto-update/acceptance-73bae/check-adoption-outside-bootstrap.py",
+              "sha256": "a80fac28329d691315f44b577722c1ac0e6925ed34186bca66a37d93bd1a881e",
+              "bytes": 5456
             }
           },
-          "job_id": 131972959798,
-          "method": "completed-provider-envelope-plus-2s-minus-command-monotonic"
+          "method": "completed-provider-envelope-plus-2s-minus-command-monotonic",
+          "owner_exception": {
+            "authority": "explicit managing approval relayed in implementation task",
+            "parent": "mcp:launch:d1e0d6248dffd0371bcfec587d3b642914c350b87096b8a6c2c7128298229963",
+            "scope": "THIS measured external interval despite acquisition failure; external only",
+            "instruction": "for268ms external overrun after larger verified cache, reset limit10\u201315% above new measured value, review, no new calibration; every otherguard unchanged",
+            "factor": "1.125",
+            "activation_authorized": false
+          },
+          "completion_scope": "terminal provider interval only; failed workload remains incomplete",
+          "raw_provider_status": "completed",
+          "raw_provider_conclusion": "failure",
+          "raw_fixture_accepted": false,
+          "raw_fixture_measurement_completed": false,
+          "raw_command_interval": {
+            "origin_ns": 451219620422,
+            "end_ns": 497708824519,
+            "command_ns": 46489204097,
+            "measurement_completed": false,
+            "accepted": false
+          },
+          "raw_job_interval": {
+            "origin_ns": 399141083000,
+            "run": "43549723359",
+            "job": "native-adoption",
+            "admission_ns": 900000000000,
+            "end_ns": 499422633337,
+            "elapsed_ns": 100281550337,
+            "external_complete": false,
+            "unmeasured_tail": "action post-job cleanup and cache-save work",
+            "external_before_ns": 52078537422,
+            "external_after_ns": 1713808818,
+            "external_budget_ns": 53524000000,
+            "external_observed_ns": 53792346240
+          },
+          "raw_failures": [
+            {
+              "type": "ClockExpired",
+              "error": "installed fixture clock expired at acquire:v0.1.254#1"
+            },
+            {
+              "type": "ClockExpired",
+              "error": "installed fixture clock expired at acquire:v0.1.254#1"
+            },
+            {
+              "type": "ClockExpired",
+              "error": "installed fixture clock expired at acquire:v0.1.254#1"
+            },
+            {
+              "type": "ClockExpired",
+              "error": "installed fixture clock expired at acquire:v0.1.254#1"
+            },
+            {
+              "type": "ValueError",
+              "error": "frozen clock sequence differs from actual disjoint leaves"
+            }
+          ],
+          "excluded_from_budget_sizing": [
+            "command workload",
+            "operation leaves",
+            "spans",
+            "build/product/source/group/I/O/soak/order guards"
+          ],
+          "overlay": {
+            "path": "/work/reports/mesh-auto-update/external-cache-reset/external-only-overlay.json",
+            "sha256": "a89f8f16b834f633a7314dbe7083f4b718051ecedc7740acd7fdfc2a3fb5eb29"
+          },
+          "method_limitations": [
+            "2 s covers provider endpoint representation, not future workload or cache-save variation",
+            "No exact monotonic bridge outside recorder; UTC and monotonic elapsed rates assumed comparable",
+            "Actual setup-go post action is skipped in the log despite outer post metadata success; future successful cache-save cost is unmeasured"
+          ],
+          "cleanup_evidence": "Verified archive members: scratch-cleanup.json, pairs/scratch-cleanup.json, tools-cleanup.json, pairs/fixture-ownership.json, pairs/signer-lifetime.json"
         },
         "workload": {
           "workload": {
@@ -943,7 +1048,7 @@
           "kind": "external-job-overhead",
           "basis": "completed-provider-envelope-plus-2s-minus-command-monotonic"
         },
-        "elapsed_ns": 47576754135,
+        "elapsed_ns": 61510795903,
         "completed": true,
         "cleanup_verified": true
       }
@@ -951,5 +1056,5 @@
   },
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,
-  "eligibility_review": ""
+  "eligibility_review": "Independent code and numerical reviews at 55b0f8bd; bootstrap-phase/PACKET.json SHA-256 63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743"
 }
