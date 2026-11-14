@@ -542,7 +542,7 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
 
 
 def retain_producer_logs(root, output):
-    for path in producer_log_paths(root):
+    for path in installed_clock.recursive_suffix_paths(root, ".log"):
         label = "producer-" + str(path.relative_to(root)).replace("/", "-")
         installed_native.copy_log_tail(path, output / label)
     for path in (root / "proofs").rglob("*.json"):
@@ -550,25 +550,3 @@ def retain_producer_logs(root, output):
         destination = output / "measured-proofs" / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, destination)
-
-
-def producer_log_paths(root):
-    paths, directories = producer_log_directory(root)
-    pending = [directories]
-    while pending:
-        for directory in pending.pop():
-            records, directories = producer_log_directory(directory)
-            paths.extend(records)
-            pending.append(directories)
-    return paths
-
-
-def producer_log_directory(directory):
-    # Reuse the matching census for descent without changing rglob's record order.
-    try:
-        with os.scandir(directory) as entries:
-            census = list(entries)
-    except OSError:
-        return [], []
-    paths = [Path(entry.path) for entry in census if entry.name.endswith(".log")]
-    return paths, [entry.path for entry in census if installed_clock.native_record_directory(entry)]

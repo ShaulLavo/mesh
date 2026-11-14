@@ -962,7 +962,7 @@ class NativeOwnership:
             self.owned[(pid, rows[pid]["birth"])] = rows[pid]
 
     def read_native_records(self, rows):
-        paths = native_cohort_paths(self.output)
+        paths = recursive_suffix_paths(self.output, ".cohort.json")
         for directory in self.root.glob("mesh-transition.*"):
             paths.extend(directory.glob("cohort.json"))
             paths.extend(directory.glob("state/s/*/meta.json"))
@@ -1053,29 +1053,29 @@ class NativeOwnership:
         (self.output / "fixture-native-ownership.json").write_text(json.dumps(value, indent=2) + "\n")
 
 
-def native_cohort_paths(root):
-    paths, directories = native_cohort_directory(root)
+def recursive_suffix_paths(root, suffix):
+    paths, directories = suffix_directory(root, suffix)
     pending = [directories]
     while pending:
         for directory in pending.pop():
-            records, directories = native_cohort_directory(directory)
+            records, directories = suffix_directory(directory, suffix)
             paths.extend(records)
             pending.append(directories)
     return paths
 
 
-def native_cohort_directory(directory):
+def suffix_directory(directory, suffix):
     # Reuse the matching census for descent.
     try:
         with os.scandir(directory) as entries:
             census = list(entries)
     except OSError:
         return [], []
-    paths = [Path(entry.path) for entry in census if entry.name.endswith(".cohort.json")]
-    return paths, [entry.path for entry in census if native_record_directory(entry)]
+    paths = [Path(entry.path) for entry in census if entry.name.endswith(suffix)]
+    return paths, [entry.path for entry in census if entry_is_directory(entry)]
 
 
-def native_record_directory(entry):
+def entry_is_directory(entry):
     try:
         return entry.is_dir(follow_symlinks=False)
     except OSError:

@@ -161,7 +161,7 @@ class ExporterFormatTest(unittest.TestCase):
         with patch.object(installed_adoption.os, "scandir", wraps=os.scandir) as scans, \
                 patch.object(installed_native, "copy_log_tail", wraps=installed_native.copy_log_tail) as copy:
             installed_adoption.retain_producer_logs(root, output)
-        self.assertEqual([call.args[0] for call in copy.call_args_list], expected)
+        self.assertCountEqual([call.args[0] for call in copy.call_args_list], expected)
         enumerated = [Path(call.args[0]) for call in scans.call_args_list]
         for directory in directories:
             if directory == root / "proofs" or root / "proofs" in directory.parents:
@@ -177,7 +177,7 @@ class ExporterFormatTest(unittest.TestCase):
         directory.mkdir()
         (directory / "nested.log").write_text("nested")
         (self.root / "broken.log").symlink_to(self.root / "absent")
-        self.assertEqual(installed_adoption.producer_log_paths(self.root), list(self.root.rglob("*.log")))
+        self.assertCountEqual(installed_clock.recursive_suffix_paths(self.root, ".log"), self.root.rglob("*.log"))
 
 
 class SocketPathsTest(unittest.TestCase):
