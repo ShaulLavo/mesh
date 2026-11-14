@@ -319,7 +319,8 @@ class PolicyTests(unittest.TestCase):
     def test_three_normal_events_audit_and_cleanup_without_a_count_gate(self):
         self.confirmed_native()
         events = [{"session": f"W{index}", "version": "v0.1.308", "digest": "a" * 64,
-                   "failure": {"snapshot": snapshot_value(), "cohort": str(self.root / "proofs/groups" / ("b" * 64) / f"forward-only/{index}/cohort.json")},
+                   "failure": {"snapshot": snapshot_value(), "cohort": f"/tmp/mesh-transition.MOCK-{index}/cohort.json",
+                               "groupSelection": str(self.root / "proofs/groups" / ("b" * 64) / f"forward-only/{index}/selected.json")},
                    "retry": {"outcome": "started"}} for index in range(3)]
         policy.write(self.ledger, {"schema": 1, "cap": None, "events": events})
         policy.cleanup(self.root, self.native)
@@ -412,7 +413,8 @@ class SummaryTests(unittest.TestCase):
         for shard, path in enumerate(self.paths):
             ledger = {"schema": 1, "cap": None, "provenance": {"run": "123", "attempt": "1", "platform": "linux/amd64", "shard": shard, "job": "prove"},
                       "events": [{"session": "W00D", "version": "v0.1.308", "digest": "a" * 64,
-                                  "failure": {"snapshot": snapshot_value(), "cohort": str(path.parent / "proofs/groups" / ("b" * 64) / "forward-only/3/cohort.json")},
+                                  "failure": {"snapshot": snapshot_value(), "cohort": "/tmp/mesh-transition.MOCK/cohort.json",
+                                              "groupSelection": str(path.parent / "proofs/groups" / ("b" * 64) / "forward-only/3/selected.json")},
                                   "retry": {"outcome": "started"}}]}
             policy.write(path.parent / "eperm-ledger.json", ledger)
             audit = eperm.diagnostic_cleanup(path.parent / "eperm-ledger.json", required=True)
@@ -421,6 +423,37 @@ class SummaryTests(unittest.TestCase):
         self.assertTrue(result["complete"])
         self.assertEqual(result["total"], 3)
         self.assertEqual(result["sourceIds"], ["b" * 64])
+
+    def test_actual_mock_launch_keeps_scratch_cohort_and_separate_proof_source(self):
+        retry = module("summary_retry_controls", "test-release-worker-eperm.py")
+        case = retry.RetryControls("test_successful_retry_keeps_original_failure_and_same_image_arguments_environment_deadline")
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        case.path = case.root / "mesh-transition.MOCK" / "cohort.json"
+        case.path.parent.mkdir()
+        case.diagnostic.return_value = snapshot_value()
+        selection = self.paths[0].parent / "proofs/groups" / ("b" * 64) / "forward-only/3/selected.json"
+        provenance = {"run": "123", "attempt": "1", "platform": "linux/amd64", "shard": 0, "job": "prove"}
+        policy.write(case.ledger, {"schema": 1, "cap": None, "provenance": provenance, "events": []})
+        with patch.dict(os.environ, MESH_WORKER_GROUP=str(selection)):
+            case.launch()
+        ledger = json.loads(case.ledger.read_bytes())
+        policy.write(self.paths[0].parent / "eperm-ledger.json", ledger)
+        audit = eperm.diagnostic_cleanup(case.ledger, required=True)
+        policy.write(self.paths[0], policy.recurrence_counter(self.paths[0].parent, audit))
+        result = self.aggregate()
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["sourceIds"], ["b" * 64])
+        event = result["recurrences"][0]
+        self.assertEqual(event["cohort"], str(case.path.resolve()))
+        self.assertEqual(event["groupSelection"], str(selection))
+        self.assertNotEqual(event["sourceId"], event["digest"])
+        self.assertEqual(ledger["events"][0]["failure"]["groupSelection"], str(selection))
+
+    def test_missing_or_invalid_source_digest_never_claims_complete(self):
+        for identity in (None, "", "unknown", "a" * 63):
+            self.change(self.paths[0], lambda value: value["recurrences"][0].update(sourceId=identity))
+            self.assertFalse(self.aggregate()["complete"])
 
     def test_identical_counter_copies_are_deduplicated(self):
         duplicate = self.root / "copy"

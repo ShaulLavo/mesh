@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 
 
 THRESHOLD = 2
@@ -29,6 +30,8 @@ def read_counter(path, run, attempt):
     for row in rows:
         if not {"sourceId", "version", "digest", "session", "cohort"}.issubset(row):
             raise ValueError("counter recurrence source identities are incomplete")
+        if not isinstance(row["sourceId"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["sourceId"]):
+            raise ValueError("counter recurrence proof source digest is missing or invalid")
     return shard, value
 
 

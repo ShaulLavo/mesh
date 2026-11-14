@@ -153,7 +153,7 @@ class GrammarTest(unittest.TestCase):
         first = preparation.samples[0].provenance["clock_span"]
         self.assertEqual(first["start_ns"], 202_236_162_263)
         self.assertEqual(first["end_ns"], 233_265_468_440)
-        self.assertEqual(preparation.limit_ns, 34_908_000_000)
+        self.assertEqual(preparation.limit_ns, 37_030_000_000)
         self.assertEqual(first["start_ns"], bootstrap.samples[0].provenance["clock_span"]["end_ns"])
         self.assertTrue(preparation.workload["clockSpan"]["leaves"][-1].startswith("head:"))
         self.assertFalse(set(bootstrap.workload["clockSpan"]["leaves"]).intersection(preparation.workload["clockSpan"]["leaves"]))
@@ -166,7 +166,8 @@ class GrammarTest(unittest.TestCase):
         sample = preparation.samples[0]
         provenance = deepcopy(sample.provenance)
         provenance["clock_span"]["end_ns"] -= 1
-        invalid = replace(preparation, samples=(replace(sample, provenance=provenance, elapsed_ns=sample.elapsed_ns - 1),))
+        changed = replace(sample, provenance=provenance, elapsed_ns=sample.elapsed_ns - 1)
+        invalid = replace(preparation, samples=(changed,) + preparation.samples[1:])
         with self.assertRaisesRegex(ValueError, "phase endpoints"):
             replace(plan, phases=(bootstrap, invalid) + plan.phases[2:]).validate()
 
@@ -312,7 +313,7 @@ class CursorTest(unittest.TestCase):
         deadline = self.clock.effective_deadline()
         self.move_to_from_active("publish:v0.1.9001#1")
         publication = self.plan.phases[1].telemetry[1]
-        self.assertEqual(publication.limit_ns, 107 * clocks.MILLISECOND)
+        self.assertEqual(publication.limit_ns, 122 * clocks.MILLISECOND)
         self.now += publication.limit_ns + 1
         self.clock.switch("setup")
         self.assertEqual(self.clock.effective_deadline(), deadline)

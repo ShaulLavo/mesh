@@ -160,17 +160,17 @@ def recurrence_summary(root, index, event):
     return {"index": index, "session": event.get("session"), "version": event.get("version"), "digest": event.get("digest"),
             "originalPid": failure.get("pid"), "originalOutcome": failure.get("outcome"),
             "originalException": failure.get("exception"), "retry": event.get("retry"), "cohort": failure.get("cohort"),
-            "sourceId": source_id(root, failure.get("cohort"))}
+            "groupSelection": failure.get("groupSelection"), "sourceId": source_id(root, failure.get("groupSelection"))}
 
 
-def source_id(root, cohort):
-    if not isinstance(cohort, str):
+def source_id(root, selection):
+    if not isinstance(selection, str):
         return None
     try:
-        parts = Path(cohort).relative_to(root / "proofs/groups").parts
+        parts = Path(selection).relative_to(root / "proofs/groups").parts
     except ValueError:
         return None
-    return parts[0] if len(parts) >= 4 and re.fullmatch(r"[0-9a-f]{64}", parts[0]) else None
+    return parts[0] if len(parts) == 4 and parts[-1] == "selected.json" and re.fullmatch(r"[0-9a-f]{64}", parts[0]) else None
 
 
 def main():

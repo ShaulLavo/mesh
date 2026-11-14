@@ -67,6 +67,7 @@ def capture(ledger_state, row, error, directory, deadline, save):
                "pid": row["pid"], "shellPid": row["shellPid"], "startupFailure": row["startupFailure"],
                "exception": {"type": type(error).__name__, "message": str(error)[:8192]},
                "logPath": str(directory / "worker.log"), "cohort": row["epermCohort"],
+               "groupSelection": os.environ.get("MESH_WORKER_GROUP"),
                "arguments": row["startupArguments"], "deadlineMonotonic": row["startupDeadlineMonotonic"],
                "selectedImage": row["startupImage"]}
     row.setdefault("startupAttempts", []).append(attempt)
