@@ -543,8 +543,9 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
 
 def retain_producer_logs(root, output):
     for path in installed_clock.recursive_suffix_paths(root, ".log"):
-        label = "producer-" + str(path.relative_to(root)).replace("/", "-")
-        installed_native.copy_log_tail(path, output / label)
+        destination = output / "producer-logs" / path.relative_to(root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        installed_native.copy_log_tail(path, destination)
     for path in (root / "proofs").rglob("*.json"):
         relative = path.relative_to(root / "proofs")
         destination = output / "measured-proofs" / relative

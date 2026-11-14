@@ -168,7 +168,7 @@ class ExporterFormatTest(unittest.TestCase):
                 continue
             self.assertEqual(enumerated.count(directory), 1, str(directory))
         for path in expected:
-            destination = output / ("producer-" + str(path.relative_to(root)).replace("/", "-"))
+            destination = output / "producer-logs" / path.relative_to(root)
             self.assertEqual(destination.read_bytes(), path.read_bytes())
         self.assertEqual((output / "measured-proofs/nested/receipt.json").read_bytes(), proof.read_bytes())
 
@@ -178,6 +178,24 @@ class ExporterFormatTest(unittest.TestCase):
         (directory / "nested.log").write_text("nested")
         (self.root / "broken.log").symlink_to(self.root / "absent")
         self.assertCountEqual(installed_clock.recursive_suffix_paths(self.root, ".log"), self.root.rglob("*.log"))
+
+    def test_producer_log_export_preserves_colliding_flat_names_in_either_order(self):
+        root = self.root / "producer"
+        paths = [root / name for name in ("a/b/c-d.log", "a-b/c/d.log")]
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((str(path.relative_to(root)) + "\n").encode() * 10000)
+        self.check_colliding_logs(root, paths, "first")
+        self.check_colliding_logs(root, list(reversed(paths)), "reversed")
+
+    def check_colliding_logs(self, root, paths, name):
+        output = self.root / name
+        output.mkdir()
+        with patch.object(installed_clock, "recursive_suffix_paths", return_value=paths):
+            installed_adoption.retain_producer_logs(root, output)
+        for path in paths:
+            destination = output / "producer-logs" / path.relative_to(root)
+            self.assertEqual(destination.read_bytes(), path.read_bytes()[-65536:])
 
 
 class SocketPathsTest(unittest.TestCase):
