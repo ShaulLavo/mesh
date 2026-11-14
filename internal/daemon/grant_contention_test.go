@@ -3,7 +3,6 @@ package daemon
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -133,7 +132,7 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 		authorizeOnce.Do(func() {
 			close(entered)
 			<-admission
-			// Cancel at grant admission so TLS setup cannot spend the cancellation budget.
+			// Admitted authentication drains despite HTTP cancellation and the held writer lock.
 			cancel := <-cancelRequest
 			cancel()
 		})
@@ -187,10 +186,10 @@ func TestGrantContentionReleasesRealControlSlotBeforeUnlock(t *testing.T) {
 	select {
 	case <-returned:
 	case <-completion.Done():
-		t.Fatal("canceled authentication retained the real control reservation behind a writer lock")
+		t.Fatal("admitted authentication retained the real control reservation behind a writer lock")
 	}
-	if err := <-dialed; !errors.Is(err, transport.ErrAuthentication) {
-		t.Fatalf("canceled grant admission returned %v; want authentication failure", err)
+	if err := <-dialed; err != nil {
+		t.Fatalf("HTTP cancellation interrupted admitted grant authentication: %v", err)
 	}
 	conn, err := transport.DialOnce(ctx, server.URL+"/mesh", options)
 	if err != nil {

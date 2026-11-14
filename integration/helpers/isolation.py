@@ -45,7 +45,7 @@ def refuse_live_paths(paths, environment=None, *, parents=True):
 def check_environment():
     paths = {name: os.environ.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")}
     refuse_live_paths(paths)
-    refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
+    refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP", "RUNNER_TEMP")}, parents=False)
     if not all(paths.values()):
         raise RuntimeError("integration isolation requires explicit MESH_STATE_DIR and MESH_CONFIG_DIR")
 
@@ -141,7 +141,7 @@ def prepare_isolation(owner):
     caller = dict(os.environ)
     try:
         refuse_live_paths({name: caller.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
-        refuse_live_paths({name: caller.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
+        refuse_live_paths({name: caller.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP", "RUNNER_TEMP")}, parents=False)
     except RuntimeError as error:
         raise setup_failed(str(error)) from error
     # Losing an available bus would turn the scope assertions into a false pass.
@@ -155,7 +155,7 @@ def prepare_isolation(owner):
     for name, target in (("python3", str(Path(sys.executable).resolve())), ("bash", spec["bash"]), ("sh", "/bin/sh")):
         (tools / name).symlink_to(target)
     selected = ("PATH", "TMPDIR", "TERM", "LANG", "DBUS_SESSION_BUS_ADDRESS", "GOCACHE", "GOMODCACHE",
-                "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "MESH_WATCH_SECONDS")
+                "MESH", "MESH_INTEGRATION_BINARY", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "MESH_WATCH_SECONDS", "RUNNER_TEMP")
     environment = {name: caller[name] for name in selected if name in caller}
     environment.update(owned_go_environment(owner, caller, tools))
     environment.update({
@@ -256,7 +256,7 @@ def run(bash, script, arguments):
     that owner and its launcher have exited.
     """
     refuse_live_paths({name: os.environ.get(name) for name in ("MESH_STATE_DIR", "MESH_CONFIG_DIR")})
-    refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP")}, parents=False)
+    refuse_live_paths({name: os.environ.get(name) for name in ("TMPDIR", "TEMP", "TMP", "MESH_SHORT_TMP", "RUNNER_TEMP")}, parents=False)
     from owned_command import Controller, Triggers, keep_log
     from process_tree import Kernel
     # Refuse before creating anything where children cannot be joined.

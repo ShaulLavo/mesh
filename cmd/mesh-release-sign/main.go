@@ -129,6 +129,9 @@ func verifyMetadata(args []string) error {
 		if index == 1 {
 			maximum = release.MaxSignatureBytes
 		}
+		if index == 2 {
+			maximum = 512 << 10
+		}
 		contents, err := readBounded(path, maximum)
 		if err != nil {
 			return err

@@ -40,7 +40,7 @@ GO_PATHS = ("GOROOT", "GOCACHE", "GOMODCACHE")
 GO_POLICY = ("GOPROXY", "GONOSUMDB", "GONOPROXY", "GOPRIVATE", "GOFLAGS", "GOINSECURE", "GOSUMDB")
 BUILD_NETWORK = ("HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "no_proxy",
                  "all_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR")
-TEST_PASSTHROUGH = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "MESH_TEST_ZSH", "MESH_SHORT_TMP")
+TEST_PASSTHROUGH = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "MESH_TEST_ZSH", "MESH_SHORT_TMP", "RUNNER_TEMP")
 DURATION = re.compile(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)")
 UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 # Test only: a directory of holds, faults and shorter stage timings for the runner regression.
@@ -433,7 +433,8 @@ def main(arguments):
     try:
         jobs = job_count(environ)
         budget = budgets(environ)
-        refuse_live_paths({"TMPDIR": tmpdir, "MESH_SHORT_TMP": environ.get("MESH_SHORT_TMP")}, parents=False)
+        refuse_live_paths({"TMPDIR": tmpdir, "MESH_SHORT_TMP": environ.get("MESH_SHORT_TMP"),
+                           "RUNNER_TEMP": environ.get("RUNNER_TEMP")}, parents=False)
         # Refuse before creating anything where children cannot be joined.
         Kernel().require()
         control, overrides = load_control(environ)

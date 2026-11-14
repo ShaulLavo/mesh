@@ -12,7 +12,7 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
-func TestWorkerProbeAcceptsModernInspectionAndExactLegacyAcknowledgement(t *testing.T) {
+func TestWorkerProbeAcceptsLogTailAndExactLegacyAcknowledgement(t *testing.T) {
 	inspection := protocol.SessionInspection{ObservedAt: time.Now()}
 	tests := []struct {
 		name     string
@@ -21,9 +21,15 @@ func TestWorkerProbeAcceptsModernInspectionAndExactLegacyAcknowledgement(t *test
 		want     bool
 	}{
 		{
-			name:     "modern inspection",
+			name:     "modern log tail",
 			meta:     worker.Meta{ID: "7K3D", Build: &release.Build{}},
-			response: protocol.Control{Type: protocol.TypeInspected, RequestID: "bootstrap-worker", SessionID: "7K3D", Inspection: &inspection},
+			response: protocol.Control{Type: protocol.TypeLogged, RequestID: "bootstrap-worker", SessionID: "7K3D", Output: []byte("$")},
+			want:     true,
+		},
+		{
+			name:     "log tail of a session with no output",
+			meta:     worker.Meta{ID: "7K3D"},
+			response: protocol.Control{Type: protocol.TypeLogged, RequestID: "bootstrap-worker", SessionID: "7K3D"},
 			want:     true,
 		},
 		{
@@ -53,19 +59,24 @@ func TestWorkerProbeAcceptsModernInspectionAndExactLegacyAcknowledgement(t *test
 			response: protocol.Control{Type: protocol.TypeError, SessionID: "7K3D", Message: "expected session.attach-detached"},
 		},
 		{
-			name:     "inspection requires body",
+			name:     "log tail requires exact session",
 			meta:     worker.Meta{ID: "7K3D"},
-			response: protocol.Control{Type: protocol.TypeInspected, RequestID: "bootstrap-worker", SessionID: "7K3D"},
+			response: protocol.Control{Type: protocol.TypeLogged, RequestID: "bootstrap-worker", SessionID: "OTHER"},
 		},
 		{
-			name:     "inspection requires exact session",
+			name:     "log tail requires exact request",
 			meta:     worker.Meta{ID: "7K3D"},
-			response: protocol.Control{Type: protocol.TypeInspected, RequestID: "bootstrap-worker", SessionID: "OTHER", Inspection: &inspection},
+			response: protocol.Control{Type: protocol.TypeLogged, RequestID: "other-request", SessionID: "7K3D"},
 		},
 		{
-			name:     "inspection requires exact request",
-			meta:     worker.Meta{ID: "7K3D"},
-			response: protocol.Control{Type: protocol.TypeInspected, RequestID: "other-request", SessionID: "7K3D", Inspection: &inspection},
+			name:     "refused log tail",
+			meta:     worker.Meta{ID: "7K3D", Build: &release.Build{}},
+			response: protocol.Control{Type: protocol.TypeError, RequestID: "bootstrap-worker", SessionID: "7K3D", Message: "log tail must be between 1 and 1048576 bytes"},
+		},
+		{
+			name:     "answer to another request",
+			meta:     worker.Meta{ID: "7K3D", Build: &release.Build{}},
+			response: protocol.Control{Type: protocol.TypeInspected, RequestID: "bootstrap-worker", SessionID: "7K3D", Inspection: &inspection},
 		},
 	}
 	for _, test := range tests {

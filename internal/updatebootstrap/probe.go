@@ -413,16 +413,20 @@ func (current *workerObservation) connect(ctx context.Context) {
 	}
 }
 
+const workerProbeRequest = "bootstrap-worker"
+
 func (current *workerObservation) ask() {
 	defer func() { _ = current.conn.Close() }()
 	meta, image := current.meta, current.image
-	response, err := exchange(current.conn, protocol.Control{Type: protocol.TypeInspect, RequestID: "bootstrap-worker", PreviewCols: 1, PreviewRows: 1})
+	// Every released worker answers a log tail from memory. A session inspection
+	// makes each macOS worker start ps and lsof for fields this probe never reads.
+	response, err := exchange(current.conn, protocol.Control{Type: protocol.TypeLogs, RequestID: workerProbeRequest, Tail: 1})
 	if err != nil {
 		current.err = fmt.Errorf("verify session %s workerPID=%d shellPID=%d: %w", meta.ID, image.PID, meta.PID, err)
 		return
 	}
 	if !validWorkerProbe(response, meta) {
-		current.err = errors.New("worker cannot answer a read-only session inspection")
+		current.err = errors.New("worker cannot answer a read-only session request")
 	}
 }
 
@@ -440,10 +444,10 @@ func (current *workerObservation) digest(ctx context.Context, stateVersion int) 
 }
 
 func validWorkerProbe(response protocol.Control, meta worker.Meta) bool {
-	if response.Type == protocol.TypeInspected {
-		return response.Inspection != nil && response.SessionID == meta.ID && response.RequestID == "bootstrap-worker"
+	if response.Type == protocol.TypeLogged {
+		return response.SessionID == meta.ID && response.RequestID == workerProbeRequest
 	}
-	// Workers before session.inspect reject the unknown request before the
+	// Workers before session.logs reject the unknown request before the
 	// attachment path. This exact framed response is their read-only liveness
 	// acknowledgement; peerImage has already bound it to the executable and PID.
 	return meta.Build == nil && response.Type == protocol.TypeError && response.Inspection == nil &&

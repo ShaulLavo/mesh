@@ -161,6 +161,35 @@ func TestLogsReturnsBoundedOutputWithoutStealingAttacher(t *testing.T) {
 	}
 }
 
+// The update probe asks every retained worker this exact question on every
+// observation, so the answer must come from memory. On macOS the process
+// observer starts ps and lsof.
+func TestUpdateProbeLogTailNeverObservesTheProcess(t *testing.T) {
+	sid, err := protocol.NewSessionID("7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring := session.NewRing(32)
+	_, _ = ring.Write([]byte("prompt> "))
+	observed := 0
+	w := &Worker{
+		cfg:  Config{ID: sid.String()},
+		sid:  sid,
+		ring: ring,
+		observeProcess: func(int, int) processObservation {
+			observed++
+			return processObservation{}
+		},
+	}
+	response := inspectRequest(t, w, protocol.Control{Type: protocol.TypeLogs, RequestID: "bootstrap-worker", Tail: 1})
+	if response.Type != protocol.TypeLogged || response.RequestID != "bootstrap-worker" || response.SessionID != sid.String() || !bytes.Equal(response.Output, []byte(" ")) {
+		t.Fatalf("update probe response = %+v", response)
+	}
+	if observed != 0 {
+		t.Fatalf("log tail observed the session process %d times", observed)
+	}
+}
+
 func TestExpiredAttachReceivesSnapshotAtCurrentHead(t *testing.T) {
 	sid, err := protocol.NewSessionID("GAP")
 	if err != nil {

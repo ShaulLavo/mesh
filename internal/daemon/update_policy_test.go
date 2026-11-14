@@ -30,7 +30,7 @@ func policyControlFixture(t *testing.T) (*updateController, update.Client, updat
 	if err := update.Trust(t.Context(), state, other.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newUpdateController(state, host.ID, key)
+	controller, err := newUpdateController(t.Context(), state, host.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}

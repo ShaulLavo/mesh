@@ -1549,6 +1549,126 @@ independent reviews and green CI.
 
 ## Evidence
 
+### Darwin cutover closed as not reproducing
+
+Managing closed this diagnosis on 2026-11-12. No product fix is claimed.
+The original [Darwin cutover failure](https://github.com/ShaulLavo/mesh/actions/runs/43286962367/job/131423622571)
+on PR 455 head `c44f5235` remains preserved in
+[artifact 13976891071](https://github.com/ShaulLavo/mesh/actions/runs/43286962367/artifacts/13976891071).
+The final fleet command returned 2 with `Stopped=true`, but its surviving state
+did not retain the first stop reason. Two replacement daemons started less
+than 0.3 seconds before fixture teardown. That timing does not identify the cause.
+
+Both bounded follow-up controls passed:
+
+- The current-only Linux fixture at composition `d789fcee` completed all four
+  targets with the original 120-second outer bound. Its actual-daemon positive
+  control captured an expected first stop before the measured cutover. The
+  cutover itself never stopped. The report, corrected reproducer, per-host logs,
+  observer evidence and cleanup are in
+  `/work/reports/mesh-auto-update/current-cutover-first-stop/REPORT.md`.
+- PR 446 head `15c81e0c` passed the normal
+  [native Darwin cutover](https://github.com/ShaulLavo/mesh/actions/runs/43287823060/job/131427338690),
+  including its historical workers and session-preservation checks. That run's
+  separate historical update proofs failed and remain blocking.
+
+The original cause remains unknown. Do not run another Darwin diagnostic for
+this closed observation. If normal CI reproduces it, retain that artifact and
+bring it back to managing. This decision changes no timeout, assertion,
+authentication requirement or release gate.
+
+Managing subsequently reviewed the delayed normal-CI recurrence on PR 458
+`2616d085`, before the `session.logs` fix. Its
+[Darwin cutover job](https://github.com/ShaulLavo/mesh/actions/runs/43303952240/job/131484452725)
+and [retained artifact](https://github.com/ShaulLavo/mesh/actions/runs/43303952240/artifacts/13983302466)
+show CLI exit 1 and `stopped: true`, with one failed target reporting
+`phase=build-identity: hash executable image: read executable image: context canceled`.
+The actual candidate source is `039036a86f31ac517ed9371fdc9f5fe8174eee3f`.
+This is probably the same Mac hashing-pressure family addressed by the reviewed
+`session.logs` and grouped-cohort work, but that attribution is unconfirmed.
+Do not start a separate unit for this older-source observation. Read the normal
+reviewed PR 435 cycle containing both changes first. If current-source cutover
+fails the same way, retain its artifact and return it to managing for a bounded
+unit. The verified small archive and summary remain in
+`/work/reports/mesh-auto-update/current-cutover-first-stop/`.
+
+### Pre-policy deployment startup did not reproduce
+
+PR 457 head `c4b729ef` failed the replacement mode of
+`TestPrePolicyDeploymentSurvivesReplacementAndManagedActivation` in
+[its race job](https://github.com/ShaulLavo/mesh/actions/runs/43294894210/job/131450455936).
+The daemon socket stayed absent for the existing ten-second probe, and cleanup
+reported exit 1. Its temporary daemon log was not retained.
+Two focused Go 1.27.4 race attempts on byte-identical deployment code passed
+both replacement and managed activation, with empty daemon logs and verified
+cleanup. Coordinator source review found no demonstrated cause. The observation
+is not reproducing; no startup fix, port-contention cause or longer wait is
+claimed. Preserve the original job and the controls in
+`/work/reports/mesh-auto-update/prepolicy-deployment-race/REPORT.md`.
+Normal current-source green CI remains required before merge.
+
+### Native helper rollback health did not reproduce
+
+PR 435 caller `7db3d671` failed
+`TestOriginalInodeSurvivesRollbackRetryAndCommit` in its
+[normal Darwin helper recovery job](https://github.com/ShaulLavo/mesh/actions/runs/43327607816/job/131564070619).
+After the deliberately unhealthy candidate, the source health check reported
+unexpected end of JSON input and a context deadline after 1.46 seconds, yielding
+`rollback_failed` instead of rollback. No Go race warning was recorded.
+Two focused Go 1.27.4 Linux race attempts passed the unchanged inode, rollback,
+retry, commit and worker checks, including the real OpenSSL branch. The
+300-millisecond health deadline stayed unchanged. Source review identifies a
+possible empty-file window while the fixture writes its health JSON, but does
+not establish the Darwin deadline's cause. This observation is not reproducing;
+no runtime fix, deadline expansion or EOF suppression is justified. Preserve
+the original failure and both passes in
+`/work/reports/mesh-auto-update/helper-inode-fixture/REPORT.md`. Normal reviewed
+current-source CI remains required before merge.
+
+### Linux shell startup remains blocked on EPERM
+
+Current caller C2 `e3dc8899` failed
+[Linux AMD64 native shard 1](https://github.com/ShaulLavo/mesh/actions/runs/43338129669/job/131604867814).
+The [small proof artifact](https://github.com/ShaulLavo/mesh/actions/runs/43338129669/artifacts/13997974744)
+matches its published length and digest. Native preparation and candidate
+reader independently identify source `df0bb8df8e1bcb7d6eafe91b2906707529c390b4`.
+During v0.1.259 forward-only group 1, selected v0.1.225 worker W00F failed
+starting `/bin/sh` with errno 1 and `stage=unavailable`. Fifteen preceding
+worker entries survive. The held failed-worker image matches its selected
+artifact digest; its later process fields are already unavailable.
+
+The cheap observer supplied actual image binding and initial process context,
+but not the failed syscall. Its passed Python launcher control does not cover
+a denied clone in a Go worker or the historical child's pre-exec calls. The
+initial observed worker task has ordinary credentials, Seccomp zero and an
+unconfined label; that snapshot is not a measurement of every thread or the
+later failure event. Neither the old nor current evidence establishes the
+underlying cause or a concrete runtime correction. This is a recurring real
+blocker, not a flake or a successful startup proof.
+
+Offline source/context review stopped because the missing observation cannot
+be recovered from exited-process metadata. Preserve
+`/work/reports/mesh-auto-update/linux-shell-eperm-current-context/REPORT.md`
+and `cycle2-native-collection/LINUX-SHARD1-FOLLOWUP.md`, including exact source,
+compiler, image and cleanup limits. A separate diagnostic would need the
+actual errno-1 syscall return and both parent clone and pre-exec child coverage,
+with executable positive controls in the same launch context. The retained
+old tracer misses parent clone failures and must not be deployed unchanged.
+Tracing changes scheduling and visible process context; any traced result is
+diagnostic evidence, not native acceptance. No further capture, local seed
+loop, retry, deadline expansion or policy change follows without managing's
+bounded next-step decision. The approved setup-only repair remains separate.
+
+Managing authorized one observer repair and diagnostic capture unit, about two
+agent hours, in parallel with the setup repair. Prefer a suitable lower-overhead
+hosted hook when available; use ptrace if necessary and retain its timing and
+context caveats. Require same-context controls for denied parent clone and
+pre-exec child returns, then quick independent review before one bounded
+capture. Keep deadlines unchanged and label every traced result diagnostic
+only. If the capture still does not identify the failing call, stop and report.
+This does not add a normal acceptance cycle or make the setup repair wait for
+the observer unit.
+
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.
 The graph analysis reads manifest claims and does not verify receipts.

@@ -15,6 +15,7 @@ import (
 
 	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transporttrace"
 )
 
 const (
@@ -47,13 +48,14 @@ type socketConn struct {
 	cause      error
 	queueMu    sync.Mutex
 	queueBytes int
+	trace      *transporttrace.Connection
 }
 
 func newSocketConn(ws *websocket.Conn, keepAlive KeepAlive) *socketConn {
 	return newSecureSocketConn(ws, nil, keepAlive)
 }
 
-func newSecureSocketConn(ws *websocket.Conn, stream io.ReadWriteCloser, keepAlive KeepAlive) *socketConn {
+func newSecureSocketConn(ws *websocket.Conn, stream io.ReadWriteCloser, keepAlive KeepAlive, observers ...*transporttrace.Connection) *socketConn {
 	ctx, cancel := context.WithCancel(context.Background())
 	writeCtx, cancelWrite := context.WithCancel(ctx)
 	c := &socketConn{
@@ -66,6 +68,10 @@ func newSecureSocketConn(ws *websocket.Conn, stream io.ReadWriteCloser, keepAliv
 		frames:      make(chan inboundFrame, inboundQueueCapacity),
 		done:        make(chan struct{}),
 	}
+	if len(observers) != 0 {
+		c.trace = observers[0]
+	}
+	c.trace.Emit(ctx, transporttrace.StreamBegin, nil)
 	// A WebSocket message contains the five-byte Mesh header plus a payload
 	// already bounded by protocol.MaxPayload.
 	ws.SetReadLimit(protocol.MaxPayload + protocolHeaderSize)
@@ -80,9 +86,12 @@ func (c *socketConn) ReadFrame() (protocol.Frame, error) {
 		c.queueMu.Lock()
 		c.queueBytes -= inbound.bytes
 		c.queueMu.Unlock()
+		c.observeSession(inbound.frame, protocol.TypeAttach, transporttrace.AttachRead)
 		return inbound.frame, nil
 	}
-	return protocol.Frame{}, c.terminalError()
+	err := c.terminalError()
+	c.trace.Emit(c.ctx, transporttrace.StreamReadEnd, err)
+	return protocol.Frame{}, err
 }
 
 func (c *socketConn) WriteFrame(frame protocol.Frame) error {
@@ -104,17 +113,31 @@ func (c *socketConn) WriteFrame(frame protocol.Frame) error {
 		writeErr = c.ws.Write(c.writeCtx, websocket.MessageBinary, payload)
 	}
 	if err := writeErr; err != nil {
+		c.trace.Emit(c.ctx, transporttrace.StreamWriteEnd, err)
 		wrapped := fmt.Errorf("transport: write WebSocket frame: %w", err)
 		c.fail(wrapped)
 		return wrapped
 	}
+	c.observeSession(frame, protocol.TypeAttached, transporttrace.AttachedWrite)
 	return nil
 }
 
+func (c *socketConn) observeSession(frame protocol.Frame, kind string, stage transporttrace.Stage) {
+	if c.trace == nil || frame.Kind != protocol.KindControl {
+		return
+	}
+	control, err := protocol.DecodeControl(frame.Payload)
+	if err == nil && control.Type == kind {
+		c.trace.Session(stage, control.SessionID)
+	}
+}
+
 func (c *socketConn) Close() error {
+	c.trace.Emit(c.ctx, transporttrace.StreamCloseBegin, nil)
 	won := c.setCause(ErrClosed)
 	if !won {
 		<-c.done
+		c.trace.Emit(c.ctx, transporttrace.StreamCloseEnd, nil)
 		return nil
 	}
 
@@ -122,6 +145,7 @@ func (c *socketConn) Close() error {
 	err := c.ws.Close(websocket.StatusNormalClosure, "")
 	c.cancel()
 	<-c.done
+	c.trace.Emit(c.ctx, transporttrace.StreamCloseEnd, err)
 	if !closeCompleted(err) {
 		return fmt.Errorf("transport: close WebSocket: %w", err)
 	}
@@ -227,11 +251,14 @@ func (c *socketConn) keepAliveLoop(opts KeepAlive) {
 }
 
 func (c *socketConn) fail(err error) {
+	c.trace.Emit(c.ctx, transporttrace.StreamFailed, err)
 	if !c.setCause(err) {
 		return
 	}
 	c.cancel()
-	_ = c.ws.CloseNow()
+	c.trace.Emit(c.ctx, transporttrace.StreamAbortBegin, nil)
+	closeErr := c.ws.CloseNow()
+	c.trace.Emit(c.ctx, transporttrace.StreamAbortEnd, closeErr)
 }
 
 func (c *socketConn) setCause(err error) bool {
@@ -308,7 +335,8 @@ func Serve(w http.ResponseWriter, r *http.Request, h Handler) error {
 }
 
 // ServeWithOptions accepts one WebSocket with explicit health and origin policy.
-func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions, h Handler) error {
+func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions, h Handler) (result error) {
+	defer observeServeResult(r.Context(), &result)
 	if h == nil {
 		return fmt.Errorf("transport: nil WebSocket handler")
 	}
@@ -356,6 +384,7 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 		go conn.watchAuthorization(peer.grant.Current)
 	}
 	handlerErr := h(ctx, handlerConn)
+	transporttrace.Emit(r.Context(), transporttrace.HandlerEnd, handlerErr)
 	flushErr := batched.Flush()
 	closeErr := batched.Close()
 	if handlerErr != nil {
@@ -365,6 +394,10 @@ func ServeWithOptions(w http.ResponseWriter, r *http.Request, opts ServeOptions,
 		return flushErr
 	}
 	return closeErr
+}
+
+func observeServeResult(ctx context.Context, result *error) {
+	transporttrace.Emit(ctx, transporttrace.ServeEnd, *result)
 }
 
 func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, keepAlive KeepAlive) (*socketConn, AuthenticatedPeer, error) {
@@ -385,6 +418,7 @@ func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, kee
 		CompressionMode: websocket.CompressionDisabled,
 		OriginPatterns:  append([]string(nil), opts.OriginPatterns...),
 	})
+	transporttrace.Emit(r.Context(), transporttrace.UpgradeDone, err)
 	if err != nil {
 		return nil, AuthenticatedPeer{}, fmt.Errorf("transport: accept WebSocket: %w", err)
 	}
@@ -395,7 +429,7 @@ func acceptSocket(w http.ResponseWriter, r *http.Request, opts ServeOptions, kee
 	if err != nil {
 		return nil, AuthenticatedPeer{}, err
 	}
-	conn := newSecureSocketConn(ws, secure, keepAlive) //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
+	conn := newSecureSocketConn(ws, secure, keepAlive, transporttrace.From(r.Context())) //nolint:contextcheck // sockets own their lifetime after the HTTP upgrade
 	if peer.grant.Class == access.Scoped {
 		conn.writeCurrent = peer.grant.Current
 	}

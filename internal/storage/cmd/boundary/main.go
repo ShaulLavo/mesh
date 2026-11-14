@@ -39,11 +39,15 @@ func run(ctx context.Context, args []string) error {
 	cache := flags.Bool("write-cache", false, "write representative cached session facts using candidate storage code")
 	migrationDir := flags.String("migrations", "", "candidate migration directory; defaults to embedded candidate files")
 	proofs := flags.String("verify-proofs", "", "verify forward receipts and separate rollback assets in this directory")
+	manifest := flags.String("verify-manifest", "", "validate a complete rollback cache-context manifest")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("boundary: flags: %w", err)
 	}
 	if *proofs != "" {
 		return verifyProofDirectory(*proofs)
+	}
+	if *manifest != "" {
+		return verifyContextManifest(*manifest)
 	}
 	if *databasePath == "" || *version <= 0 || flags.NArg() != 0 {
 		return errors.New("boundary: -database and positive -version are required")

@@ -143,6 +143,26 @@ class Terminal:
             if error.errno != errno.EIO:
                 raise
 
+    def snapshot(self):
+        """Retain a bounded pending tail without sending terminal replies."""
+        for _ in range(8):
+            if not select.select([self.master], [], [], 0)[0]:
+                break
+            chunk = self._snapshot_chunk()
+            if not chunk:
+                break
+            self.output.extend(chunk)
+            require(len(self.output) < 2 << 20, "terminal output exceeded the fixture limit")
+        return bytes(self.output[-8192:])
+
+    def _snapshot_chunk(self):
+        try:
+            return os.read(self.master, 8192)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                return b""
+            raise
+
     def send(self, contents):
         if isinstance(contents, str):
             contents = contents.encode()

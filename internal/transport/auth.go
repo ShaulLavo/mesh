@@ -22,6 +22,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transporttrace"
 )
 
 const AuthProtocol = "mesh-control-tls-v1"
@@ -208,7 +209,7 @@ func (c *handshakeConn) Read(p []byte) (int, error) {
 }
 
 func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication, server bool) (*tls.Conn, AuthenticatedPeer, error) {
-	cfg, err := auth.config(server)
+	cfg, err := observedAuthentication(ctx, auth, server).config(server)
 	if err != nil {
 		return nil, AuthenticatedPeer{}, err
 	}
@@ -223,28 +224,37 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
-	stop := context.AfterFunc(handshakeCtx, func() { _ = ws.CloseNow() })
+	stop := context.AfterFunc(handshakeCtx, func() {
+		transporttrace.Emit(ctx, transporttrace.HandshakeCanceled, handshakeCtx.Err())
+		closeObservedHandshake(ctx, ws)
+	})
 	defer stop()
 	deadline, _ := handshakeCtx.Deadline()
 	if err := secure.SetDeadline(deadline); err != nil {
-		_ = ws.CloseNow()
+		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: set handshake deadline: %w", ErrAuthentication, err)
 	}
-	if err := secure.HandshakeContext(handshakeCtx); err != nil {
-		_ = ws.CloseNow()
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
+	transporttrace.Emit(ctx, transporttrace.HandshakeBegin, nil)
+	err = secure.HandshakeContext(handshakeCtx)
+	transporttrace.Emit(ctx, transporttrace.HandshakeDone, err)
+	if err != nil {
+		closeObservedHandshake(ctx, ws)
+		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: TLS handshake: %w", ErrAuthentication, err)
 	}
 	key := secure.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	peer := AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}
 	if server {
 		peer.grant = auth.bind(peer.Identity)
+		observeGrant(ctx, peer.grant.Class)
 	}
-	if err := confirmAuthentication(secure, auth, server, peer); err != nil {
-		_ = ws.CloseNow()
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: %w", ErrAuthentication, err)
+	err = confirmAuthentication(ctx, secure, auth, server, peer)
+	transporttrace.Emit(ctx, transporttrace.AcceptanceDone, err)
+	if err != nil {
+		closeObservedHandshake(ctx, ws)
+		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: peer acceptance: %w", ErrAuthentication, err)
 	}
 	if err := secure.SetDeadline(time.Time{}); err != nil {
-		_ = ws.CloseNow()
+		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: clear handshake deadline: %w", ErrAuthentication, err)
 	}
 	raw.remaining = -1
@@ -252,11 +262,58 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	return secure, peer, nil
 }
 
+func observedAuthentication(ctx context.Context, auth *Authentication, server bool) *Authentication {
+	if !server || auth == nil || auth.Authorize == nil || transporttrace.From(ctx) == nil {
+		return auth
+	}
+	observed := *auth
+	observed.Authorize = func(id string) bool {
+		allowed := auth.Authorize(id)
+		stage := transporttrace.AuthorizeDeny
+		if allowed {
+			stage = transporttrace.AuthorizeAllow
+		}
+		transporttrace.Emit(ctx, stage, nil)
+		return allowed
+	}
+	return &observed
+}
+
+func observeGrant(ctx context.Context, class access.Class) {
+	stage := transporttrace.GrantNone
+	switch class {
+	case access.FullDevice:
+		stage = transporttrace.GrantFull
+	case access.UpdateCarrier:
+		stage = transporttrace.GrantUpdate
+	case access.Scoped:
+		stage = transporttrace.GrantScoped
+	case access.Unauthenticated, access.LocalAccount:
+	}
+	transporttrace.Emit(ctx, stage, nil)
+}
+
+func closeObservedHandshake(ctx context.Context, ws *websocket.Conn) {
+	transporttrace.Emit(ctx, transporttrace.HandshakeClose, nil)
+	err := ws.CloseNow()
+	transporttrace.Emit(ctx, transporttrace.HandshakeClosed, err)
+}
+
+func observeGrantCurrent(ctx context.Context, current bool) {
+	stage := transporttrace.GrantRevoked
+	if current {
+		stage = transporttrace.GrantCurrent
+	}
+	transporttrace.Emit(ctx, stage, nil)
+}
+
 // TLS 1.3 can return to a client before the server checks its certificate.
 // An encrypted acceptance byte makes denial permanent before Dial returns.
-func confirmAuthentication(secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
+func confirmAuthentication(ctx context.Context, secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
 	if server {
-		if peer.grant.Current == nil || !peer.grant.Current() {
+		current := peer.grant.Current != nil && peer.grant.Current()
+		observeGrantCurrent(ctx, current)
+		if !current {
 			return errors.New("transport: device grant removed during authentication")
 		}
 		var acceptance byte
@@ -329,6 +386,7 @@ func (c *socketConn) watchAuthorization(allowed func() bool) {
 			return
 		case <-ticker.C:
 			if !allowed() {
+				c.trace.Emit(c.ctx, transporttrace.AuthorizationRevoked, nil)
 				c.fail(errors.New("transport: device grant revoked"))
 				return
 			}

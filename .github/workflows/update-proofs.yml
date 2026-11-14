@@ -1,0 +1,395 @@
+name: Native release transition proofs
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      version:
+        default: ''
+        type: string
+      previous_tag:
+        default: ''
+        type: string
+      draft:
+        default: false
+        type: boolean
+      baseline_assets:
+        default: ''
+        type: string
+
+    outputs:
+      worker_artifact_source:
+        description: Clean checkout source used by all three native preparations
+        value: ${{ jobs.context.outputs.source }}
+      worker_artifact_run:
+        description: This run containing the complete native preparation artifacts
+        value: ${{ jobs.context.outputs.run }}
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.select.outputs.version }}
+      previous: ${{ steps.select.outputs.previous }}
+      shards: ${{ steps.select.outputs.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/mesh-release-evidence
+          key: mesh-route-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mesh-route-evidence-
+      - name: Freeze required source selection from verified receipt bytes
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PREVIOUS: ${{ inputs.previous_tag }}
+          DRAFT: ${{ inputs.draft }}
+          BASELINE_ASSETS: ${{ inputs.baseline_assets }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-record-update-preparation.py
+          root="$RUNNER_TEMP/mesh-policy"
+          mkdir -p "$root/documents"
+          python3 scripts/acquire-release-history.py "$root/documents" "$HOME/.cache/mesh-release-evidence" "$root/history.json"
+          if [[ -z $PREVIOUS ]]; then
+            PREVIOUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[-1]["tag"])' "$root/history.json")
+          fi
+          if [[ -z $VERSION ]]; then
+            VERSION=$(python3 -c 'import sys; v=sys.argv[1].split("."); v[-1]=str(int(v[-1])+1); print(".".join(v))' "$PREVIOUS")
+          fi
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
+          go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
+          python3 scripts/prepare-release-baselines.py --pins "$root/selection.json" "$BASELINE_ASSETS"
+          printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
+          shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
+          printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-policy
+          path: ${{ runner.temp }}/mesh-policy
+          retention-days: 7
+      - name: Remove policy staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/mesh-policy"
+
+  prepare:
+    needs: policy
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            archive: mesh_linux_amd64.tar.gz
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            archive: mesh_linux_arm64.tar.gz
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            archive: mesh_darwin_arm64.tar.gz
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-policy
+          path: ${{ runner.temp }}/mesh-policy
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/mesh-release-baselines
+          key: mesh-native-baselines-${{ matrix.key }}-${{ needs.policy.outputs.version }}
+          restore-keys: mesh-native-baselines-${{ matrix.key }}-
+      - name: Build the native candidate and startup-fault fixture once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.policy.outputs.version }}
+          PREVIOUS: ${{ needs.policy.outputs.previous }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCHIVE: ${{ matrix.archive }}
+          DRAFT: ${{ inputs.draft }}
+          BASELINE_ASSETS: ${{ inputs.baseline_assets }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$PLATFORM"
+          root="$RUNNER_TEMP/mesh-native.noindex"
+          mkdir -p "$root"
+          python3 scripts/fixtures/noindex_paths.py "$root" > "$root/noindex-setup.json"
+          export MESH_BASELINE_CACHE="$HOME/.cache/mesh-release-baselines"
+          export MESH_RELEASE_SELECTION="$RUNNER_TEMP/mesh-policy/selection.json"
+          if [[ $DRAFT == true ]]; then
+            gh release download "$VERSION" --pattern "$ARCHIVE" --dir "$root"
+            scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION" "$root/$ARCHIVE"
+          else
+            scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
+          fi
+          python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
+          short=$(mktemp -d /tmp/mw-XXXXXX.noindex)
+          trap 'rm -rf -- "$short"' EXIT
+          TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
+          grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
+          scripts/prepare-release-baselines.sh "$VERSION" "$PREVIOUS" "$PLATFORM" "$BASELINE_ASSETS" "$root/retained" "$root/retained.list"
+          if [[ $DRAFT == true ]]; then
+            python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list" "$root/$ARCHIVE"
+            rm "$root/$ARCHIVE"
+          else
+            python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list"
+          fi
+          python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_text("".join(str(Path(v).relative_to(p.parent))+"\n" for v in p.read_text().splitlines()))' "$root/retained.list"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-native-${{ matrix.key }}
+          path: ${{ runner.temp }}/mesh-native.noindex
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-context-${{ matrix.key }}
+          path: ${{ runner.temp }}/mesh-native.noindex/tools/rollback-artifact.json
+          retention-days: 7
+      - name: Remove native staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy"
+
+  context:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    outputs:
+      source: ${{ steps.producer.outputs.source }}
+      run: ${{ steps.producer.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: update-context-*
+          path: ${{ runner.temp }}/rollback-context
+      - name: Export the actual native preparation source and run
+        id: producer
+        env:
+          SOURCE: ${{ inputs.source_sha }}
+          RUN: ${{ github.run_id }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE"
+          printf 'source=%s\nrun=%s\n' "$SOURCE" "$RUN" >> "$GITHUB_OUTPUT"
+      - name: Aggregate only actual native artifact metadata
+        run: python3 scripts/prepare-rollback-context.py assemble "$RUNNER_TEMP/rollback-context" "$RUNNER_TEMP/rollback-context/mesh-release-context.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-rollback-manifest
+          path: ${{ runner.temp }}/rollback-context/mesh-release-context.json
+          retention-days: 7
+      - name: Remove context staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/rollback-context"
+
+  prove:
+    needs: [policy, prepare, context]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64, darwin/arm64]
+        shard: ${{ fromJSON(needs.policy.outputs.shards) }}
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Initialize this AMD64 shard EPERM unit and healthy control
+        if: matrix.platform == 'linux/amd64'
+        env:
+          MESH_WORKER_EPERM_SUDO: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+          SHARD: ${{ matrix.shard }}
+        run: |
+          python3 scripts/native-eperm-policy.py initialize "$RUNNER_TEMP/update-proof" --shard "$SHARD"
+          printf 'MESH_WORKER_EPERM_LEDGER=%s\nMESH_WORKER_EPERM_SUDO=1\n' "$RUNNER_TEMP/update-proof/eperm-ledger.json" >> "$GITHUB_ENV"
+      - name: Create owned excluded native extraction root
+        run: |
+          mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
+          python3 scripts/fixtures/noindex_paths.py "$RUNNER_TEMP/mesh-native.noindex"
+      - name: Download native proof inputs
+        id: native-download
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-native-${{ matrix.key }}
+          path: ${{ runner.temp }}/mesh-native.noindex
+      - name: Remove incomplete native inputs before the single retry
+        if: steps.native-download.outcome == 'failure'
+        run: |
+          rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"
+          mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
+      - name: Retry native proof inputs once
+        if: steps.native-download.outcome == 'failure'
+        timeout-minutes: 2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-native-${{ matrix.key }}
+          path: ${{ runner.temp }}/mesh-native.noindex
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-rollback-manifest
+          path: ${{ runner.temp }}/mesh-native.noindex
+      - name: Exercise required sources with the actual native executables
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.policy.outputs.shards }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          trap 'rm -rf -- "$scratch"' EXIT
+          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
+          if [[ -n ${MESH_WORKER_EPERM_LEDGER:-} ]]; then
+            python3 scripts/native-eperm-policy.py begin "$RUNNER_TEMP/update-proof" "$scratch"
+            trap 'status=$?; python3 scripts/native-eperm-policy.py returned "$RUNNER_TEMP/update-proof" "$status"' EXIT
+          fi
+          root="$RUNNER_TEMP/mesh-native.noindex"
+          chmod +x "$root"/tools/candidate "$root"/tools/startup-fault-candidate "$root"/tools/boundary "$root"/tools/worker-probe
+          find "$root/retained" -type f -name mesh -exec chmod +x {} +
+          count=$(python3 -c 'import json,os; print(len(json.loads(os.environ["SHARDS"])))')
+          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$count" --manifest "$root/mesh-release-context.json"
+      - name: Audit control and diagnostic ownership before removing native payloads
+        id: eperm-cleanup
+        if: always() && matrix.platform == 'linux/amd64'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/native-eperm-policy.py cleanup "$RUNNER_TEMP/update-proof" "$RUNNER_TEMP/mesh-native.noindex"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: proof-upload
+        if: always()
+        with:
+          name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}
+          path: ${{ runner.temp }}/update-proof
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: counter-upload
+        if: always() && matrix.platform == 'linux/amd64'
+        with:
+          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}
+          path: ${{ runner.temp }}/update-proof/eperm-counter.json
+          retention-days: 7
+      - name: Remove proof staging
+        if: always() && matrix.platform != 'linux/amd64'
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/update-proof"
+      - name: Remove uploaded EPERM proof evidence after confirmed cleanup
+        if: always() && matrix.platform == 'linux/amd64' && steps.eperm-cleanup.outcome == 'success' && steps.proof-upload.outcome == 'success' && steps.counter-upload.outcome == 'success'
+        run: rm -rf -- "$RUNNER_TEMP/update-proof"
+
+  eperm-summary:
+    needs: prove
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: native-eperm-counter-linux-amd64-*
+          path: ${{ runner.temp }}/eperm-summary/inputs
+      - name: Report all AMD64 recurrences for parent investigation
+        if: always()
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 scripts/summarize-native-eperm.py "$RUNNER_TEMP/eperm-summary/inputs" "$RUNNER_TEMP/eperm-summary/result/summary.json" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: native-eperm-run-summary
+          path: ${{ runner.temp }}/eperm-summary/result
+          retention-days: 7
+      - name: Remove summary staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/eperm-summary"
+
+  reader:
+    name: Original schema 1 release reader
+    needs: [policy, prepare, prove]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: update-native-*
+          path: ${{ runner.temp }}/reader-native
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: update-proofs-*
+          path: ${{ runner.temp }}/reader-proofs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-policy
+          path: ${{ runner.temp }}/mesh-policy
+      - name: Decode generated assets with the unchanged published executable
+        env:
+          VERSION: ${{ needs.policy.outputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          trap 'rm -rf -- "$scratch"' EXIT
+          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
+          root="$RUNNER_TEMP/reader"
+          mkdir -p "$root"
+          python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/reader-proofs" "$root/proofs" "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
+          python3 scripts/prepare-legacy-reader-assets.py "$RUNNER_TEMP/reader-native" "$RUNNER_TEMP/mesh-policy" "$root/dist"
+          scripts/assemble-release-compatibility.py "$root/proofs" "$root/compatibility.json"
+          scripts/generate-release-manifest.sh -dist "$root/dist" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/dist/mesh-release.json"
+          original="$RUNNER_TEMP/reader-native/update-native-linux-amd64/retained/release-v0.1.249/mesh"
+          chmod +x "$original"
+          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: original-schema1-reader
+          path: ${{ runner.temp }}/reader/evidence
+          retention-days: 7
+      - name: Remove reader staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/reader" "$RUNNER_TEMP/reader-native" "$RUNNER_TEMP/reader-proofs" "$RUNNER_TEMP/mesh-policy"

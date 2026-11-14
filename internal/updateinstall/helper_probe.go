@@ -187,6 +187,9 @@ func helperPromotionJournal(ctx context.Context, cfg HelperConfig) error {
 	if cfg.Kind != promotionSystemd && cfg.Kind != promotionLaunchd || cfg.Kind == promotionLaunchd && !launchDomainPattern.MatchString(cfg.Domain) {
 		return errors.New("helper promotion requires a supported user service manager")
 	}
+	if err := noFreshHelperPreparation(ctx, cfg.StateDir); err != nil {
+		return err
+	}
 	status, err := ReadContext(ctx, cfg.StateDir)
 	if err != nil {
 		return err

@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "inventoryDate": "2026-11-11",
+  "firstPublishedUpdater": null,
+  "hosts": [
+    {"name": "pc", "platform": "linux/amd64", "daemon": "v0.1.249", "helper": "v0.1.196", "helperRunning": false},
+    {"name": "pi", "platform": "linux/arm64", "daemon": "v0.1.255", "helper": "v0.1.230", "helperRunning": true,
+      "daemonSha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c",
+      "helperSha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"},
+    {"name": "vps", "platform": "linux/amd64", "daemon": "v0.1.255", "helper": "v0.1.196", "helperRunning": true,
+      "daemonSha256": "cb57fd0bba224b911f2dcd4300092c8b5bf0033e6f4827771db6ea3143087496",
+      "helperSha256": "35de97be239b0159bd4bff102d2491e311ae564523c9b5ebfc5860619d161484"},
+    {"name": "mac", "platform": "darwin/arm64", "daemon": "v0.1.257", "helper": "v0.1.196", "helperRunning": true,
+      "daemonSha256": "25b7f56495c3572b014ee45466162e533000d2112490a6c0e2efc09be199b78a",
+      "helperSha256": "d00c5604202b437cf4671f8d7927d426861775cfb38b9133e9c3ebb8b21e1a8b"}
+  ]
+}

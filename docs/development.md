@@ -93,6 +93,30 @@ and finish it, or keep their root, within one bounded allowance. Running one
 script directly gives the same ownership without a budget. Other platforms refuse
 before creating anything, because this ownership needs Linux child subreaping.
 
+## Installed update proofs
+
+Installed correctness tests assert source and image signatures, original process
+and session identities, command bytes, successful update and rollback, complete
+worker groups and format readers, and verified cleanup. Elapsed durations are
+reported in `fixture-clock.json` and job logs. They do not decide acceptance.
+
+Each fixture has a 20-minute hang cap and a separate two-minute final cleanup
+cap. Operations and child processes share the original absolute monotonic
+work deadline. `fixtures.installed_clock.parent_deadline()` returns nanoseconds;
+`timeout()` returns remaining seconds. `handoff_environment()` passes the deadline
+through `MESH_FIXTURE_DEADLINE_NS`; child dispatch enters `inherited_handoff()`.
+Cleanup uses `cleanup_handoff()` to replace an expired work deadline once for
+the teardown owner and pass the same endpoint to every child stop.
+Polling may use shorter intervals, and process termination uses a short TERM
+grace before KILL. Neither grants a new work deadline. Product expiry,
+cancellation and predecessor soak rules retain their functional checks.
+
+Prepared proofs build once for each native platform and chain or waypoint case.
+Three consumers run every authoritative group in their complete profiles, with
+all original format readers in the waypoint `none` profile. The aggregate
+rechecks exact bundle bytes, provenance, state identities and the full union.
+Inputs remain retained when owner absence or cleanup cannot be established.
+
 ## Docs
 
 `docs/reference/cli.md` is generated. After you change a command, flag or help text, regenerate it:

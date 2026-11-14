@@ -145,8 +145,13 @@ func archiveBytes(t *testing.T, binary []byte) []byte {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureWithOriginal(t, testExecutable("v0.1.0"))
+}
+
+func newFixtureWithOriginal(t *testing.T, old []byte) *fixture {
+	t.Helper()
 	root := t.TempDir()
-	old, candidate := testExecutable("v0.1.0"), testExecutable("v0.2.0")
+	candidate := testExecutable("v0.2.0")
 	executable := filepath.Join(root, "mesh")
 	if err := os.WriteFile(executable, old, 0755); err != nil { //nolint:gosec // executable test fixture
 		t.Fatal(err)

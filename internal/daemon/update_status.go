@@ -18,8 +18,12 @@ func (u *updateController) hostSummary() *protocol.HostUpdateSummary {
 	defer cancel()
 	status, err := u.coordinator.Store.HostStatus(ctx)
 	build := release.Current()
-	executable, _ := os.Executable()
-	summary := summarizeHostUpdate(status, build, updateinstall.InstallationKind(executable, build, true))
+	installation := u.hostInstallation
+	if installation == "" {
+		executable, _ := os.Executable()
+		installation = updateinstall.InstallationKind(executable, build, true)
+	}
+	summary := summarizeHostUpdate(status, build, installation)
 	if err != nil {
 		summary.Phase, summary.Problem = string(update.HostAttention), err.Error()
 	}

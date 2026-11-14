@@ -14,7 +14,7 @@ func TestConfigurationObserverRejectsOlderPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	controller, err := newUpdateController(state, host.ID, key)
+	controller, err := newUpdateController(t.Context(), state, host.ID, key)
 	if err != nil {
 		t.Fatal(err)
 	}

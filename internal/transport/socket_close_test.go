@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -16,7 +17,7 @@ import (
 )
 
 func TestSocketConnClosePeerEOF(t *testing.T) {
-	testSocketCloseReply(t, nil, "EOF")
+	testSocketCloseReply(t, nil, "EOF", false)
 }
 
 func TestSocketConnClosePreservesTruncatedFrames(t *testing.T) {
@@ -29,24 +30,25 @@ func TestSocketConnClosePreservesTruncatedFrames(t *testing.T) {
 		{"close payload partial", []byte{0x88, 0x02, 0x03}},
 		{"data payload partial", []byte{0x82, 0x02, 'a'}},
 	} {
-		t.Run(row.name, func(t *testing.T) { testSocketCloseReply(t, row.reply, "EOF") })
+		t.Run(row.name, func(t *testing.T) { testSocketCloseReply(t, row.reply, "EOF", false) })
 	}
 }
 
 func TestSocketConnClosePreservesInvalidReply(t *testing.T) {
 	// A reserved opcode is a genuine protocol failure during the handshake.
-	testSocketCloseReply(t, []byte{0x83, 0}, "received unknown opcode")
+	testSocketCloseReply(t, []byte{0x83, 0}, "received unknown opcode", false)
 }
 
-func testSocketCloseReply(t *testing.T, reply []byte, wantErr string) {
+func TestSocketConnClosePreservesBufferedTruncatedFrame(t *testing.T) {
+	testSocketCloseReply(t, []byte{0x88}, "EOF", true)
+}
+
+func testSocketCloseReply(t *testing.T, reply []byte, wantErr string, bufferPrefix bool) {
 	t.Helper()
 	peerDone := make(chan error, 1)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peerDone <- replyToSocketClose(w, r, reply)
+		peerDone <- replyToSocketClose(w, r, reply, bufferPrefix)
 	}))
-	server.Config.ConnContext = func(ctx context.Context, conn net.Conn) context.Context {
-		return context.WithValue(ctx, closePeerKey{}, conn)
-	}
 	server.Start()
 	t.Cleanup(server.Close)
 
@@ -85,20 +87,49 @@ func testSocketCloseReply(t *testing.T, reply []byte, wantErr string) {
 	}
 }
 
-type closePeerKey struct{}
+type closePeerWriter struct {
+	http.ResponseWriter
+	raw          net.Conn
+	reader       *bufio.Reader
+	bufferPrefix bool
+}
 
-func replyToSocketClose(w http.ResponseWriter, r *http.Request, reply []byte) error {
-	ws, err := websocket.Accept(w, r, nil)
+func (w *closePeerWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	raw, buffer, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, fmt.Errorf("hijack close peer: %w", err)
+	}
+	w.raw, w.reader = raw, buffer.Reader
+	if err := w.prepareReader(); err != nil {
+		_ = raw.Close()
+		return nil, nil, err
+	}
+	return raw, buffer, nil
+}
+
+func (w *closePeerWriter) prepareReader() error {
+	if err := w.raw.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		return fmt.Errorf("bound close peer: %w", err)
+	}
+	if !w.bufferPrefix {
+		return nil
+	}
+	// Force the Hijacker contract's buffered-data case before Accept returns.
+	if _, err := w.reader.Peek(1); err != nil {
+		return fmt.Errorf("buffer close prefix: %w", err)
+	}
+	return nil
+}
+
+func replyToSocketClose(w http.ResponseWriter, r *http.Request, reply []byte, bufferPrefix bool) error {
+	peer := &closePeerWriter{ResponseWriter: w, bufferPrefix: bufferPrefix}
+	ws, err := websocket.Accept(peer, r, nil)
 	if err != nil {
 		return fmt.Errorf("accept close peer: %w", err)
 	}
 	defer ws.CloseNow() //nolint:errcheck // deliberately terminate the peer without a close reply
-	raw := r.Context().Value(closePeerKey{}).(net.Conn)
-	if err := raw.SetDeadline(time.Now().Add(time.Second)); err != nil {
-		return fmt.Errorf("bound close peer: %w", err)
-	}
 	var frame [8]byte
-	if _, err := io.ReadFull(raw, frame[:]); err != nil {
+	if _, err := io.ReadFull(peer.reader, frame[:]); err != nil {
 		return fmt.Errorf("read close frame: %w", err)
 	}
 	if frame[0] != 0x88 || frame[1] != 0x82 {
@@ -107,7 +138,7 @@ func replyToSocketClose(w http.ResponseWriter, r *http.Request, reply []byte) er
 	if len(reply) == 0 {
 		return nil
 	}
-	_, err = raw.Write(reply)
+	_, err = peer.raw.Write(reply)
 	if err != nil {
 		return fmt.Errorf("write close reply: %w", err)
 	}

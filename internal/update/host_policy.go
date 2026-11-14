@@ -17,7 +17,7 @@ type HostMode string
 const (
 	HostManual      HostMode = "manual"
 	HostAutomatic   HostMode = "automatic"
-	DefaultHostMode          = HostManual
+	DefaultHostMode          = HostAutomatic
 )
 
 type HostPolicy struct {
@@ -32,12 +32,27 @@ func (s *Store) hostPolicy() (HostPolicy, error) {
 	var policy HostPolicy
 	err := s.readAuthority("host-policy.json", &policy)
 	if errors.Is(err, os.ErrNotExist) {
-		return HostPolicy{Schema: 1, Mode: DefaultHostMode}, nil
+		return HostPolicy{Schema: 1, Mode: s.defaultHostMode()}, nil
 	}
 	if err != nil {
 		return policy, err
 	}
 	return policy, validateHostPolicy(policy)
+}
+
+// WithHostInstallation binds the missing-policy default to an actual daemon.
+// Generic stores also serve client commands and adoption before a daemon exists.
+func (s *Store) WithHostInstallation(kind string) *Store {
+	configured := *s
+	configured.hostInstallation = kind
+	return &configured
+}
+
+func (s *Store) defaultHostMode() HostMode {
+	if s.hostInstallation == updateinstall.InstallationManaged {
+		return DefaultHostMode
+	}
+	return HostManual
 }
 
 func validateHostPolicy(policy HostPolicy) error {

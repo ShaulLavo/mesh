@@ -139,6 +139,9 @@ elif launchctl print "$user_domain" >/dev/null 2>&1; then
 else
 	fail service_install "launchd has no user domain for UID $remote_uid"
 fi
+MESH_STATE_DIR="$state_dir" "$binary_path" daemon prepare-updates --service-kind launchd --domain "$domain" ||
+	fail service_install "cannot prepare the verified update helper"
+
 # Teardown visibility and transient bootstrap errors share a five-second backoff budget.
 activation_attempts=20
 retry_activation() {
@@ -182,9 +185,9 @@ if [ "$activation_required" -eq 1 ]; then
 	fi
 fi
 launchctl print "$service" >/dev/null 2>&1 || fail service_install "$service is not loaded"
+MESH_STATE_DIR="$state_dir" "$binary_path" daemon installation-check --service-kind launchd --domain "$domain" >&2
 rm -f "$activation_pending" || fail service_install "cannot clear the service activation marker"
 
-"$binary_path" daemon installation-check >&2
 if [ "$changed" -eq 1 ]; then
 	printf 'MESH_INSTALL_RESULT=configured\n'
 else
