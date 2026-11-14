@@ -67,6 +67,29 @@ class HistoryTests(unittest.TestCase):
             self.assertIn("--paginate", command.call_args.args[0])
             self.assertIn("--slurp", command.call_args.args[0])
 
+    def test_api_failure_keeps_original_exception_and_captured_streams(self):
+        failure = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], output=b"partial page", stderr=b"HTTP 503")
+        timeout = HISTORY.subprocess.TimeoutExpired(["gh", "api"], 120, output=b"partial timeout", stderr=b"connection pending")
+        for error in (failure, timeout):
+            with mock.patch.object(HISTORY.subprocess, "run", side_effect=error):
+                self.assert_api_failure(error)
+
+    def assert_api_failure(self, error):
+        with self.assertRaises(type(error)) as caught:
+            HISTORY.api("endpoint")
+        self.assertIs(caught.exception, error)
+        self.assertIn(error.stdout.decode(), error.__notes__[0])
+        self.assertIn(error.stderr.decode(), error.__notes__[1])
+
+    def test_api_failure_bounds_retained_output(self):
+        error = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], output=b"x" * 40000, stderr=b"\xff")
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=error):
+            with self.assertRaises(HISTORY.subprocess.CalledProcessError):
+                HISTORY.api("endpoint")
+        self.assertTrue(error.__notes__[0].endswith(" [truncated]"))
+        self.assertLess(len(error.__notes__[0]), 33000)
+        self.assertIn("\ufffd", error.__notes__[1])
+
     def test_truncated_embedded_assets_use_the_paginated_asset_api(self):
         assets = [{"name": f"asset-{index}.txt", "digest": "sha256:" + self.digest} for index in range(101)]
         item = {"tag_name": "v0.1.306", "id": 42, "published_at": "2026-11-11T00:00:00Z", "assets": assets[:100]}

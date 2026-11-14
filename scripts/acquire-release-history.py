@@ -23,8 +23,15 @@ LIMITS["mesh-worker-groups.json"] = 1 << 20
 
 
 def api(endpoint):
-    result = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
-                            check=True, capture_output=True, timeout=120)
+    try:
+        result = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
+                                check=True, capture_output=True, timeout=120)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for name in ("stdout", "stderr"):
+            data = getattr(error, name) or b""
+            text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+            error.add_note(f"release API {name}: {text[:32768]}" + (" [truncated]" if len(text) > 32768 else ""))
+        raise
     return [item for page in json.loads(result.stdout) for item in page]
 
 
