@@ -59,3 +59,13 @@ acquisition remain incomplete, and its raw external record remains incomplete.
 The reviewed external overlay SHA-256 is
 a89f8f16b834f633a7314dbe7083f4b718051ecedc7740acd7fdfc2a3fb5eb29.
 The future successful cache-save tail remains unmeasured.
+
+Darwin fresh also retains both complete invocations from the original sample
+and successful population job 132322120211, run 43553838184, source 55b0f8bd.
+Every phase and telemetry row uses its larger completed measurement at 1.125,
+with both full source streams preserved. The independently reviewed candidate
+SHA-256 is e323521d16cd8155a70a9d3a64506ef9e696e3dbd19b4660661132731ba08a42.
+Command, external and reserve total 500.828 seconds within the unchanged
+900-second admission. All independent guards remain unchanged; diagnostic
+acceptance stays false. See acceptance-ae2a/darwin-fresh-candidate/REVIEW.md in
+the retained lane reports.
