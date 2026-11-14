@@ -27,6 +27,11 @@ def wait_for(predicate, message):
         if value:
             return value
         time.sleep(installed_clock.remaining_until(deadline, 0.05))
+    try:
+        installed_clock.timeout(10)
+    except installed_clock.ClockExpired as error:
+        error.add_note(message)
+        raise
     raise RuntimeError(message)
 
 

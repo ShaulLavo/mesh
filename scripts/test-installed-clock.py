@@ -47,6 +47,36 @@ class ClockTest(unittest.TestCase):
     def clock(self, plan=None, **kwargs):
         return clocks.Clock(plan or diagnostic(), now=self.now, **kwargs)
 
+    def test_native_wait_preserves_parent_clock_expiry(self):
+        clock = self.clock(diagnostic(command_ns=109 * clocks.MILLISECOND))
+        predicate = Mock(return_value=False)
+        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(native_services.time, "sleep", side_effect=self.advance_wait):
+            with self.assertRaisesRegex(clocks.ClockExpired, "installed fixture clock expired") as raised:
+                native_services.wait_for(predicate, "installed signature exporter did not start")
+        self.assertEqual(raised.exception.__notes__, ["installed signature exporter did not start"])
+        self.assertEqual(clock.failures[0]["type"], "ClockExpired")
+        self.assertEqual(predicate.call_count, 3)
+
+    def test_native_wait_preserves_handoff_expiry(self):
+        deadline = self.now() + 109 * clocks.MILLISECOND
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(native_services.time, "sleep", side_effect=self.advance_wait), clocks.handoff(deadline):
+            with self.assertRaisesRegex(clocks.ClockExpired, "parent fixture deadline expired"):
+                native_services.wait_for(lambda: False, "handoff wait did not finish")
+
+    def test_native_wait_keeps_local_timeout_error(self):
+        start = self.now()
+        with patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(native_services.time, "sleep", side_effect=self.advance_wait):
+            with self.assertRaisesRegex(RuntimeError, "^local wait did not finish$") as raised:
+                native_services.wait_for(lambda: False, "local wait did not finish")
+        self.assertIs(type(raised.exception), RuntimeError)
+        self.assertEqual(self.now() - start, 10 * clocks.SECOND)
+
+    def advance_wait(self, seconds):
+        self.now.advance(round(seconds * clocks.SECOND))
+
     def test_native_control_child_entry_works_without_package_path(self):
         marker = self.root / "native-child.json"
         arguments = [str(Path(sys.executable).resolve()), str(Path(native_services.__file__).resolve()), "child", str(marker), "owned-control"]
