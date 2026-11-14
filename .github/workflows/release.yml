@@ -122,78 +122,21 @@ jobs:
           scripts/finalize-release.sh "$VERSION" "$SOURCE" "$VERSION" "$RUNNER_TEMP/cask/mesh.rb"
 
   prove-transition:
-    name: Prove forward upgrade and restart (${{ matrix.platform }})
+    name: Native forward and rollback proofs
     permissions:
-      contents: write
+      contents: read
     needs: [reserve, build]
     if: needs.reserve.outputs.action == 'publish'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            archive: mesh_linux_amd64.tar.gz
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            archive: mesh_linux_arm64.tar.gz
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            archive: mesh_darwin_arm64.tar.gz
-            runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.reserve.outputs.source }}
-      - name: Set up Go for retained-worker verification
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Verify Darwin retains the mapped executable across replacement
-        if: matrix.platform == 'darwin/arm64'
-        run: |
-          output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
-          go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
-          grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
-      - name: Download retained and candidate artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
-          VERSION: ${{ needs.reserve.outputs.version }}
-          ARCHIVE: ${{ matrix.archive }}
-          PLATFORM: ${{ matrix.platform }}
-          BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/retained" "$RUNNER_TEMP/candidate"
-          gh release download "$VERSION" --pattern "$ARCHIVE" --dir "$RUNNER_TEMP/candidate"
-          tar -xzf "$RUNNER_TEMP/candidate/$ARCHIVE" -C "$RUNNER_TEMP/candidate"
-          chmod 0755 "$RUNNER_TEMP/candidate/mesh"
-          scripts/prepare-release-baselines.sh \
-            "$VERSION" "$PREVIOUS_TAG" "$PLATFORM" "$BASELINE_ASSETS" \
-            "$RUNNER_TEMP/retained" "$RUNNER_TEMP/retained.list"
-      - name: Exercise retained state and candidate restart
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          while IFS= read -r retained; do
-            probe_output="$RUNNER_TEMP/retained-worker-probe.log"
-            MESH_LEGACY_BINARY="$retained" go test -count=1 \
-              -run '^TestLegacyWorkerProcessProtocolAndVersion$' \
-              -v ./internal/updatebootstrap | tee "$probe_output"
-            grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$probe_output"
-            scripts/prove-release-transition.sh \
-              "$retained" "$RUNNER_TEMP/candidate/mesh" \
-              "$PLATFORM" "$RUNNER_TEMP/proofs"
-          done <"$RUNNER_TEMP/retained.list"
-      - name: Store proof in the reserved draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.reserve.outputs.version }}
-        run: gh release upload "$VERSION" --clobber "$RUNNER_TEMP"/proofs/*.json
+    uses: ./.github/workflows/update-proofs.yml
+    with:
+      source_sha: ${{ needs.reserve.outputs.source }}
+      version: ${{ needs.reserve.outputs.version }}
+      previous_tag: ${{ needs.reserve.outputs.previous_tag }}
+      draft: true
+      baseline_assets: ${{ needs.reserve.outputs.baseline_assets }}
 
   publish:
-    name: Publish complete release
+    name: Sign complete release draft
     permissions:
       actions: write
       statuses: write
@@ -203,7 +146,7 @@ jobs:
       attestations: write
       artifact-metadata: write
     needs: [reserve, build, prove-transition]
-    if: needs.reserve.outputs.action == 'publish'
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -223,13 +166,16 @@ jobs:
           gh release download "$VERSION" --pattern 'mesh_*.tar.gz' --dir dist
           gh release download "$VERSION" --pattern checksums.txt --dir dist
           gh release download "$VERSION" --pattern mesh.rb --dir dist/homebrew/Casks
-          gh release download "$VERSION" --pattern '*.json' --dir "$RUNNER_TEMP/release-json"
-          for asset in "$RUNNER_TEMP"/release-json/*.json; do
-            name=${asset##*/}
-            [[ $name =~ ^[0-9a-f]{64}\.json$ ]] || continue
-            cp "$asset" "proofs/$name"
-          done
-          compgen -G 'proofs/*.json' >/dev/null
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: update-proofs-*
+          path: ${{ runner.temp }}/proof-shards
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-policy
+          path: ${{ runner.temp }}/mesh-policy
+      - name: Collect every native proof asset
+        run: python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/proof-shards" proofs "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
       - name: Build immutable release manifest
         env:
           VERSION: ${{ needs.reserve.outputs.version }}
@@ -240,12 +186,36 @@ jobs:
             -dist dist -version "$VERSION" -commit "$SOURCE" \
             -compatibility "$RUNNER_TEMP/compatibility.json" -proofs proofs \
             -output dist/mesh-release.json
+      - name: Build verified update metadata and discovery pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/mesh-policy"
+          python3 scripts/acquire-release-history.py "$root/documents" "$HOME/.cache/mesh-release-evidence" "$root/fresh-history.json"
+          python3 scripts/stage-release-publication.py "$root" "$VERSION" dist proofs "$RUNNER_TEMP/proof-shards"
+          go build -o "$RUNNER_TEMP/mesh-release-sign" ./cmd/mesh-release-sign
+          status=75
+          while (( status == 75 )); do
+            status=0
+            "$RUNNER_TEMP/mesh-release-sign" refresh "$MESH_RELEASE_TRUST_CACHE" || status=$?
+          done
+          (( status == 0 )) || exit "$status"
+          go run ./cmd/mesh-release-routes -operation publish -input "$root/input.json" -documents "$root/documents" -output-dir dist | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/stage-metadata-page.py dist "$root/documents" "$RUNNER_TEMP/metadata-page.json"
       - name: Attest final manifest and archives
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
             dist/mesh-release.json
+            dist/mesh-update.json
+            dist/mesh-retention.json
+            dist/mesh-workers.json
+            dist/mesh-worker-groups.json
             dist/mesh_*.tar.gz
       - name: Verify original bundle and candidate verifier
         env:
@@ -255,14 +225,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for subject in dist/mesh-release.json dist/mesh_*.tar.gz; do
+          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz; do
             gh attestation verify "$subject" --bundle "$BUNDLE" \
               --repo ShaulLavo/mesh \
               --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
               --source-ref refs/heads/main --deny-self-hosted-runners
           done
           signer="$RUNNER_TEMP/mesh-release-sign"
-          go build -o "$signer" ./cmd/mesh-release-sign
+          if [[ ! -x $signer ]]; then
+            go build -o "$signer" ./cmd/mesh-release-sign
+          fi
           status=75
           while (( status == 75 )); do
             status=0
@@ -270,15 +242,156 @@ jobs:
           done
           (( status == 0 )) || exit "$status"
           "$signer" wrap "$BUNDLE" dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
           "$signer" verify dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
+          "$signer" verify-metadata dist/mesh-update.json dist/mesh-update.sig.json dist/mesh-release.json "$RUNNER_TEMP/metadata-page.json"
+      - name: Upload signed draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          shopt -s nullglob
+          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json proofs/groups/leaves/*.worker-group.json)
+          gh release upload "$VERSION" --clobber "${assets[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-publication-input
+          path: ${{ runner.temp }}/mesh-policy/input.json
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-publication-trust
+          path: ${{ runner.temp }}/mesh-release-trust
+          retention-days: 7
+
+  verify-readers:
+    name: Verify original permitted readers (${{ matrix.platform }})
+    needs: [reserve, publish]
+    if: needs.reserve.outputs.action == 'publish'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.reserve.outputs.source }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-policy
+          path: ${{ runner.temp }}/mesh-policy
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-publication-input
+          path: ${{ runner.temp }}/mesh-policy
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-publication-trust
+          path: ${{ runner.temp }}/mesh-release-trust
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/mesh-release-baselines
+          key: mesh-native-baselines-${{ matrix.key }}-${{ needs.reserve.outputs.version }}
+          restore-keys: mesh-native-baselines-${{ matrix.key }}-
+      - name: Require the original source verifier to accept each automatic edge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$PLATFORM"
+          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
+          root="$RUNNER_TEMP/mesh-policy"
+          mkdir -p "$root/documents/$VERSION"
+          gh release download "$VERSION" --pattern '*.json' --dir "$root/documents/$VERSION"
+          go run ./cmd/mesh-release-routes -operation packets -input "$root/input.json" -documents "$root/documents" -platform "$PLATFORM" -output-dir "$RUNNER_TEMP/reader-packets"
+          python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets" "$PLATFORM" "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$RUNNER_TEMP/reader-evidence"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: original-update-readers-${{ matrix.key }}
+          path: ${{ runner.temp }}/reader-evidence
+          retention-days: 7
+      - name: Remove original reader staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/reader-evidence"
+
+  publication-native:
+    name: Installed signed draft gate
+    needs: [reserve, prove-transition, publish]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      actions: read
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@bb5ed960820ee098309ea1097af8ea4d6521dd22
+    with:
+      harness_source: bb5ed960820ee098309ea1097af8ea4d6521dd22
+      publication_only: true
+      release_version: ${{ needs.reserve.outputs.version }}
+      release_source: ${{ needs.reserve.outputs.source }}
+      release_run: ${{ github.run_id }}
+      worker_artifact_prefix: update-native
+      worker_artifact_run: ${{ fromJSON(needs.prove-transition.outputs.worker_artifact_run) }}
+      worker_artifact_source: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+
+  finalize:
+    name: Publish verified release
+    needs: [reserve, publish, verify-readers, publication-native]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main' && needs.verify-readers.result == 'success' && needs.publication-native.result == 'success'
+    permissions:
+      actions: write
+      statuses: write
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.reserve.outputs.source }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Recover the verified draft Cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/final-cask"
+          gh release download "$VERSION" --pattern mesh.rb --dir "$RUNNER_TEMP/final-cask"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: installed-publication-*
+          path: ${{ runner.temp }}/installed-completion
       - name: Upload and publish after ancestry recheck
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
           PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
+          MESH_INSTALLED_COMPLETION: ${{ runner.temp }}/installed-completion
         run: |
-          gh release upload "$VERSION" --clobber dist/mesh-release.json dist/mesh-update.sig.json
-          scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" dist/homebrew/Casks/mesh.rb
+          scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" "$RUNNER_TEMP/final-cask/mesh.rb"

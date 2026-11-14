@@ -5,32 +5,49 @@ import json
 import socket
 import struct
 import sys
+import time
 import uuid
 
 
-def receive(connection, length):
+def remaining_socket_time(deadline_ns):
+    remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
+    if remaining <= 0:
+        raise TimeoutError("absolute socket exchange deadline expired")
+    return remaining
+
+
+def receive(connection, length, *, deadline_ns=None):
     result = b""
     while len(result) < length:
+        if deadline_ns is not None:
+            connection.settimeout(remaining_socket_time(deadline_ns))
         chunk = connection.recv(length - len(result))
         if not chunk:
             raise RuntimeError("daemon closed an incomplete response")
         result += chunk
+    if deadline_ns is not None:
+        remaining_socket_time(deadline_ns)
     return result
 
 
-def round_trip(socket_path, request):
+def round_trip(socket_path, request, *, timeout=10, deadline_ns=None):
+    local_deadline = time.monotonic_ns() + int(timeout * 1_000_000_000)
+    deadline_ns = min(local_deadline, deadline_ns) if deadline_ns is not None else local_deadline
     payload = json.dumps(request, separators=(",", ":")).encode()
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(10)
+        connection.settimeout(remaining_socket_time(deadline_ns))
         connection.connect(socket_path)
+        connection.settimeout(remaining_socket_time(deadline_ns))
         connection.sendall(b"\x01" + struct.pack(">I", len(payload)) + payload)
-        header = receive(connection, 5)
+        header = receive(connection, 5, deadline_ns=deadline_ns)
         if header[0] != 1:
             raise RuntimeError(f"unexpected response kind {header[0]}")
         length = struct.unpack(">I", header[1:])[0]
         if length > 4 << 20:
             raise RuntimeError(f"oversized response: {length}")
-        return json.loads(receive(connection, length))
+        value = json.loads(receive(connection, length, deadline_ns=deadline_ns))
+        remaining_socket_time(deadline_ns)
+        return value
 
 
 def request_id(operation):

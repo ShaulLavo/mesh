@@ -429,7 +429,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
-	updates, err := newUpdateController(stateDir, meshHost.ID, meshPrivateKey)
+	updates, err := newUpdateController(daemonCtx, stateDir, meshHost.ID, meshPrivateKey)
 	if err != nil {
 		return err
 	}

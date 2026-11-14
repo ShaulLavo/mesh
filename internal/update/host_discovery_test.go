@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/shaul/mesh/internal/release"
@@ -209,6 +210,27 @@ func TestDiscoveryRequiresSignatureAdapterAndExactRootIdentity(t *testing.T) {
 	f.documents["latest/mesh-update-root.json"] = data
 	if _, err := DiscoverNextHop(t.Context(), f.from, f.at, 1, DiscoveryCursor{}, f.source(), release.NewPassBudget()); err == nil {
 		t.Fatal("host discovery accepted wrong head identity")
+	}
+}
+
+func TestDiscoveryPreviousEpochRootRequiresItsOwnReleaseIdentity(t *testing.T) {
+	f := recordedDiscovery(t)
+	previousBytes := f.documents["latest/mesh-update-root.json"]
+	previous := release.AssetRef{Tag: "v0.1.305", Name: release.DiscoveryRootAssetName, SHA256: discoveryDigest(previousBytes)}
+	f.documents[previous.Tag+"/"+previous.Name] = previousBytes
+	root := release.DiscoveryRoot{Format: 1, Epoch: 2, Previous: &previous,
+		Head: release.AssetRef{Tag: "v0.1.307", Name: release.UpdateMetadataAssetName, SHA256: discoveryDigest([]byte("future metadata"))}}
+	data, err := release.EncodeDiscoveryRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.documents["latest/mesh-update-root.json"] = data
+	_, err = DiscoverNextHop(t.Context(), f.from, f.at, 1, DiscoveryCursor{}, f.source(), release.NewPassBudget())
+	if err == nil || !strings.Contains(err.Error(), "previous root identity differs from its reference") {
+		t.Fatalf("mismatched previous root identity: %v", err)
+	}
+	if f.verified != 0 || f.reads["v0.1.307/mesh-update.json"] != 0 || f.reads["v0.1.306/mesh-update.json"] != 0 {
+		t.Fatal("mismatched epoch root reached metadata acquisition or authentication")
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/tailnet"
 	"github.com/shaul/mesh/internal/transport"
+	"github.com/shaul/mesh/internal/transporttrace"
 )
 
 const (
@@ -210,6 +211,8 @@ func serveBoundListeners(
 	appRegistryListener net.Listener,
 ) error {
 	defer closeListenerDiagnostics(normalized)
+	ctx = transporttrace.ProcessContext(ctx)
+	defer transporttrace.Finish(ctx)
 	var boundedAppRegistry *boundedAppRegistryListener
 	if appRegistryListener != nil {
 		boundedAppRegistry = newBoundedAppRegistryListener(appRegistryListener, maximumAppRegistryConnections)
@@ -326,14 +329,19 @@ func serveBoundListeners(
 	// Fatal listener failure is also daemon shutdown. Cancel the shared lifetime
 	// before closing sockets or waiting, so handlers blocked in publication can
 	// observe it and return.
+	transporttrace.Process(ctx, transporttrace.DaemonCancel, nil)
 	cancel()
+	transporttrace.Process(ctx, transporttrace.DaemonCanceled, ctx.Err())
 
 	closeErr := unixListener.Close()
 	// A client's malformed frame or disconnect does not make daemon shutdown
 	// fail. Preserve its close error through the non-fatal connection reporter.
+	transporttrace.Process(ctx, transporttrace.GroupsCloseBegin, nil)
 	if err := errors.Join(connections.closeAll(), tailnetConnections.closeAll()); err != nil {
 		normalized.reporter.report(fmt.Errorf("daemon: close client connections: %w", err))
 	}
+	transporttrace.Process(ctx, transporttrace.GroupsCloseEnd, nil)
+	transporttrace.Process(ctx, transporttrace.HTTPShutdownBegin, nil)
 	if err := shutdownHTTPServer(server.Server, normalized.shutdownTimeout); err != nil {
 		closeErr = errors.Join(closeErr, fmt.Errorf("daemon: close WebSocket server: %w", err))
 	}
@@ -351,6 +359,8 @@ func serveBoundListeners(
 	listenerWG.Wait()
 	connections.wait()
 	tailnetConnections.wait()
+	transporttrace.Process(ctx, transporttrace.HTTPShutdownEnd, closeErr)
+	transporttrace.Process(ctx, transporttrace.DaemonEnd, runErr)
 	return errors.Join(runErr, closeErr)
 }
 
@@ -543,6 +553,8 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			services.ServeHTTP(w, r)
 			return
 		}
+		r, observedDone := transporttrace.Request(r)
+		defer observedDone()
 		if r.Header.Get("Origin") != "" {
 			http.Error(w, "browser control connections are forbidden", http.StatusForbidden)
 			return
@@ -555,17 +567,21 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		defer connections.release(id)
+		defer func() { observedDone(); connections.release(id) }()
 		if cfg.controlAuth == nil {
 			http.Error(w, "Mesh device authorization unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		// An admitted handshake must finish under its own authentication budget.
+		// Canceling it on shutdown turns an approved peer into a terminal
+		// authentication failure. The closed group refuses handler dispatch.
+		r = r.WithContext(context.WithoutCancel(r.Context())) //nolint:contextcheck // admitted authentication owns its deadline during shutdown
 		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: cfg.controlAuth}, func(connectionCtx context.Context, conn transport.Conn) error {
 			if _, authenticated := transport.Peer(connectionCtx); !authenticated {
 				return transport.ErrAuthentication
 			}
 			handlerCtx, cancel := context.WithCancel(connectionCtx)
-			stop := context.AfterFunc(ctx, cancel)
+			stop := observeHandlerCancellation(ctx, connectionCtx, cancel)
 			defer func() {
 				stop()
 				cancel()
@@ -580,6 +596,13 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 	}
 	trackNewHTTPConnections(server.Server)
 	return server
+}
+
+func observeHandlerCancellation(parent, connection context.Context, cancel context.CancelFunc) func() bool {
+	return context.AfterFunc(parent, func() {
+		transporttrace.Emit(connection, transporttrace.RequestCanceled, parent.Err())
+		cancel()
+	})
 }
 
 func shutdownHTTPServer(server *http.Server, timeout time.Duration) error {

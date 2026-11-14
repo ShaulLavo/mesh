@@ -66,15 +66,25 @@ def reject_outcomes(command, environment, variable):
 
 def check_outcomes(command, results):
     for code in ("true", "false"):
-        environment = dict(os.environ, CODE=code)
-        environment.update({name: "skipped" if code == "false" and dependency in FILTERED else "success"
-                            for name, dependency in results.items()})
-        assert status(command, environment) == 0, f"aggregate rejects valid CODE={code} results"
-        for variable in results:
-            reject_outcomes(command, environment, variable)
-    environment = dict(os.environ, **{name: "success" for name in results})
+        for proofs in ("true", "false"):
+            check_filtered_outcomes(command, results, code, proofs)
+    environment = dict(os.environ, UPDATE_PROOFS_REQUIRED="true", **{name: "success" for name in results})
     for code in ("", "pending", "True", "unknown"):
         assert status(command, dict(environment, CODE=code)) != 0, f"aggregate accepts unknown CODE={code!r}"
+    for proofs in ("", "pending", "True", "unknown"):
+        assert status(command, dict(environment, CODE="true", UPDATE_PROOFS_REQUIRED=proofs)) != 0, \
+            f"aggregate accepts unknown UPDATE_PROOFS_REQUIRED={proofs!r}"
+
+
+def check_filtered_outcomes(command, results, code, proofs):
+    environment = dict(os.environ, CODE=code, UPDATE_PROOFS_REQUIRED=proofs)
+    environment.update({name: "skipped" if code == "false" and dependency in FILTERED else "success"
+                        for name, dependency in results.items()})
+    environment["UPDATE_PROOFS"] = "success" if proofs == "true" else "skipped"
+    environment["INSTALLED_CATCHUP"] = environment["UPDATE_PROOFS"]
+    assert status(command, environment) == 0, f"aggregate rejects valid CODE={code}, proofs={proofs} results"
+    for variable in results:
+        reject_outcomes(command, environment, variable)
 
 
 def check_gate(ci, recovery):

@@ -14,7 +14,6 @@ import (
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
-	"golang.org/x/sys/unix"
 )
 
 type AdoptionPhase string
@@ -189,7 +188,7 @@ func (s *Store) lockAdoptionPass(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	defer func() { _ = dir.Close() }()
-	fd, err := unix.Openat(int(dir.Fd()), "adoption.lock", unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0600)
+	fd, err := openLockAt(int(dir.Fd()), "adoption.lock")
 	if err != nil {
 		return nil, fmt.Errorf("update: open adoption pass lock: %w", err)
 	}

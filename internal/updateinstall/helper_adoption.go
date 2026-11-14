@@ -49,6 +49,9 @@ func PrepareAdoptionHelper(ctx context.Context, cfg HelperConfig, source release
 		return HelperInstallation{}, err
 	}
 	defer unlock(lock)
+	if err := noFreshHelperPreparation(ctx, cfg.StateDir); err != nil {
+		return HelperInstallation{}, err
+	}
 	if err := noAdoptionJournal(ctx, cfg.StateDir); err != nil {
 		return HelperInstallation{}, err
 	}

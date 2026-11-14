@@ -1,0 +1,5749 @@
+{
+  "mode": "frozen",
+  "workload": {
+    "platform": "linux/arm64",
+    "host": "pi",
+    "mode": "oldest",
+    "scenario": null,
+    "grouped": true,
+    "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+    "catalogEvidence": true,
+    "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+    "manifestSchemas": [
+      1
+    ]
+  },
+  "phases": [
+    {
+      "key": "span:setup#1",
+      "limit_ns": 154540000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#1",
+            "signer-build:#1",
+            "setup#2",
+            "signer-start#1",
+            "setup#3",
+            "build:v0.1.9001:epoch=1#1",
+            "setup#4",
+            "acquire:v0.1.255#1",
+            "setup#5",
+            "acquire:v0.1.230#1",
+            "setup#6",
+            "acquire:v0.1.254#1"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 92821909580,
+              "end_ns": 230190531272,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#1",
+                "signer-build:#1",
+                "setup#2",
+                "signer-start#1",
+                "setup#3",
+                "build:v0.1.9001:epoch=1#1",
+                "setup#4",
+                "acquire:v0.1.255#1",
+                "setup#5",
+                "acquire:v0.1.230#1",
+                "setup#6",
+                "acquire:v0.1.254#1"
+              ]
+            }
+          },
+          "elapsed_ns": 137368621692,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ],
+      "telemetry": [
+        {
+          "key": "span:setup#1",
+          "limit_ns": 16895000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#1",
+                "signer-build:#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 92821909580,
+                  "end_ns": 107838810816,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#1",
+                    "signer-build:#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 15016901236,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#2",
+          "limit_ns": 58000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#2",
+                "signer-start#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 107838810816,
+                  "end_ns": 107889869507,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#2",
+                    "signer-start#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 51058691,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#3",
+          "limit_ns": 135042000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#3",
+                "build:v0.1.9001:epoch=1#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 107889869507,
+                  "end_ns": 227926783765,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#3",
+                    "build:v0.1.9001:epoch=1#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 120036914258,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#4",
+          "limit_ns": 801000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#4",
+                "acquire:v0.1.255#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 227926783765,
+                  "end_ns": 228638433448,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#4",
+                    "acquire:v0.1.255#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 711649683,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#5",
+          "limit_ns": 868000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#5",
+                "acquire:v0.1.230#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 228638433448,
+                  "end_ns": 229409641456,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#5",
+                    "acquire:v0.1.230#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 771208008,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#6",
+          "limit_ns": 879000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#6",
+                "acquire:v0.1.254#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 229409641456,
+                  "end_ns": 230190531272,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#6",
+                    "acquire:v0.1.254#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 780889816,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "span:setup#7",
+      "limit_ns": 206846000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#7",
+            "proof:v0.1.255:v0.1.9001#1",
+            "native-transition:v0.1.255:v0.1.9001#1",
+            "proof:v0.1.255:v0.1.9001#2",
+            "setup#8",
+            "publish:v0.1.9001#1",
+            "setup#9",
+            "serve:releases#1",
+            "setup#10",
+            "serve:public#1",
+            "setup#11",
+            "head:v0.1.9001#1"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 230190531272,
+              "end_ns": 414053102655,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#7",
+                "proof:v0.1.255:v0.1.9001#1",
+                "native-transition:v0.1.255:v0.1.9001#1",
+                "proof:v0.1.255:v0.1.9001#2",
+                "setup#8",
+                "publish:v0.1.9001#1",
+                "setup#9",
+                "serve:releases#1",
+                "setup#10",
+                "serve:public#1",
+                "setup#11",
+                "head:v0.1.9001#1"
+              ]
+            }
+          },
+          "elapsed_ns": 183862571383,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ],
+      "telemetry": [
+        {
+          "key": "span:setup#7",
+          "limit_ns": 206712000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#7",
+                "proof:v0.1.255:v0.1.9001#1",
+                "native-transition:v0.1.255:v0.1.9001#1",
+                "proof:v0.1.255:v0.1.9001#2"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 230190531272,
+                  "end_ns": 413933994030,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#7",
+                    "proof:v0.1.255:v0.1.9001#1",
+                    "native-transition:v0.1.255:v0.1.9001#1",
+                    "proof:v0.1.255:v0.1.9001#2"
+                  ]
+                }
+              },
+              "elapsed_ns": 183743462758,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#8",
+          "limit_ns": 96000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#8",
+                "publish:v0.1.9001#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 413933994030,
+                  "end_ns": 414018890359,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#8",
+                    "publish:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 84896329,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        },
+        {
+          "key": "span:setup#9",
+          "limit_ns": 39000000,
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#9",
+                "serve:releases#1",
+                "setup#10",
+                "serve:public#1",
+                "setup#11",
+                "head:v0.1.9001#1"
+              ]
+            }
+          },
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 414018890359,
+                  "end_ns": 414053102655,
+                  "origin_ns": 92821909580,
+                  "command_end_ns": 601682065615
+                }
+              },
+              "workload": {
+                "platform": "linux/arm64",
+                "host": "pi",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#9",
+                    "serve:releases#1",
+                    "setup#10",
+                    "serve:public#1",
+                    "setup#11",
+                    "head:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 34212296,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "span:setup#12",
+      "limit_ns": 1310000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#12",
+            "partition:v0.1.255#1"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 414053102655,
+              "end_ns": 415217137357,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#12",
+                "partition:v0.1.255#1"
+              ]
+            }
+          },
+          "elapsed_ns": 1164034702,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#13",
+      "limit_ns": 18684000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#13",
+            "installed-group:pi:adopt:0#1",
+            "installed-case:pi:adopt#1",
+            "case-cleanup:pi-adopt#1",
+            "installed-case:pi:adopt#2",
+            "installed-group:pi:adopt:0#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 415217137357,
+              "end_ns": 431824878334,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#13",
+                "installed-group:pi:adopt:0#1",
+                "installed-case:pi:adopt#1",
+                "case-cleanup:pi-adopt#1",
+                "installed-case:pi:adopt#2",
+                "installed-group:pi:adopt:0#2"
+              ]
+            }
+          },
+          "elapsed_ns": 16607740977,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#14",
+      "limit_ns": 18729000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#14",
+            "installed-group:pi:adopt:1#1",
+            "installed-case:pi:adopt#3",
+            "case-cleanup:pi-adopt#2",
+            "installed-case:pi:adopt#4",
+            "installed-group:pi:adopt:1#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 431824878334,
+              "end_ns": 448472579303,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#14",
+                "installed-group:pi:adopt:1#1",
+                "installed-case:pi:adopt#3",
+                "case-cleanup:pi-adopt#2",
+                "installed-case:pi:adopt#4",
+                "installed-group:pi:adopt:1#2"
+              ]
+            }
+          },
+          "elapsed_ns": 16647700969,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#15",
+      "limit_ns": 13674000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#15",
+            "installed-group:pi:adopt:2#1",
+            "installed-case:pi:adopt#5",
+            "case-cleanup:pi-adopt#3",
+            "installed-case:pi:adopt#6",
+            "installed-group:pi:adopt:2#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 448472579303,
+              "end_ns": 460626410518,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#15",
+                "installed-group:pi:adopt:2#1",
+                "installed-case:pi:adopt#5",
+                "case-cleanup:pi-adopt#3",
+                "installed-case:pi:adopt#6",
+                "installed-group:pi:adopt:2#2"
+              ]
+            }
+          },
+          "elapsed_ns": 12153831215,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#16",
+      "limit_ns": 54183000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#16",
+            "installed-group:pi:rollback:0#1",
+            "installed-case:pi:rollback#1",
+            "case-cleanup:pi-rollback#1",
+            "installed-case:pi:rollback#2",
+            "installed-group:pi:rollback:0#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 460626410518,
+              "end_ns": 508788455161,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#16",
+                "installed-group:pi:rollback:0#1",
+                "installed-case:pi:rollback#1",
+                "case-cleanup:pi-rollback#1",
+                "installed-case:pi:rollback#2",
+                "installed-group:pi:rollback:0#2"
+              ]
+            }
+          },
+          "elapsed_ns": 48162044643,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#17",
+      "limit_ns": 54768000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#17",
+            "installed-group:pi:rollback:1#1",
+            "installed-case:pi:rollback#3",
+            "case-cleanup:pi-rollback#2",
+            "installed-case:pi:rollback#4",
+            "installed-group:pi:rollback:1#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 508788455161,
+              "end_ns": 557470566324,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#17",
+                "installed-group:pi:rollback:1#1",
+                "installed-case:pi:rollback#3",
+                "case-cleanup:pi-rollback#2",
+                "installed-case:pi:rollback#4",
+                "installed-group:pi:rollback:1#2"
+              ]
+            }
+          },
+          "elapsed_ns": 48682111163,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#18",
+      "limit_ns": 49610000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#18",
+            "installed-group:pi:rollback:2#1",
+            "installed-case:pi:rollback#5",
+            "case-cleanup:pi-rollback#3",
+            "installed-case:pi:rollback#6",
+            "installed-group:pi:rollback:2#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 557470566324,
+              "end_ns": 601567477804,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#18",
+                "installed-group:pi:rollback:2#1",
+                "installed-case:pi:rollback#5",
+                "case-cleanup:pi-rollback#3",
+                "installed-case:pi:rollback#6",
+                "installed-group:pi:rollback:2#2"
+              ]
+            }
+          },
+          "elapsed_ns": 44096911480,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "span:setup#19",
+      "limit_ns": 129000000,
+      "workload": {
+        "platform": "linux/arm64",
+        "host": "pi",
+        "mode": "oldest",
+        "scenario": null,
+        "grouped": true,
+        "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+        "catalogEvidence": true,
+        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+        "manifestSchemas": [
+          1
+        ],
+        "clockSpan": {
+          "leaves": [
+            "setup#19",
+            "completion#1",
+            "completion#2"
+          ]
+        }
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {},
+            "clock_span": {
+              "start_ns": 601567477804,
+              "end_ns": 601682065615,
+              "origin_ns": 92821909580,
+              "command_end_ns": 601682065615
+            }
+          },
+          "workload": {
+            "platform": "linux/arm64",
+            "host": "pi",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "9a36ca53b9500a730451d0966d81b9fd2af29b7129189fb444d239a5dddb3e19",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#19",
+                "completion#1",
+                "completion#2"
+              ]
+            }
+          },
+          "elapsed_ns": 114587811,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    }
+  ],
+  "guards": [
+    {
+      "key": "guard:installed-group:pi:adopt:0#1",
+      "limit_ns": 18684000000,
+      "workload": {
+        "index": 0,
+        "members": [
+          {
+            "version": "v0.1.179",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+          },
+          {
+            "version": "v0.1.180",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+          },
+          {
+            "version": "v0.1.181",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+          },
+          {
+            "version": "v0.1.182",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+          },
+          {
+            "version": "v0.1.183",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+          },
+          {
+            "version": "v0.1.184",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+          },
+          {
+            "version": "v0.1.185",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+          },
+          {
+            "version": "v0.1.186",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+          },
+          {
+            "version": "v0.1.187",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+          },
+          {
+            "version": "v0.1.188",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+          },
+          {
+            "version": "v0.1.189",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+          },
+          {
+            "version": "v0.1.190",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+          },
+          {
+            "version": "v0.1.191",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+          },
+          {
+            "version": "v0.1.192",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+          },
+          {
+            "version": "v0.1.193",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+          },
+          {
+            "version": "v0.1.194",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+          },
+          {
+            "version": "v0.1.195",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+          },
+          {
+            "version": "v0.1.196",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+          },
+          {
+            "version": "v0.1.197",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+          },
+          {
+            "version": "v0.1.198",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+          },
+          {
+            "version": "v0.1.199",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+          },
+          {
+            "version": "v0.1.200",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+          },
+          {
+            "version": "v0.1.201",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+          },
+          {
+            "version": "v0.1.202",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+          },
+          {
+            "version": "v0.1.203",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+          },
+          {
+            "version": "v0.1.204",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+          },
+          {
+            "version": "v0.1.205",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+          },
+          {
+            "version": "v0.1.206",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+          },
+          {
+            "version": "v0.1.207",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+          },
+          {
+            "version": "v0.1.208",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+          },
+          {
+            "version": "v0.1.209",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 0,
+            "members": [
+              {
+                "version": "v0.1.179",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+              },
+              {
+                "version": "v0.1.180",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+              },
+              {
+                "version": "v0.1.181",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+              },
+              {
+                "version": "v0.1.182",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+              },
+              {
+                "version": "v0.1.183",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+              },
+              {
+                "version": "v0.1.184",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+              },
+              {
+                "version": "v0.1.185",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+              },
+              {
+                "version": "v0.1.186",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+              },
+              {
+                "version": "v0.1.187",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+              },
+              {
+                "version": "v0.1.188",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+              },
+              {
+                "version": "v0.1.189",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+              },
+              {
+                "version": "v0.1.190",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+              },
+              {
+                "version": "v0.1.191",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+              },
+              {
+                "version": "v0.1.192",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+              },
+              {
+                "version": "v0.1.193",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+              },
+              {
+                "version": "v0.1.194",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+              },
+              {
+                "version": "v0.1.195",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+              },
+              {
+                "version": "v0.1.196",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+              },
+              {
+                "version": "v0.1.197",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+              },
+              {
+                "version": "v0.1.198",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+              },
+              {
+                "version": "v0.1.199",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+              },
+              {
+                "version": "v0.1.200",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+              },
+              {
+                "version": "v0.1.201",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+              },
+              {
+                "version": "v0.1.202",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+              },
+              {
+                "version": "v0.1.203",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+              },
+              {
+                "version": "v0.1.204",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+              },
+              {
+                "version": "v0.1.205",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+              },
+              {
+                "version": "v0.1.206",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+              },
+              {
+                "version": "v0.1.207",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+              },
+              {
+                "version": "v0.1.208",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+              },
+              {
+                "version": "v0.1.209",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+              }
+            ]
+          },
+          "elapsed_ns": 16607658814,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "guard:installed-group:pi:adopt:1#1",
+      "limit_ns": 18729000000,
+      "workload": {
+        "index": 1,
+        "members": [
+          {
+            "version": "v0.1.210",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+          },
+          {
+            "version": "v0.1.211",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+          },
+          {
+            "version": "v0.1.212",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+          },
+          {
+            "version": "v0.1.213",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+          },
+          {
+            "version": "v0.1.214",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+          },
+          {
+            "version": "v0.1.215",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+          },
+          {
+            "version": "v0.1.216",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+          },
+          {
+            "version": "v0.1.217",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+          },
+          {
+            "version": "v0.1.218",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+          },
+          {
+            "version": "v0.1.219",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+          },
+          {
+            "version": "v0.1.220",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+          },
+          {
+            "version": "v0.1.221",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+          },
+          {
+            "version": "v0.1.222",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+          },
+          {
+            "version": "v0.1.223",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+          },
+          {
+            "version": "v0.1.224",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+          },
+          {
+            "version": "v0.1.225",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+          },
+          {
+            "version": "v0.1.226",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+          },
+          {
+            "version": "v0.1.227",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+          },
+          {
+            "version": "v0.1.228",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+          },
+          {
+            "version": "v0.1.229",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+          },
+          {
+            "version": "v0.1.230",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+          },
+          {
+            "version": "v0.1.231",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+          },
+          {
+            "version": "v0.1.232",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+          },
+          {
+            "version": "v0.1.233",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+          },
+          {
+            "version": "v0.1.234",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+          },
+          {
+            "version": "v0.1.235",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+          },
+          {
+            "version": "v0.1.236",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+          },
+          {
+            "version": "v0.1.237",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+          },
+          {
+            "version": "v0.1.238",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+          },
+          {
+            "version": "v0.1.239",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+          },
+          {
+            "version": "v0.1.240",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 1,
+            "members": [
+              {
+                "version": "v0.1.210",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+              },
+              {
+                "version": "v0.1.211",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+              },
+              {
+                "version": "v0.1.212",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+              },
+              {
+                "version": "v0.1.213",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+              },
+              {
+                "version": "v0.1.214",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+              },
+              {
+                "version": "v0.1.215",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+              },
+              {
+                "version": "v0.1.216",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+              },
+              {
+                "version": "v0.1.217",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+              },
+              {
+                "version": "v0.1.218",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+              },
+              {
+                "version": "v0.1.219",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+              },
+              {
+                "version": "v0.1.220",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+              },
+              {
+                "version": "v0.1.221",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+              },
+              {
+                "version": "v0.1.222",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+              },
+              {
+                "version": "v0.1.223",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+              },
+              {
+                "version": "v0.1.224",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+              },
+              {
+                "version": "v0.1.225",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+              },
+              {
+                "version": "v0.1.226",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+              },
+              {
+                "version": "v0.1.227",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+              },
+              {
+                "version": "v0.1.228",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+              },
+              {
+                "version": "v0.1.229",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+              },
+              {
+                "version": "v0.1.230",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+              },
+              {
+                "version": "v0.1.231",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+              },
+              {
+                "version": "v0.1.232",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+              },
+              {
+                "version": "v0.1.233",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+              },
+              {
+                "version": "v0.1.234",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+              },
+              {
+                "version": "v0.1.235",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+              },
+              {
+                "version": "v0.1.236",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+              },
+              {
+                "version": "v0.1.237",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+              },
+              {
+                "version": "v0.1.238",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+              },
+              {
+                "version": "v0.1.239",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+              },
+              {
+                "version": "v0.1.240",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+              }
+            ]
+          },
+          "elapsed_ns": 16647618895,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "guard:installed-group:pi:adopt:2#1",
+      "limit_ns": 13673000000,
+      "workload": {
+        "index": 2,
+        "members": [
+          {
+            "version": "v0.1.241",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+          },
+          {
+            "version": "v0.1.242",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+          },
+          {
+            "version": "v0.1.243",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+          },
+          {
+            "version": "v0.1.244",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+          },
+          {
+            "version": "v0.1.245",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+          },
+          {
+            "version": "v0.1.246",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+          },
+          {
+            "version": "v0.1.247",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+          },
+          {
+            "version": "v0.1.248",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+          },
+          {
+            "version": "v0.1.249",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+          },
+          {
+            "version": "v0.1.250",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+          },
+          {
+            "version": "v0.1.251",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+          },
+          {
+            "version": "v0.1.252",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+          },
+          {
+            "version": "v0.1.253",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+          },
+          {
+            "version": "v0.1.254",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+          },
+          {
+            "version": "v0.1.255",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 2,
+            "members": [
+              {
+                "version": "v0.1.241",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+              },
+              {
+                "version": "v0.1.242",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+              },
+              {
+                "version": "v0.1.243",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+              },
+              {
+                "version": "v0.1.244",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+              },
+              {
+                "version": "v0.1.245",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+              },
+              {
+                "version": "v0.1.246",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+              },
+              {
+                "version": "v0.1.247",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+              },
+              {
+                "version": "v0.1.248",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+              },
+              {
+                "version": "v0.1.249",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+              },
+              {
+                "version": "v0.1.250",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+              },
+              {
+                "version": "v0.1.251",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+              },
+              {
+                "version": "v0.1.252",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+              },
+              {
+                "version": "v0.1.253",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+              },
+              {
+                "version": "v0.1.254",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+              },
+              {
+                "version": "v0.1.255",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+              }
+            ]
+          },
+          "elapsed_ns": 12153739965,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "guard:installed-group:pi:rollback:0#1",
+      "limit_ns": 54176000000,
+      "workload": {
+        "index": 0,
+        "members": [
+          {
+            "version": "v0.1.179",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+          },
+          {
+            "version": "v0.1.180",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+          },
+          {
+            "version": "v0.1.181",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+          },
+          {
+            "version": "v0.1.182",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+          },
+          {
+            "version": "v0.1.183",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+          },
+          {
+            "version": "v0.1.184",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+          },
+          {
+            "version": "v0.1.185",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+          },
+          {
+            "version": "v0.1.186",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+          },
+          {
+            "version": "v0.1.187",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+          },
+          {
+            "version": "v0.1.188",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+          },
+          {
+            "version": "v0.1.189",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+          },
+          {
+            "version": "v0.1.190",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+          },
+          {
+            "version": "v0.1.191",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+          },
+          {
+            "version": "v0.1.192",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+          },
+          {
+            "version": "v0.1.193",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+          },
+          {
+            "version": "v0.1.194",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+          },
+          {
+            "version": "v0.1.195",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+          },
+          {
+            "version": "v0.1.196",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+          },
+          {
+            "version": "v0.1.197",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+          },
+          {
+            "version": "v0.1.198",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+          },
+          {
+            "version": "v0.1.199",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+          },
+          {
+            "version": "v0.1.200",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+          },
+          {
+            "version": "v0.1.201",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+          },
+          {
+            "version": "v0.1.202",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+          },
+          {
+            "version": "v0.1.203",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+          },
+          {
+            "version": "v0.1.204",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+          },
+          {
+            "version": "v0.1.205",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+          },
+          {
+            "version": "v0.1.206",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+          },
+          {
+            "version": "v0.1.207",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+          },
+          {
+            "version": "v0.1.208",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+          },
+          {
+            "version": "v0.1.209",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 0,
+            "members": [
+              {
+                "version": "v0.1.179",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+              },
+              {
+                "version": "v0.1.180",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+              },
+              {
+                "version": "v0.1.181",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+              },
+              {
+                "version": "v0.1.182",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+              },
+              {
+                "version": "v0.1.183",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+              },
+              {
+                "version": "v0.1.184",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+              },
+              {
+                "version": "v0.1.185",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+              },
+              {
+                "version": "v0.1.186",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+              },
+              {
+                "version": "v0.1.187",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+              },
+              {
+                "version": "v0.1.188",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+              },
+              {
+                "version": "v0.1.189",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+              },
+              {
+                "version": "v0.1.190",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+              },
+              {
+                "version": "v0.1.191",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+              },
+              {
+                "version": "v0.1.192",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+              },
+              {
+                "version": "v0.1.193",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+              },
+              {
+                "version": "v0.1.194",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+              },
+              {
+                "version": "v0.1.195",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+              },
+              {
+                "version": "v0.1.196",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+              },
+              {
+                "version": "v0.1.197",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+              },
+              {
+                "version": "v0.1.198",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+              },
+              {
+                "version": "v0.1.199",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+              },
+              {
+                "version": "v0.1.200",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+              },
+              {
+                "version": "v0.1.201",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+              },
+              {
+                "version": "v0.1.202",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+              },
+              {
+                "version": "v0.1.203",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+              },
+              {
+                "version": "v0.1.204",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+              },
+              {
+                "version": "v0.1.205",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+              },
+              {
+                "version": "v0.1.206",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+              },
+              {
+                "version": "v0.1.207",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+              },
+              {
+                "version": "v0.1.208",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+              },
+              {
+                "version": "v0.1.209",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+              }
+            ]
+          },
+          "elapsed_ns": 48155964509,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "guard:installed-group:pi:rollback:1#1",
+      "limit_ns": 54768000000,
+      "workload": {
+        "index": 1,
+        "members": [
+          {
+            "version": "v0.1.210",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+          },
+          {
+            "version": "v0.1.211",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+          },
+          {
+            "version": "v0.1.212",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+          },
+          {
+            "version": "v0.1.213",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+          },
+          {
+            "version": "v0.1.214",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+          },
+          {
+            "version": "v0.1.215",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+          },
+          {
+            "version": "v0.1.216",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+          },
+          {
+            "version": "v0.1.217",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+          },
+          {
+            "version": "v0.1.218",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+          },
+          {
+            "version": "v0.1.219",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+          },
+          {
+            "version": "v0.1.220",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+          },
+          {
+            "version": "v0.1.221",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+          },
+          {
+            "version": "v0.1.222",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+          },
+          {
+            "version": "v0.1.223",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+          },
+          {
+            "version": "v0.1.224",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+          },
+          {
+            "version": "v0.1.225",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+          },
+          {
+            "version": "v0.1.226",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+          },
+          {
+            "version": "v0.1.227",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+          },
+          {
+            "version": "v0.1.228",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+          },
+          {
+            "version": "v0.1.229",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+          },
+          {
+            "version": "v0.1.230",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+          },
+          {
+            "version": "v0.1.231",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+          },
+          {
+            "version": "v0.1.232",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+          },
+          {
+            "version": "v0.1.233",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+          },
+          {
+            "version": "v0.1.234",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+          },
+          {
+            "version": "v0.1.235",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+          },
+          {
+            "version": "v0.1.236",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+          },
+          {
+            "version": "v0.1.237",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+          },
+          {
+            "version": "v0.1.238",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+          },
+          {
+            "version": "v0.1.239",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+          },
+          {
+            "version": "v0.1.240",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 1,
+            "members": [
+              {
+                "version": "v0.1.210",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+              },
+              {
+                "version": "v0.1.211",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+              },
+              {
+                "version": "v0.1.212",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+              },
+              {
+                "version": "v0.1.213",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+              },
+              {
+                "version": "v0.1.214",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+              },
+              {
+                "version": "v0.1.215",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+              },
+              {
+                "version": "v0.1.216",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+              },
+              {
+                "version": "v0.1.217",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+              },
+              {
+                "version": "v0.1.218",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+              },
+              {
+                "version": "v0.1.219",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+              },
+              {
+                "version": "v0.1.220",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+              },
+              {
+                "version": "v0.1.221",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+              },
+              {
+                "version": "v0.1.222",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+              },
+              {
+                "version": "v0.1.223",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+              },
+              {
+                "version": "v0.1.224",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+              },
+              {
+                "version": "v0.1.225",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+              },
+              {
+                "version": "v0.1.226",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+              },
+              {
+                "version": "v0.1.227",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+              },
+              {
+                "version": "v0.1.228",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+              },
+              {
+                "version": "v0.1.229",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+              },
+              {
+                "version": "v0.1.230",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+              },
+              {
+                "version": "v0.1.231",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+              },
+              {
+                "version": "v0.1.232",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+              },
+              {
+                "version": "v0.1.233",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+              },
+              {
+                "version": "v0.1.234",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+              },
+              {
+                "version": "v0.1.235",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+              },
+              {
+                "version": "v0.1.236",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+              },
+              {
+                "version": "v0.1.237",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+              },
+              {
+                "version": "v0.1.238",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+              },
+              {
+                "version": "v0.1.239",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+              },
+              {
+                "version": "v0.1.240",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+              }
+            ]
+          },
+          "elapsed_ns": 48682021809,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "guard:installed-group:pi:rollback:2#1",
+      "limit_ns": 49609000000,
+      "workload": {
+        "index": 2,
+        "members": [
+          {
+            "version": "v0.1.241",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+          },
+          {
+            "version": "v0.1.242",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+          },
+          {
+            "version": "v0.1.243",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+          },
+          {
+            "version": "v0.1.244",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+          },
+          {
+            "version": "v0.1.245",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+          },
+          {
+            "version": "v0.1.246",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+          },
+          {
+            "version": "v0.1.247",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+          },
+          {
+            "version": "v0.1.248",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+          },
+          {
+            "version": "v0.1.249",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+          },
+          {
+            "version": "v0.1.250",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+          },
+          {
+            "version": "v0.1.251",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+          },
+          {
+            "version": "v0.1.252",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+          },
+          {
+            "version": "v0.1.253",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+          },
+          {
+            "version": "v0.1.254",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+          },
+          {
+            "version": "v0.1.255",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 2,
+            "members": [
+              {
+                "version": "v0.1.241",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+              },
+              {
+                "version": "v0.1.242",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+              },
+              {
+                "version": "v0.1.243",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+              },
+              {
+                "version": "v0.1.244",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+              },
+              {
+                "version": "v0.1.245",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+              },
+              {
+                "version": "v0.1.246",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+              },
+              {
+                "version": "v0.1.247",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+              },
+              {
+                "version": "v0.1.248",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+              },
+              {
+                "version": "v0.1.249",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+              },
+              {
+                "version": "v0.1.250",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+              },
+              {
+                "version": "v0.1.251",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+              },
+              {
+                "version": "v0.1.252",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+              },
+              {
+                "version": "v0.1.253",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+              },
+              {
+                "version": "v0.1.254",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+              },
+              {
+                "version": "v0.1.255",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+              }
+            ]
+          },
+          "elapsed_ns": 44096831998,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "native-group:native-transition:v0.1.255:v0.1.9001#1:0",
+      "limit_ns": 75341000000,
+      "workload": {
+        "index": 0,
+        "members": [
+          {
+            "version": "v0.1.179",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+          },
+          {
+            "version": "v0.1.180",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+          },
+          {
+            "version": "v0.1.181",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+          },
+          {
+            "version": "v0.1.182",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+          },
+          {
+            "version": "v0.1.183",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+          },
+          {
+            "version": "v0.1.184",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+          },
+          {
+            "version": "v0.1.185",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+          },
+          {
+            "version": "v0.1.186",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+          },
+          {
+            "version": "v0.1.187",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+          },
+          {
+            "version": "v0.1.188",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+          },
+          {
+            "version": "v0.1.189",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+          },
+          {
+            "version": "v0.1.190",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+          },
+          {
+            "version": "v0.1.191",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+          },
+          {
+            "version": "v0.1.192",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+          },
+          {
+            "version": "v0.1.193",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+          },
+          {
+            "version": "v0.1.194",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+          },
+          {
+            "version": "v0.1.195",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+          },
+          {
+            "version": "v0.1.196",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+          },
+          {
+            "version": "v0.1.197",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+          },
+          {
+            "version": "v0.1.198",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+          },
+          {
+            "version": "v0.1.199",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+          },
+          {
+            "version": "v0.1.200",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+          },
+          {
+            "version": "v0.1.201",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+          },
+          {
+            "version": "v0.1.202",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+          },
+          {
+            "version": "v0.1.203",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+          },
+          {
+            "version": "v0.1.204",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+          },
+          {
+            "version": "v0.1.205",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+          },
+          {
+            "version": "v0.1.206",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+          },
+          {
+            "version": "v0.1.207",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+          },
+          {
+            "version": "v0.1.208",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+          },
+          {
+            "version": "v0.1.209",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 0,
+            "members": [
+              {
+                "version": "v0.1.179",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "4787bb1813a4785f73950ae246fcfdd684bf65dbac8b4327f847e29f7721669a"
+              },
+              {
+                "version": "v0.1.180",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "94c5e1011a49b410eb5016744f6892d8766e06a35eb801aca1fc224aaa619c59"
+              },
+              {
+                "version": "v0.1.181",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "bfbc02fc030c2d7ad07ff3471d85924bf0f953ecbeeeb3a3abdfcd0cc934bc29"
+              },
+              {
+                "version": "v0.1.182",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9f62c3a6ecc0c267b787eb6eebf0fd0b3804e6b36a5769bc2bc7e48c5c987118"
+              },
+              {
+                "version": "v0.1.183",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "66b2b0ad3e8d5ed39e3595682edf7d6df301a9e8d08a5e8d3a27c16f7a0889e2"
+              },
+              {
+                "version": "v0.1.184",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3e915019492c5004ca0b612d89e5bb236e7ca24e3348f2bdcac08976ac3ed28e"
+              },
+              {
+                "version": "v0.1.185",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0359e7a5f65c0feca67e9e04917bb0b6617010d00996c0c4f372e664a11053c2"
+              },
+              {
+                "version": "v0.1.186",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7179f5af57a0cd8a4889b6f8de58cefc9151ceb99ff69a7a31d3cfcc868f5d5e"
+              },
+              {
+                "version": "v0.1.187",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7a8bc1150522033a2577a2635bcdd076ea3d0c84389aac695be28bf945e23fa7"
+              },
+              {
+                "version": "v0.1.188",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3b73076a0390c37bc081822cff0f51cc787cd39dfc0a82fc71400d40fa3b262d"
+              },
+              {
+                "version": "v0.1.189",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "358d5eb05b043d49d931ff0e3e4b601963ba58155b1a8d55e019b0abd125d41c"
+              },
+              {
+                "version": "v0.1.190",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8b587e0197f6c8ab867bbd61d642496913def26176290208bf671d65bf9f4aca"
+              },
+              {
+                "version": "v0.1.191",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e40ff728eb59113b816706af81cd4d22efd41254e63d9f2bef12a82cce3c22d3"
+              },
+              {
+                "version": "v0.1.192",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6441da57b61efe8f3fc2209d13a485c2bbb6186dd6a7c497c4c8870e7598dc77"
+              },
+              {
+                "version": "v0.1.193",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f6298ef5d9cb09c53a51e87ee41943a3c8ca6239cc0e21b40b0aeb968ede3f65"
+              },
+              {
+                "version": "v0.1.194",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed0a9d0ee8717b88e45f4fc66c5eb90a063927d575a3386341f709001bab3306"
+              },
+              {
+                "version": "v0.1.195",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9c64ebd6e1c1869be8b8b8bb5d944739ceb231502a99bd8a5795149ef19654b3"
+              },
+              {
+                "version": "v0.1.196",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b237890a92becff968de9fdfb9817c6d0e3943218b5c11999e69506184e7fdd0"
+              },
+              {
+                "version": "v0.1.197",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e20d17c958d44e98ef91ad0a08c64854410e1d4e61316f6c412bdb1280f52886"
+              },
+              {
+                "version": "v0.1.198",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "645b2ba870bda71679e8dd9971c59fa77b7834d357bc5b029d34bff89100d326"
+              },
+              {
+                "version": "v0.1.199",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "439050a3ecba16d8d79dc871dbebd6b74e36ea41615e015e27d3cb091f0ccf75"
+              },
+              {
+                "version": "v0.1.200",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ec13d333646dec004eb5e0080bc33babf5522c100499681f7209381d179a21fb"
+              },
+              {
+                "version": "v0.1.201",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ef02a60a28e2d5822fe43dcd85ec2c08d6e041039fd3d81176c35876aae5c834"
+              },
+              {
+                "version": "v0.1.202",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2ed39ec04bcfe3a729bb18975551f5ba501e0d4b6b7a8441110876c9bbb3b3c1"
+              },
+              {
+                "version": "v0.1.203",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8a0eac1fded37ad5cdf594bc058402ee3e15b153ba7be4b8909c3ade148c5b0d"
+              },
+              {
+                "version": "v0.1.204",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "fa21a3c5a684fa7c1e17f578663187353dcb4405e6d8bd46257344fd58882a53"
+              },
+              {
+                "version": "v0.1.205",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "21ebef9f5e2cdec7733a15b02253c703e82c76b066b1f3af58f151cb34cb2082"
+              },
+              {
+                "version": "v0.1.206",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "52a05198fce6bbe5ea576af14d3d84b252a8f3dfafac8fbf6cdda253ebe819a3"
+              },
+              {
+                "version": "v0.1.207",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "182e2c676a4a5d3687b9d61cb568a804e56b969737a217305961e3ce5e12873e"
+              },
+              {
+                "version": "v0.1.208",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f5bc4fd93278e5efaf570f777a3906a8d2a8f79577a846289a84418e5e5f6b3d"
+              },
+              {
+                "version": "v0.1.209",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "d0752614a23fc6ef7a8f1d85408092b0aad431be9c59d086d6afe03f566ae7dd"
+              }
+            ]
+          },
+          "elapsed_ns": 66969723536,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "native-group:native-transition:v0.1.255:v0.1.9001#1:1",
+      "limit_ns": 74173000000,
+      "workload": {
+        "index": 1,
+        "members": [
+          {
+            "version": "v0.1.210",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+          },
+          {
+            "version": "v0.1.211",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+          },
+          {
+            "version": "v0.1.212",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+          },
+          {
+            "version": "v0.1.213",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+          },
+          {
+            "version": "v0.1.214",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+          },
+          {
+            "version": "v0.1.215",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+          },
+          {
+            "version": "v0.1.216",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+          },
+          {
+            "version": "v0.1.217",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+          },
+          {
+            "version": "v0.1.218",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+          },
+          {
+            "version": "v0.1.219",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+          },
+          {
+            "version": "v0.1.220",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+          },
+          {
+            "version": "v0.1.221",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+          },
+          {
+            "version": "v0.1.222",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+          },
+          {
+            "version": "v0.1.223",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+          },
+          {
+            "version": "v0.1.224",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+          },
+          {
+            "version": "v0.1.225",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+          },
+          {
+            "version": "v0.1.226",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+          },
+          {
+            "version": "v0.1.227",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+          },
+          {
+            "version": "v0.1.228",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+          },
+          {
+            "version": "v0.1.229",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+          },
+          {
+            "version": "v0.1.230",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+          },
+          {
+            "version": "v0.1.231",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+          },
+          {
+            "version": "v0.1.232",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+          },
+          {
+            "version": "v0.1.233",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+          },
+          {
+            "version": "v0.1.234",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+          },
+          {
+            "version": "v0.1.235",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+          },
+          {
+            "version": "v0.1.236",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+          },
+          {
+            "version": "v0.1.237",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+          },
+          {
+            "version": "v0.1.238",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+          },
+          {
+            "version": "v0.1.239",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+          },
+          {
+            "version": "v0.1.240",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 1,
+            "members": [
+              {
+                "version": "v0.1.210",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "60f93fc31a5c90b07c41272b11801dc546804005b744f5086e8efd6be846ddfb"
+              },
+              {
+                "version": "v0.1.211",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6fdc163b084c9374d77dac0b944b49f4cfad8046fbf30c6a79f3c865e46d5bae"
+              },
+              {
+                "version": "v0.1.212",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "71e0fc1655561f1b8e2e165d8b42a43bbcdc0a536b0a0217576b2bee21cd3002"
+              },
+              {
+                "version": "v0.1.213",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ba114bc56a3899655519c47f3ae122b9b6b9608435587474ce90249b495767d4"
+              },
+              {
+                "version": "v0.1.214",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ff13e02b00caf69a9cb1a991511f07792070af3b289805cbe7cf0415068111ea"
+              },
+              {
+                "version": "v0.1.215",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7e61ac74cae87119e18c89d36d6413675e39015663f87ebd7922ad33c8363ada"
+              },
+              {
+                "version": "v0.1.216",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6f1046bcccb45539469c7509a85cfbf381e574efd9c551902c50712c59062ef1"
+              },
+              {
+                "version": "v0.1.217",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0f48e289aab874c18a343b6b6262f1063eff6f88731b6e538b746f78ea6abecd"
+              },
+              {
+                "version": "v0.1.218",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "7953f985f012eee4cea37fd361ff465fbad9381d5e13b2a8b656dc362231ee9b"
+              },
+              {
+                "version": "v0.1.219",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "802376a266fc614a16b04dc00f88e63a897ed9a54ed7fece0a79c528fb1c9036"
+              },
+              {
+                "version": "v0.1.220",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a6e5fa248d2508c7492de0e6d8e2aea7a36dafa6ff9d901e9b0501804e72bdcb"
+              },
+              {
+                "version": "v0.1.221",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e084e3cdf75ed88f9cc07413a6b38adf4651cfd5d52f9f0a7e5e909d676b097c"
+              },
+              {
+                "version": "v0.1.222",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25276bd53ee9d34ed6d6a39d0ab506c060473c089eb0173f0eb1c2019c8ec280"
+              },
+              {
+                "version": "v0.1.223",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f87956df94117e1f5548fc416df74612efc785b9e8b6bf360d3aef7330665d1f"
+              },
+              {
+                "version": "v0.1.224",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "895db611031148fc24c98fa1ae1cc5eb5548fd04517ad1d2ac18922cd898b95d"
+              },
+              {
+                "version": "v0.1.225",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "0e9506416f970767c270400844fb124ab4645d251426f9491c2c0757a393ccab"
+              },
+              {
+                "version": "v0.1.226",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "786de4d165e832c8fbe288339561a856e1ed93d23b881d2535dadab324f91179"
+              },
+              {
+                "version": "v0.1.227",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "25066f89cad8621bbc2865c80275fdcd8ffd8fbd71923c0b56ea695a7ada1dd7"
+              },
+              {
+                "version": "v0.1.228",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "a4d48fcae3ded6fb4ced6678d5cc2e87caa7e060264d73db438a30753c362a05"
+              },
+              {
+                "version": "v0.1.229",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "2b9047a13f38d77876e18a23231834db58a8610540274fc4d995851c6b2941d2"
+              },
+              {
+                "version": "v0.1.230",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "eae8245698bcd52b23809972d5cbf699e741d45ff130ce34a3b735882157f4da"
+              },
+              {
+                "version": "v0.1.231",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "30ed3927fed94503c82b45484f2f8d51b5e04beb724becef3c4cc19360cc66d6"
+              },
+              {
+                "version": "v0.1.232",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9e850801c51b008619bd88ca2197e89d8f281ad485b1c4c8517fbf6919ab6fc1"
+              },
+              {
+                "version": "v0.1.233",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f39427d5624a1e91ee924181ea510c52e4bd8c4299de7cdb50c98c5e16aaa5a8"
+              },
+              {
+                "version": "v0.1.234",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5ec278867e533210a31f87a077556b1992768fba68efdb212dfd4c198e60117f"
+              },
+              {
+                "version": "v0.1.235",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5017108c58b1190e6095977f039430b609b8b69edf5dca35dec7eec495207a9d"
+              },
+              {
+                "version": "v0.1.236",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "97a18c115a9dc7b48cd9b2d35109396f75a5f247272624074755e76353fc13ba"
+              },
+              {
+                "version": "v0.1.237",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c683e0df14964141b9b95f4ab317247aca996ca99de2ad34672befacf1ace144"
+              },
+              {
+                "version": "v0.1.238",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "9fffc387a86e05d8c805f6180b527900551943cfee0f8acf3e1ccdf4121c7f04"
+              },
+              {
+                "version": "v0.1.239",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "357837fa8734a7fcb78d3a22fb2daa1d6f14a9244b98a7b30cc8babd5c339dfc"
+              },
+              {
+                "version": "v0.1.240",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "e431d7806c4fdba001385d8ed8cd09d6ff47b96a2de6ccb658312fbdb7404c30"
+              }
+            ]
+          },
+          "elapsed_ns": 65931150015,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    },
+    {
+      "key": "native-group:native-transition:v0.1.255:v0.1.9001#1:2",
+      "limit_ns": 55427000000,
+      "workload": {
+        "index": 2,
+        "members": [
+          {
+            "version": "v0.1.241",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+          },
+          {
+            "version": "v0.1.242",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+          },
+          {
+            "version": "v0.1.243",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+          },
+          {
+            "version": "v0.1.244",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+          },
+          {
+            "version": "v0.1.245",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+          },
+          {
+            "version": "v0.1.246",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+          },
+          {
+            "version": "v0.1.247",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+          },
+          {
+            "version": "v0.1.248",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+          },
+          {
+            "version": "v0.1.249",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+          },
+          {
+            "version": "v0.1.250",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+          },
+          {
+            "version": "v0.1.251",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+          },
+          {
+            "version": "v0.1.252",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+          },
+          {
+            "version": "v0.1.253",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+          },
+          {
+            "version": "v0.1.254",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+          },
+          {
+            "version": "v0.1.255",
+            "protocol": 1,
+            "platform": {
+              "arch": "arm64",
+              "os": "linux"
+            },
+            "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+          }
+        ]
+      },
+      "samples": [
+        {
+          "provenance": {
+            "fixture_record": {
+              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-arm64-oldest/cohort-proof/fixture-clock.json",
+              "sha256": "874c64f76ed8611b3f79c71aa3ea1ec38c304dc5ea989473266a83a1d6b06bd9"
+            },
+            "observation": {}
+          },
+          "workload": {
+            "index": 2,
+            "members": [
+              {
+                "version": "v0.1.241",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f0d3b3353799e1ee49b0f4ed7e1cc355e0cb56459d0c8701f0a8f59e48fcaac9"
+              },
+              {
+                "version": "v0.1.242",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "8e8f7232c011425febacd06b98fa937cd1e1f3d3eeb42d80f239a153eee2b28e"
+              },
+              {
+                "version": "v0.1.243",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "81964a2b375a52613bd92ef139661e8e4bb980916adee18d5ada145a4c8146d0"
+              },
+              {
+                "version": "v0.1.244",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "6d08caace9c90b08421bc64bf6789738176aa49ac6fd9cd08d0b96959b0bf7b3"
+              },
+              {
+                "version": "v0.1.245",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "cb61086aabb0122e98d5302f0d9ef1aa43ce0290ad56eb383d929bf04a45187e"
+              },
+              {
+                "version": "v0.1.246",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b355bb1cb9ba2a8bbc226f15799c154d1edc10f14477fdd211e685c4e480c963"
+              },
+              {
+                "version": "v0.1.247",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "052b2c446a8b647480ee031e789e3d5848eb090221d0e28fb0e672f6e6523afc"
+              },
+              {
+                "version": "v0.1.248",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "ed8b20350a3af14aad09abc3bc92c57ec994c3b848ee40e7a423709a75696dd0"
+              },
+              {
+                "version": "v0.1.249",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "3ba42e907d7fe1b20e90386e6eab5a77a6ac57c6458b42733002b172c44aca42"
+              },
+              {
+                "version": "v0.1.250",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "b53753d6200c3f22fecdaf9444e555d07bd0d9decd211db01b06c130e3ca628e"
+              },
+              {
+                "version": "v0.1.251",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "5594bac20c0efa040a0dcbb69213590f7a643579783060d4d6cbe1ea8773f565"
+              },
+              {
+                "version": "v0.1.252",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "c796c7a8531b54303eebc89ff1ce068a3315c7274f275965c2ce1ae2d382d5f8"
+              },
+              {
+                "version": "v0.1.253",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "95befb773bd04cf7397a5d3de547e275ac50f5500b36be12c11c7fc433e5a78a"
+              },
+              {
+                "version": "v0.1.254",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "90471e6720b57863db3e1bf4e66008611d469359cadbde2a6c1ca7e6a7a0699a"
+              },
+              {
+                "version": "v0.1.255",
+                "protocol": 1,
+                "platform": {
+                  "arch": "arm64",
+                  "os": "linux"
+                },
+                "binarySha256": "f8795623c3b0e5e20a025d7515fea7f9167ad82c4cf56680516c5e22dcb2c23c"
+              }
+            ]
+          },
+          "elapsed_ns": 49267625613,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ]
+    }
+  ],
+  "command_ns": 572473000000,
+  "external_ns": 73283000000,
+  "emergency_ns": 60000000000,
+  "admission_ns": 900000000000,
+  "eligibility_review": "Independent code and numerical reviews at 55b0f8bd; bootstrap-phase/PACKET.json SHA-256 63f88e3189a67985271734e146c7b625888e9712cd448c1e87e72b82d7136743",
+  "external_budget": {
+    "key": "external",
+    "limit_ns": 73283000000,
+    "workload": {
+      "cell": "linux-arm64-oldest",
+      "kind": "external-job-overhead",
+      "basis": "provider-envelope-upper-bound"
+    },
+    "samples": [
+      {
+        "provenance": {
+          "provider_metadata": {
+            "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/jobs.json",
+            "sha256": "ecd64e3da8177e3f94eb5d86e8e7b350aedafb622ab42a9ff68f0e3b9de5d156"
+          },
+          "job_id": 131872710309,
+          "derivation": "(completed_at - started_at + 2 seconds) - measured command monotonic duration",
+          "eligibility": "pending parent review of wall/monotonic comparability and provider boundary semantics"
+        },
+        "workload": {
+          "cell": "linux-arm64-oldest",
+          "kind": "external-job-overhead",
+          "basis": "provider-envelope-upper-bound"
+        },
+        "elapsed_ns": 65139843965,
+        "completed": true,
+        "cleanup_verified": true
+      }
+    ]
+  }
+}

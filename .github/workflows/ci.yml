@@ -24,6 +24,7 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ github.event_name != 'pull_request' || steps.paths.outputs.code == 'true' }}
+      update_proofs: ${{ github.event_name == 'pull_request' && steps.update_paths.outputs.updates == 'true' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,6 +40,27 @@ jobs:
               - '!README.md'
               - '!AGENTS.md'
               - '!LICENSE'
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
+        id: update_paths
+        with:
+          filters: |
+            updates:
+              - 'cmd/**'
+              - 'internal/cli/**'
+              - 'internal/release/**'
+              - 'internal/update*/**'
+              - 'internal/storage/**'
+              - 'internal/worker/**'
+              - 'internal/session/**'
+              - 'internal/protocol/**'
+              - 'internal/daemon/**'
+              - 'db/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'scripts/**'
+              - '.github/workflows/*'
+              - '.github/actions/installed-go/**'
+              - '.internal/fixtures/installed-clock/**'
 
   app-pill:
     needs: changes
@@ -202,6 +224,8 @@ jobs:
       - name: Verify native authentication regressions
         run: |
           go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
+      - name: Verify opt-in transport observer fixture
+        run: go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s -run '^(TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$' ./internal/transporttrace ./internal/transport ./internal/daemon
       - name: Verify native pinned-fleet enrollment
         run: |
           set -euo pipefail
@@ -319,6 +343,14 @@ jobs:
         run: golangci-lint config verify
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
+      - name: Verify installed release gate wiring
+        run: |
+          python3 scripts/test-installed-gate-wiring.py
+          python3 scripts/test-installed-budgets.py
+          python3 scripts/test-installed-prepared.py
+          python3 scripts/test-installed-workflow.py
+          python3 scripts/test-publication-jobs.py
+          python3 scripts/test-publication-workflow.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
         timeout-minutes: 8
         run: |
@@ -393,12 +425,34 @@ jobs:
     name: Required native helper recovery
     uses: ./.github/workflows/helper-recovery.yml
 
+  update-proofs:
+    name: Required native update proofs
+    needs: changes
+    if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
+    uses: ./.github/workflows/update-proofs.yml
+    with:
+      source_sha: ${{ github.sha }}
+
+  installed-catchup:
+    name: Required installed update proofs
+    needs: [changes, update-proofs]
+    if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
+    permissions:
+      contents: read
+      actions: read
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@bb5ed960820ee098309ea1097af8ea4d6521dd22
+    with:
+      harness_source: bb5ed960820ee098309ea1097af8ea4d6521dd22
+      worker_artifact_prefix: update-native
+      worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
+      worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
+
   gate:
     name: Complete CI gate
     permissions:
       statuses: write
     if: always()
-    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, gates, vulnerability, packaging]
+    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, installed-catchup, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
       - name: Require a ready PR
@@ -417,6 +471,9 @@ jobs:
           AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
           MACHINE_NAMING: ${{ needs.machine-naming.result }}
           HELPER_RECOVERY: ${{ needs.helper-recovery.result }}
+          UPDATE_PROOFS_REQUIRED: ${{ needs.changes.outputs.update_proofs }}
+          UPDATE_PROOFS: ${{ needs.update-proofs.result }}
+          INSTALLED_CATCHUP: ${{ needs.installed-catchup.result }}
           GATES: ${{ needs.gates.result }}
           VULNERABILITY: ${{ needs.vulnerability.result }}
           PACKAGING: ${{ needs.packaging.result }}
@@ -429,6 +486,11 @@ jobs:
           esac
           [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]] || exit 1
           [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]] || exit 1
+          case "$UPDATE_PROOFS_REQUIRED" in
+            true) [[ $UPDATE_PROOFS == success && $INSTALLED_CATCHUP == success ]] || exit 1 ;;
+            false) [[ $UPDATE_PROOFS == skipped && $INSTALLED_CATCHUP == skipped ]] || exit 1 ;;
+            *) exit 1 ;;
+          esac
 
       # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
       - name: Report the real CI verdict on the tested commit

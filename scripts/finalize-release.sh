@@ -30,6 +30,7 @@ if [[ $latest_tag != "$version" ]]; then
     echo "release finalization: $source_sha no longer advances $previous_source" >&2
     exit 1
   }
+  python3 "$(dirname -- "${BASH_SOURCE[0]}")/verify-worker-publication.py" "$version" "$source_sha" "${MESH_INSTALLED_COMPLETION:?missing post-sign installed completion}"
   gh release edit "$version" --draft=false --latest
 fi
 

@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "plans": {
+    "linux-amd64-oldest-catalog": {
+      "path": "linux-amd64-oldest-catalog.json"
+    },
+    "linux-arm64-oldest-catalog": {
+      "path": "linux-arm64-oldest-catalog.json"
+    },
+    "darwin-arm64-oldest": {
+      "path": "darwin-arm64-oldest.json"
+    },
+    "linux-amd64-fresh": {
+      "path": "linux-amd64-fresh.json"
+    },
+    "linux-arm64-fresh": {
+      "path": "linux-arm64-fresh.json"
+    },
+    "linux-amd64-adoption-interrupt": {
+      "path": "linux-amd64-adoption-interrupt.json"
+    },
+    "linux-arm64-adoption-interrupt": {
+      "path": "linux-arm64-adoption-interrupt.json"
+    },
+    "linux-amd64-adoption-all": {
+      "path": "linux-amd64-adoption-all.json"
+    },
+    "linux-arm64-adoption-all": {
+      "path": "linux-arm64-adoption-all.json"
+    },
+    "darwin-arm64-adoption-interrupt": {
+      "path": "darwin-arm64-adoption-interrupt.json"
+    },
+    "linux-amd64-chain-prepare": {
+      "path": "linux-amd64-chain-prepare.json"
+    },
+    "linux-amd64-waypoint-prepare": {
+      "path": "linux-amd64-waypoint-prepare.json"
+    },
+    "linux-arm64-chain-prepare": {
+      "path": "linux-arm64-chain-prepare.json"
+    },
+    "linux-arm64-waypoint-prepare": {
+      "path": "linux-arm64-waypoint-prepare.json"
+    },
+    "darwin-arm64-fresh": {
+      "path": "darwin-arm64-fresh.json"
+    },
+    "linux-amd64-chain-consume-none": {
+      "path": "linux-amd64-chain-consume-none.json"
+    },
+    "linux-amd64-chain-consume-first": {
+      "path": "linux-amd64-chain-consume-first.json"
+    },
+    "linux-amd64-waypoint-consume-none": {
+      "path": "linux-amd64-waypoint-consume-none.json"
+    },
+    "linux-amd64-waypoint-consume-first": {
+      "path": "linux-amd64-waypoint-consume-first.json"
+    },
+    "linux-amd64-waypoint-consume-final": {
+      "path": "linux-amd64-waypoint-consume-final.json"
+    },
+    "linux-arm64-chain-consume-first": {
+      "path": "linux-arm64-chain-consume-first.json"
+    },
+    "linux-arm64-chain-consume-final": {
+      "path": "linux-arm64-chain-consume-final.json"
+    },
+    "linux-arm64-waypoint-consume-none": {
+      "path": "linux-arm64-waypoint-consume-none.json"
+    },
+    "linux-arm64-waypoint-consume-first": {
+      "path": "linux-arm64-waypoint-consume-first.json"
+    },
+    "darwin-arm64-chain-prepare": {
+      "path": "darwin-arm64-chain-prepare.json"
+    },
+    "darwin-arm64-chain-consume-first": {
+      "path": "darwin-arm64-chain-consume-first.json"
+    },
+    "darwin-arm64-waypoint-prepare": {
+      "path": "darwin-arm64-waypoint-prepare.json"
+    },
+    "darwin-arm64-waypoint-consume-first": {
+      "path": "darwin-arm64-waypoint-consume-first.json"
+    },
+    "darwin-arm64-waypoint-consume-final": {
+      "path": "darwin-arm64-waypoint-consume-final.json"
+    },
+    "darwin-arm64-adoption-all": {
+      "path": "darwin-arm64-adoption-all.json"
+    },
+    "darwin-arm64-chain-consume-final": {
+      "path": "darwin-arm64-chain-consume-final.json"
+    },
+    "darwin-arm64-waypoint-consume-none": {
+      "path": "darwin-arm64-waypoint-consume-none.json"
+    },
+    "linux-amd64-order": {
+      "path": "linux-amd64-order.json"
+    },
+    "linux-amd64-chain-consume-final": {
+      "path": "linux-amd64-chain-consume-final.json"
+    },
+    "linux-arm64-waypoint-consume-final": {
+      "path": "linux-arm64-waypoint-consume-final.json"
+    },
+    "darwin-arm64-chain-consume-none": {
+      "path": "darwin-arm64-chain-consume-none.json"
+    },
+    "linux-arm64-chain-consume-none": {
+      "path": "linux-arm64-chain-consume-none.json"
+    }
+  }
+}

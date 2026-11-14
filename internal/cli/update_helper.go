@@ -143,7 +143,7 @@ func updateHelperStep(ctx context.Context, stateDir string) error {
 		return resumeMissingCoordinatorInstallation(ctx, stateDir)
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("read helper installation: %w", err)
 	}
 	settings := previous.Settings
 	if settings.StateDir != stateDir {
@@ -156,26 +156,20 @@ func updateHelperStep(ctx context.Context, stateDir string) error {
 	config.Probe = updatebootstrap.Probe(stateDir)
 	engine, err := updateinstall.New(config)
 	if err != nil {
-		return err
+		return fmt.Errorf("configure helper installation: %w", err)
 	}
-	status, err := engine.Run(ctx)
-	if errors.Is(err, updateinstall.ErrNoGrant) && status.Settings.ClientOnly {
-		status, err = grantApprovedClientOnlyUpdate(ctx, engine, status)
-		if err == nil {
-			status, err = engine.Run(ctx)
-		}
-	}
-	if errors.Is(err, updateinstall.ErrNoGrant) && !status.Settings.ClientOnly {
-		status, err = grantFirstCoordinator(ctx, engine, status)
-		if err == nil {
-			status, err = engine.Run(ctx)
-		}
+	status, err := runHelperInstallation(ctx, engine)
+	if status.Phase == updateinstall.Committed || status.Phase == updateinstall.RolledBack {
+		err = errors.Join(err, update.PublishHostResult(ctx, stateDir))
 	}
 	if err != nil || status.Phase != updateinstall.Committed {
 		return err
 	}
 	kind, domain := helperUpgradeService(status.Settings)
-	_, err = updateinstall.UpgradeHelper(ctx, updateinstall.HelperConfig{StateDir: stateDir, Executable: status.Settings.Executable, Kind: kind, Domain: domain})
+	helper := updateinstall.HelperConfig{StateDir: stateDir, Executable: status.Settings.Executable, Kind: kind, Domain: domain}
+	// The probe lets the replacement helper settle its own pending activation.
+	helper.Probe = updatebootstrap.HelperProcessProbe(helper)
+	_, err = updateinstall.UpgradeHelper(ctx, helper)
 	if err != nil {
 		return fmt.Errorf("upgrade committed update helper: %w", err)
 	}
@@ -183,6 +177,29 @@ func updateHelperStep(ctx context.Context, stateDir string) error {
 		return fmt.Errorf("clean committed update cache: %w", err)
 	}
 	return nil
+}
+
+func runHelperInstallation(ctx context.Context, engine *updateinstall.Engine) (updateinstall.Status, error) {
+	status, err := engine.Run(ctx)
+	if !errors.Is(err, updateinstall.ErrNoGrant) {
+		if err != nil {
+			err = fmt.Errorf("run helper installation: %w", err)
+		}
+		return status, err
+	}
+	if status.Settings.ClientOnly {
+		status, err = grantApprovedClientOnlyUpdate(ctx, engine, status)
+	} else {
+		status, err = grantFirstCoordinator(ctx, engine, status)
+	}
+	if err != nil {
+		return status, err
+	}
+	status, err = engine.Run(ctx)
+	if err != nil {
+		err = fmt.Errorf("run helper installation: %w", err)
+	}
+	return status, err
 }
 
 func helperUpgradeService(settings updateinstall.Settings) (string, string) {

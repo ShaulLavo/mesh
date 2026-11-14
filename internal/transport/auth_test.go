@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,7 +147,7 @@ func TestAuthenticatedRecordsRejectReplayAndTampering(t *testing.T) {
 			if err := secure.HandshakeContext(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if err := confirmAuthentication(secure, &Authentication{}, false, AuthenticatedPeer{}); err != nil {
+			if err := confirmAuthentication(ctx, secure, &Authentication{}, false, AuthenticatedPeer{}); err != nil {
 				t.Fatal(err)
 			}
 			payload, _ := (protocol.Control{Type: protocol.TypeHostInfo}).Encode()
@@ -203,6 +204,9 @@ func TestAuthenticationHandshakeCancellationAndByteLimit(t *testing.T) {
 	conn, err := DialOnce(ctx, server.URL, DialOptions{Auth: &Authentication{Key: clientKey, ExpectedIdentity: serverID}})
 	if conn != nil || !errors.Is(err, ErrAuthentication) {
 		t.Fatalf("silent peer returned connection=%v, error=%v", conn, err)
+	}
+	if !strings.Contains(err.Error(), "TLS handshake:") {
+		t.Fatalf("authentication error lost its stage: %v", err)
 	}
 	select {
 	case <-closed:
