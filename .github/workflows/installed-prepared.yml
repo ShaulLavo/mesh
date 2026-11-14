@@ -97,10 +97,7 @@ jobs:
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
         run: bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/cohort-control"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/installed-go
       - name: Pin complete original producer intake and measure space before transfer
         env:
           GH_TOKEN: ${{ github.token }}

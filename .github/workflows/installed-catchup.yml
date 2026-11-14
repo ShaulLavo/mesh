@@ -410,10 +410,7 @@ jobs:
           MESH_TEST_NATIVE_MANAGER: '1'
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 scripts/test-installed-catchup.py
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/installed-go
       - name: Build production helper preparation fixture
         run: |
           mkdir -p "$RUNNER_TEMP/native-tools.noindex"
@@ -561,10 +558,7 @@ jobs:
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT \
             env PYTHONPATH="$GITHUB_WORKSPACE/scripts" PYTHONDONTWRITEBYTECODE=1 \
             python3 scripts/fixtures/installed_accounts.py "$RUNNER_TEMP/cohort-control/ordered-managers"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: ./.github/actions/installed-go
       - name: Require the complete pinned producer artifact set
         env:
           GH_TOKEN: ${{ github.token }}

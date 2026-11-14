@@ -79,10 +79,10 @@ class WorkflowControls(unittest.TestCase):
         self.assertIn("${{ steps.seed.outputs.build }}", CACHE)
         self.assertNotIn("runner.temp", CACHE)
         self.assertNotIn("go build", CACHE)
-        self.assertEqual(job(CATCHUP, "fresh-managed").count("uses: ./.github/actions/installed-go"), 1)
-        for name in ("native-adoption", "signed-cohort-chain", "publication-native"):
-            self.assertNotIn("installed-go", job(CATCHUP, name))
-        self.assertNotIn("installed-go", job(PREPARED, "prepare"))
+        for name in ("fresh-managed", "native-adoption", "signed-cohort-chain"):
+            self.assertEqual(job(CATCHUP, name).count("uses: ./.github/actions/installed-go"), 1)
+        self.assertNotIn("installed-go", job(CATCHUP, "publication-native"))
+        self.assertEqual(job(PREPARED, "prepare").count("uses: ./.github/actions/installed-go"), 1)
         self.assertNotIn("installed-go", job(PREPARED, "consume"))
         self.assertIn("'.github/actions/installed-go/**'", CATCHUP)
         self.assertIn("'.github/actions/installed-go/**'", (WORKFLOWS / "ci.yml").read_text())
