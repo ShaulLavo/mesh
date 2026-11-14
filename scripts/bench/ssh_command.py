@@ -160,7 +160,7 @@ AuthenticationMethods publickey
 UseDNS no
 PermitRootLogin prohibit-password
 PrintMotd no
-LogLevel ERROR
+LogLevel INFO
 """)
     preflight = checked_run([sshd, "-t", "-f", str(config)], fixture.environment)
     if preflight.returncode:
@@ -282,13 +282,17 @@ def allocation_signals():
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
+def fixture_logs(root):
+    return {path.name: path.read_text(errors="replace")[-8000:]
+            for path in root.glob("*.log")}
+
+
 def finish(owner, root, report):
     owner.close()
     report["cleanup"] = {"descendants_joined": True, "scratch_removed": root is None}
     if root is None:
         return
-    report["logs"] = {path.name: path.read_text(errors="replace")[-8000:]
-                      for path in root.glob("*.log")}
+    report["logs"] = fixture_logs(root)
     shutil.rmtree(root)
     report["cleanup"]["scratch_removed"] = not root.exists()
 

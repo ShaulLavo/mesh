@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ssh_command as bench  # noqa: E402 - adjacent benchmark module
 
 SCRATCH_PARENT = os.environ.get("MESH_SHORT_TMP", "/work/tmp")
+# StrictModes checks every key ancestor; /tmp is world-writable on hosted Ubuntu.
+OPENSSH_SCRATCH_PARENT = os.environ.get("RUNNER_TEMP", SCRATCH_PARENT)
 
 
 def pairs(mesh, ssh):
@@ -138,6 +140,7 @@ class DecisionTests(unittest.TestCase):
 
         def failed_exercise(_args, _report, root):
             roots.append(root)
+            (root / "sshd.log").write_text("x" * 9000 + "\nAuthentication refused\n")
             processes.append(subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"]))
             if terminate:
                 os.kill(os.getpid(), bench.signal.SIGTERM)
@@ -151,6 +154,8 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"descendants_joined": True, "scratch_removed": True})
         self.assertFalse(roots[0].exists())
         self.assertFalse(Path(f"/proc/{processes[0].pid}").exists())
+        self.assertEqual(len(report["logs"]["sshd.log"]), 8000)
+        self.assertTrue(report["logs"]["sshd.log"].endswith("\nAuthentication refused\n"))
         processes[0].poll()
 
 
@@ -166,8 +171,17 @@ class OpenSSHTests(unittest.TestCase):
             bench.stop_process(process)
 
     def test_real_command_and_cleanup(self):
+        self.check_command(OPENSSH_SCRATCH_PARENT)
+
+    def test_insecure_key_ancestor_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="ms-ssh-insecure-", dir=SCRATCH_PARENT) as parent:
+            Path(parent).chmod(0o1777)
+            with self.assertRaisesRegex(RuntimeError, "Authentication refused: bad ownership or modes for directory"):
+                self.check_command(parent)
+
+    def check_command(self, parent):
         owner = bench.Descendants()
-        root = Path(tempfile.mkdtemp(prefix="ms-ssh-test-", dir=SCRATCH_PARENT))
+        root = Path(tempfile.mkdtemp(prefix="ms-ssh-test-", dir=parent))
         port = None
         try:
             port = self.command(root)
@@ -184,9 +198,15 @@ class OpenSSHTests(unittest.TestCase):
         key = state / "identity.key"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
         fixture = SimpleNamespace(root=root, local=state, environment=environment)
+        try:
+            return self.sample_command(fixture)
+        except Exception as error:
+            raise RuntimeError(f"{error}\nOpenSSH fixture logs: {bench.fixture_logs(root)}") from error
+
+    def sample_command(self, fixture):
         with ExitStack() as stack:
             argv, port = bench.start_openssh(fixture, shutil.which("sshd"), stack)
-            bench.sample(argv + [shlex.join(bench.COMMAND)], environment)
+            bench.sample(argv + [shlex.join(bench.COMMAND)], fixture.environment)
             return port
 
 
