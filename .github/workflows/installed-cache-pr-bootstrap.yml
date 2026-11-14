@@ -1,0 +1,20 @@
+name: Temporary PR fixture cache population
+
+on:
+  pull_request:
+    types: [synchronize]
+    paths: ['.github/workflows/installed-cache-pr-bootstrap.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  populate:
+    if: github.event.pull_request.number == 435 && github.event.pull_request.draft
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@55b0f8bd212a117c2e7bbb6336757f22519c34b9
+    with:
+      harness_source: 55b0f8bd212a117c2e7bbb6336757f22519c34b9
+      reusable_call: true
+      calibration_only: true
+      calibration_support: fresh
