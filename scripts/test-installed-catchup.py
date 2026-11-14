@@ -136,6 +136,41 @@ class ExporterFormatTest(unittest.TestCase):
         factory.return_value.close.assert_called_once_with()
         prepare.assert_not_called()
 
+    def test_invalid_exporter_reply_is_a_protocol_runtime_error(self):
+        for data in (b"", b"not JSON\n"):
+            connection = self.exporter_connection(data)
+            with patch.object(installed_releases.installed_origin.socket, "socket", return_value=connection), \
+                    self.assertRaisesRegex(RuntimeError, "incomplete or invalid reply") as raised:
+                installed_releases.installed_origin.request(self.root, {"stop": True})
+            self.assertIsInstance(raised.exception.__cause__, json.JSONDecodeError)
+
+    def test_empty_stop_reply_reaps_exporter_and_preserves_primary_timeout(self):
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.root, clock_plan=self.clock.plan)
+        process = releases.signer = Mock()
+        process.poll.side_effect = [None, 0]
+        log = releases.signer_log = Mock()
+        primary = TimeoutError("original serving deadline")
+        connection = self.exporter_connection(b"")
+        with patch.object(installed_releases.installed_origin.socket, "socket", return_value=connection), \
+                self.assertRaises(TimeoutError) as raised:
+            try:
+                raise primary
+            finally:
+                releases.close()
+        self.assertIs(raised.exception, primary)
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+        log.close.assert_called_once_with()
+        self.assertTrue(releases.closed)
+        self.assertTrue(json.loads((self.root / "fixture-ownership.json").read_bytes())["signerAbsent"])
+
+    def exporter_connection(self, data):
+        connection = Mock()
+        connection.__enter__ = Mock(return_value=connection)
+        connection.__exit__ = Mock(return_value=False)
+        connection.makefile.return_value = io.BytesIO(data)
+        return connection
+
     def test_failed_export_never_reads_stale_ledger(self):
         case = SimpleNamespace(root=self.root, state=self.root / "state", origin=SimpleNamespace())
         (self.root / "chain-ledger.json").write_text('{"entries":[]}')

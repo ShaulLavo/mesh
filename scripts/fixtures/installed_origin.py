@@ -44,7 +44,11 @@ def request(root, value, timeout=15):
         connection.sendall(json.dumps(value).encode() + b"\n")
         connection.settimeout(installed_clock.remaining_until(deadline_ns, timeout))
         with connection.makefile("rb") as stream:
-            reply = json.loads(stream.readline())
+            data = stream.readline()
+    try:
+        reply = json.loads(data)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("installed fixture producer returned an incomplete or invalid reply") from error
     if reply != {"ok": True}:
         raise RuntimeError("installed fixture producer did not complete")
 
