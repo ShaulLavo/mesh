@@ -132,7 +132,8 @@ class FailureRetentionTests(unittest.TestCase):
         stop = self.root / "stop.py"
         stop.write_text("from pathlib import Path; import sys; Path(sys.argv[0]).with_suffix('.stopped').write_bytes(Path(sys.argv[2]).read_bytes())")
         environment = os.environ | {"test_root": str(scratch), "cohort": str(scratch / "cohort.json"),
-            "cohort_tool": str(stop), "output_directory": str(output), "source_version": "v0.1.9003"}
+            "cohort_tool": str(stop), "output_directory": str(output), "source_version": "v0.1.9003",
+            "PYTHONPATH": str(Path(__file__).resolve().parent)}
         prelude = "set -euo pipefail\nhelper_pid= client= candidate_daemon= old_daemon= shell_pid= worker_pid= original_worker= original_shell=\ndiscover_owned_session_processes() { :; }\n"
         result = subprocess.run(["bash", "-c", prelude + cleanup + "trap cleanup EXIT\nexit 7"], env=environment,
                                 capture_output=True, text=True, timeout=5)
