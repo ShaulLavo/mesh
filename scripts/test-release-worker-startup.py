@@ -2,6 +2,7 @@
 """Owned subprocess controls for fixture startup, not a kernel EPERM reproducer."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -154,7 +155,9 @@ class StartupFinalizer(unittest.TestCase):
         self.assertEqual(installed_clock.handoff_environment(), {installed_clock.HANDOFF_ENV: str(end)})
         with installed_clock.cleanup_handoff() as nested:
             self.assertEqual(nested, end)
-            self.assertEqual(workers.hang_deadline(), end / installed_clock.SECOND)
+            seconds = end / installed_clock.SECOND
+            self.assertLessEqual(workers.hang_deadline(), seconds)
+            self.assertAlmostEqual(workers.hang_deadline(), seconds, delta=math.ulp(seconds))
             self.real_stop_one(worker)
         if self.cleanup_error:
             raise self.cleanup_error
@@ -185,8 +188,17 @@ class StartupFinalizer(unittest.TestCase):
             self.fail("startup failure was suppressed")
 
     def test_expired_inherited_work_gets_one_shared_cleanup_endpoint(self):
+        for origin in (89_133_810_986, 100 * installed_clock.SECOND, 2 ** 55 + 123):
+            with self.subTest(origin=origin):
+                self.check_shared_cleanup_endpoint(origin)
+
+    def check_shared_cleanup_endpoint(self, origin):
+        self.now = origin
+        self.work_end = origin + 120 * installed_clock.SECOND
+        self.endpoints = []
         self.run_failure()
         self.assertEqual(self.endpoints, [self.now + installed_clock.CLEANUP_SECONDS * installed_clock.SECOND] * 2)
+        self.assertFalse(getattr(self.primary, "__notes__", []))
 
     def test_cleanup_base_exception_keeps_identical_startup_error_and_diagnostics(self):
         self.cleanup_error = KeyboardInterrupt("cleanup interrupted")
