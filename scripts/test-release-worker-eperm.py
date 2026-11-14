@@ -279,6 +279,22 @@ class SnapshotControls(unittest.TestCase):
         self.assertEqual(result["mounts"], [{"options": "nosuid"}])
         self.assertFalse(result["cleanupConfirmed"])
 
+    def test_unexpected_reader_error_keeps_snapshot_fields_and_unreaped_pid(self):
+        process = mock.Mock(pid=2468, returncode=None)
+        process.poll.return_value = None
+        process.wait.side_effect = snapshot.subprocess.TimeoutExpired(["journalctl"], 0.01)
+        with mock.patch.object(snapshot.subprocess, "Popen", return_value=process), \
+                mock.patch.object(snapshot, "read_command", side_effect=ValueError("closed diagnostic stream")), \
+                mock.patch.object(snapshot, "read_file", return_value="1"), \
+                mock.patch.object(snapshot, "mounts", return_value=[{"options": "nosuid"}]):
+            result = snapshot.capture({}, "/fixture", time.monotonic() + 0.01)
+        self.assertEqual(result["kernelJournal"]["unavailable"], "ValueError")
+        self.assertEqual(result["kernelJournal"]["cleanup"]["pid"], 2468)
+        self.assertEqual(result["sysctls"]["kernel/apparmor_restrict_unprivileged_userns"], "1")
+        self.assertEqual(result["mounts"], [{"options": "nosuid"}])
+        self.assertFalse(result["cleanupConfirmed"])
+        process.stdout.close.assert_called_once()
+
     def test_sysctl_file_and_retained_log_byte_bounds(self):
         with tempfile.TemporaryDirectory(prefix="eperm-bytes-") as directory:
             source, retained = Path(directory) / "source", Path(directory) / "retained"

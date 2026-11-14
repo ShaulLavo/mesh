@@ -24,7 +24,7 @@ def command(arguments, deadline):
         process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         read_end = end - min(0.1, max(0, end - time.monotonic()) / 4)
         result = read_command(process, arguments, read_end)
-    except OSError as error:
+    except Exception as error:
         result = dict(evidence.unavailable(error), arguments=arguments)
     finally:
         cleanup = close_command(process, end)
