@@ -1065,7 +1065,7 @@ def native_cohort_paths(root):
 
 
 def native_cohort_directory(directory):
-    # Reuse the matching census for descent, keeping rglob's record order.
+    # Reuse the matching census for descent.
     try:
         with os.scandir(directory) as entries:
             census = list(entries)

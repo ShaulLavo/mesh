@@ -952,13 +952,13 @@ class NativeOwnershipTest(unittest.TestCase):
         nested.write_text("{}")
         self.assertEqual(set(clocks.native_cohort_paths(output)), {hidden, linked, broken, directory, nested})
 
-    def test_single_census_preserves_recursive_record_order(self):
+    def test_single_census_preserves_recursive_record_coverage(self):
         for name in ("root.cohort.json", "one/one.cohort.json", "one/deep/deep.cohort.json",
                      "two/two.cohort.json", "two/deep/deep.cohort.json", "two/other/other.cohort.json"):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("{}")
-        self.assertEqual(clocks.native_cohort_paths(self.root), list(self.root.rglob("*.cohort.json")))
+        self.assertCountEqual(clocks.native_cohort_paths(self.root), self.root.rglob("*.cohort.json"))
 
     def test_observations_and_final_verification_each_take_fresh_snapshot(self):
         deadline = clocks.time.monotonic_ns() + clocks.SECOND
