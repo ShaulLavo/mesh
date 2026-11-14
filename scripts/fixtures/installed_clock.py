@@ -962,7 +962,7 @@ class NativeOwnership:
             self.owned[(pid, rows[pid]["birth"])] = rows[pid]
 
     def read_native_records(self, rows):
-        paths = list(self.output.rglob("*.cohort.json"))
+        paths = native_cohort_paths(self.output)
         for directory in self.root.glob("mesh-transition.*"):
             paths.extend(directory.glob("cohort.json"))
             paths.extend(directory.glob("state/s/*/meta.json"))
@@ -1051,6 +1051,35 @@ class NativeOwnership:
                  "absenceVerified": self.verified,
                  "coverage": "launch ancestry reconciled with native worker/shell records"}
         (self.output / "fixture-native-ownership.json").write_text(json.dumps(value, indent=2) + "\n")
+
+
+def native_cohort_paths(root):
+    paths, directories = native_cohort_directory(root)
+    pending = [directories]
+    while pending:
+        for directory in pending.pop():
+            records, directories = native_cohort_directory(directory)
+            paths.extend(records)
+            pending.append(directories)
+    return paths
+
+
+def native_cohort_directory(directory):
+    # Reuse the matching census for descent, keeping rglob's record order.
+    try:
+        with os.scandir(directory) as entries:
+            census = list(entries)
+    except OSError:
+        return [], []
+    paths = [Path(entry.path) for entry in census if entry.name.endswith(".cohort.json")]
+    return paths, [entry.path for entry in census if native_record_directory(entry)]
+
+
+def native_record_directory(entry):
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return False
 
 
 def process_snapshot(deadline_ns):

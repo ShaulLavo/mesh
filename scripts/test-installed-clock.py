@@ -910,6 +910,104 @@ class NativeOwnershipTest(unittest.TestCase):
         return {pid: {"pid": pid, "parent": parent, "group": pid, "uid": os.getuid(), "birth": "birth-" + str(pid)}
                 for pid, parent in ((10, 1), (20, 10), (30, 20))}
 
+    def test_observation_batches_all_native_records_into_one_process_command(self):
+        output = self.root / "proof"
+        records = (output / "observations/proof.cohort.json", self.root / "mesh-transition.control/cohort.json",
+                   self.root / "mesh-transition.control/state/s/owned/meta.json")
+        for path in records:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            value = {"pid": 30} if path.name == "meta.json" else {"workers": [{"pid": 20, "shellPid": 30}]}
+            path.write_text(json.dumps(value))
+        uid = os.getuid()
+        result = SimpleNamespace(stdout="".join(f"{pid} {parent} {pid} {uid} Sat Nov 14 01:02:03 2026 S\n"
+                                               for pid, parent in ((10, 1), (20, 10), (30, 20))))
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks.subprocess, "run", return_value=result) as command, \
+                patch.object(clocks.os, "scandir", wraps=os.scandir) as scans:
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, output, deadline)
+        command.assert_called_once()
+        enumerated = [Path(call.args[0]) for call in scans.call_args_list]
+        self.assertEqual(enumerated.count(output), 1)
+        self.assertEqual(enumerated.count(output / "observations"), 1)
+        self.assertEqual(ownership.observed_records, set(records))
+        self.assertEqual(ownership.expected, {20, 30})
+        self.assertEqual(ownership.correlated, {20, 30})
+
+    def test_cohort_discovery_keeps_hidden_and_link_records_without_following_link_directories(self):
+        output, outside = self.root / "proof", self.root / "outside"
+        output.mkdir()
+        outside.mkdir()
+        hidden = output / ".hidden.cohort.json"
+        hidden.write_text("{}")
+        external = outside / "external.cohort.json"
+        external.write_text("{}")
+        linked = output / "linked.cohort.json"
+        linked.symlink_to(external)
+        broken = output / "broken.cohort.json"
+        broken.symlink_to(outside / "absent")
+        (output / "linked-directory").symlink_to(outside, target_is_directory=True)
+        directory = output / "directory.cohort.json"
+        directory.mkdir()
+        nested = directory / "nested.cohort.json"
+        nested.write_text("{}")
+        self.assertEqual(set(clocks.native_cohort_paths(output)), {hidden, linked, broken, directory, nested})
+
+    def test_single_census_preserves_recursive_record_order(self):
+        for name in ("root.cohort.json", "one/one.cohort.json", "one/deep/deep.cohort.json",
+                     "two/two.cohort.json", "two/deep/deep.cohort.json", "two/other/other.cohort.json"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("{}")
+        self.assertEqual(clocks.native_cohort_paths(self.root), list(self.root.rglob("*.cohort.json")))
+
+    def test_observations_and_final_verification_each_take_fresh_snapshot(self):
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", side_effect=[self.rows(), {}, self.rows(), {}]) as snapshot:
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+            ownership.note_pid(30, self.rows())
+            ownership.observe(deadline)
+            self.assertEqual(ownership.live(deadline), {pid: row["birth"] for pid, row in self.rows().items()})
+            ownership.verify(deadline)
+        self.assertEqual(snapshot.call_count, 4)
+        self.assertEqual(ownership.scans, 2)
+        self.assertTrue(ownership.verified)
+
+    def test_capture_keeps_uid_group_and_lifetime_boundaries(self):
+        rows = self.rows()
+        rows[40] = rows[30] | {"pid": 40, "parent": 1, "group": 10, "birth": "birth-40"}
+        rows[50] = rows[40] | {"pid": 50, "uid": os.getuid() + 1, "birth": "birth-50"}
+        rows[60] = rows[40] | {"pid": 60, "parent": 50, "group": 60, "birth": "birth-60"}
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=rows):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        self.assertEqual({pid for pid, _birth in ownership.owned}, {10, 20, 30, 40})
+        changed = {10: rows[10] | {"birth": "replacement"}, 40: rows[40] | {"birth": "replacement"}}
+        with patch.object(clocks, "process_snapshot", return_value=changed):
+            ownership.observe(deadline)
+        self.assertNotIn((40, "replacement"), ownership.owned)
+        self.assertNotIn((10, "replacement"), ownership.owned)
+
+    def test_signaling_rechecks_each_birth_for_each_signal(self):
+        owned = {20: "birth-20", 30: "birth-30"}
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_birth", side_effect=["birth-20", "replacement", None, "birth-30"]) as birth, \
+                patch.object(clocks, "signal_process") as send:
+            clocks.signal_descendants(owned, signal.SIGTERM, deadline)
+            clocks.signal_descendants(owned, signal.SIGKILL, deadline)
+        self.assertEqual([call.args for call in birth.call_args_list], [(20, deadline), (30, deadline)] * 2)
+        self.assertEqual([call.args for call in send.call_args_list], [(20, signal.SIGTERM), (30, signal.SIGKILL)])
+
+    def test_process_snapshot_uses_one_command_and_excludes_zombies(self):
+        uid = os.getuid()
+        result = SimpleNamespace(stdout=f"10 1 10 {uid} Sat Nov 14 01:02:03 2026 S\n20 10 20 {uid} Sat Nov 14 01:02:03 2026 Z\n")
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks.subprocess, "run", return_value=result) as command:
+            rows = clocks.process_snapshot(deadline)
+        self.assertEqual(set(rows), {10})
+        self.assertEqual(rows[10]["birth"], f"{uid} Sat Nov 14 01:02:03 2026")
+        command.assert_called_once()
+        self.assertEqual(command.call_args.args[0], ["ps", "-axww", "-o", "pid=,ppid=,pgid=,uid=,lstart=,stat="])
+
     def test_native_worker_and_detached_shell_are_correlated_while_live(self):
         state = self.root / "mesh-transition.control"
         state.mkdir()
