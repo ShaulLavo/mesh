@@ -67,6 +67,29 @@ class ClockTest(unittest.TestCase):
             with self.assertRaisesRegex(clocks.ClockExpired, "parent fixture deadline expired"):
                 native_services.wait_for(lambda: False, "handoff wait did not finish")
 
+    def test_native_mapping_wait_preserves_exact_phase_expiry(self):
+        clock = self.clock(diagnostic(command_ns=109 * clocks.MILLISECOND))
+        observed, record = [], {}
+        def expired_mapping(*_args):
+            self.now.advance(110 * clocks.MILLISECOND)
+            try:
+                clock.check()
+            except clocks.ClockExpired as error:
+                observed.append(error)
+                raise
+        with clock.activate(), patch.object(clocks.time, "monotonic_ns", self.now), \
+                patch.object(native_services, "mapped_image", side_effect=expired_mapping):
+            with self.assertRaises(clocks.ClockExpired) as raised:
+                native_services.wait_for(lambda: native_services.control_image(123, record), "mapping control")
+        self.assertIs(raised.exception, observed[0])
+        self.assertEqual(record, {})
+
+    def test_native_mapping_error_remains_a_pending_observation(self):
+        record = {}
+        with patch.object(native_services, "mapped_image", side_effect=RuntimeError("image not observed")):
+            self.assertIsNone(native_services.control_image(123, record))
+        self.assertEqual(record, {"lastMappingError": "image not observed"})
+
     def test_native_wait_keeps_local_timeout_error(self):
         start = self.now()
         with patch.object(clocks.time, "monotonic_ns", self.now), \

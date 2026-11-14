@@ -213,8 +213,11 @@ def child(marker, token):
 
 
 def control_image(pid, record):
+    from fixtures import installed_clock
     try:
         return mapped_image(pid, "/bin/sleep")
+    except installed_clock.ClockExpired:
+        raise
     except RuntimeError as error:
         record["lastMappingError"] = str(error)
         return None
