@@ -472,7 +472,7 @@
     },
     {
       "key": "span:setup#7",
-      "limit_ns": 249313000000,
+      "limit_ns": 249484000000,
       "workload": {
         "platform": "linux/amd64",
         "host": "pc",
@@ -490,7 +490,15 @@
             "setup#7",
             "proof:v0.1.249:v0.1.9001#1",
             "native-transition:v0.1.249:v0.1.9001#1",
-            "proof:v0.1.249:v0.1.9001#2"
+            "proof:v0.1.249:v0.1.9001#2",
+            "setup#8",
+            "publish:v0.1.9001#1",
+            "setup#9",
+            "serve:releases#1",
+            "setup#10",
+            "serve:public#1",
+            "setup#11",
+            "head:v0.1.9001#1"
           ]
         }
       },
@@ -504,7 +512,7 @@
             "observation": {},
             "clock_span": {
               "start_ns": 209449732063,
-              "end_ns": 431060875513,
+              "end_ns": 431213190190,
               "origin_ns": 106895261903,
               "command_end_ns": 621331903483
             }
@@ -526,53 +534,93 @@
                 "setup#7",
                 "proof:v0.1.249:v0.1.9001#1",
                 "native-transition:v0.1.249:v0.1.9001#1",
+                "proof:v0.1.249:v0.1.9001#2",
+                "setup#8",
+                "publish:v0.1.9001#1",
+                "setup#9",
+                "serve:releases#1",
+                "setup#10",
+                "serve:public#1",
+                "setup#11",
+                "head:v0.1.9001#1"
+              ]
+            }
+          },
+          "elapsed_ns": 221763458127,
+          "completed": true,
+          "cleanup_verified": true
+        }
+      ],
+      "telemetry": [
+        {
+          "key": "span:setup#7",
+          "limit_ns": 249313000000,
+          "workload": {
+            "platform": "linux/amd64",
+            "host": "pc",
+            "mode": "oldest",
+            "scenario": null,
+            "grouped": true,
+            "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
+            "catalogEvidence": true,
+            "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+            "manifestSchemas": [
+              1
+            ],
+            "clockSpan": {
+              "leaves": [
+                "setup#7",
+                "proof:v0.1.249:v0.1.9001#1",
+                "native-transition:v0.1.249:v0.1.9001#1",
                 "proof:v0.1.249:v0.1.9001#2"
               ]
             }
           },
-          "elapsed_ns": 221611143450,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "span:setup#8",
-      "limit_ns": 124000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "oldest",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": true,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "clockSpan": {
-          "leaves": [
-            "setup#8",
-            "publish:v0.1.9001#1"
-          ]
-        }
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-amd64-oldest/cohort-proof/fixture-clock.json",
-              "sha256": "af6424303025e3b6c3846a75b8e4ba618f3c5d210f870fea4a788acefabba312"
-            },
-            "observation": {},
-            "clock_span": {
-              "start_ns": 431060875513,
-              "end_ns": 431170844537,
-              "origin_ns": 106895261903,
-              "command_end_ns": 621331903483
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-amd64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "af6424303025e3b6c3846a75b8e4ba618f3c5d210f870fea4a788acefabba312"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 209449732063,
+                  "end_ns": 431060875513,
+                  "origin_ns": 106895261903,
+                  "command_end_ns": 621331903483
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": "pc",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#7",
+                    "proof:v0.1.249:v0.1.9001#1",
+                    "native-transition:v0.1.249:v0.1.9001#1",
+                    "proof:v0.1.249:v0.1.9001#2"
+                  ]
+                }
+              },
+              "elapsed_ns": 221611143450,
+              "completed": true,
+              "cleanup_verified": true
             }
-          },
+          ]
+        },
+        {
+          "key": "span:setup#8",
+          "limit_ns": 124000000,
           "workload": {
             "platform": "linux/amd64",
             "host": "pc",
@@ -592,53 +640,49 @@
               ]
             }
           },
-          "elapsed_ns": 109969024,
-          "completed": true,
-          "cleanup_verified": true
-        }
-      ]
-    },
-    {
-      "key": "span:setup#9",
-      "limit_ns": 48000000,
-      "workload": {
-        "platform": "linux/amd64",
-        "host": "pc",
-        "mode": "oldest",
-        "scenario": null,
-        "grouped": true,
-        "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
-        "catalogEvidence": true,
-        "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
-        "manifestSchemas": [
-          1
-        ],
-        "clockSpan": {
-          "leaves": [
-            "setup#9",
-            "serve:releases#1",
-            "setup#10",
-            "serve:public#1",
-            "setup#11",
-            "head:v0.1.9001#1"
-          ]
-        }
-      },
-      "samples": [
-        {
-          "provenance": {
-            "fixture_record": {
-              "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-amd64-oldest/cohort-proof/fixture-clock.json",
-              "sha256": "af6424303025e3b6c3846a75b8e4ba618f3c5d210f870fea4a788acefabba312"
-            },
-            "observation": {},
-            "clock_span": {
-              "start_ns": 431170844537,
-              "end_ns": 431213190190,
-              "origin_ns": 106895261903,
-              "command_end_ns": 621331903483
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-amd64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "af6424303025e3b6c3846a75b8e4ba618f3c5d210f870fea4a788acefabba312"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 431060875513,
+                  "end_ns": 431170844537,
+                  "origin_ns": 106895261903,
+                  "command_end_ns": 621331903483
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": "pc",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#8",
+                    "publish:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 109969024,
+              "completed": true,
+              "cleanup_verified": true
             }
-          },
+          ]
+        },
+        {
+          "key": "span:setup#9",
+          "limit_ns": 48000000,
           "workload": {
             "platform": "linux/amd64",
             "host": "pc",
@@ -662,9 +706,49 @@
               ]
             }
           },
-          "elapsed_ns": 42345653,
-          "completed": true,
-          "cleanup_verified": true
+          "samples": [
+            {
+              "provenance": {
+                "fixture_record": {
+                  "path": "/work/reports/mesh-auto-update/signer-clock-contract/calibration-43421606579/installed-cohort-linux-amd64-oldest/cohort-proof/fixture-clock.json",
+                  "sha256": "af6424303025e3b6c3846a75b8e4ba618f3c5d210f870fea4a788acefabba312"
+                },
+                "observation": {},
+                "clock_span": {
+                  "start_ns": 431170844537,
+                  "end_ns": 431213190190,
+                  "origin_ns": 106895261903,
+                  "command_end_ns": 621331903483
+                }
+              },
+              "workload": {
+                "platform": "linux/amd64",
+                "host": "pc",
+                "mode": "oldest",
+                "scenario": null,
+                "grouped": true,
+                "publishedRegistrySha256": "3b4f14396283b61327e5b1befb33e7cc7712b64d187084b1bf410329c82229a5",
+                "catalogEvidence": true,
+                "buildRecipe": "mesh_installed_fixture/all-three-platforms/startup/full-transition",
+                "manifestSchemas": [
+                  1
+                ],
+                "clockSpan": {
+                  "leaves": [
+                    "setup#9",
+                    "serve:releases#1",
+                    "setup#10",
+                    "serve:public#1",
+                    "setup#11",
+                    "head:v0.1.9001#1"
+                  ]
+                }
+              },
+              "elapsed_ns": 42345653,
+              "completed": true,
+              "cleanup_verified": true
+            }
+          ]
         }
       ]
     },
@@ -5303,7 +5387,7 @@
       ]
     }
   ],
-  "command_ns": 578745000000,
+  "command_ns": 578744000000,
   "external_ns": 107509000000,
   "emergency_ns": 60000000000,
   "admission_ns": 900000000000,

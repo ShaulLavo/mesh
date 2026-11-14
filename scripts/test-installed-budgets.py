@@ -224,10 +224,10 @@ class FrozenBudgetTests(unittest.TestCase):
     def test_reviewed_order_plan_preserves_its_complete_admission(self):
         key, workload = budgets.selection("linux/amd64", "order")
         _path, plan = budgets.select_plan(test_plan_index(self.root, key), key, workload)
-        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_883_000_000)
+        self.assertEqual(plan.command_ns + plan.external_ns + plan.emergency_ns, 688_878_000_000)
         self.assertEqual(plan.admission_ns, 900 * clocks.SECOND)
         self.assertEqual(budgets.workflow_minutes(plan), 15)
-        self.assertEqual((len(plan.phases), len(plan.guards)), (13, 11))
+        self.assertEqual((len(plan.phases), len(plan.guards)), (4, 11))
 
     def test_all_ten_cohort_cells_and_six_support_cells_are_required(self):
         profiles = budgets.required_profiles(True, True, None, False)

@@ -138,14 +138,37 @@ class GrammarTest(unittest.TestCase):
         variants = ((), members[:-1], members[1:] + members[:1], members + self.plan.phases[1:2],
                     (replace(members[0], telemetry=(members[1],)),) + members[1:])
         for telemetry in variants:
-            with self.assertRaisesRegex(ValueError, "bootstrap"):
+            with self.assertRaisesRegex(ValueError, "phase"):
                 replace(self.plan, phases=(replace(phase, telemetry=telemetry),) + self.plan.phases[1:]).validate()
         sample = phase.samples[0]
         provenance = deepcopy(sample.provenance)
         provenance["clock_span"]["end_ns"] -= 1
         changed = replace(phase, samples=(replace(sample, provenance=provenance, elapsed_ns=sample.elapsed_ns - 1),))
-        with self.assertRaisesRegex(ValueError, "bootstrap endpoints"):
+        with self.assertRaisesRegex(ValueError, "phase endpoints"):
             replace(self.plan, phases=(changed,) + self.plan.phases[1:]).validate()
+
+    def test_preparation_has_exact_disjoint_ready_endpoint_and_rejects_overlap(self):
+        plan = controls.reviewed_for_test("linux-amd64-adoption-interrupt")
+        bootstrap, preparation = plan.phases[:2]
+        first = preparation.samples[0].provenance["clock_span"]
+        self.assertEqual(first["start_ns"], 202_236_162_263)
+        self.assertEqual(first["end_ns"], 233_265_468_440)
+        self.assertEqual(preparation.limit_ns, 34_908_000_000)
+        self.assertEqual(first["start_ns"], bootstrap.samples[0].provenance["clock_span"]["end_ns"])
+        self.assertTrue(preparation.workload["clockSpan"]["leaves"][-1].startswith("head:"))
+        self.assertFalse(set(bootstrap.workload["clockSpan"]["leaves"]).intersection(preparation.workload["clockSpan"]["leaves"]))
+        invalid = replace(preparation, telemetry=preparation.telemetry[:-1])
+        with self.assertRaisesRegex(ValueError, "phase telemetry"):
+            replace(plan, phases=(bootstrap, invalid) + plan.phases[2:]).validate()
+        parts = [row.workload["clockSpan"]["leaves"] for row in plan.phases]
+        with self.assertRaisesRegex(ValueError, "sequence|partition"):
+            controls.with_parts(plan, [parts[0], parts[0][-1:] + parts[1]] + parts[2:]).validate()
+        sample = preparation.samples[0]
+        provenance = deepcopy(sample.provenance)
+        provenance["clock_span"]["end_ns"] -= 1
+        invalid = replace(preparation, samples=(replace(sample, provenance=provenance, elapsed_ns=sample.elapsed_ns - 1),))
+        with self.assertRaisesRegex(ValueError, "phase endpoints"):
+            replace(plan, phases=(bootstrap, invalid) + plan.phases[2:]).validate()
 
 
 class ReductionTest(unittest.TestCase):
@@ -257,7 +280,7 @@ class CursorTest(unittest.TestCase):
         self.clock.check()
         telemetry = self.clock.recorded_telemetry([clocks.qualify(row, True) for row in self.clock.rows])
         self.assertGreater(telemetry[0]["elapsed_ns"], telemetry[0]["limit_ns"])
-        self.assertTrue(all(row["enforced"] is False and row["bootstrap_deadline_ns"] == deadline for row in telemetry))
+        self.assertTrue(all(row["enforced"] is False and row["phase_deadline_ns"] == deadline for row in telemetry))
         self.now = deadline
         with self.assertRaises(clocks.ClockExpired):
             self.clock.switch("setup")
@@ -281,6 +304,32 @@ class CursorTest(unittest.TestCase):
             self.clock.stack.pop()
         self.assertEqual(self.clock.effective_deadline(), deadline)
         self.assertEqual(self.clock.active_key, "proof:v0.1.249:v0.1.9001#2")
+
+    def test_preparation_publication_telemetry_does_not_reset_or_expire_phase(self):
+        self.plan = controls.reviewed_for_test("linux-amd64-adoption-interrupt")
+        self.clock = clocks.Clock(self.plan, now=lambda: self.now)
+        self.move_to("proof:v0.1.255:v0.1.9001#1")
+        deadline = self.clock.effective_deadline()
+        self.move_to_from_active("publish:v0.1.9001#1")
+        publication = self.plan.phases[1].telemetry[1]
+        self.assertEqual(publication.limit_ns, 107 * clocks.MILLISECOND)
+        self.now += publication.limit_ns + 1
+        self.clock.switch("setup")
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        self.move_to_from_active("head:v0.1.9001#1")
+        self.assertEqual(self.clock.effective_deadline(), deadline)
+        telemetry = self.clock.recorded_telemetry([clocks.qualify(row, True) for row in self.clock.rows])
+        published = next(row for row in telemetry if row["key"] == publication.key)
+        self.assertGreater(published["elapsed_ns"], publication.limit_ns)
+        self.assertEqual(published["phase_deadline_ns"], deadline)
+        self.assertFalse(published["enforced"])
+        self.now = deadline
+        with self.assertRaises(clocks.ClockExpired):
+            self.clock.switch("setup")
+        self.assertEqual(self.clock.span_index, 1)
+        cleanup = self.clock.cleanup_deadline_ns
+        self.clock.fail(RuntimeError("secondary"))
+        self.assertEqual(self.clock.cleanup_deadline_ns, cleanup)
 
     def move_to_from_active(self, key):
         keys = controls.leaf_keys(self.plan)

@@ -195,10 +195,18 @@ def bootstrap_parts(parts, workload):
 
 def partition_leaf_keys(keys, workload):
     parts = operation_leaf_keys(keys, workload)
+    return [[key for part in group for key in part] for group in phase_parts(parts, workload)]
+
+
+def phase_parts(parts, workload):
+    """Disjoint startup and preparation end before partitioning or case work."""
     bootstrap = bootstrap_parts(parts, workload)
     if not bootstrap:
-        return parts
-    return [[key for part in bootstrap for key in part]] + parts[len(bootstrap):]
+        return [[part] for part in parts]
+    rest = parts[len(bootstrap):]
+    ready = next(index for index, part in enumerate(rest)
+                 if part[1].startswith("serve:") and any(key.startswith("head:") for key in part))
+    return [bootstrap, rest[:ready + 1]] + [[part] for part in rest[ready + 1:]]
 
 
 def completed_leaves(record):

@@ -123,40 +123,42 @@ def validate_spans(plan):
             raise ValueError("span key/workload projection differs")
     if any("clockSpan" in row.workload for row in plan.guards):
         raise ValueError("guards cannot contain span membership")
-    if any(row.telemetry for row in plan.phases[1:] + plan.guards):
-        raise ValueError("only bootstrap may contain span telemetry")
-    validate_bootstrap(plan.phases[0], keys, plan.workload)
+    groups = spans.phase_parts(spans.operation_leaf_keys(keys, plan.workload), plan.workload)
+    for phase, group in zip(plan.phases, groups):
+        validate_telemetry(phase, group if len(group) > 1 else [], plan.workload)
+    if any(row.telemetry for row in plan.guards):
+        raise ValueError("guards cannot contain phase telemetry")
     validate_span_samples(plan.phases)
 
 
-def validate_bootstrap(phase, keys, workload):
-    parts = spans.bootstrap_parts(spans.operation_leaf_keys(keys, workload), workload)
+def validate_telemetry(phase, parts, workload):
     if [row.workload.get("clockSpan", {}).get("leaves") for row in phase.telemetry] != parts:
-        raise ValueError("bootstrap telemetry differs from complete canonical membership")
+        raise ValueError("phase telemetry differs from complete canonical membership")
     if not parts:
         return
     for row, part in zip(phase.telemetry, parts):
         if row.telemetry or row.key != "span:" + part[0] or row.workload != workload | {"clockSpan": {"leaves": part}}:
-            raise ValueError("bootstrap telemetry projection differs")
+            raise ValueError("phase telemetry projection differs")
         row.validate()
-    validate_bootstrap_sources(phase)
+    validate_telemetry_sources(phase)
 
 
-def validate_bootstrap_sources(phase):
-    cursors, sources = {}, None
+def validate_telemetry_sources(phase):
+    cursors = {span_sample(sample)[0]: span_sample(sample)[1] for sample in phase.samples}
+    sources = None
     for row in phase.telemetry:
         current = validate_span_sources(row, cursors, False)
         if sources is not None and sources != current:
-            raise ValueError("bootstrap telemetry mixes invocations")
+            raise ValueError("phase telemetry mixes invocations")
         sources = current
     aggregate = {span_sample(sample)[0]: sample for sample in phase.samples}
     if set(aggregate) != sources:
-        raise ValueError("bootstrap telemetry sources differ from aggregate")
+        raise ValueError("phase telemetry sources differ from aggregate")
     for sample in phase.telemetry[0].samples:
         source, start, _end, _origin, _terminal = span_sample(sample)
         outer = span_sample(aggregate[source])
         if outer[1] != start or outer[2] != cursors[source]:
-            raise ValueError("bootstrap endpoints differ from original member spans")
+            raise ValueError("phase endpoints differ from original member spans")
 
 
 def validate_span_samples(phases):
@@ -235,8 +237,12 @@ def reduce_span_budgets(observations):
     result = reduce_intervals(observations, intervals, workload)
     if workload.get("preparedRole") != "consume":
         individual = reduce_intervals(observations, [span_intervals(row["fixture"], telemetry=True) for row in observations], workload)
-        count = len(spans.bootstrap_parts([row.workload["clockSpan"]["leaves"] for row in individual], workload))
-        result[0] = replace(result[0], telemetry=tuple(individual[:count]))
+        groups = spans.phase_parts([row.workload["clockSpan"]["leaves"] for row in individual], workload)
+        offset = 0
+        for index, group in enumerate(groups):
+            telemetry = tuple(individual[offset:offset + len(group)]) if len(group) > 1 else ()
+            result[index] = replace(result[index], telemetry=telemetry)
+            offset += len(group)
     validate_span_samples(result)
     return tuple(result)
 
@@ -477,17 +483,25 @@ class Clock:
         return recorded_intervals(self.plan.phases, leaves)
 
     def recorded_telemetry(self, leaves):
-        if not self.plan.phases or not self.plan.phases[0].telemetry:
-            return []
-        return [row | {"enforced": False, "bootstrap_deadline_ns": self.origin_ns + self.plan.phases[0].limit_ns}
-                for row in recorded_intervals(self.plan.phases[0].telemetry, leaves)]
+        result, offset = [], 0
+        for phase in self.plan.phases:
+            count = len(phase.workload["clockSpan"]["leaves"])
+            rows = leaves[offset:offset + count]
+            if phase.telemetry and rows:
+                deadline = rows[0]["start_ns"] + phase.limit_ns
+                result.extend(row | {"enforced": False, "phase_key": phase.key, "phase_deadline_ns": deadline}
+                              for row in recorded_intervals(phase.telemetry, rows))
+            offset += count
+        return result
 
     def add_telemetry(self, value):
         telemetry = self.recorded_telemetry(value["leaves"])
         if not telemetry:
             return
         value["telemetry_spans"] = telemetry
-        value["spans"][0].update(enforced=True, deadline_ns=self.origin_ns + self.plan.phases[0].limit_ns)
+        for phase, row in zip(self.plan.phases, value["spans"]):
+            if phase.telemetry:
+                row.update(enforced=True, deadline_ns=row["start_ns"] + phase.limit_ns)
 
     def persist(self, path, value):
         path = Path(path)
