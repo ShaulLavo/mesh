@@ -38,7 +38,7 @@ class ReleaseSigningTests(unittest.TestCase):
             (root / "bin").mkdir()
             (root / "scripts").mkdir()
             (root / "dist").mkdir()
-            for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json", "mesh-workers.json", "mesh-worker-groups.json", "mesh_linux_amd64.tar.gz",
+            for name in ("mesh-release.json", "mesh-update.json", "mesh-update-root.json", "mesh-update.sig.json", "mesh-retention.json", "mesh-workers.json", "mesh-worker-groups.json", "mesh_linux_amd64.tar.gz",
                          "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz"):
                 (root / "dist" / name).write_text("fixture")
             fake = """#!/usr/bin/env bash
@@ -95,7 +95,7 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
 
     def test_action_failure_cannot_be_ignored(self):
         signing = WORKFLOW[WORKFLOW.index("      - name: Attest final manifest and archives"):]
-        signing = signing[:signing.index("\n  verify-readers:")]
+        signing = signing[:signing.index("      - name: Remove signed draft document staging")]
         self.assertIn("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", signing)
         self.assertNotIn("continue-on-error", signing)
         self.assertNotIn("always()", signing)
