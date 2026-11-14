@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pure/mock controls for the opt-in untraced Linux EPERM fixture unit."""
 import ast
+import fcntl
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ from fixtures import release_worker_groups
 
 
 LOG = 'worker: start /bin/sh: child-start path="/bin/sh" errno=1 stage=unavailable: fork/exec /bin/sh: operation not permitted\n'
+CLEAN_COMMAND = {"cleanup": {"reaped": True, "stdoutClosed": True}}
 
 
 class RetryControls(unittest.TestCase):
@@ -39,7 +41,8 @@ class RetryControls(unittest.TestCase):
         mock.patch.dict(os.environ, MESH_WORKER_EPERM_LEDGER=str(self.ledger)).start()
         mock.patch.object(workers, "spawn_selected", side_effect=self.spawn).start()
         mock.patch.object(workers, "wait_startup", side_effect=self.wait).start()
-        self.diagnostic = mock.patch.object(snapshot, "capture", return_value={"kernelJournal": {"unavailable": "permission denied"}}).start()
+        self.diagnostic = mock.patch.object(snapshot, "capture", return_value={"cleanupConfirmed": True,
+            "kernelJournal": {"unavailable": "permission denied"}}).start()
 
     def spawn(self, arguments, environment, directory, row):
         if self.calls:
@@ -132,18 +135,45 @@ class RetryControls(unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.diagnostic.assert_not_called()
 
-    def test_partial_snapshot_failure_stays_visible_and_retry_still_runs(self):
+    def test_unknown_snapshot_cleanup_preserves_failure_and_refuses_retry(self):
         self.diagnostic.side_effect = PermissionError(13, "kernel context denied")
-        self.launch()
+        original = self.errors[0]
+        with self.assertRaises(RuntimeError) as caught:
+            self.launch()
+        self.assertIs(caught.exception, original)
+        self.assertEqual(len(self.calls), 1)
         failure = json.loads(self.ledger.read_bytes())["events"][0]["failure"]
-        self.assertEqual(failure["snapshot"], {"unavailable": "PermissionError", "errno": 13})
+        self.assertEqual(failure["snapshot"], {"unavailable": "PermissionError", "errno": 13, "cleanupConfirmed": False})
+        self.assertIn("unconfirmed", caught.exception.__notes__[0])
+
+    def test_ledger_contention_refuses_before_any_worker_spawn(self):
+        with mock.patch("fcntl.flock", side_effect=BlockingIOError()) as lock, mock.patch.object(workers, "start_selected") as launch:
+            with self.assertRaisesRegex(RuntimeError, "ledger is busy"):
+                workers.start_one(None, None, {}, 0, "host", {}, self.path)
+        lock.assert_called_once_with(mock.ANY, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        launch.assert_not_called()
+
+    def test_unreaped_snapshot_reader_refuses_retry_and_retains_its_pid(self):
+        self.diagnostic.return_value = {"cleanupConfirmed": False, "kernelJournal": {
+            "output": "partial denial", "cleanup": {"pid": 2468, "reaped": False, "stdoutClosed": True}}}
+        original = self.errors[0]
+        with self.assertRaises(RuntimeError) as caught:
+            self.launch()
+        self.assertIs(caught.exception, original)
+        self.assertEqual(len(self.calls), 1)
+        failure = json.loads(self.ledger.read_bytes())["events"][0]["failure"]
+        self.assertEqual(failure["snapshot"]["kernelJournal"]["cleanup"]["pid"], 2468)
 
     def test_changed_original_image_refuses_retry_after_retaining_failure(self):
-        self.diagnostic.side_effect = lambda *_: self.binary.write_bytes(b"changed")
+        self.diagnostic.side_effect = self.change_image
         with self.assertRaisesRegex(RuntimeError, "image changed"):
             self.launch()
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(len(json.loads(self.ledger.read_bytes())["events"]), 1)
+
+    def change_image(self, *_):
+        self.binary.write_bytes(b"changed")
+        return {"cleanupConfirmed": True}
 
     def test_deadline_exhaustion_after_capture_refuses_retry(self):
         self.diagnostic.side_effect = self.exhaust_deadline
@@ -153,7 +183,7 @@ class RetryControls(unittest.TestCase):
 
     def exhaust_deadline(self, *_):
         mock.patch.object(workers.time, "monotonic", return_value=1e20).start()
-        return {"unavailable": "deadline exhausted control"}
+        return {"unavailable": "deadline exhausted control", "cleanupConfirmed": True}
 
     def test_non_eperm_retry_error_remains_original_and_visible(self):
         original = ValueError("retry different error")
@@ -188,13 +218,14 @@ class RetryControls(unittest.TestCase):
 
 class SnapshotControls(unittest.TestCase):
     def test_kernel_commands_have_window_caps_and_partial_permissions(self):
-        with mock.patch.object(snapshot, "command", return_value={"returncode": 1, "output": "permission denied"}) as command, mock.patch.object(snapshot, "read_file", side_effect=PermissionError(13, "denied")), mock.patch.object(snapshot, "mounts", side_effect=FileNotFoundError(2, "missing")), mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.object(snapshot, "command", return_value=CLEAN_COMMAND | {"returncode": 1, "output": "permission denied"}) as command, mock.patch.object(snapshot, "read_file", side_effect=PermissionError(13, "denied")), mock.patch.object(snapshot, "mounts", side_effect=FileNotFoundError(2, "missing")), mock.patch.dict(os.environ, {}, clear=True):
             result = snapshot.capture({}, "/fixture cwd", time.monotonic() + 6)
         self.assertEqual(command.call_count, 2)
         self.assertIn("--until", command.call_args_list[0].args[0])
         self.assertEqual(result["windowUnixSeconds"]["until"] - result["windowUnixSeconds"]["since"], 60)
         self.assertEqual(result["sysctls"]["kernel/apparmor_restrict_unprivileged_userns"]["unavailable"], "PermissionError")
         self.assertIn("unavailable", result["shellChild"])
+        self.assertTrue(result["cleanupConfirmed"])
 
     def test_command_stops_at_exact_output_byte_cap(self):
         process = mock.Mock()
@@ -218,6 +249,35 @@ class SnapshotControls(unittest.TestCase):
         with mock.patch.object(snapshot.subprocess, "Popen") as spawn:
             self.assertIn("unavailable", snapshot.command(["journalctl"], time.monotonic() - 1))
         spawn.assert_not_called()
+
+    def test_timed_out_reader_closes_pipe_and_keeps_partial_output_within_deadline(self):
+        process = mock.Mock(pid=2468, returncode=None)
+        process.poll.return_value = None
+        process.wait.side_effect = snapshot.subprocess.TimeoutExpired(["journalctl"], 0.01)
+        with mock.patch.object(snapshot.subprocess, "Popen", return_value=process), \
+                mock.patch.object(snapshot, "read_command", return_value={"output": "partial denial", "bytes": 14}), \
+                mock.patch.object(snapshot.time, "monotonic", return_value=0):
+            result = snapshot.command(["journalctl"], 0.01)
+        self.assertEqual(result["output"], "partial denial")
+        self.assertLessEqual(process.wait.call_args.kwargs["timeout"], 0.01)
+        process.stdout.close.assert_called_once()
+        self.assertFalse(result["cleanup"]["reaped"])
+        self.assertEqual(result["cleanup"]["pid"], 2468)
+
+    def test_failed_fallback_retains_prior_snapshot_and_stops_command_expansion(self):
+        journal = CLEAN_COMMAND | {"returncode": 1, "output": "permission denied"}
+        fallback = {"output": "partial audit", "cleanup": {"reaped": False, "stdoutClosed": True, "pid": 2468}}
+        with mock.patch.object(snapshot, "command", side_effect=[journal, fallback]) as command, \
+                mock.patch.object(snapshot, "read_file", return_value="1"), \
+                mock.patch.object(snapshot, "mounts", return_value=[{"options": "nosuid"}]), \
+                mock.patch.dict(os.environ, MESH_WORKER_EPERM_SUDO="1", GITHUB_ACTIONS="true"):
+            result = snapshot.capture({}, "/fixture", time.monotonic() + 1)
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(result["kernelJournal"], journal)
+        self.assertEqual(result["kernelDmesg"], fallback)
+        self.assertEqual(result["sysctls"]["kernel/apparmor_restrict_unprivileged_userns"], "1")
+        self.assertEqual(result["mounts"], [{"options": "nosuid"}])
+        self.assertFalse(result["cleanupConfirmed"])
 
     def test_sysctl_file_and_retained_log_byte_bounds(self):
         with tempfile.TemporaryDirectory(prefix="eperm-bytes-") as directory:
@@ -272,13 +332,13 @@ class SnapshotControls(unittest.TestCase):
         self.assertEqual(cwd["options"], "rw,noexec,nosuid")
 
     def test_sudo_is_read_only_explicit_and_hosted_only(self):
-        with mock.patch.object(snapshot, "command", return_value={"returncode": 1, "bytes": 0}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "true"}):
+        with mock.patch.object(snapshot, "command", return_value=CLEAN_COMMAND | {"returncode": 1, "bytes": 0}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "true"}):
             snapshot.capture({}, "/fixture", time.monotonic() + 6)
         self.assertEqual(command.call_args.args[0][:4], ["sudo", "-n", "journalctl", "-k"])
-        with mock.patch.object(snapshot, "command", return_value={"returncode": 0, "bytes": 10}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "false"}):
+        with mock.patch.object(snapshot, "command", return_value=CLEAN_COMMAND | {"returncode": 0, "bytes": 10}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "false"}):
             snapshot.capture({}, "/fixture", time.monotonic() + 6)
         self.assertEqual(command.call_count, 1)
-        with mock.patch.object(snapshot, "command", return_value={"returncode": 0, "bytes": 10}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "true"}):
+        with mock.patch.object(snapshot, "command", return_value=CLEAN_COMMAND | {"returncode": 0, "bytes": 10}) as command, mock.patch.object(snapshot, "read_file", return_value="0"), mock.patch.object(snapshot, "mounts", return_value=[]), mock.patch.dict(os.environ, {"MESH_WORKER_EPERM_SUDO": "1", "GITHUB_ACTIONS": "true"}):
             snapshot.capture({}, "/fixture", time.monotonic() + 6)
         self.assertEqual(command.call_count, 1)
 

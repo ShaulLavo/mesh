@@ -209,6 +209,9 @@ def retain_eperm(ledger, process, error, directory, record, row, path, deadline)
     release_worker_eperm.persist(ledger, save)
     record["epermRecurrenceCount"] = len(ledger[1]["events"])
     save(path, record)
+    if attempt["snapshot"].get("cleanupConfirmed") is not True:
+        error.add_note("EPERM diagnostic child cleanup is unconfirmed; retry refused")
+        raise error
     release_worker_eperm.ensure_capacity(ledger[1])
 
 

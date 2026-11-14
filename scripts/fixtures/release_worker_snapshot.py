@@ -17,27 +17,58 @@ SYSCTLS = ("kernel/apparmor_restrict_unprivileged_userns", "kernel/unprivileged_
 def command(arguments, deadline):
     end = min(deadline, time.monotonic() + 0.4)
     if end <= time.monotonic():
-        return {"unavailable": "startup deadline exhausted", "arguments": arguments}
+        return {"unavailable": "startup deadline exhausted", "arguments": arguments,
+                "cleanup": {"reaped": True, "stdoutClosed": True}}
     process = None
     try:
         process = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        result = read_command(process, arguments, end)
+        read_end = end - min(0.1, max(0, end - time.monotonic()) / 4)
+        result = read_command(process, arguments, read_end)
     except OSError as error:
         result = dict(evidence.unavailable(error), arguments=arguments)
     finally:
-        close_command(process)
+        cleanup = close_command(process, end)
+    result["cleanup"] = cleanup
     if process is not None:
         result["returncode"] = process.returncode
     return result
 
 
-def close_command(process):
+def close_command(process, deadline):
     if process is None:
+        return {"reaped": True, "stdoutClosed": True}
+    result = {"pid": process.pid, "reaped": False, "stdoutClosed": False}
+    try:
+        terminate_command(process)
+        process.wait(timeout=max(0, deadline - time.monotonic()))
+        result["reaped"] = True
+    except Exception as error:
+        result["error"] = evidence.unavailable(error)
+    finally:
+        close_stdout(process, result)
+    return result
+
+
+def terminate_command(process):
+    if process.poll() is not None:
         return
-    if process.poll() is None:
+    try:
         process.kill()
-    process.wait(timeout=1)
-    process.stdout.close()
+    except ProcessLookupError:
+        pass
+
+
+def close_stdout(process, result):
+    try:
+        process.stdout.close()
+        result["stdoutClosed"] = True
+    except Exception as error:
+        result["stdoutError"] = evidence.unavailable(error)
+
+
+def command_clean(result):
+    cleanup = result.get("cleanup", {})
+    return cleanup.get("reaped") is True and cleanup.get("stdoutClosed") is True
 
 
 def read_command(process, arguments, end):
@@ -109,11 +140,17 @@ def capture(failure, working_directory, deadline):
     args = ["journalctl", "-k", "--since", "@" + str(since), "--until", "@" + str(until),
             "--no-pager", "-n", "128", "-o", "short-iso"]
     result["kernelJournal"] = command(args, deadline)
+    if not command_clean(result["kernelJournal"]):
+        return result | {"cleanupConfirmed": False}
     if not readable(result["kernelJournal"]):
         result["kernelDmesg"] = command(["dmesg", "--time-format", "iso", "--since", iso(since), "--until", iso(until)], deadline)
+    if "kernelDmesg" in result and not command_clean(result["kernelDmesg"]):
+        return result | {"cleanupConfirmed": False}
     needs_access = not readable(result["kernelJournal"]) and not readable(result.get("kernelDmesg", {}))
     if needs_access and os.environ.get("MESH_WORKER_EPERM_SUDO") == "1" and os.environ.get("GITHUB_ACTIONS") == "true":
         result["hostedSudoKernelJournal"] = command(["sudo", "-n"] + args, deadline)
+    result["cleanupConfirmed"] = all(command_clean(value) for name, value in result.items() if name in
+                                     ("kernelJournal", "kernelDmesg", "hostedSudoKernelJournal"))
     return result
 
 

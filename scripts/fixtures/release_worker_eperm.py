@@ -31,7 +31,10 @@ def ledger():
     import fcntl
     path = Path(name).resolve()
     with path.with_suffix(path.suffix + ".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError("EPERM recurrence ledger is busy; cohort startup refused") from error
         value = json.loads(path.read_bytes()) if path.exists() else {"schema": 1, "cap": CAP, "events": []}
         if value.get("schema") != 1 or value.get("cap") != CAP or not isinstance(value.get("events"), list):
             raise ValueError("invalid shared EPERM recurrence ledger")
@@ -81,7 +84,7 @@ def safe_snapshot(operation, failure, deadline):
         cwd = failure.get("workerAtObservation", {}).get("cwd", os.getcwd())
         return operation(failure, cwd if isinstance(cwd, str) else os.getcwd(), deadline)
     except Exception as error:
-        return evidence.unavailable(error)
+        return dict(evidence.unavailable(error), cleanupConfirmed=False)
 
 
 def image(path):
