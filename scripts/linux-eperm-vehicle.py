@@ -195,9 +195,31 @@ def counter(root):
                                  "diagnosticOnly": True, "acceptanceEstablished": False})
 
 
-def removable(state, control):
+def diagnostic_cleanup(root, state):
+    path = root / "eperm-ledger.json"
+    if not state.get("launchAttempted") and not path.exists():
+        return {"confirmed": True, "events": 0}
+    try:
+        value = json.loads(path.read_bytes())
+        if value.get("schema") != 1 or value.get("cap") != 2 or not isinstance(value.get("events"), list):
+            raise ValueError("invalid diagnostic ownership ledger")
+        snapshots = [snapshot_cleanup(event["failure"]["snapshot"]) for event in value["events"]]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        return {"confirmed": False, "error": type(error).__name__ + ": " + str(error)}
+    return {"confirmed": all(row["confirmed"] for row in snapshots), "events": len(snapshots), "snapshots": snapshots}
+
+
+def snapshot_cleanup(snapshot):
+    commands = [name for name in ("kernelJournal", "kernelDmesg", "hostedSudoKernelJournal") if name in snapshot]
+    records = [{"command": name, "cleanup": snapshot[name].get("cleanup", {})} for name in commands]
+    confirmed = snapshot.get("cleanupConfirmed") is True and "kernelJournal" in commands and all(
+        row["cleanup"].get("reaped") is True and row["cleanup"].get("stdoutClosed") is True for row in records)
+    return {"confirmed": confirmed, "commands": records}
+
+
+def removable(state, control, diagnostic):
     return (not state.get("controlAttempted") or control.get("cleanupConfirmed") is True) and (
-        not state.get("launchAttempted") or state.get("nativeCleanupConfirmed") is True)
+        not state.get("launchAttempted") or state.get("nativeCleanupConfirmed") is True) and diagnostic["confirmed"] is True
 
 
 def cleanup(root):
@@ -208,7 +230,8 @@ def cleanup(root):
     except (OSError, ValueError) as error:
         write(root / "cleanup.json", {"payloadsMayBeRemoved": False, "reason": "unreadable ownership evidence; preserve payloads"})
         raise RuntimeError("ownership evidence unreadable; payloads preserved") from error
-    allowed = removable(state, control)
+    diagnostic = diagnostic_cleanup(root, state)
+    allowed = removable(state, control, diagnostic)
     paths = [root / "native.noindex", root / "manifest.noindex"]
     if not state and any(path.exists() for path in paths):
         allowed = False
@@ -221,7 +244,7 @@ def cleanup(root):
         if short.exists() and short.stat().st_uid != os.getuid():
             raise RuntimeError("cleanup scratch owner differs; preserve payloads")
         paths.append(short)
-    write(root / "cleanup.json", {"payloadsMayBeRemoved": allowed, "paths": list(map(str, paths)),
+    write(root / "cleanup.json", {"payloadsMayBeRemoved": allowed, "paths": list(map(str, paths)), "diagnosticCleanup": diagnostic,
                                 "reason": "owned resources absent or never launched" if allowed else "ownership unconfirmed; preserve payloads"})
     if not allowed:
         raise RuntimeError("ownership unconfirmed; payloads preserved")
@@ -229,6 +252,7 @@ def cleanup(root):
         if path.exists():
             shutil.rmtree(path)
     write(root / "cleanup.json", {"payloadsMayBeRemoved": True, "payloadsAbsent": all(not path.exists() for path in paths),
+                                "diagnosticCleanup": diagnostic,
                                 "removed": list(map(str, paths))})
 
 

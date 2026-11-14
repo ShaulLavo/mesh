@@ -156,6 +156,61 @@ class VehicleTests(unittest.TestCase):
             vehicle.cleanup(self.root)
         self.assertTrue(payload.exists())
 
+    def test_native_teardown_does_not_hide_unreaped_diagnostic_child(self):
+        short = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="me-", suffix=".noindex")))
+        state = {"scratch": str(short)}
+        payload = self.root / "native.noindex"
+        payload.mkdir()
+        with patch.object(vehicle.subprocess, "Popen", return_value=Mock(pid=123)), patch.object(
+                vehicle.installed_clock, "NativeOwnership"), patch.object(vehicle.installed_releases,
+                "wait_transition", side_effect=self.fail_with_unreaped_diagnostic), patch.object(
+                vehicle.installed_releases, "stop_transition"):
+            with self.assertRaisesRegex(RuntimeError, "original EPERM"):
+                vehicle.run_proof(self.root, self.root, self.root / "one.list", state, "a" * 40)
+        self.assertTrue(state["nativeCleanupConfirmed"])
+        with self.assertRaisesRegex(RuntimeError, "preserved"):
+            vehicle.cleanup(self.root)
+        decision = json.loads((self.root / "cleanup.json").read_bytes())
+        self.assertFalse(decision["payloadsMayBeRemoved"])
+        child = decision["diagnosticCleanup"]["snapshots"][0]["commands"][0]["cleanup"]
+        self.assertEqual(child["pid"], 9753)
+        self.assertFalse(child["reaped"])
+        self.assertTrue(payload.exists())
+        self.assertTrue(short.exists())
+
+    def fail_with_unreaped_diagnostic(self, *_):
+        value = {"cleanupConfirmed": False, "kernelJournal": {
+            "cleanup": {"pid": 9753, "reaped": False, "stdoutClosed": True}}}
+        vehicle.write(self.root / "eperm-ledger.json", {"schema": 1, "cap": 2, "events": [{"failure": {"snapshot": value}}]})
+        raise RuntimeError("original EPERM; diagnostic cleanup unconfirmed")
+
+    def test_missing_or_invalid_required_diagnostic_ledger_preserves_payloads(self):
+        vehicle.write(self.root / "state.json", {"launchAttempted": True, "nativeCleanupConfirmed": True})
+        payload = self.root / "native.noindex"
+        payload.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "preserved"):
+            vehicle.cleanup(self.root)
+        for data in ("incomplete", "{}", '{"schema":1,"cap":2,"events":[{}]}'):
+            (self.root / "eperm-ledger.json").write_text(data)
+            with self.assertRaisesRegex(RuntimeError, "preserved"):
+                vehicle.cleanup(self.root)
+            self.assertTrue(payload.exists())
+
+    def test_snapshot_header_cannot_override_unreaped_command(self):
+        value = snapshot_value()
+        value["kernelJournal"]["cleanup"] = {"pid": 9753, "reaped": False, "stdoutClosed": True}
+        self.assertFalse(vehicle.snapshot_cleanup(value)["confirmed"])
+
+    def test_complete_empty_ledger_allows_confirmed_native_cleanup(self):
+        vehicle.write(self.root / "state.json", {"launchAttempted": True, "nativeCleanupConfirmed": True})
+        vehicle.write(self.root / "eperm-ledger.json", {"schema": 1, "cap": 2, "events": []})
+        payload = self.root / "native.noindex"
+        payload.mkdir()
+        vehicle.cleanup(self.root)
+        self.assertFalse(payload.exists())
+        decision = json.loads((self.root / "cleanup.json").read_bytes())
+        self.assertTrue(decision["diagnosticCleanup"]["confirmed"])
+
     def test_confirmed_and_prelaunch_cleanup_is_idempotent(self):
         vehicle.write(self.root / "state.json", {"launchAttempted": False})
         (self.root / "native.noindex").mkdir()
