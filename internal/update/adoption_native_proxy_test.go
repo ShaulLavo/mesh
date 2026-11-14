@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -164,15 +165,22 @@ func (p *adoptionNativeProxy) serve(w http.ResponseWriter, request *http.Request
 }
 
 func (file adoptionNativeFile) serve(w http.ResponseWriter, request *http.Request) {
-	reader, err := file.root.Open(file.path)
+	reader, err := file.root.OpenFile(file.path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		http.NotFound(w, request)
 		return
 	}
 	defer func() { _ = reader.Close() }()
+	info, err := reader.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != file.size {
+		http.NotFound(w, request)
+		return
+	}
 	// Keep the byte handler's sniffing, HEAD and ignored Range behavior. Bound
 	// each response to the registered size without materializing the asset.
-	_, _ = io.CopyN(w, reader, file.size)
+	if _, err := io.CopyN(w, reader, file.size); err != nil {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 type adoptionSingleConnection struct {

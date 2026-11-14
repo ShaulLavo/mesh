@@ -166,6 +166,69 @@ func assertPreparedRecordedBytes(t *testing.T, proxy *adoptionNativeProxy, name 
 	}
 }
 
+func TestPreparedChangedFileShape(t *testing.T) {
+	for _, kind := range []string{"short", "directory"} {
+		t.Run(kind, func(t *testing.T) { assertPreparedChangedShape(t, kind) })
+	}
+}
+
+func assertPreparedChangedShape(t *testing.T, kind string) {
+	t.Helper()
+	root, file := preparedMutationFile(t, []byte("immutable"))
+	if err := root.Remove("asset"); err != nil {
+		t.Fatal(err)
+	}
+	if kind == "directory" {
+		if err := root.Mkdir("asset", 0700); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		installedWrite(t, root, "asset", []byte("short"))
+	}
+	response := httptest.NewRecorder()
+	file.serve(response, httptest.NewRequest(http.MethodGet, "https://github.com/asset", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("changed file shape returned %d", response.Code)
+	}
+}
+
+func preparedMutationFile(t *testing.T, content []byte) (*os.Root, adoptionNativeFile) {
+	t.Helper()
+	root := installedServingRoot(t)
+	installedWrite(t, root, "asset", content)
+	proxy := &adoptionNativeProxy{files: make(map[string][]byte)}
+	if err := proxy.putFile(root, "registered", "asset"); err != nil {
+		t.Fatal(err)
+	}
+	return root, proxy.filesOnDisk["registered"]
+}
+
+type preparedTruncatingWriter struct {
+	http.ResponseWriter
+	root *os.Root
+	err  error
+}
+
+func (writer *preparedTruncatingWriter) Write(data []byte) (int, error) {
+	count, err := writer.ResponseWriter.Write(data)
+	writer.err = writer.root.WriteFile("asset", nil, 0600)
+	return count, err
+}
+
+func TestPreparedCopyFailureAbortsResponse(t *testing.T) {
+	root, file := preparedMutationFile(t, bytes.Repeat([]byte("x"), 128<<10))
+	writer := &preparedTruncatingWriter{ResponseWriter: httptest.NewRecorder(), root: root}
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("copy failure did not abort the response: %v", got)
+		}
+		if writer.err != nil {
+			t.Fatal(writer.err)
+		}
+	}()
+	file.serve(writer, httptest.NewRequest(http.MethodGet, "https://github.com/asset", nil))
+}
+
 func BenchmarkPreparedFileRegistration(b *testing.B) {
 	root := installedServingRoot(b)
 	payload := bytes.Repeat([]byte("fixture-"), (4<<20)/8)
