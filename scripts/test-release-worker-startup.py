@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Owned subprocess controls for fixture startup, not a kernel EPERM reproducer."""
+from contextlib import closing
 import hashlib
 import json
 import math
@@ -123,7 +124,7 @@ class StartupFinalizer(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="mesh-startup-finalizer-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        with sqlite3.connect(self.root / "mesh.db") as database:
+        with closing(sqlite3.connect(self.root / "mesh.db")) as database, database:
             database.execute("CREATE TABLE hosts (id TEXT)")
             database.execute("INSERT INTO hosts VALUES ('owned-host')")
         self.path = self.root / "cohort.json"
