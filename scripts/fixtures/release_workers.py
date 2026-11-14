@@ -319,10 +319,20 @@ def start(state, config, selected, path, publish=False):
         if publish:
             record["initialPublication"] = wait_publication(state, host, record["workers"])
             save(path, record)
-    except BaseException:
-        stop(path)
+    except BaseException as error:
+        cleanup_start_failure(path, error)
         raise
     return record
+
+
+def cleanup_start_failure(path, error):
+    from fixtures import installed_clock
+    try:
+        with installed_clock.cleanup_handoff():
+            stop(path)
+    except BaseException as cleanup_error:
+        error.add_note(f"worker cohort startup cleanup failed; resources unconfirmed, record retained at {path}: "
+                       f"{type(cleanup_error).__name__}: {cleanup_error}")
 
 
 def publication_time(value):
@@ -348,8 +358,8 @@ def publication_members(state, workers):
 def wait_publication(state, host, workers):
     expected = publication_members(state, workers)
     visible = set()
-    # The installed caller's existing 90-second startup subprocess owns this
-    # blocking watch too. Receiving a frame never renews that absolute bound.
+    # The inherited parent deadline also bounds this blocking watch.
+    # Receiving a frame never renews that absolute bound.
     with socket.socket(socket.AF_UNIX) as connection:
         connection.connect(str(state / "daemon.sock"))
         control(connection, {"type": "state.watch", "requestId": "cohort-publication", "watch": {"topics": ["host", "sessions"]}})

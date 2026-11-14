@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -98,8 +99,9 @@ class OwnedStartup(unittest.TestCase):
     def test_real_children_retry_once_keep_image_and_ownership_and_are_reaped(self):
         self.real_spawn = subprocess.Popen
         item = {"version": "synthetic", "artifact": {"binarySha256": self.row["digest"]}}
-        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(workers.subprocess, "Popen", side_effect=self.spawn), \
-                mock.patch.object(installed_clock, "parent_deadline", side_effect=lambda: time.monotonic_ns() + 1200_000_000_000), \
+        environment = {installed_clock.HANDOFF_ENV: str(time.monotonic_ns() + 120 * installed_clock.SECOND)}
+        with mock.patch.dict(os.environ, environment, clear=True), installed_clock.inherited_handoff(watchdog=True), \
+                mock.patch.object(workers.subprocess, "Popen", side_effect=self.spawn), \
                 mock.patch("fixtures.release_worker_snapshot.capture", return_value={"cleanupConfirmed": True}), eperm.ledger(self.path) as ledger:
             workers.launch_selected(self.binary, self.arguments, {}, self.root, item, self.record, self.row, self.path, ledger)
         self.assertEqual(len(self.processes), 2)
@@ -113,6 +115,91 @@ class OwnedStartup(unittest.TestCase):
         shell = json.loads((self.root / "meta.json").read_text())["pid"]
         self.assertEqual(workers.process_info(shell)[0], self.processes[1].pid)
         self.assertIsNone(self.processes[1].poll())
+
+
+class StartupFinalizer(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="mesh-startup-finalizer-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        with sqlite3.connect(self.root / "mesh.db") as database:
+            database.execute("CREATE TABLE hosts (id TEXT)")
+            database.execute("INSERT INTO hosts VALUES ('owned-host')")
+        self.path = self.root / "cohort.json"
+        self.log = self.root / "worker.log"
+        self.primary = installed_clock.ClockExpired("original startup deadline failure")
+        self.now = time.monotonic_ns()
+        self.work_end = self.now + 120 * installed_clock.SECOND
+        self.endpoints = []
+        self.real_stop_one = workers.stop_one
+        self.cleanup_error = None
+
+    def fail_start(self, _state, _config, _item, _index, _host, record, path):
+        record["workers"] = [{"session": "first", "pid": 0, "shellPid": 0},
+                             {"session": "second", "pid": 0, "shellPid": 0}]
+        record["startupFailure"] = "original diagnostic"
+        workers.save(path, record)
+        self.log.write_text("original worker failure\n")
+        self.now = self.work_end + installed_clock.SECOND
+        # A delivered one-shot work alarm is already disarmed on entry to cleanup.
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        raise self.primary
+
+    def stop_one(self, worker):
+        end = installed_clock.cleanup_deadline()
+        self.endpoints.append(end)
+        self.assertGreater(end, self.now)
+        self.assertEqual(installed_clock.parent_deadline(), end)
+        self.assertGreater(installed_clock.timeout(), 0)
+        self.assertEqual(installed_clock.handoff_environment(), {installed_clock.HANDOFF_ENV: str(end)})
+        with installed_clock.cleanup_handoff() as nested:
+            self.assertEqual(nested, end)
+            self.assertEqual(workers.hang_deadline(), end / installed_clock.SECOND)
+            self.real_stop_one(worker)
+        if self.cleanup_error:
+            raise self.cleanup_error
+
+    def run_failure(self):
+        environment = {installed_clock.HANDOFF_ENV: str(self.work_end)}
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(installed_clock.time, "monotonic_ns", side_effect=lambda: self.now), \
+                mock.patch.object(workers.time, "monotonic", side_effect=lambda: self.now / installed_clock.SECOND), \
+                mock.patch("fixtures.release_worker_evidence.positive_control", return_value={"controlled": True}), \
+                mock.patch.object(workers, "start_one", side_effect=self.fail_start), \
+                mock.patch.object(workers, "stop_one", side_effect=self.stop_one), \
+                installed_clock.inherited_handoff(watchdog=True):
+            self.assert_start_failure()
+            with self.assertRaises(installed_clock.ClockExpired):
+                installed_clock.timeout()
+        self.assertIsNone(installed_clock.HANDOFF.get())
+        self.assertIsNone(installed_clock.CLEANUP_HANDOFF.get())
+        self.assertEqual(json.loads(self.path.read_text())["startupFailure"], "original diagnostic")
+        self.assertEqual(self.log.read_text(), "original worker failure\n")
+
+    def assert_start_failure(self):
+        try:
+            workers.start(self.root, self.root, [{"selected": "original"}], self.path)
+        except BaseException as error:
+            self.assertIs(error, self.primary)
+        else:
+            self.fail("startup failure was suppressed")
+
+    def test_expired_inherited_work_gets_one_shared_cleanup_endpoint(self):
+        self.run_failure()
+        self.assertEqual(self.endpoints, [self.now + installed_clock.CLEANUP_SECONDS * installed_clock.SECOND] * 2)
+
+    def test_cleanup_base_exception_keeps_identical_startup_error_and_diagnostics(self):
+        self.cleanup_error = KeyboardInterrupt("cleanup interrupted")
+        self.run_failure()
+        self.assertEqual(len(self.endpoints), 1)
+        self.assertIn("KeyboardInterrupt: cleanup interrupted", self.primary.__notes__[0])
+        self.assertIn("resources unconfirmed", self.primary.__notes__[0])
+        self.assertIn(str(self.path), self.primary.__notes__[0])
+
+    def test_startup_base_exception_also_cleans_up_without_replacement(self):
+        self.primary = KeyboardInterrupt("original startup interruption")
+        self.run_failure()
+        self.assertEqual(len(self.endpoints), 2)
 
 
 if __name__ == "__main__":

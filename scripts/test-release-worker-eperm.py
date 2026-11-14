@@ -39,7 +39,6 @@ class RetryControls(unittest.TestCase):
         self.errors = [RuntimeError("original startup EPERM"), None]
         self.failure_log = LOG
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(installed_clock, "parent_deadline", side_effect=lambda: time.monotonic_ns() + 1200_000_000_000).start()
         mock.patch.dict(os.environ, MESH_WORKER_EPERM_LEDGER=str(self.ledger)).start()
         mock.patch.object(workers, "spawn_selected", side_effect=self.spawn).start()
         mock.patch.object(workers, "wait_startup", side_effect=self.wait).start()
