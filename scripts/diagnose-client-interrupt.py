@@ -179,9 +179,10 @@ def finish(owned, primary, clock):
     try:
         owned.finish(primary)
     except BaseException as error:
-        if primary is None:
+        original = primary or owned.cleanup_error
+        if original is None:
             raise
-        primary.add_note("diagnostic cleanup also failed: " + type(error).__name__)
+        original.add_note("diagnostic cleanup also failed: " + type(error).__name__)
     def export():
         return clock.export(owned.output / "fixture-clock.json", owned.record["cleanupVerified"],
             {"harness": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),

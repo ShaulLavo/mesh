@@ -1,4 +1,5 @@
 """Real external socket tracing and pure one-case diagnostic safety controls."""
+from contextlib import nullcontext
 import ast
 import importlib.util
 import io
@@ -195,6 +196,40 @@ class DiagnosticTest(unittest.TestCase):
         with patch.object(VEHICLE.subprocess, "check_output", return_value="a" * 40):
             VEHICLE.finish(owned, None, clock)
         self.assertIn("ValueError", original.__notes__[0])
+
+    def test_record_write_failure_preserves_native_cleanup_error_through_run(self):
+        original = OSError("native service cleanup failed")
+        owned = SimpleNamespace(prepare=Mock(), execute=Mock(), cleanup_error=None,
+                                output=self.root, record={"cleanupVerified": False})
+
+        def failed_finish(_primary):
+            owned.cleanup_error = original
+            raise ValueError("diagnostic result write failed")
+
+        owned.finish = failed_finish
+        clock = SimpleNamespace(activate=Mock(return_value=nullcontext()),
+                                export=Mock(side_effect=OSError("clock write failed")))
+        with patch.object(VEHICLE, "Run", return_value=owned), \
+                patch.object(installed_clock, "Clock", return_value=clock), \
+                patch.object(VEHICLE.subprocess, "check_output", return_value="a" * 40):
+            self.check_cleanup_error_through_run(original)
+        clock.export.assert_called_once()
+        self.assertIn("ValueError", original.__notes__[0])
+        self.assertIn("OSError", original.__notes__[1])
+
+    def check_cleanup_error_through_run(self, original):
+        with self.assertRaises(OSError) as caught:
+            VEHICLE.run(SimpleNamespace(output=self.root))
+        self.assertIs(caught.exception, original)
+
+    def test_record_write_failure_without_prior_error_stays_terminal(self):
+        original = ValueError("diagnostic result write failed")
+        owned = SimpleNamespace(finish=Mock(side_effect=original), cleanup_error=None)
+        clock = SimpleNamespace(export=Mock())
+        with self.assertRaises(ValueError) as caught:
+            VEHICLE.finish(owned, None, clock)
+        self.assertIs(caught.exception, original)
+        clock.export.assert_not_called()
 
     def test_existing_preparation_uses_only_original_pc_pair_prior_and_one_genuine_proof(self):
         self.check_preparation()
