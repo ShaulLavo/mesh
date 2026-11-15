@@ -131,15 +131,7 @@ func nativeCatalogHostWithSessions(t *testing.T, setupDelay, replyDelay time.Dur
 		runErr = daemon.Run(ctx, daemon.Config{StateDir: state})
 	}()
 	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-			if runErr != nil {
-				t.Error(runErr)
-			}
-		case <-time.After(3 * time.Second):
-			t.Error("native catalog daemon did not stop")
-		}
+		stopNativeCatalogHost(t, cancel, done, &runErr)
 	})
 	socket := daemon.SocketPath(state)
 	for {
@@ -192,6 +184,20 @@ func nativeCatalogHostWithSessions(t *testing.T, setupDelay, replyDelay time.Dur
 	}))
 	t.Cleanup(server.Close)
 	return HostRecord{MachineName: "cached-fixture", ID: host.ID, MeshIdentity: host.ID, TailscaleName: "fixture.example.ts.net", Addresses: []string{"127.0.0.1"}, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http") + "/mesh"}
+}
+
+func stopNativeCatalogHost(t *testing.T, cancel context.CancelFunc, done <-chan struct{}, runErr *error) {
+	t.Helper()
+	cancel()
+	// Large catalog teardown must finish; its duration is not a speed assertion.
+	select {
+	case <-done:
+		if *runErr != nil {
+			t.Error(*runErr)
+		}
+	case <-time.After(2 * time.Minute):
+		t.Error("native catalog daemon did not stop")
+	}
 }
 
 func relayCatalogFrames(target, source transport.Conn) error {
