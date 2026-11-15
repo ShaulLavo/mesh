@@ -615,7 +615,8 @@ class WiringTests(unittest.TestCase):
         self.assertIn("steps.eperm-cleanup.outcome == 'success' && steps.proof-upload.outcome == 'success'", self.prove)
 
     def test_download_one_retry_budgets_and_original_reader_coverage_stay(self):
-        self.assertEqual(self.prove.count("timeout-minutes: 2\n"), 2)
+        downloads = self.prove.split("      - name: Download native proof inputs", 1)[1]
+        self.assertEqual(downloads.count("timeout-minutes: 2\n"), 2)
         self.assertEqual(self.prove.count("name: Retry native proof inputs once"), 1)
         self.assertIn("timeout-minutes: 15\n", self.prove)
         self.assertIn('status = process.wait(timeout=600)', Path(runner.__file__).read_text())
@@ -624,6 +625,27 @@ class WiringTests(unittest.TestCase):
         self.assertIn("needs: [policy, prepare, prove]", reader)
         self.assertIn("scripts/collect-update-proofs.py", reader)
         self.assertIn("scripts/prove-legacy-release-reader.py", reader)
+
+    def test_exact_producer_cache_preserves_artifact_fallback_and_consumers(self):
+        prepare = self.workflow.split("\n  prepare:\n", 1)[1].split("\n  context:\n", 1)[0]
+        save = prepare.split("      - name: Cache this exact native preparation", 1)[1].split("      - uses:", 1)[0]
+        restore = self.prove.split("      - name: Restore this exact producer", 1)[1].split("      - name:", 1)[0]
+        key = "mesh-native-inputs-v1-${{ matrix.key }}-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+        for step in (save, restore):
+            self.assertIn("key: " + key, step)
+            self.assertIn("path: ${{ runner.temp }}/mesh-native.noindex", step)
+            self.assertIn("continue-on-error: true", step)
+            self.assertNotIn("restore-keys:", step)
+        self.assertIn("actions/cache/save@", save)
+        self.assertIn("actions/cache/restore@", restore)
+        self.assertIn("timeout-minutes: 2", restore)
+        fallback = self.prove.split("      - name: Remove incomplete cached inputs", 1)[1].split("      - name: Remove incomplete native", 1)[0]
+        self.assertEqual(fallback.count("if: steps.native-cache.outputs.cache-hit != 'true'"), 2)
+        self.assertLess(fallback.index('rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"'), fallback.index("id: native-download"))
+        self.assertLess(prepare.index("name: update-native-${{ matrix.key }}"), prepare.index("actions/cache/save@"))
+        self.assertLess(prepare.index("actions/cache/save@"), prepare.index("Remove native staging"))
+        self.assertIn("pattern: update-native-*", self.workflow.split("\n  reader:\n", 1)[1])
+        self.assertIn("if: steps.native-download.outcome == 'failure'", self.prove)
 
     def test_single_existing_blocking_gate_contains_integration_controls(self):
         gates = (REPO / "scripts/check-packaging.sh").read_text()

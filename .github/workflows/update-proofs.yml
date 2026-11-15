@@ -200,6 +200,14 @@ jobs:
           name: update-native-${{ matrix.key }}
           path: ${{ runner.temp }}/mesh-native.noindex
           retention-days: 1
+      # Cache's solid zstd archive shares bytes between historical executables.
+      # Keep the full artifact for installed consumers and cache misses.
+      - name: Cache this exact native preparation for parallel proof shards
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mesh-native.noindex
+          key: mesh-native-inputs-v1-${{ matrix.key }}-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-context-${{ matrix.key }}
@@ -278,8 +286,22 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
           python3 scripts/fixtures/noindex_paths.py "$RUNNER_TEMP/mesh-native.noindex"
+      - name: Restore this exact producer's native proof inputs
+        id: native-cache
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/mesh-native.noindex
+          key: mesh-native-inputs-v1-${{ matrix.key }}-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Remove incomplete cached inputs before artifact fallback
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"
+          mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
       - name: Download native proof inputs
         id: native-download
+        if: steps.native-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
