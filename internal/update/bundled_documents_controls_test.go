@@ -192,6 +192,37 @@ func TestBundledDocumentsKeepSemanticReceiptValidation(t *testing.T) {
 	}
 }
 
+func TestHostSourceOperationClosesAfterCancellation(t *testing.T) {
+	f := newHostFixture(t)
+	scratch := t.TempDir()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	closed := 0
+	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, func() error, error) {
+		documents, err := OpenHostDocuments(ctx, f.documents.Client, f.documents.Trust, scratch)
+		if err != nil {
+			return HostSource{}, release.DocumentSource{}, nil, err
+		}
+		source, err := documents.Current(ctx, current)
+		if err != nil {
+			_ = documents.Close()
+			return HostSource{}, release.DocumentSource{}, nil, err
+		}
+		cancel()
+		return source, documents.Source(), func() error { closed++; return documents.Close() }, nil
+	}
+	if err := f.updater.Tick(ctx); err == nil {
+		t.Fatal("canceled update operation succeeded")
+	}
+	if closed != 1 {
+		t.Fatalf("factory cleanup ran %d times", closed)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("factory backing retained after cancellation: %v %v", entries, err)
+	}
+}
+
 func TestBundledDocumentsMaterializeActualPhysicalSnapshot(t *testing.T) {
 	f := newHostFixture(t)
 	version := f.current.Version

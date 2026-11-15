@@ -40,6 +40,9 @@ func (d HostDocuments) Close() error { return hostError(d.store.Close()) }
 func (d HostDocuments) Source() release.DocumentSource {
 	return release.DocumentSource{Read: func(ctx context.Context, ref release.AssetRef, kind release.DocumentKind) ([]byte, error) {
 		if ref.Tag == release.LatestDiscoveryTag {
+			if ref.Name != release.DiscoveryRootAssetName || kind != release.RootDocument || ref.SHA256 != "" {
+				return nil, errors.New("update: unsupported latest discovery reference")
+			}
 			return d.latestHint(ctx)
 		}
 		if ref.SHA256 == "" && ref.Name == release.UpdateMetadataAssetName && kind == release.MetadataDocument {

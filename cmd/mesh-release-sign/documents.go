@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,29 +46,15 @@ func packDocuments(args []string) error {
 	}()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	hash := sha256.New()
-	count := &countWriter{writer: io.MultiWriter(output, hash)}
-	result, err := releasedocuments.Pack(ctx, args[0], members, binding, count)
+	result, err := releasedocuments.Pack(ctx, args[0], members, binding, output)
 	if err != nil {
 		return signingError(err)
 	}
 	if err := output.Close(); err != nil {
 		return signingError(err)
 	}
-	result.Archive = releasedocuments.Document{Name: releasedocuments.ArchiveName, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: count.size}
 	complete = true
 	return signingError(json.NewEncoder(os.Stdout).Encode(result))
-}
-
-type countWriter struct {
-	writer io.Writer
-	size   int64
-}
-
-func (w *countWriter) Write(data []byte) (int, error) {
-	n, err := w.writer.Write(data)
-	w.size += int64(n)
-	return n, signingError(err)
 }
 
 func materializeDocuments(args []string) error {

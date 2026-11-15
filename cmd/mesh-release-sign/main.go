@@ -25,7 +25,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mesh-release-sign metadata|wrap|verify|verify-metadata|refresh ...")
+		return errors.New("usage: mesh-release-sign metadata|wrap|verify|verify-metadata|refresh|pack-documents|materialize-documents|identity ...")
 	}
 	switch args[0] {
 	case "metadata":

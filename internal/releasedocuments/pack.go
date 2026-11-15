@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,7 +66,8 @@ func encodeArchive(ctx context.Context, root *os.Root, catalog catalog, output i
 	if expanded > MaxExpanded {
 		return result, errors.New("documents: expanded archive exceeds bound")
 	}
-	bounded := &boundedWriter{writer: output, remaining: MaxCompressed}
+	hash := sha256.New()
+	bounded := &boundedWriter{writer: io.MultiWriter(output, hash), remaining: MaxCompressed}
 	compressed := gzip.NewWriter(bounded)
 	archive := tar.NewWriter(compressed)
 	if err := writeMember(archive, catalogName, encoded); err != nil {
@@ -81,7 +84,7 @@ func encodeArchive(ctx context.Context, root *os.Root, catalog catalog, output i
 	if err := compressed.Close(); err != nil {
 		return result, documentError(err)
 	}
-	return Packed{Inventory: Inventory{Schema: 1, Binding: catalog.Binding, Documents: catalog.Documents}}, nil
+	return Packed{Inventory: Inventory{Schema: 1, Binding: catalog.Binding, Documents: catalog.Documents}, Archive: Document{Name: ArchiveName, SHA256: hex.EncodeToString(hash.Sum(nil)), Size: MaxCompressed - bounded.remaining}}, nil
 }
 
 type boundedWriter struct {
