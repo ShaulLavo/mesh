@@ -127,7 +127,7 @@ def cleanup(root):
     scratch = proof / "scratch-cleanup.json"
     removed = json.loads(scratch.read_bytes()) if scratch.exists() else {}
     absent = removed.get("absent") is True and isinstance(removed.get("root"), str) and not Path(removed["root"]).exists()
-    names = ("native-worker-input.noindex", "native-tools.noindex", "publication-trust", "publication-draft-input")
+    names = ("native-worker-input.noindex", "native-tools.noindex", "publication-tools", "publication-trust", "publication-draft-input")
     allowed = not launched or absent
     decision = {"inputsMayBeRemoved": allowed, "retained": [] if allowed else [str(root / name) for name in names]}
     (control / "tools-cleanup-decision.json").write_text(json.dumps(decision) + "\n")

@@ -41,13 +41,13 @@ func reserveHostWithoutStage(t *testing.T, f *hostFixture) OwnedRequest {
 func TestHostPolicyRevisionDuringDiscoveryPreventsOwnership(t *testing.T) {
 	f := newHostFixture(t)
 	read := f.updater.Source
-	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, error) {
-		source, documents, err := read(ctx, current)
+	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, func() error, error) {
+		source, documents, closeDocuments, err := read(ctx, current)
 		if err != nil {
-			return source, documents, err
+			return source, documents, closeDocuments, err
 		}
 		_, err = f.store.SetHostPolicy(ctx, 1, HostPolicy{Mode: HostManual})
-		return source, documents, err
+		return source, documents, closeDocuments, err
 	}
 	if err := f.updater.Tick(t.Context()); err == nil {
 		t.Fatal("policy change did not fence discovery")

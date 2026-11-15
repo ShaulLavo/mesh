@@ -1,6 +1,7 @@
 package update
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -90,6 +91,11 @@ func newSigningFixture(t *testing.T) *signingFixture {
 
 func (fixture *signingFixture) envelope(t *testing.T, subjects ...[]byte) []byte {
 	t.Helper()
+	return fixture.envelopeContext(t.Context(), t, subjects...)
+}
+
+func (fixture *signingFixture) envelopeContext(ctx context.Context, t *testing.T, subjects ...[]byte) []byte {
+	t.Helper()
 	var entries []map[string]any
 	for _, subject := range subjects {
 		digest := sha256.Sum256(subject)
@@ -105,7 +111,7 @@ func (fixture *signingFixture) envelope(t *testing.T, subjects ...[]byte) []byte
 	}
 	leaf := fixture.leaf(t, key.GetPublicKey())
 	data := &sign.DSSEData{Data: statement, PayloadType: "application/vnd.in-toto+json"}
-	sig, digest, err := key.SignData(t.Context(), data.PreAuthEncoding())
+	sig, digest, err := key.SignData(ctx, data.PreAuthEncoding())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -38,7 +38,7 @@ func TestFailedSigningNeverWritesEnvelope(t *testing.T) {
 }
 
 func TestReleaseSignerRejectsMissingFilesAndArguments(t *testing.T) {
-	for _, args := range [][]string{nil, {"unknown"}, {"wrap"}, {"verify"}, {"metadata"}, {"verify-metadata"}, {"refresh"}, {"metadata", "missing"}, {"verify", "missing", "missing"}} {
+	for _, args := range [][]string{nil, {"unknown"}, {"wrap"}, {"verify"}, {"metadata"}, {"verify-metadata"}, {"refresh"}, {"pack-documents"}, {"materialize-documents"}, {"materialize-history"}, {"identity", "extra"}, {"metadata", "missing"}, {"verify", "missing", "missing"}} {
 		if err := run(args); err == nil {
 			t.Fatalf("accepted %v", args)
 		}

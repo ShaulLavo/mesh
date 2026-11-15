@@ -4,6 +4,7 @@ import base64
 import json
 import shlex
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -12,16 +13,26 @@ from terminal_window import Fixture, PROMPT, Terminal, require
 from mesh_control import round_trip
 
 
-def invoke(binary, environment, *args, code=0):
+def invoke(binary, environment, *args, code=0, authentication_denied=False):
     result = subprocess.run([binary, "device", "scope", *args, "--json"],
                             env=environment, capture_output=True, text=True,
                             timeout=6, check=False)
     require(result.returncode == code, f"scope {args}: {result.stdout} {result.stderr}")
-    require(not result.stderr, result.stderr)
+    require_scope_stderr(result.stderr, authentication_denied)
     value = json.loads(result.stdout)
     require(value["schemaVersion"] == 1 and len(value["requestId"]) == 26, value)
     require(value["operation"].startswith("scope."), value)
     return value
+
+
+def require_scope_stderr(stderr, authentication_denied):
+    if not authentication_denied:
+        require(not stderr, stderr)
+        return
+    diagnostic = (r'\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} transport: server=false '
+                  r'stage=(?:tls-handshake|peer-acceptance) classification=terminal '
+                  r'error="transport: Mesh peer authentication failed: [^\r\n]*"\n')
+    require(re.fullmatch(diagnostic, stderr) is not None, f"unexpected authentication diagnostic: {stderr!r}")
 
 
 def exercise(fixture):
@@ -72,7 +83,7 @@ def exercise(fixture):
                      "--expected-revision", "2")
     require(revoked["data"]["changed"], revoked)
     denied = invoke(fixture.binary, caller, "read", "--host", fixture.remote_id,
-                    "--key-dir", str(dedicated), code=1)
+                    "--key-dir", str(dedicated), code=1, authentication_denied=True)
     require(denied["errors"][0]["code"] == "host.authentication_failed", denied)
     os.kill(shell_pid, 0)
     owner.send("printf 'WORKER-SURVIVED-REVOKE\\n'\n")

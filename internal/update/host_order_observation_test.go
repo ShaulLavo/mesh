@@ -25,10 +25,10 @@ func TestHostOrderHeldAtCurrentStillObservesAuthenticatedHead(t *testing.T) {
 	f.head(3)
 	read := f.updater.Source
 	rootReads, verifiedHeads := 0, 0
-	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, error) {
-		source, documents, err := read(ctx, current)
+	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, func() error, error) {
+		source, documents, closeDocuments, err := read(ctx, current)
 		documents = countObservedDocuments(documents, &rootReads, &verifiedHeads)
-		return source, documents, err
+		return source, documents, closeDocuments, err
 	}
 	f.tick()
 	var cursor DiscoveryCursor

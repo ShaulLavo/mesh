@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"time"
 
@@ -92,6 +93,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 	for {
 		frame, err := client.ReadFrame()
 		if err != nil {
+			logClientStreamClose(ctx, terminalUsed, err)
 			return clientOperationError(ctx, "read client frame", err)
 		}
 		if ctx.Err() != nil {
@@ -188,6 +190,12 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		if err := writeClientResponse(ctx, client, relay, responseFrames, response); err != nil {
 			return clientOperationError(ctx, fmt.Sprintf("write %s response", request.Type), err)
 		}
+	}
+}
+
+func logClientStreamClose(ctx context.Context, attached bool, err error) {
+	if attached || !onlyNormalClientErrors(err) {
+		log.Printf("daemon: stage=client-stream-read classification=terminal attached=%t context=%v error=%q", attached, ctx.Err(), err)
 	}
 }
 

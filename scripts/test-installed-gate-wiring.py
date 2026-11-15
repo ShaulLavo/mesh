@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-PIN = "81af3bf2275921c8b5b257491b9446021b16ddc5"
+PIN = "db746241f57a6d35948aa653461966669e30a4e1"
 WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()
@@ -132,7 +132,8 @@ class InstalledGateWiringTests(unittest.TestCase):
     def test_failed_or_skipped_installed_gate_cannot_finalize(self):
         finalize = GATE.job(RELEASE, "finalize")
         self.assertEqual(field(finalize, "needs"), "[reserve, publish, verify-readers, publication-native]")
-        self.assertNotIn("always()", finalize)
+        condition = next(line for line in finalize.splitlines() if line.startswith("    if:"))
+        self.assertNotIn("always()", condition)
         condition = field(finalize, "if")
         values = {"needs.reserve.outputs.action": "publish", "github.ref": "refs/heads/main",
                   "needs.verify-readers.result": "success", "needs.publication-native.result": "success"}

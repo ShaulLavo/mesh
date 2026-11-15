@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -21,6 +22,10 @@ import (
 )
 
 func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
+	var diagnostics bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&diagnostics)
+	t.Cleanup(func() { log.SetOutput(previous) })
 	client := newServerTestConn()
 	worker := newServerTestConn()
 	controlWorker := newServerTestConn()
@@ -85,6 +90,9 @@ func TestClientServerDispatchesRelayAndLifecycleFrames(t *testing.T) {
 	client.pushReadError(io.EOF)
 	if err := waitServerResult(t, done, "client server"); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(diagnostics.String(), `stage=client-stream-read classification=terminal attached=true context=<nil> error="EOF"`) {
+		t.Fatalf("daemon lost suppressed close cause: %q", diagnostics.String())
 	}
 	client.waitClosed(t)
 	worker.waitClosed(t)

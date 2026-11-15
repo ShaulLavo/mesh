@@ -99,11 +99,19 @@ def eventually(check, message, timeout=4):
     raise RuntimeError(message)
 
 
+def redirect_stderr(path):
+    if path is None:
+        return
+    with open(path, "ab", buffering=0) as stream:
+        os.dup2(stream.fileno(), 2)
+
+
 class Terminal:
-    def __init__(self, command, environment, cwd, timeout=4):
+    def __init__(self, command, environment, cwd, timeout=4, stderr_path=None):
         self.pid, self.master = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
+            redirect_stderr(stderr_path)
             fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
             os.execvpe(command[0], command, environment)
         self.output = bytearray()

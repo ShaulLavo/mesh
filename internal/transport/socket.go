@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -254,6 +255,10 @@ func (c *socketConn) fail(err error) {
 	c.trace.Emit(c.ctx, transporttrace.StreamFailed, err)
 	if !c.setCause(err) {
 		return
+	}
+	status := websocket.CloseStatus(err)
+	if status != websocket.StatusNormalClosure && status != websocket.StatusGoingAway {
+		log.Printf("transport: stage=established-stream classification=link-failed error=%q", err)
 	}
 	c.cancel()
 	c.trace.Emit(c.ctx, transporttrace.StreamAbortBegin, nil)

@@ -45,7 +45,7 @@ type HostUpdater struct {
 	ID          string
 	Current     func() release.Build
 	Engine      func(context.Context) (*updateinstall.Engine, error)
-	Source      func(context.Context, release.Build) (HostSource, release.DocumentSource, error)
+	Source      func(context.Context, release.Build) (HostSource, release.DocumentSource, func() error, error)
 	Helper      func(context.Context, release.Manifest) error
 	Probe       updateinstall.Probe
 	Now         func() time.Time
@@ -478,10 +478,11 @@ func (u *HostUpdater) verifyOwned(ctx context.Context, owned OwnedRequest) (host
 	if u.Source == nil || u.Helper == nil || u.Probe == nil {
 		return hostHopProof{}, errors.New("update: owned request verification unavailable")
 	}
-	source, documents, err := u.Source(ctx, u.currentBuild())
+	source, documents, closeDocuments, err := u.Source(ctx, u.currentBuild())
 	if err != nil {
 		return hostHopProof{}, err
 	}
+	defer func() { _ = closeDocuments() }()
 	if err := verifyHostSource(u.currentBuild(), source); err != nil {
 		return hostHopProof{}, err
 	}
@@ -586,10 +587,11 @@ func (u *HostUpdater) discoverObserved(ctx context.Context, state HostUpdate, po
 		return u.attention(ctx, state, "installation", errors.New("executing host identity differs from local observation"))
 	}
 	u.observed, current = health.Build, health.Build
-	source, documents, err := u.Source(ctx, current)
+	source, documents, closeDocuments, err := u.Source(ctx, current)
 	if err != nil {
 		return u.backoff(ctx, state, err)
 	}
+	defer func() { _ = closeDocuments() }()
 	if err := verifyHostSource(current, source); err != nil {
 		return u.attention(ctx, state, "source", err)
 	}

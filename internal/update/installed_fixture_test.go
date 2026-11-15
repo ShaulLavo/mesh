@@ -20,19 +20,28 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/releasedocuments"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 type installedSignRequest struct {
-	Files   []string          `json:"files"`
-	Output  string            `json:"output"`
-	Stop    bool              `json:"stop"`
-	Put     map[string]string `json:"put"`
-	Seed    *installedSeed    `json:"seed"`
-	Inspect string            `json:"inspect"`
-	Ledger  string            `json:"ledger"`
-	Export  string            `json:"export"`
+	Files     []string               `json:"files"`
+	Output    string                 `json:"output"`
+	Stop      bool                   `json:"stop"`
+	Put       map[string]string      `json:"put"`
+	Seed      *installedSeed         `json:"seed"`
+	Inspect   string                 `json:"inspect"`
+	Ledger    string                 `json:"ledger"`
+	Export    string                 `json:"export"`
+	Documents *installedDocumentPack `json:"documents"`
+}
+
+type installedDocumentPack struct {
+	Directory string                   `json:"directory"`
+	Members   []string                 `json:"members"`
+	Binding   releasedocuments.Binding `json:"binding"`
+	Output    string                   `json:"output"`
 }
 
 type installedSeed struct {
@@ -93,17 +102,21 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		t.Fatal(err)
 	}
 	var request installedSignRequest
-	decoder := json.NewDecoder(io.LimitReader(connection, 64<<10))
+	decoder := json.NewDecoder(io.LimitReader(connection, 8<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		t.Fatal(err)
 	}
-	if fixture == nil && (len(request.Files) > 0 || request.Export != "") {
+	if fixture == nil && (len(request.Files) > 0 || request.Export != "" || request.Documents != nil) {
 		_ = json.NewEncoder(connection).Encode(map[string]string{"error": "prepared origin cannot sign or export authority"})
 		return false
 	}
 	if request.Export != "" {
 		exportPreparedOrigin(t, root, proxy, request.Export)
+	}
+	if request.Documents != nil {
+		installedPackDocuments(t, root, *request.Documents)
+		request.Files = append(request.Files, request.Documents.Output)
 	}
 	if len(request.Files) > 0 {
 		installedSignFiles(t, root, fixture, request)
@@ -324,7 +337,7 @@ func installedSeedWithClient(t *testing.T, seed installedSeed, client release.Cl
 
 func installedSignFiles(t *testing.T, root *os.Root, fixture *signingFixture, request installedSignRequest) {
 	t.Helper()
-	if len(request.Files) == 0 || len(request.Files) > 4 || !filepath.IsLocal(request.Output) {
+	if len(request.Files) == 0 || len(request.Files) > 10 || !filepath.IsLocal(request.Output) {
 		t.Fatal("invalid installed fixture signing request")
 	}
 	subjects := make([][]byte, 0, len(request.Files))
@@ -336,4 +349,19 @@ func installedSignFiles(t *testing.T, root *os.Root, fixture *signingFixture, re
 		subjects = append(subjects, contents)
 	}
 	installedWrite(t, root, request.Output, fixture.envelope(t, subjects...))
+}
+
+func installedPackDocuments(t *testing.T, root *os.Root, request installedDocumentPack) {
+	t.Helper()
+	if !filepath.IsLocal(request.Directory) || !filepath.IsLocal(request.Output) {
+		t.Fatal("fixture document paths must be local")
+	}
+	output, err := root.OpenFile(request.Output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, packErr := releasedocuments.Pack(t.Context(), filepath.Join(root.Name(), request.Directory), request.Members, request.Binding, output)
+	if err := errors.Join(packErr, output.Close()); err != nil {
+		t.Fatal(err)
+	}
 }

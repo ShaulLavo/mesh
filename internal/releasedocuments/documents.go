@@ -1,0 +1,317 @@
+// Package releasedocuments owns the authenticated release document container.
+package releasedocuments
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"reflect"
+	"slices"
+	"strings"
+	"syscall"
+
+	"github.com/shaul/mesh/internal/release"
+)
+
+const (
+	ArchiveName   = "mesh-documents.tar.gz"
+	EnvelopeName  = "mesh-update.sig.json"
+	MaxCompressed = 32 << 20
+	MaxExpanded   = 128 << 20
+	MaxMembers    = 32768
+	maxCatalog    = 8 << 20
+	catalogName   = "bundle.json"
+)
+
+type Binding struct {
+	Version   string             `json:"version"`
+	Source    string             `json:"source"`
+	ReleaseID int64              `json:"releaseId"`
+	WriterRun int64              `json:"writerRun"`
+	Platforms []release.Platform `json:"platforms"`
+}
+
+type Document struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+
+type Inventory struct {
+	Schema    int        `json:"schema"`
+	Binding   Binding    `json:"binding"`
+	Documents []Document `json:"documents"`
+}
+
+type Packed struct {
+	Inventory
+	Archive Document `json:"archive"`
+}
+
+type catalog struct {
+	Schema    int        `json:"schema"`
+	Binding   Binding    `json:"binding"`
+	Documents []Document `json:"documents"`
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(data []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, documentError(err)
+	}
+	return r.reader.Read(data) //nolint:wrapcheck // io.Reader requires the original EOF sentinel.
+}
+
+func digest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
+
+func validateBinding(binding Binding) error {
+	if _, err := release.CompareVersions(binding.Version, binding.Version); err != nil {
+		return documentError(err)
+	}
+	if len(binding.Source) != 40 || strings.Trim(binding.Source, "0123456789abcdef") != "" || binding.ReleaseID <= 0 || binding.WriterRun <= 0 {
+		return errors.New("documents: invalid source, release or writer run")
+	}
+	want := []release.Platform{{OS: "darwin", Arch: "arm64"}, {OS: "linux", Arch: "amd64"}, {OS: "linux", Arch: "arm64"}}
+	if !slices.Equal(binding.Platforms, want) {
+		return errors.New("documents: exact sorted platform set required")
+	}
+	return nil
+}
+
+func validName(name string) bool {
+	return name != catalogName && name != EnvelopeName && strings.HasSuffix(name, ".json") &&
+		(release.AssetRef{Tag: "v0.1.1", Name: name, SHA256: strings.Repeat("0", 64)}).Validate() == nil
+}
+
+func documentLimit(name string) int64 {
+	switch name {
+	case release.ManifestAssetName:
+		return int64(release.DocumentLimit(release.ManifestDocument))
+	case release.UpdateMetadataAssetName:
+		return release.MaxMetadataBytes
+	case release.DiscoveryRootAssetName:
+		return release.MaxDiscoveryRootBytes
+	case EnvelopeName:
+		return release.MaxSignatureBytes
+	case "mesh-retention.json":
+		return 16 << 20
+	case "mesh-workers.json":
+		return 8 << 20
+	default:
+		if strings.HasPrefix(name, "mesh-anchors-") || strings.HasSuffix(name, ".anchors.json") {
+			return release.MaxAnchorPageBytes
+		}
+		return 1 << 20
+	}
+}
+
+func readFile(ctx context.Context, root *os.Root, name string, limit int64) ([]byte, error) {
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, documentError(err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, documentError(err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, errors.New("documents: input is not a bounded regular file")
+	}
+	data, err := io.ReadAll(io.LimitReader(contextReader{ctx, file}, limit+1))
+	if int64(len(data)) > limit {
+		return nil, errors.New("documents: input grew beyond byte bound")
+	}
+	return data, documentError(err)
+}
+
+func writeFile(ctx context.Context, root *os.Root, name string, contents []byte) error {
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return documentError(err)
+	}
+	_, writeErr := io.Copy(file, contextReader{ctx, bytes.NewReader(contents)})
+	return errors.Join(writeErr, file.Close())
+}
+
+func validateIdentity(ctx context.Context, root *os.Root, binding Binding) error {
+	manifest, err := readFile(ctx, root, release.ManifestAssetName, documentLimit(release.ManifestAssetName))
+	if err != nil {
+		return documentError(err)
+	}
+	metadata, err := readFile(ctx, root, release.UpdateMetadataAssetName, release.MaxMetadataBytes)
+	if err != nil {
+		return documentError(err)
+	}
+	var frozen release.Manifest
+	var update release.UpdateMetadata
+	if err := json.Unmarshal(manifest, &frozen); err != nil {
+		return documentError(err)
+	}
+	if err := json.Unmarshal(metadata, &update); err != nil {
+		return documentError(err)
+	}
+	if frozen.Version != binding.Version || frozen.Commit != binding.Source || update.Version != binding.Version || update.Manifest != digest(manifest) {
+		return errors.New("documents: catalog differs from exact manifest or metadata identity")
+	}
+	platforms := make([]release.Platform, 0, len(frozen.Artifacts))
+	for _, artifact := range frozen.Artifacts {
+		platforms = append(platforms, artifact.Platform)
+	}
+	slices.SortFunc(platforms, func(a, b release.Platform) int { return strings.Compare(a.String(), b.String()) })
+	if !slices.Equal(platforms, binding.Platforms) {
+		return errors.New("documents: manifest platforms differ from catalog")
+	}
+	rootBytes, err := readFile(ctx, root, release.DiscoveryRootAssetName, release.MaxDiscoveryRootBytes)
+	if err != nil {
+		return documentError(err)
+	}
+	var hint release.DiscoveryRoot
+	if err := json.Unmarshal(rootBytes, &hint); err != nil {
+		return documentError(err)
+	}
+	if hint.Head.Tag != binding.Version || hint.Head.Name != release.UpdateMetadataAssetName || hint.Head.SHA256 != digest(metadata) {
+		return errors.New("documents: root differs from bundled metadata")
+	}
+	return nil
+}
+
+// DecodeJSON rejects ambiguous object keys, unknown fields and trailing values.
+func DecodeJSON(data []byte, destination any) error {
+	return decodeJSON(context.Background(), data, destination)
+}
+
+func decodeJSON(ctx context.Context, data []byte, destination any) error {
+	decoder := json.NewDecoder(contextReader{ctx, bytes.NewReader(data)})
+	if err := uniqueValue(decoder, 0, reflect.TypeOf(destination)); err != nil {
+		return documentError(err)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("documents: trailing JSON")
+	}
+	decoder = json.NewDecoder(contextReader{ctx, bytes.NewReader(data)})
+	decoder.DisallowUnknownFields()
+	return documentError(decoder.Decode(destination))
+}
+
+func uniqueValue(decoder *json.Decoder, depth int, kind reflect.Type) error {
+	if depth > 32 {
+		return errors.New("documents: JSON nesting exceeds bound")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return documentError(err)
+	}
+	if token == json.Delim('{') {
+		return uniqueObject(decoder, depth+1, jsonType(kind))
+	}
+	if token != json.Delim('[') {
+		return nil
+	}
+	kind = jsonElement(kind)
+	for decoder.More() {
+		if err := uniqueValue(decoder, depth+1, kind); err != nil {
+			return documentError(err)
+		}
+	}
+	_, err = decoder.Token()
+	return documentError(err)
+}
+
+func uniqueObject(decoder *json.Decoder, depth int, kind reflect.Type) error {
+	seen := map[string]bool{}
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return documentError(err)
+		}
+		name, ok := key.(string)
+		if !ok || seen[name] {
+			return errors.New("documents: repeated JSON key")
+		}
+		seen[name] = true
+		field, err := jsonField(kind, name)
+		if err != nil {
+			return err
+		}
+		if err := uniqueValue(decoder, depth, field); err != nil {
+			return documentError(err)
+		}
+	}
+	_, err := decoder.Token()
+	return documentError(err)
+}
+
+func jsonType(kind reflect.Type) reflect.Type {
+	for kind != nil && kind.Kind() == reflect.Pointer {
+		kind = kind.Elem()
+	}
+	return kind
+}
+
+func jsonElement(kind reflect.Type) reflect.Type {
+	kind = jsonType(kind)
+	if kind != nil && (kind.Kind() == reflect.Slice || kind.Kind() == reflect.Array || kind.Kind() == reflect.Map) {
+		return kind.Elem()
+	}
+	return nil
+}
+
+func jsonField(kind reflect.Type, name string) (reflect.Type, error) {
+	if kind == nil || kind.Kind() != reflect.Struct {
+		return jsonElement(kind), nil
+	}
+	for index := range kind.NumField() {
+		field := kind.Field(index)
+		if match := declaredJSONField(field, name); match != nil {
+			return match, nil
+		}
+	}
+	return nil, fmt.Errorf("documents: unknown JSON field %q", name)
+}
+
+func declaredJSONField(field reflect.StructField, name string) reflect.Type {
+	if !field.IsExported() {
+		return nil
+	}
+	tag := strings.Split(field.Tag.Get("json"), ",")[0]
+	if tag == "-" {
+		return nil
+	}
+	if field.Anonymous && tag == "" {
+		match, _ := jsonField(jsonType(field.Type), name)
+		return match
+	}
+	if tag == name || tag == "" && field.Name == name {
+		return field.Type
+	}
+	return nil
+}
+
+func sameBinding(a, b Binding) bool {
+	return a.Version == b.Version && a.Source == b.Source && a.ReleaseID == b.ReleaseID && a.WriterRun == b.WriterRun && slices.Equal(a.Platforms, b.Platforms)
+}
+
+func checkDocument(document Document) error {
+	if !validName(document.Name) || document.Size <= 0 || document.Size > documentLimit(document.Name) || len(document.SHA256) != 64 || strings.Trim(document.SHA256, "0123456789abcdef") != "" {
+		return fmt.Errorf("documents: invalid document %q", document.Name)
+	}
+	return nil
+}
+
+func documentError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("release documents: %w", err)
+}

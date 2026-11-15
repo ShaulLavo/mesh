@@ -1,13 +1,16 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +21,32 @@ import (
 	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/transport"
 )
+
+func TestDaemonLogsDroppedHandshake(t *testing.T) {
+	var diagnostics bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&diagnostics)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	_, key := shutdownHandshakeIdentity(t)
+	fixture := newShutdownHandshakeFixture(t, &transport.Authentication{Key: key, Authorize: func(string) bool { return true }},
+		func(context.Context, transport.Conn) error { return errors.New("closed handshake dispatched handler") })
+	ws, _, err := websocket.Dial(t.Context(), "ws://127.0.0.1/mesh", &websocket.DialOptions{ //nolint:bodyclose // websocket.Dial owns its response body
+		HTTPClient: fixture.client, Subprotocols: []string{transport.AuthProtocol},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.CloseNow()
+	fixture.cancel()
+	if err := waitRuntime(t, fixture.done); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"server=true stage=tls-handshake", "stage=websocket-serve classification=terminal", "TLS handshake:", "EOF"} {
+		if !strings.Contains(diagnostics.String(), want) {
+			t.Errorf("daemon log %q missing %q", diagnostics.String(), want)
+		}
+	}
+}
 
 func TestDaemonShutdownDrainsPendingAuthentication(t *testing.T) {
 	t.Run("approved", func(t *testing.T) { testShutdownHandshake(t, true, true) })

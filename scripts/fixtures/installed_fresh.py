@@ -35,6 +35,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         image = {"executable": build["path"], "artifact": {"binarySha256": build["digest"]}}
         host = {"name": name, "daemon": first, "helper": first, "helperRunning": True}
         super().__init__(root, host, {"daemon": image, "helper": image}, None, origin, releases, "managed")
+        self.legacy_attachment = False
 
     def prepare(self):
         with socket.socket() as reservation:
@@ -170,14 +171,15 @@ def await_commit(case, target):
 def validate_commit(case, target, entry, helper):
     host = case.control("host.info")["host"]
     case.require_automatic_zero(host)
-    case.inspect_retained()
+    attachment = case.inspect_retained()
     pin = installed_releases.digest((case.releases.directory / target / "mesh-update.json").read_bytes())
     if entry["origin"] != "host" or entry["metadata"] != pin or entry["workersPreserved"] != 1 or host["build"]["digest"] != case.releases.builds[target]["digest"]:
         raise RuntimeError("fresh automatic commit differs from its actual signed release and retained worker")
     if (case.state / "updates/host-policy.json").exists() or (case.state / "updates/host-adoption.json").exists():
         raise RuntimeError("fresh automatic update acquired an explicit policy or adoption envelope")
     return {"entry": entry, "effectiveUpdate": host["hostUpdate"], "helper": helper,
-            "client": case.terminal.pid, "worker": case.worker, "shell": case.shell, "listener": case.listener}
+            "client": case.terminal.pid, "worker": case.worker, "shell": case.shell, "listener": case.listener,
+            "attachment": attachment}
 
 
 @installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])

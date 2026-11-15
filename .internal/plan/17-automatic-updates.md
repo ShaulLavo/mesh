@@ -761,8 +761,14 @@ Rules for schema changes, enforced by the proofs:
 **Forward receipts stay as they are.** Schema 1, the exact current fields, the
 manifest's `proof` naming them. The actual v0.1.249 receipt reader and the
 actual v0.1.196 journal reader run against generated release assets in unit 8.
+These are logical names and exact byte/schema contracts. The current signed
+updater transports the full receipt and worker-evidence closure inside one
+authenticated `mesh-documents.tar.gz`. Flat forward receipts are the bounded
+LEGACY projection from fleet daemon versions, required rollback sources, and
+explicit original-reader bridge destinations, on every supported platform.
+The schema 1 manifest and native archives remain separate physical assets.
 
-**Rollback proofs are separate assets**, named by their digest and listed in
+**Rollback proofs are separate logical documents**, named by their digest and listed in
 the signed metadata:
 
 ```go

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -276,6 +278,10 @@ func TestClientRelayRejectedReplacementPreservesIncumbent(t *testing.T) {
 }
 
 func TestClientRelayHandshakeEOFPreservesIncumbent(t *testing.T) {
+	var diagnostics bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&diagnostics)
+	t.Cleanup(func() { log.SetOutput(previous) })
 	client := newRelayTestConn()
 	incumbent := newRelayTestConn()
 	candidate := newRelayTestConn()
@@ -290,12 +296,15 @@ func TestClientRelayHandshakeEOFPreservesIncumbent(t *testing.T) {
 	attachRelaySession(t, relay, client, incumbent, id)
 	candidate.pushReadError(io.EOF)
 	replacement := controlFrame(t, protocol.Control{Type: protocol.TypeAttach, SessionID: id.String()})
-	if handled, err := relay.HandleFrame(context.Background(), replacement); !handled || err == nil {
+	if handled, err := relay.HandleFrame(context.Background(), replacement); !handled || !errors.Is(err, io.EOF) {
 		t.Fatalf("EOF replacement handled = %v, error = %v", handled, err)
 	}
 	assertRelayFrame(t, candidate.nextWrite(t), replacement)
 	candidate.waitClosed(t)
 	assertRelayConnOpen(t, incumbent, "EOF replacement closed incumbent")
+	if !strings.Contains(diagnostics.String(), `session=KEEP stage=attach-worker-response classification=terminal context=<nil> error="EOF"`) {
+		t.Fatalf("worker handshake cause missing: %q", diagnostics.String())
+	}
 }
 
 func TestClientRelayCanceledHandshakePreservesIncumbent(t *testing.T) {

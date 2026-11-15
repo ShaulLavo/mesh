@@ -33,6 +33,11 @@ permissions:
 jobs:
   policy:
     runs-on: ubuntu-24.04
+    env:
+      GOTOOLCHAIN: local
+      MESH_RELEASE_TOOL_SOURCE: ${{ inputs.source_sha }}
+      MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+      MESH_RELEASE_TOOL_ROLE: source
     outputs:
       version: ${{ steps.select.outputs.version }}
       previous: ${{ steps.select.outputs.previous }}
@@ -50,6 +55,25 @@ jobs:
           path: ~/.cache/mesh-release-evidence
           key: mesh-route-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: mesh-route-evidence-
+      - name: Prepare the explicit SOURCE metadata and route tools
+        run: |
+          test "$(git rev-parse HEAD)" = "$MESH_RELEASE_TOOL_SOURCE"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/history-tools"
+          go build -trimpath -o "$RUNNER_TEMP/history-tools/mesh-release-sign" ./cmd/mesh-release-sign
+          go build -trimpath -o "$RUNNER_TEMP/history-tools/mesh-release-routes" ./cmd/mesh-release-routes
+          PYTHONPATH=scripts python3 -m fixtures.release_tool record "$RUNNER_TEMP/history-tools" "$MESH_RELEASE_TOOL_SOURCE" "$GITHUB_RUN_ID" source linux/amd64
+          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/history-tools/mesh-release-sign" >> "$GITHUB_ENV"
+          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/history-trust" >> "$GITHUB_ENV"
+      - name: Prepare authenticated trust before reading signed history
+        run: |
+          status=75
+          for _ in 1 2 3 4; do
+            status=0
+            "$MESH_RELEASE_TOOL" refresh "$MESH_RELEASE_TRUST_CACHE" || status=$?
+            if (( status != 75 )); then break; fi
+          done
+          (( status == 0 )) || exit "$status"
       - name: Freeze required source selection from verified receipt bytes
         id: select
         env:
@@ -73,7 +97,7 @@ jobs:
           fi
           published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
-          go run ./cmd/mesh-release-routes -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
+          "$RUNNER_TEMP/history-tools/mesh-release-routes" -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
           python3 scripts/prepare-release-baselines.py --pins "$root/selection.json" "$BASELINE_ASSETS"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
           shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
@@ -85,7 +109,7 @@ jobs:
           retention-days: 7
       - name: Remove policy staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-policy"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/history-tools" "$RUNNER_TEMP/history-trust"
 
   prepare:
     needs: policy
@@ -394,7 +418,7 @@ jobs:
           scripts/generate-release-manifest.sh -dist "$root/dist" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/dist/mesh-release.json"
           original="$RUNNER_TEMP/reader-native/update-native-linux-amd64/retained/release-v0.1.249/mesh"
           chmod +x "$original"
-          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence"
+          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence" --history-inventory "$RUNNER_TEMP/mesh-policy/history.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

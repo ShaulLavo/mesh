@@ -18,10 +18,10 @@ func TestHostTargetLatestPreviewUsesCompatibleAuthenticatedDiscovery(t *testing.
 	future := release.DiscoveryRoot{Format: 1, Epoch: 2, Head: release.AssetRef{Tag: "v99.0.0", Name: release.UpdateMetadataAssetName, SHA256: strings.Repeat("f", 64)}, Previous: &previous}
 	f.files["latest/"+release.DiscoveryRootAssetName] = mustHostJSON(future)
 	read := f.updater.Source
-	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, error) {
-		source, documents, err := read(ctx, current)
+	f.updater.Source = func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, func() error, error) {
+		source, documents, closeDocuments, err := read(ctx, current)
 		documents = rejectFutureTargetRead(t, documents)
-		return source, documents, err
+		return source, documents, closeDocuments, err
 	}
 	plan, err := f.updater.PlanLocalTarget(t.Context(), input)
 	if err != nil {

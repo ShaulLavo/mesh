@@ -576,7 +576,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 		// Canceling it on shutdown turns an approved peer into a terminal
 		// authentication failure. The closed group refuses handler dispatch.
 		r = r.WithContext(context.WithoutCancel(r.Context())) //nolint:contextcheck // admitted authentication owns its deadline during shutdown
-		_ = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: cfg.controlAuth}, func(connectionCtx context.Context, conn transport.Conn) error {
+		err = transport.ServeWithOptions(w, r, transport.ServeOptions{Auth: cfg.controlAuth}, func(connectionCtx context.Context, conn transport.Conn) error {
 			if _, authenticated := transport.Peer(connectionCtx); !authenticated {
 				return transport.ErrAuthentication
 			}
@@ -588,6 +588,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 			}()
 			return connections.run(id, handlerCtx, conn)
 		})
+		logWebSocketServeError(err)
 	})
 	server.Server = &http.Server{
 		Handler:           serveHTTP,
@@ -596,6 +597,12 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 	}
 	trackNewHTTPConnections(server.Server)
 	return server
+}
+
+func logWebSocketServeError(err error) {
+	if err != nil {
+		log.Printf("daemon: stage=websocket-serve classification=terminal error=%q", err)
+	}
 }
 
 func observeHandlerCancellation(parent, connection context.Context, cancel context.CancelFunc) func() bool {

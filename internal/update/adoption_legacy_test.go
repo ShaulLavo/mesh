@@ -15,6 +15,7 @@ import (
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/releasedocuments"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -129,8 +130,12 @@ func checkLegacyAdoptionSource(t *testing.T, state string, current release.Build
 		t.Fatal(err)
 	}
 	documents := signedReaderDocuments(t, signer, target, HostReaderEpoch, metadata.Position, metadata.Updater, metadata.Rollback)
-	server := adoptionLegacyOrigin(t, documents, target.Version, packet)
-	descriptor := HostDocuments{Trust: signer.trust, Client: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}}
+	server := adoptionLegacyOrigin(t, documents, target.Version, packet, signer)
+	descriptor, err := OpenHostDocuments(t.Context(), release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, signer.trust, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = descriptor.Close() }()
 	pinned, err := ReadAdoptionRelease(t.Context(), descriptor, build.Version)
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +155,7 @@ func checkLegacyAdoptionSource(t *testing.T, state string, current release.Build
 	}
 }
 
-func adoptionLegacyOrigin(t *testing.T, documents HostReaderDocuments, version string, packet HostReaderInput) *httptest.Server {
+func adoptionLegacyOrigin(t *testing.T, documents HostReaderDocuments, version string, packet HostReaderInput, signer *signingFixture) *httptest.Server {
 	t.Helper()
 	var metadata release.UpdateMetadata
 	if err := decodeAuthority(documents.Metadata, &metadata); err != nil {
@@ -158,6 +163,12 @@ func adoptionLegacyOrigin(t *testing.T, documents HostReaderDocuments, version s
 	}
 	files := map[string][]byte{release.UpdateMetadataAssetName: documents.Metadata, "mesh-update.sig.json": documents.Envelope, release.ManifestAssetName: documents.Manifest,
 		metadata.Page.Name: documents.Page, discoveryDigest(packet.Forward) + ".json": packet.Forward, discoveryDigest(packet.Rollback) + ".rollback.json": packet.Rollback}
+	logical := make(map[string][]byte, len(files))
+	for name, data := range files {
+		logical[version+"/"+name] = data
+	}
+	archive, envelope := fixtureDocumentBundle(t, logical, version, signer)
+	files = map[string][]byte{releasedocuments.ArchiveName: archive, releasedocuments.EnvelopeName: envelope}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/download/"+version+"/")
 		data, ok := files[name]

@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"github.com/shaul/mesh/internal/access"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -208,7 +210,11 @@ func (c *handshakeConn) Read(p []byte) (int, error) {
 	return n, err //nolint:wrapcheck // TLS consumes the underlying EOF and network errors
 }
 
-func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication, server bool) (*tls.Conn, AuthenticatedPeer, error) {
+func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication, server bool) (_ *tls.Conn, _ AuthenticatedPeer, resultErr error) {
+	stage := "authentication-config"
+	defer func() {
+		logAuthenticationFailure(server, stage, resultErr)
+	}()
 	cfg, err := observedAuthentication(ctx, auth, server).config(server)
 	if err != nil {
 		return nil, AuthenticatedPeer{}, err
@@ -230,16 +236,18 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	})
 	defer stop()
 	deadline, _ := handshakeCtx.Deadline()
+	stage = "authentication-set-deadline"
 	if err := secure.SetDeadline(deadline); err != nil {
 		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: set handshake deadline: %w", ErrAuthentication, err)
 	}
 	transporttrace.Emit(ctx, transporttrace.HandshakeBegin, nil)
+	stage = "tls-handshake"
 	err = secure.HandshakeContext(handshakeCtx)
 	transporttrace.Emit(ctx, transporttrace.HandshakeDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: TLS handshake: %w", ErrAuthentication, err)
+		return nil, AuthenticatedPeer{}, authenticationFailure("TLS handshake", err)
 	}
 	key := secure.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	peer := AuthenticatedPeer{Identity: base64.RawURLEncoding.EncodeToString(key)}
@@ -247,12 +255,14 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 		peer.grant = auth.bind(peer.Identity)
 		observeGrant(ctx, peer.grant.Class)
 	}
+	stage = "peer-acceptance"
 	err = confirmAuthentication(ctx, secure, auth, server, peer)
 	transporttrace.Emit(ctx, transporttrace.AcceptanceDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
-		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: peer acceptance: %w", ErrAuthentication, err)
+		return nil, AuthenticatedPeer{}, authenticationFailure("peer acceptance", err)
 	}
+	stage = "authentication-clear-deadline"
 	if err := secure.SetDeadline(time.Time{}); err != nil {
 		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: clear handshake deadline: %w", ErrAuthentication, err)
@@ -293,6 +303,17 @@ func observeGrant(ctx context.Context, class access.Class) {
 	transporttrace.Emit(ctx, stage, nil)
 }
 
+func logAuthenticationFailure(server bool, stage string, err error) {
+	if err == nil {
+		return
+	}
+	classification := "terminal"
+	if errors.Is(err, errAuthenticationInterrupted) {
+		classification = "link-failed"
+	}
+	log.Printf("transport: server=%t stage=%s classification=%s error=%q", server, stage, classification, err)
+}
+
 func closeObservedHandshake(ctx context.Context, ws *websocket.Conn) {
 	transporttrace.Emit(ctx, transporttrace.HandshakeClose, nil)
 	err := ws.CloseNow()
@@ -307,38 +328,70 @@ func observeGrantCurrent(ctx context.Context, current bool) {
 	transporttrace.Emit(ctx, stage, nil)
 }
 
+// errAuthenticationInterrupted marks an authentication whose link closed
+// before the peer decided. A retiring daemon can cut a reconnect mid-handshake;
+// that refuses nothing, so a reconnecting client must try again rather than
+// end the attachment.
+var errAuthenticationInterrupted = errors.New("link closed during authentication")
+
+func authenticationFailure(stage string, err error) error {
+	if linkClosed(err) {
+		return fmt.Errorf("%w: %s: %w: %w", ErrAuthentication, stage, errAuthenticationInterrupted, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrAuthentication, stage, err)
+}
+
+func linkClosed(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
+// refusedAcceptance is the acceptance byte of a peer the server declined. It
+// is explicit so the client can tell a refusal from a link that closed.
+const refusedAcceptance byte = 0
+
 // TLS 1.3 can return to a client before the server checks its certificate.
 // An encrypted acceptance byte makes denial permanent before Dial returns.
 func confirmAuthentication(ctx context.Context, secure *tls.Conn, auth *Authentication, server bool, peer AuthenticatedPeer) error {
-	if server {
-		current := peer.grant.Current != nil && peer.grant.Current()
-		observeGrantCurrent(ctx, current)
-		if !current {
-			return errors.New("transport: device grant removed during authentication")
-		}
-		var acceptance byte
-		switch peer.grant.Class {
-		case access.FullDevice:
-			acceptance = 1
-		case access.UpdateCarrier:
-			acceptance = 2
-		case access.Scoped:
-			acceptance = 3
-		case access.Unauthenticated, access.LocalAccount:
-			return errors.New("transport: missing connection class")
-		default:
-			return errors.New("transport: invalid connection class")
-		}
-		if _, err := secure.Write([]byte{acceptance}); err != nil {
-			return fmt.Errorf("confirm approved Mesh peer: %w", err)
-		}
-		return nil
+	if !server {
+		return readAcceptance(secure, auth)
 	}
+	acceptance, refusal := serverAcceptance(ctx, peer)
+	if _, err := secure.Write([]byte{acceptance}); err != nil && refusal == nil {
+		return fmt.Errorf("confirm approved Mesh peer: %w", err)
+	}
+	return refusal
+}
+
+func serverAcceptance(ctx context.Context, peer AuthenticatedPeer) (byte, error) {
+	current := peer.grant.Current != nil && peer.grant.Current()
+	observeGrantCurrent(ctx, current)
+	if !current {
+		return refusedAcceptance, errors.New("transport: device grant removed during authentication")
+	}
+	switch peer.grant.Class {
+	case access.FullDevice:
+		return 1, nil
+	case access.UpdateCarrier:
+		return 2, nil
+	case access.Scoped:
+		return 3, nil
+	case access.Unauthenticated, access.LocalAccount:
+		return refusedAcceptance, errors.New("transport: missing connection class")
+	default:
+		return refusedAcceptance, errors.New("transport: invalid connection class")
+	}
+}
+
+func readAcceptance(secure *tls.Conn, auth *Authentication) error {
 	var accepted [1]byte
 	if _, err := io.ReadFull(secure, accepted[:]); err != nil {
 		return fmt.Errorf("read Mesh peer acceptance: %w", err)
 	}
-	if accepted[0] < 1 || accepted[0] > 3 {
+	if accepted[0] == refusedAcceptance {
+		return errors.New("transport: destination refused this device")
+	}
+	if accepted[0] > 3 {
 		return errors.New("transport: invalid Mesh peer acceptance")
 	}
 	if accepted[0] == 2 && auth.Admission == FullAdmission {

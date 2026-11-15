@@ -57,6 +57,8 @@ on:
       - 'scripts/fixtures/fleet-baselines.json'
       - 'scripts/fixtures/fleet_baselines.py'
       - 'scripts/fixtures/installed_native.py'
+      - 'scripts/fixtures/installed_continuity.py'
+      - 'scripts/fixtures/installed_attachment_controls.py'
       - 'scripts/fixtures/installed_listener.py'
       - 'scripts/fixtures/installed_listener_evidence.py'
       - 'scripts/fixtures/installed_listener_controls.py'
@@ -90,6 +92,16 @@ on:
       - 'scripts/fixtures/draft_intake.py'
       - 'scripts/prepare-draft-intake.py'
       - 'scripts/test-prepare-draft-intake.py'
+      - 'scripts/fixtures/release_documents.py'
+      - 'scripts/fixtures/release_tool.py'
+      - 'scripts/test-release-documents.py'
+      - 'scripts/test-release-tool.py'
+      - 'scripts/test-bundled-release.py'
+      - 'scripts/test-signed-bundle-publication.py'
+      - 'scripts/upload-signed-draft.py'
+      - 'scripts/prepare-release-documents.py'
+      - 'internal/releasedocuments/**'
+      - 'cmd/mesh-release-sign/**'
       - 'scripts/publication-jobs.py'
       - 'scripts/publication-workflow.py'
       - 'scripts/test-publication-jobs.py'
@@ -140,7 +152,57 @@ jobs:
           path: ${{ runner.temp }}/ordered-managers
           retention-days: 7
 
+  publication-tools:
+    if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
+    name: Build reviewed publication tools (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            runner: macos-15
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the trusted H release verifier and native helper once
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/publication-tool-build"
+          go build -trimpath -o "$RUNNER_TEMP/publication-tool-build/mesh-release-sign" ./cmd/mesh-release-sign
+          go build -trimpath -o "$RUNNER_TEMP/publication-tool-build/native-helper" ./scripts/fixtures/native-helper
+          go test -c -tags mesh_installed_fixture -o "$RUNNER_TEMP/publication-tool-build/publication-reader" ./internal/update
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool record "$RUNNER_TEMP/publication-tool-build" "$MESH_HARNESS_SOURCE" "$GITHUB_RUN_ID" harness "$PLATFORM"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-tool-harness-${{ matrix.key }}
+          path: ${{ runner.temp }}/publication-tool-build
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove owned publication tool build
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/publication-tool-build"
+
   publication-plan:
+    needs: publication-tools
     # Activation waits for the parent to repin the immutable installed-catchup callers.
     if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
     name: Inventory complete signed draft tasks
@@ -148,10 +210,28 @@ jobs:
     timeout-minutes: 5
     outputs:
       tasks: ${{ steps.inventory.outputs.tasks }}
+    env:
+      MESH_RELEASE_TOOL_SOURCE: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+      MESH_RELEASE_TOOL_ROLE: harness
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Configure explicit trusted tool paths
+        run: |
+          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/publication-tools/mesh-release-sign" >> "$GITHUB_ENV"
+          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/publication-trust" >> "$GITHUB_ENV"
+      - name: Acquire the exact same-run reviewed H tool artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_HARNESS_SOURCE" harness linux-amd64 "$RUNNER_TEMP/publication-tools"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-publication-trust
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-trust
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-signed-draft
@@ -172,10 +252,10 @@ jobs:
           printf 'tasks=%s\n' "$tasks" >> "$GITHUB_OUTPUT"
       - name: Remove scheduling draft inputs
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-draft-input"
+        run: rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-draft-input" "$RUNNER_TEMP/publication-tools" "$RUNNER_TEMP/publication-trust"
 
   publication-native:
-    needs: publication-plan
+    needs: [publication-plan, publication-tools]
     if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
     name: Actual signed draft installation (${{ matrix.platform }}, ${{ matrix.task }})
     runs-on: ${{ matrix.runner }}
@@ -184,6 +264,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.publication-plan.outputs.tasks) }}
+    env:
+      MESH_RELEASE_TOOL_SOURCE: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+      MESH_RELEASE_TOOL_ROLE: harness
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -203,10 +287,14 @@ jobs:
         run: |
           value=$(python3 -c 'import json; print(str(json.load(open("scripts/fixtures/fleet-baselines.json"))["firstPublishedUpdater"] is not None).lower())')
           printf 'needed=%s\n' "$value" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
+      - name: Configure explicit trusted tool paths
+        run: |
+          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/publication-tools/mesh-release-sign" >> "$GITHUB_ENV"
+          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/publication-trust" >> "$GITHUB_ENV"
+      - name: Acquire the exact same-run reviewed H tool artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_HARNESS_SOURCE" harness ${{ matrix.key }} "$RUNNER_TEMP/publication-tools"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-publication-trust
@@ -263,10 +351,8 @@ jobs:
             chmod +x "$RUNNER_TEMP/native-worker-input.noindex/tools/worker-probe"
             extra=(--worker-registry "$RUNNER_TEMP/native-worker-input.noindex/retained/workers.json" --worker-probe "$RUNNER_TEMP/native-worker-input.noindex/tools/worker-probe")
           fi
-          mkdir -p "$RUNNER_TEMP/native-tools.noindex"
-          go build -o "$RUNNER_TEMP/native-tools.noindex/native-helper" ./scripts/fixtures/native-helper
           printf '{"started":true}\n' > "$RUNNER_TEMP/publication-control/fixture-launch.json"
-          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/publication-proof" --native-preflight --native-helper "$RUNNER_TEMP/native-tools.noindex/native-helper" --publication-version "$RELEASE_VERSION" --publication-source "$RELEASE_SOURCE" --publication-task "$PUBLICATION_TASK" "${extra[@]}"
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/publication-proof" --native-preflight --native-helper "$RUNNER_TEMP/publication-tools/native-helper" --publication-version "$RELEASE_VERSION" --publication-source "$RELEASE_SOURCE" --publication-task "$PUBLICATION_TASK" "${extra[@]}"
       - name: Remove owned publication consumer tools after installed teardown
         if: always()
         run: python3 scripts/publication-workflow.py cleanup "$RUNNER_TEMP"
@@ -280,7 +366,7 @@ jobs:
           retention-days: 7
 
   publication-aggregate:
-    needs: [publication-plan, publication-native]
+    needs: [publication-plan, publication-native, publication-tools]
     if: (inputs.release_version != '' || inputs.publication_only) && github.ref == 'refs/heads/main'
     name: Complete signed draft evidence (${{ matrix.platform }})
     runs-on: ubuntu-24.04
@@ -295,10 +381,28 @@ jobs:
             key: linux-arm64
           - platform: darwin/arm64
             key: darwin-arm64
+    env:
+      MESH_RELEASE_TOOL_SOURCE: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+      MESH_RELEASE_TOOL_ROLE: harness
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - name: Configure explicit trusted tool paths
+        run: |
+          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/publication-tools/mesh-release-sign" >> "$GITHUB_ENV"
+          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/publication-trust" >> "$GITHUB_ENV"
+      - name: Acquire the exact same-run reviewed H tool artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_HARNESS_SOURCE" harness linux-amd64 "$RUNNER_TEMP/publication-tools"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: update-publication-trust
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-trust
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-signed-draft
@@ -326,7 +430,7 @@ jobs:
       - name: Remove owned child evidence and aggregation staging
         if: always()
         run: |
-          rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-children.noindex" "$RUNNER_TEMP/publication-complete" "$RUNNER_TEMP/publication-draft-input"
+          rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-children.noindex" "$RUNNER_TEMP/publication-complete" "$RUNNER_TEMP/publication-draft-input" "$RUNNER_TEMP/publication-tools" "$RUNNER_TEMP/publication-trust"
           test ! -e "$RUNNER_TEMP/publication-children.noindex"
           test ! -e "$RUNNER_TEMP/publication-complete"
 
@@ -404,7 +508,7 @@ jobs:
 
   fresh-managed:
     if: inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
-    name: Fresh native automatic first start (${{ matrix.platform }})
+    name: Strict current-to-current native update (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -435,12 +539,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
           bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
       - uses: ./.github/actions/installed-go
-      - name: Prepare the real helper before the first managed daemon activation
+      - name: Prove fresh preparation and same-client update between current source builds
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed \
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

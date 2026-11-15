@@ -90,6 +90,7 @@ jobs:
               - 'cmd/**'
               - 'internal/cli/**'
               - 'internal/release/**'
+              - 'internal/releasedocuments/**'
               - 'internal/update*/**'
               - 'internal/storage/**'
               - 'internal/worker/**'
@@ -481,9 +482,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@81af3bf2275921c8b5b257491b9446021b16ddc5
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@db746241f57a6d35948aa653461966669e30a4e1
     with:
-      harness_source: 81af3bf2275921c8b5b257491b9446021b16ddc5
+      harness_source: db746241f57a6d35948aa653461966669e30a4e1
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}

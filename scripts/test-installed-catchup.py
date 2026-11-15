@@ -1,5 +1,6 @@
 """Installed proof path boundaries and real native-service failure cleanup."""
 import json
+import hashlib
 import ast
 import http.server
 import io
@@ -297,7 +298,7 @@ class SocketPathsTest(unittest.TestCase):
     def test_python_fixture_blocks_remain_at_most_three_deep(self):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), scripts / "test-installed-clock.py", *(scripts / "fixtures" / name for name in
-            ("release_worker_groups.py", "release_worker_index.py", "release_worker_completion.py", "noindex_paths.py", "installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_attachment_evidence.py", "installed_attachment_controls.py", "installed_native.py", "fleet_baselines.py",
+            ("release_worker_groups.py", "release_worker_index.py", "release_worker_completion.py", "noindex_paths.py", "installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_attachment_evidence.py", "installed_attachment_controls.py", "installed_continuity.py", "installed_native.py", "fleet_baselines.py",
              "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_catalog_evidence.py", "installed_catalog_controls.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_order_trace.py", "installed_order_trace_controls.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
@@ -583,12 +584,36 @@ class PublicationConsumerTest(unittest.TestCase):
         release.mkdir(parents=True)
         actual = b"publication transport control; never a signed release proof"
         (release / "asset.json").write_bytes(actual)
+        (release / "draft.json").write_text(json.dumps({"assets": [{"name": "asset.json", "size": len(actual),
+            "digest": "sha256:" + hashlib.sha256(actual).hexdigest()}]}))
         origin = publication_origin.Origin(root, release.parent, root / "unused-reader")
         self.addCleanup(origin.close)
         origin.start()
         data = publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/asset.json")
         self.assertEqual(data, actual)
         self.assertFalse(origin.close()["testSignatureRootUsed"])
+
+    def test_candidate_origin_denies_loose_members_and_network_fallback_over_tls(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ipub-layout-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        release = root / "releases/v0.1.1"
+        release.mkdir(parents=True)
+        actual = b"actual opaque bundle bytes"
+        (release / "mesh-documents.tar.gz").write_bytes(actual)
+        (release / "mesh-update.json").write_text("must never be served as a loose candidate asset")
+        (release / "draft.json").write_text(json.dumps({"assets": [{"name": "mesh-documents.tar.gz", "size": len(actual),
+            "digest": "sha256:" + hashlib.sha256(actual).hexdigest()}]}))
+        origin = publication_origin.Origin(root, release.parent, root / "unused-reader")
+        self.addCleanup(origin.close)
+        origin.start()
+        with patch.object(publication_origin.published_releases, "download", side_effect=AssertionError("candidate network fallback")) as download:
+            self.assertEqual(publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/mesh-documents.tar.gz"), actual)
+            with self.assertRaisesRegex(RuntimeError, "exact asset"):
+                publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/mesh-update.json")
+            with self.assertRaisesRegex(RuntimeError, "exact asset"):
+                publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/missing.json")
+        download.assert_not_called()
 
     def test_owned_activation_port_fault_releases_at_actual_rollback_phase(self):
         temporary = tempfile.TemporaryDirectory()

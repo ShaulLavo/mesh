@@ -154,6 +154,9 @@ func newHostFixture(t *testing.T) *hostFixture {
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := strings.TrimPrefix(r.URL.Path, "/download/")
+		if serveFixtureBundle(r.Context(), t, w, key, f.files, f.signer) {
+			return
+		}
 		if r.URL.Path == "/latest/download/"+release.DiscoveryRootAssetName {
 			key = "latest/" + release.DiscoveryRootAssetName
 		}
@@ -165,7 +168,11 @@ func newHostFixture(t *testing.T) *hostFixture {
 		_, _ = w.Write(data)
 	}))
 	t.Cleanup(server.Close)
-	f.documents = HostDocuments{Client: release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, Trust: f.signer.trust}
+	f.documents, err = OpenHostDocuments(t.Context(), release.Client{BaseURL: server.URL, HTTPClient: server.Client()}, f.signer.trust, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.documents.Close() })
 	f.settings = updateinstall.Config{StateDir: f.store.stateDir(), Executable: executable, CacheDir: filepath.Join(root, "cache"), Client: f.documents.Client, Probe: f.probe, Service: f,
 		ServiceSpec: updateinstall.ServiceSpec{Kind: "systemd", Name: "fixture-daemon.service"}, HealthTimeout: 100 * time.Millisecond}
 	f.engine, err = updateinstall.New(f.settings)
@@ -207,9 +214,17 @@ func (f *hostFixture) startWorker() {
 func (f *hostFixture) newUpdater() *HostUpdater {
 	return &HostUpdater{Store: f.store, ID: "host", Current: func() release.Build { return f.current }, Probe: f.probe, Now: func() time.Time { return f.now },
 		Engine: func(context.Context) (*updateinstall.Engine, error) { return f.engine, nil },
-		Source: func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, error) {
-			source, err := f.documents.Current(ctx, current)
-			return source, f.documents.Source(), err
+		Source: func(ctx context.Context, current release.Build) (HostSource, release.DocumentSource, func() error, error) {
+			documents, err := OpenHostDocuments(ctx, f.documents.Client, f.documents.Trust, f.t.TempDir())
+			if err != nil {
+				return HostSource{}, release.DocumentSource{}, nil, err
+			}
+			source, err := documents.Current(ctx, current)
+			if err != nil {
+				_ = documents.Close()
+				return HostSource{}, release.DocumentSource{}, nil, err
+			}
+			return source, documents.Source(), documents.Close, nil
 		}, Helper: func(context.Context, release.Manifest) error { f.helperCalls++; return f.helperErr }}
 }
 

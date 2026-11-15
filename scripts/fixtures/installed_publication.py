@@ -11,7 +11,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
+from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion, release_tool, release_documents
 
 
 def require_main():
@@ -31,10 +31,13 @@ def stage(root, output, native, version, source):
     if free < required:
         raise RuntimeError("native runner lacks space for real draft assets and installed scratch")
     (output / "draft-intake.json").write_text(json.dumps(release, sort_keys=True) + "\n")
-    return load_draft(root, output, directory, native, version, source, release["html_url"])
+    logical = root / "logical" / version
+    logical.parent.mkdir()
+    draft_intake.documents(directory, version, source, logical, int(os.environ["MESH_PUBLICATION_RUN"]))
+    return load_draft(root, output, logical, native, version, source, release["html_url"], directory)
 
 
-def load_draft(root, output, directory, native, version, source, url):
+def load_draft(root, output, directory, native, version, source, url, physical):
     manifest = json.loads((directory / "mesh-release.json").read_text())
     metadata = json.loads((directory / "mesh-update.json").read_text())
     if manifest["version"] != version or manifest["commit"] != source or metadata["version"] != version:
@@ -42,13 +45,14 @@ def load_draft(root, output, directory, native, version, source, url):
     if published_releases.digest((directory / "mesh-release.json").read_bytes()) != metadata["manifest"]:
         raise RuntimeError("real signed metadata does not bind its exact release manifest")
     subjects = [directory / name for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json", "mesh-workers.json", "mesh-worker-groups.json")]
-    subjects.extend(directory / item["archive"] for item in manifest["artifacts"])
+    subjects.extend(physical / item["archive"] for item in manifest["artifacts"])
+    subjects.append(physical / release_documents.BUNDLE)
     verify_signature(root, output, directory / "mesh-update.sig.json", subjects)
     release_worker_index.validate_index(directory / "mesh-worker-groups.json", manifest)
     platform = dict(zip(("os", "arch"), native.split("/")))
     artifact = next(item for item in manifest["artifacts"] if item["platform"] == platform)
     binary = root / "real-candidate"
-    binary.write_bytes(published_releases.archive_binary((directory / artifact["archive"]).read_bytes(), artifact))
+    binary.write_bytes(published_releases.archive_binary((physical / artifact["archive"]).read_bytes(), artifact))
     binary.chmod(0o755)
     environment = os.environ | {"MESH_STATE_DIR": str(root / "inspect-state"), "MESH_CONFIG_DIR": str(root / "inspect-config")}
     build = json.loads(subprocess.check_output([str(binary), "version", "--json"], env=environment, timeout=installed_clock.timeout()))
@@ -64,17 +68,15 @@ def load_draft(root, output, directory, native, version, source, url):
         "routeContract": context["routeContract"]}
     release_worker_completion.validate_draft(verified, context, native, harness)
     (output / "real-draft.json").write_text(json.dumps(verified, indent=2) + "\n")
-    return SimpleNamespace(root=root, directory=directory.parent, native=native, verification=verified,
+    return SimpleNamespace(root=root, directory=directory.parent, physical_directory=physical.parent, native=native, verification=verified,
                            builds={version: build | {"path": str(binary)}})
 
 
 def verify_signature(root, output, envelope, subjects):
-    verifier = root / "real-release-verifier"
-    subprocess.run(["go", "build", "-o", str(verifier), "./cmd/mesh-release-sign"], check=True, timeout=installed_clock.timeout())
+    verifier = release_tool.configured()
     cache = os.environ.get("MESH_PUBLICATION_TRUST_CACHE", str(root / "production-trust"))
     environment = os.environ | {"MESH_RELEASE_TRUST_CACHE": cache}
     with (output / "real-signature-verification.log").open("wb") as log:
-        refresh_trust(verifier, environment, log)
         subprocess.run([str(verifier), "verify", str(envelope), *map(str, subjects)], env=environment,
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=installed_clock.timeout())
 
@@ -157,13 +159,13 @@ class DraftCase(installed_adoption.AdoptionCase):
         milestone = result.get("adopted") or {}
         if successful and (milestone.get("workersPreserved") != self.expected_workers or milestone.get("metadata") != pin):
             raise RuntimeError("real draft confirmation lost its original worker")
-        self.inspect_retained()
+        attachment = self.inspect_retained()
         helper = self.validate_helper(version)
         if self.prior and installed_chain.read_journal(self)["settings"] != self.prior["settings"]:
             raise RuntimeError("real draft adoption changed its genuine prior installation settings")
         return {"running": running, "helper": helper, "phase": result["details"]["phase"], "confirmed": result.get("confirmed"),
                 "worker": self.worker, "shell": self.shell, "client": self.terminal.pid, "listener": self.listener,
-                "route": self.route_observer.snapshot()}
+                "route": self.route_observer.snapshot(), "attachment": attachment}
 
     def interrupt_real_helper(self, version):
         if self.adoption_status().get("confirmed"):
@@ -182,9 +184,10 @@ def prove(root, output, native, version, source, preparer, registry=None, probe=
     directory = releases.directory / version
     inventory = release_worker_completion.task_inventory(directory, native, os.environ["MESH_HARNESS_SOURCE"]) if task_id is not None else None
     task = release_worker_completion.select_task(inventory, task_id) if inventory else None
-    inspector = root / "publication-reader"
-    subprocess.run(["go", "test", "-c", "-tags", "mesh_installed_fixture", "-o", str(inspector), "./internal/update"], check=True, timeout=installed_clock.timeout())
-    origin = publication_origin.Origin(root, releases.directory, inspector)
+    inspector = release_tool.configured().parent / "publication-reader"
+    if not inspector.is_file():
+        raise ValueError("publication requires the once-built reviewed H inspector")
+    origin = publication_origin.Origin(root, releases.physical_directory, inspector)
     try:
         origin.start()
         origin.head(releases.directory, version)
@@ -432,13 +435,13 @@ def observe_published_hop(case, record, first, target, seen):
         return
     os.kill(pid, signal.SIGSTOP)
     try:
+        case.releases.builds[build["version"]] = build
         case.inspect_retained()
         if image["sha256"] != expected["binary"]:
             raise RuntimeError("published intermediate helper differs from its authenticated release")
         record["hops"].append({"expected": expected, "build": build, "helper": image,
                                "workers": case.cohort.verify(release_worker_completion.hop_label(record, build["version"]))})
         seen.add(build["version"])
-        case.releases.builds[build["version"]] = build
         extend_expected_route(case, record, target)
     finally:
         os.kill(pid, signal.SIGCONT)
@@ -475,12 +478,12 @@ def read_route_plan(case, target):
                             env=case.environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
     plan = json.loads(result.stdout)
     current = case.control("host.info")["host"]["build"]
-    prefix = "/ShaulLavo/mesh/releases/download/" + target + "/"
-    metadata = case.origin.asset(prefix + "mesh-update.json").read_bytes()
-    manifest = case.origin.asset(prefix + "mesh-release.json").read_bytes()
+    manifest = case.origin.asset("/ShaulLavo/mesh/releases/download/" + target + "/mesh-release.json").read_bytes()
     if plan["currentDigest"] != current["digest"] or not plan.get("next"):
         raise RuntimeError("read-only authenticated route plan does not match the executing published source")
-    if plan["target"]["version"] != target or plan["target"]["metadata"] != published_releases.digest(metadata) or plan["target"]["manifest"] != published_releases.digest(manifest):
+    if (plan["target"]["version"] != target or plan["target"]["metadata"] != logical_digest(case.releases, target, "mesh-update.json")
+            or plan["target"]["manifest"] != logical_digest(case.releases, target, "mesh-release.json")
+            or published_releases.digest(manifest) != plan["target"]["manifest"]):
         raise RuntimeError("authenticated route target differs from the actual signed draft")
     platform = dict(zip(("os", "arch"), case.releases.native.split("/")))
     artifacts = [item for item in json.loads(manifest)["artifacts"] if item["platform"] == platform]
@@ -497,10 +500,10 @@ def next_expected_hop(record, version):
 
 
 def authenticate_hop(case, build, expected):
-    prefix = "/ShaulLavo/mesh/releases/download/" + expected["version"] + "/"
-    manifest = case.origin.asset(prefix + "mesh-release.json").read_bytes()
-    metadata = case.origin.asset(prefix + "mesh-update.json").read_bytes()
-    if published_releases.digest(manifest) != expected["manifest"] or published_releases.digest(metadata) != expected["metadata"]:
+    manifest = case.origin.asset("/ShaulLavo/mesh/releases/download/" + expected["version"] + "/mesh-release.json").read_bytes()
+    if (published_releases.digest(manifest) != expected["manifest"]
+            or logical_digest(case.releases, expected["version"], "mesh-release.json") != expected["manifest"]
+            or logical_digest(case.releases, expected["version"], "mesh-update.json") != expected["metadata"]):
         raise RuntimeError("observed intermediate bytes differ from the authenticated route plan")
     value = json.loads(manifest)
     platform = dict(zip(("os", "arch"), case.releases.native.split("/")))
@@ -509,6 +512,18 @@ def authenticate_hop(case, build, expected):
         raise RuntimeError("authenticated intermediate manifest names another native image")
     if build["version"] != expected["version"] or build["digest"] != expected["binary"] or build["commit"] != value["commit"] or build["modified"] or build["platform"] != platform:
         raise RuntimeError("executing intermediate differs from its authenticated release identity")
+
+
+def logical_digest(releases, version, name):
+    local = releases.directory / version / name
+    if local.is_file():
+        return published_releases.digest(local.read_bytes())
+    directory = releases.directory / releases.verification["version"]
+    history = json.loads((directory / "mesh-retention.json").read_bytes())
+    matches = [asset["sha256"] for item in history if item["tag"] == version for asset in item["assets"] if asset["name"] == name]
+    if len(matches) != 1:
+        raise ValueError("published route requires its exact authenticated logical retention reference")
+    return matches[0]
 
 
 def extend_expected_route(case, record, target):

@@ -67,10 +67,11 @@ func prepareInstallUpdates(ctx context.Context, kind, domain string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	source, _, err := update.OfficialHostSource(cfg.StateDir)(ctx, build)
+	source, _, closeDocuments, err := update.OfficialHostSource(cfg.StateDir)(ctx, build)
 	if err != nil {
 		return fmt.Errorf("authenticate installed release before starting its helper: %w", err)
 	}
+	defer func() { _ = closeDocuments() }()
 	if _, err := updateinstall.EnsureInstalledHelper(ctx, cfg, source.Manifest); err != nil {
 		return fmt.Errorf("prepare installed update helper: %w", err)
 	}

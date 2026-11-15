@@ -93,7 +93,8 @@ echo new >"$test_root/cask"
 run_finalize() {
   (cd "$checkout" && env PATH="$test_root/bin:$PATH" GIT_CONFIG_GLOBAL="$test_root/gitconfig" \
     GITHUB_REPOSITORY=ShaulLavo/mesh RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" \
-    MESH_INSTALLED_COMPLETION="$test_root/installed-completion" PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" "${CASK_VERSION:-v0.1.2}" "$source_sha" v0.1.1 "$test_root/cask")
+    MESH_INSTALLED_COMPLETION="$test_root/installed-completion" MESH_PUBLICATION_DRAFT="$test_root/snapshot" GITHUB_RUN_ID=42 \
+    PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" "${CASK_VERSION:-v0.1.2}" "$source_sha" v0.1.1 "$test_root/cask")
 }
 run_finalize >"$test_root/output"
 cat "$test_root/output"

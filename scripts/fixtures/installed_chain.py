@@ -5,6 +5,7 @@ import time
 
 from fixtures import installed_adoption, installed_native, installed_releases, installed_clock
 from fixtures import installed_transport_lifecycle
+from fixtures import installed_continuity
 
 
 def prepare(releases, origin, source):
@@ -38,6 +39,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         start = case.start_adoption(first)
         record["bootstrap"] = case.validate_result(case.await_result(first), first, start["pin"])
         installed_transport_lifecycle.prove(case, record["bootstrap"])
+        record["explicitReconnect"] = installed_continuity.reconnect_current(case, first)
         record["cohort"] = case.start_cohort(releases.registry, releases.probe)
         failed_version = {"none": [], "first": [intermediate], "final": [final]}[failure]
         case.write_fault({"daemon": failed_version, "holdHelper": [intermediate]})
