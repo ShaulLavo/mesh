@@ -71,7 +71,7 @@ def corpus(root):
     candidates = [{"version": VERSION, "commit": groups.SOURCE, "protocol": 2, "artifact": item} for item in artifacts]
     write(dist / "mesh-workers.json", selection["workers"] + candidates)
     groups.index.stage(dist, proofs, {"selection": selection, "sources": refs, "registries": registries}, groups.SOURCE)
-    page = {"schema": 1, "epoch": 1, "page": 0, "entries": [], "back": []}
+    page = {"schema": 1, "epoch": 1, "page": 0, "entries": [], "back": None}
     page_digest = write(dist / "mesh-anchors-control.json", page)
     metadata = {"schema": 1, "epoch": 1, "trust": 1, "version": VERSION, "manifest": manifest_digest,
         "publishedAt": "2026-11-15T00:00:00Z", "position": {"anchor": True, "ordinal": 0},

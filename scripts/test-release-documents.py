@@ -27,6 +27,50 @@ def depth(node, level=0):
     return max((depth(child, level) for child in ast.iter_child_nodes(node)), default=level)
 
 
+class PageTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="release-pages-")
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.version = "v0.1.324"
+
+    def page(self, name, back):
+        digest = write(self.root, name, {"back": back})
+        return {"tag": self.version, "name": name, "sha256": digest}
+
+    def test_null_and_empty_backrefs_are_leaf_pages(self):
+        for back in (None, []):
+            with self.subTest(back=back):
+                ref = self.page("first-page.json", back)
+                metadata = {"version": self.version, "page": ref}
+                self.assertEqual(documents.current_pages(self.root, metadata), {ref["name"]})
+
+    def test_staging_preserves_linked_current_pages_and_their_exact_bytes(self):
+        leaf = self.page("first-page.json", None)
+        historical = {"tag": "v0.1.309", "name": "historical-page.json", "sha256": "0" * 64}
+        head = self.page("second-page.json", [{"ref": leaf}, {"ref": leaf}, {"ref": historical}])
+        destination = self.root / "staged"
+        destination.mkdir()
+        documents.stage_pages(self.root, destination, {"version": self.version, "page": head})
+        self.assertEqual({path.name for path in destination.iterdir()}, {head["name"], leaf["name"]})
+        for ref in (head, leaf):
+            self.assertEqual((destination / ref["name"]).read_bytes(), (self.root / ref["name"]).read_bytes())
+
+    def test_null_backrefs_do_not_bypass_the_page_digest(self):
+        ref = self.page("first-page.json", None)
+        (self.root / ref["name"]).write_bytes(b'{"back": []}')
+        with self.assertRaisesRegex(ValueError, "authenticated reference"):
+            documents.current_pages(self.root, {"version": self.version, "page": ref})
+
+    def test_missing_and_malformed_backrefs_still_fail(self):
+        ref = self.page("first-page.json", "invalid")
+        with self.assertRaises(TypeError):
+            documents.current_pages(self.root, {"version": self.version, "page": ref})
+        ref["sha256"] = write(self.root, ref["name"], {})
+        with self.assertRaises(KeyError):
+            documents.current_pages(self.root, {"version": self.version, "page": ref})
+
+
 class DocumentsTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="release-documents-")
