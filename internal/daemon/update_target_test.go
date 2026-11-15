@@ -20,9 +20,9 @@ func TestLocalTargetControlsRequireActualUnixOwner(t *testing.T) {
 		return updateinstall.Health{HostID: owner.ID, Build: build}, nil
 	}
 	var sourceCalls atomic.Int32
-	u.hostUpdater.Source = func(context.Context, release.Build) (update.HostSource, release.DocumentSource, error) {
+	u.hostUpdater.Source = func(context.Context, release.Build) (update.HostSource, release.DocumentSource, func() error, error) {
 		sourceCalls.Add(1)
-		return update.HostSource{}, release.DocumentSource{}, errors.New("source fixture reached")
+		return update.HostSource{}, release.DocumentSource{}, nil, errors.New("source fixture reached")
 	}
 	input := update.HostTargetSubmission{Version: "v0.1.2", CurrentDigest: build.Digest}
 	for _, action := range []string{update.HostTargetPlanAction, update.HostTargetSubmitAction, update.HostTargetCancelAction, update.HostTargetStatusAction} {

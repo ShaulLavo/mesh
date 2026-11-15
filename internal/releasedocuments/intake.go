@@ -182,8 +182,8 @@ func verifyProjection(ctx context.Context, input, output *os.Root, assets []phys
 			return documentError(err)
 		}
 	}
-	if aliases != 9 {
-		return errors.New("documents: exact nine legacy receipt projection required")
+	if aliases > 9 {
+		return errors.New("documents: legacy receipt projection exceeds nine aliases")
 	}
 	return nil
 }

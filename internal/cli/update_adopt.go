@@ -73,6 +73,7 @@ func runAdoptionStart(cmd *cobra.Command, options adoptOptions, args []string, s
 	if err != nil {
 		return err
 	}
+	defer func() { _ = supervisor.Close() }()
 	if err := supervisor.Start(cmd.Context(), start); err != nil {
 		return adoptionError(err)
 	}
@@ -194,8 +195,13 @@ func localAdoptionSupervisor(ctx context.Context, stateDir string) (*update.Adop
 	if err != nil {
 		return nil, fmt.Errorf("locate adoption side executable: %w", err)
 	}
-	supervisor, err := update.NewLocalAdoptionSupervisor(stateDir, side, update.HostDocuments{Trust: trust})
+	documents, err := update.OpenHostDocuments(ctx, release.Client{}, trust, stateDir)
 	if err != nil {
+		return nil, adoptionError(err)
+	}
+	supervisor, err := update.NewLocalAdoptionSupervisor(stateDir, side, documents)
+	if err != nil {
+		_ = documents.Close()
 		return nil, adoptionError(err)
 	}
 	supervisor.Deploy = update.DeployAdoptionRemote
@@ -261,6 +267,7 @@ func resumeAdoption(ctx context.Context, stateDir string) (bool, error) {
 	if err != nil {
 		return true, err
 	}
+	defer func() { _ = supervisor.Close() }()
 	return true, adoptionError(supervisor.Resume(ctx))
 }
 

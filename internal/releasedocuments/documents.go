@@ -128,6 +128,9 @@ func readFile(ctx context.Context, root *os.Root, name string, limit int64) ([]b
 		return nil, errors.New("documents: input is not a bounded regular file")
 	}
 	data, err := io.ReadAll(io.LimitReader(contextReader{ctx, file}, limit+1))
+	if int64(len(data)) > limit {
+		return nil, errors.New("documents: input grew beyond byte bound")
+	}
 	return data, documentError(err)
 }
 

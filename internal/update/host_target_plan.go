@@ -40,10 +40,11 @@ func (u *HostUpdater) planTarget(ctx context.Context, input HostTargetSubmission
 		return preparedTarget{}, errors.New("update: observed source differs from executing image")
 	}
 	current, u.observed = health.Build, health.Build
-	source, documents, err := u.Source(ctx, current)
+	source, documents, closeDocuments, err := u.Source(ctx, current)
 	if err != nil {
 		return preparedTarget{}, err
 	}
+	defer func() { _ = closeDocuments() }()
 	if err := verifyHostSource(current, source); err != nil {
 		return preparedTarget{}, err
 	}

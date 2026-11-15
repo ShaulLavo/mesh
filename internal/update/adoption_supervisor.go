@@ -47,6 +47,8 @@ type AdoptionSupervisor struct {
 	Now              func() time.Time
 }
 
+func (u *AdoptionSupervisor) Close() error { return u.Documents.Close() }
+
 func (u *AdoptionSupervisor) now() time.Time {
 	if u.Now != nil {
 		return u.Now().UTC()

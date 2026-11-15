@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/releasedocuments"
 	"github.com/shaul/mesh/internal/updatebootstrap"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -155,6 +156,9 @@ func (f *adoptionNativeFixture) publishCandidate() (string, string) {
 	for name, data := range map[string][]byte{release.UpdateMetadataAssetName: documents.Metadata, "mesh-update.sig.json": documents.Envelope, release.ManifestAssetName: documents.Manifest, metadata.Page.Name: documents.Page, transition.Proof + ".json": forward, discoveryDigest(proof) + ".rollback.json": proof, release.ArchiveName(build.Platform, release.ArchiveGzip): archive} {
 		f.proxy.put(build.Version+"/"+name, data)
 	}
+	container, envelope := fixtureDocumentBundle(f.t, f.proxy.files, build.Version, f.signer)
+	f.proxy.put(build.Version+"/"+releasedocuments.ArchiveName, container)
+	f.proxy.put(build.Version+"/"+releasedocuments.EnvelopeName, envelope)
 	f.write("candidate.sha", []byte(build.Digest), false)
 	return side, discoveryDigest(documents.Metadata)
 }

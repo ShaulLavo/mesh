@@ -29,13 +29,9 @@ func ReadAdoptionRelease(ctx context.Context, documents HostDocuments, version s
 	if _, err := release.CompareVersions(version, version); err != nil {
 		return AdoptionRelease{}, hostError(err)
 	}
-	metadata, err := documents.read(ctx, version, release.UpdateMetadataAssetName, release.MaxMetadataBytes)
+	metadata, envelope, err := documents.store.Bootstrap(ctx, version)
 	if err != nil {
-		return AdoptionRelease{}, err
-	}
-	envelope, err := documents.read(ctx, version, "mesh-update.sig.json", release.MaxSignatureBytes)
-	if err != nil {
-		return AdoptionRelease{}, err
+		return AdoptionRelease{}, hostError(err)
 	}
 	// Only authenticated metadata can select the page or bind executable bytes.
 	if err := release.VerifySignature(documents.Trust, metadata, envelope); err != nil {
@@ -45,13 +41,13 @@ func ReadAdoptionRelease(ctx context.Context, documents HostDocuments, version s
 	if err != nil {
 		return AdoptionRelease{}, hostError(err)
 	}
-	manifest, err := documents.read(ctx, version, release.ManifestAssetName, release.DocumentLimit(release.ManifestDocument))
+	manifest, err := documents.store.Read(ctx, release.AssetRef{Tag: version, Name: release.ManifestAssetName, SHA256: hint.Manifest}, release.ManifestDocument)
 	if err != nil {
-		return AdoptionRelease{}, err
+		return AdoptionRelease{}, hostError(err)
 	}
-	page, err := documents.read(ctx, hint.Page.Tag, hint.Page.Name, release.MaxAnchorPageBytes)
+	page, err := documents.store.Read(ctx, hint.Page, release.PageDocument)
 	if err != nil {
-		return AdoptionRelease{}, err
+		return AdoptionRelease{}, hostError(err)
 	}
 	verified, err := release.VerifyMetadata(documents.Trust, metadata, envelope, manifest, page)
 	if err != nil {
