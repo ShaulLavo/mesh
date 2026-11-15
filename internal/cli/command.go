@@ -1149,13 +1149,21 @@ func (a *application) listCommand() *cobra.Command {
 		Short:   "List sessions across known hosts",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.runList(cmd, viaDaemon, timeout, listView{all: all, width: outputWidth(cmd.OutOrStdout()), privacy: a.privacy})
+			replyTimeout := listReplyTimeout(cmd, viaDaemon, timeout)
+			return a.runList(cmd, viaDaemon, replyTimeout, listView{all: all, width: outputWidth(cmd.OutOrStdout()), privacy: a.privacy})
 		},
 	}
 	command.Flags().BoolVarP(&all, "all", "a", false, "include exited and interrupted sessions")
 	command.Flags().BoolVar(&viaDaemon, "daemon", false, "read only the local daemon catalog")
-	command.Flags().DurationVar(&timeout, "timeout", defaultCatalogTimeout, "maximum wait for each host catalog reply after authenticated setup")
+	command.Flags().DurationVar(&timeout, "timeout", defaultCatalogTimeout, "maximum wait for each host catalog reply after authenticated setup (local daemon default 500ms)")
 	return command
+}
+
+func listReplyTimeout(cmd *cobra.Command, viaDaemon bool, timeout time.Duration) time.Duration {
+	if viaDaemon && !cmd.Flags().Changed("timeout") {
+		return localQueryTimeout
+	}
+	return timeout
 }
 
 func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.Duration, view listView) error {
@@ -1164,7 +1172,7 @@ func (a *application) runList(cmd *cobra.Command, viaDaemon bool, timeout time.D
 		return fmt.Errorf("locate session list state directory: %w", err)
 	}
 	if viaDaemon {
-		ctx, cancel := context.WithTimeout(cmd.Context(), localQueryTimeout)
+		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 		rows, err := ListViaDaemon(ctx, meshdaemon.SocketPath(stateDir))
 		cancel()
 		if err != nil {

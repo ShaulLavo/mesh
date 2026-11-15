@@ -413,7 +413,7 @@ FLAGS
   -h --help    Help for ls
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
-  --timeout    Maximum wait for each host catalog reply after authenticated setup (750ms)
+  --timeout    Maximum wait for each host catalog reply after authenticated setup (local daemon default 500ms) (750ms)
 ```
 
 ## mesh recover

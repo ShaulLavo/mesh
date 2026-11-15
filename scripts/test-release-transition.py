@@ -104,6 +104,8 @@ import signal
 import sys
 signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 mode = os.environ["INVENTORY_MODE"]
+if "--timeout=1m" not in sys.argv:
+    sys.exit("candidate inventory requires an explicit one-minute hang cap")
 if mode == "missing-live":
     os.write(1, b"HOST ID STATE\\nfixture NONE exited\\n")
     sys.exit(0)
