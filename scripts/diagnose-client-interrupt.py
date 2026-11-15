@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consume reviewed signed inputs for one hosted, diagnostic-only pc-interrupt."""
+"""Prepare the original PC fixture and observe one hosted pc-interrupt."""
 import argparse
 import json
 import os
@@ -14,11 +14,10 @@ from fixtures import (
     installed_adoption,
     installed_clock,
     installed_native,
-    installed_origin,
     installed_paths,
-    installed_prepared,
+    installed_releases,
     interrupt_capture,
-    interrupt_inputs,
+    interrupt_prepare,
 )
 from fixtures import installed_transport_lifecycle as lifecycle
 
@@ -28,7 +27,7 @@ def host_guard():
             or platform.system() != "Linux" or platform.machine() != "x86_64"):
         raise RuntimeError("interrupt diagnostic requires a disposable GitHub-hosted Linux AMD64 runner")
     result = subprocess.run(["/usr/bin/systemctl", "--user", "show", "mesh.service", "mesh-update-helper.service",
-        "--property=Id,LoadState,MainPID,FragmentPath"], capture_output=True, text=True, timeout=20, check=True)
+        "--property=Id,LoadState,MainPID,FragmentPath"], capture_output=True, text=True, timeout=installed_clock.timeout(120), check=True)
     loads = [line for line in result.stdout.splitlines() if line.startswith("LoadState=")]
     if loads != ["LoadState=not-found", "LoadState=not-found"]:
         raise RuntimeError("canonical native Mesh units must both be absent before the diagnostic")
@@ -51,35 +50,27 @@ class Run:
         self.record = {"schema": 1, "diagnosticOnly": True, "accepted": False, "outcomePassed": False,
             "cleanupVerified": False, "profile": "pc-interrupt", "baseline": host_guard(),
             "createdResources": ["owned short scratch root", "mesh.service", "mesh-update-helper.service",
-                "prepared origin", "original client/worker/shell/listener", "at most three attached tracers"],
+                "private signer and preparation proof descendants", "original client/worker/shell/listener", "at most three attached tracers"],
             "teardownInstalled": "Run.finish in caller finally, with SIGINT and SIGTERM raising into finally"}
         self.save()
 
     def save(self):
         (self.output / "diagnostic-result.json").write_text(json.dumps(self.record, indent=2) + "\n")
 
-    def prepare(self, bundle, expected):
-        value = interrupt_inputs.read(bundle, expected)
+    def prepare(self):
+        source = interrupt_prepare.source_evidence()
         self.root = installed_paths.create()
         self.record["root"] = str(self.root)
-        self.record["input"] = {"descriptorSha256": expected, "source": value["source"],
-                                "candidateDigest": value["build"]["digest"]}
+        self.record["source"] = source
         self.save()
-        copy_inputs(bundle, self.root, value)
-        releases = installed_prepared.PreparedReleases(self.root, "linux/amd64", self.output, prepared=True)
+        releases = installed_releases.Releases(self.root, "linux/amd64", self.output)
         self.releases = releases
-        releases.builds = {"v0.1.9001": value["build"] | {"path": str(self.root / value["build"]["path"])}}
-        releases.manifests = {"v0.1.9001": value["manifest"]}
-        releases.metadata = {"v0.1.9001": value["metadata"]}
-        releases.start_prepared_server()
-        origin = installed_origin.Origin(self.root)
-        origin.serve_tree(releases.directory)
-        origin.serve_tree(self.root / "public")
-        origin.head(releases.directory, "v0.1.9001")
-        pair = {role: installed_prepared.decode_image(image, self.root) for role, image in value["pair"].items()}
-        previous = installed_prepared.decode_image(value["previous"], self.root)
-        self.case = installed_adoption.AdoptionCase(self.root, interrupt_inputs.HOST.copy(), pair,
-            self.root / value["preparer"], origin, releases, "interrupt", previous)
+        origin, pair, previous, preparer = interrupt_prepare.prepare(releases, source)
+        self.record["candidate"] = releases.builds["v0.1.9001"]
+        self.save()
+        os.environ[lifecycle.FLAG] = "1"
+        self.case = installed_adoption.AdoptionCase(self.root, interrupt_prepare.HOST.copy(), pair,
+            preparer, origin, releases, "interrupt", previous)
 
     def execute(self):
         case = self.case
@@ -102,7 +93,7 @@ class Run:
         self.record.update(result=result, outcomePassed=True)
         self.observe("state-after-outcome", lambda: self.capture.state("outcome.passed"))
         self.observe("successor-coverage", lambda: lifecycle.prove(case,
-            {"running": case.releases.builds["v0.1.9001"]}, "after interrupted adoption", maximum=20))
+            {"running": case.releases.builds["v0.1.9001"]}, "after interrupted adoption", maximum=120))
 
     def observe(self, name, action):
         try:
@@ -151,7 +142,7 @@ class Run:
 
     def remove_scratch(self):
         stopped = self.case is None or self.case.cleaned
-        origin_stopped = self.releases is None or self.releases.closed
+        origin_stopped = self.releases is None or self.releases.closed and self.releases.transition_clean
         traces_stopped = self.capture is None or self.capture.closed()
         if self.cleanup_error is not None or not stopped or not origin_stopped or not traces_stopped:
             self.record["scratchAbsent"] = self.root is None
@@ -161,24 +152,16 @@ class Run:
         self.record["scratchAbsent"] = self.root is None or not self.root.exists()
 
 
-def copy_inputs(bundle, root, value):
-    (root / "empty-certs").mkdir()
-    for name in value["files"]:
-        target = root / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(installed_prepared.local_file(bundle, name), target)
-
-
 def run(args):
-    os.environ["MESH_TRANSPORT_LIFECYCLE"] = "1"
+    os.environ.pop(lifecycle.FLAG, None)
     clock = installed_clock.Clock({"platform": "linux/amd64", "host": "pc", "mode": "adoption",
         "scenario": "interrupt", "grouped": False, "transportLifecycle": lifecycle.MARKER,
-        "buildRecipe": "consume-reviewed-inputs/no-build/no-additional-case"})
+        "buildRecipe": "original-ungrouped-PC/v9001/genuine-single-source-preparation"})
     args.output.mkdir(parents=True, exist_ok=True)
     with clock.activate(watchdog=True):
         owned, primary = Run(args.output), None
         try:
-            owned.prepare(args.bundle, args.descriptor_sha256)
+            owned.prepare()
             owned.execute()
         except BaseException as error:  # noqa: BLE001 - Re-raise the same primary object after installed teardown.
             primary = error
@@ -230,8 +213,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-host", action="store_true")
     parser.add_argument("--verify-cleanup", action="store_true")
-    parser.add_argument("--bundle", type=Path)
-    parser.add_argument("--descriptor-sha256")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.check_host:
@@ -242,8 +223,8 @@ def main():
             parser.error("--verify-cleanup requires --output")
         verify_cleanup(args.output)
         return
-    if args.bundle is None or args.descriptor_sha256 is None or args.output is None:
-        parser.error("diagnostic execution requires --bundle, --descriptor-sha256, and --output")
+    if args.output is None:
+        parser.error("diagnostic execution requires --output")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     run(args)
@@ -256,7 +237,7 @@ def verify_cleanup(output):
         return
     value = json.loads(path.read_text())
     if not value.get("cleanupVerified") or Path(value.get("root", "/")).exists():
-        raise RuntimeError("diagnostic cleanup is unconfirmed; preserve its owned inputs and evidence")
+        raise RuntimeError("diagnostic cleanup is unconfirmed; preserve its owned scratch and evidence")
 
 
 if __name__ == "__main__":

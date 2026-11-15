@@ -7,18 +7,17 @@ import os
 import re
 import select
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
 import unittest
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from fixtures import installed_clock
 from fixtures import interrupt_capture as capture
-from fixtures import interrupt_inputs as inputs
+from fixtures import interrupt_prepare as preparation
 from fixtures import interrupt_trace as trace
 
 SPEC = importlib.util.spec_from_file_location("interrupt_vehicle", Path(__file__).with_name("diagnose-client-interrupt.py"))
@@ -29,11 +28,11 @@ TOY = """
 import ctypes,os,socket,sys
 assert ctypes.CDLL(None).prctl(0x59616d61,os.getppid(),0,0,0)==0
 s=socket.socket()
-s.settimeout(20)
+s.settimeout(120)
 if sys.argv[1]=='server':
  s.bind(('127.0.0.1',0)); s.listen()
  print(s.getsockname()[1],flush=True)
- c,_=s.accept(); c.settimeout(20)
+ c,_=s.accept(); c.settimeout(120)
  print('connected',flush=True)
  sys.stdin.readline()
  data=c.recv(1024); c.sendall(data)
@@ -52,7 +51,7 @@ else:
 
 
 def line(process):
-    if not select.select([process.stdout], [], [], 20)[0]:
+    if not select.select([process.stdout], [], [], 120)[0]:
         raise RuntimeError("toy actor failed to answer before its hang cap")
     return process.stdout.readline().strip()
 
@@ -60,7 +59,7 @@ def line(process):
 def stop(process):
     if process.poll() is None:
         process.kill()
-    process.wait(timeout=20)
+    process.wait(timeout=120)
     process.stdin.close()
     process.stdout.close()
     process.stderr.close()
@@ -93,8 +92,8 @@ class DiagnosticTest(unittest.TestCase):
             actor.require_identity()
         client.stdin.write("close\n")
         client.stdin.flush()
-        self.assertEqual(client.wait(timeout=20), 0)
-        self.assertEqual(server.wait(timeout=20), 0)
+        self.assertEqual(client.wait(timeout=120), 0)
+        self.assertEqual(server.wait(timeout=120), 0)
         for actor in observed:
             self.check_trace(actor)
 
@@ -197,27 +196,92 @@ class DiagnosticTest(unittest.TestCase):
             VEHICLE.finish(owned, None, clock)
         self.assertIn("ValueError", original.__notes__[0])
 
-    def test_input_zip_rejects_paths_links_duplicates_and_oversize(self):
-        for name, mode in (("../escape", stat.S_IFREG | 0o600), ("link", stat.S_IFLNK | 0o777)):
-            self.reject_zip(name, mode)
-        package = Mock()
-        package.infolist.return_value = [SimpleNamespace(file_size=inputs.MAX_UNPACKED + 1)]
-        with self.assertRaisesRegex(ValueError, "bounded closure"):
-            inputs.validate_zip(package)
-        package.infolist.return_value = [SimpleNamespace(file_size=1, filename="same")] * 2
-        with self.assertRaisesRegex(ValueError, "repeats a member"):
-            inputs.validate_zip(package)
+    def test_existing_preparation_uses_only_original_pc_pair_prior_and_one_genuine_proof(self):
+        self.check_preparation()
 
-    def test_zip_extraction_restores_only_owner_execution_without_special_bits(self):
-        member = zipfile.ZipInfo("fixture")
-        member.external_attr = (stat.S_IFREG | stat.S_ISUID | 0o755) << 16
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as package:
-            package.writestr(member, "synthetic fixture")
-        with zipfile.ZipFile(stream) as package:
-            inputs.validate_zip(package)
-            inputs.extract_package(package, self.root)
-        self.assertEqual((self.root / "fixture").stat().st_mode & 0o7777, 0o700)
+    def test_changed_original_bytes_stop_before_proof_or_publication(self):
+        self.check_preparation(rejected=True)
+
+    def check_preparation(self, rejected=False):
+        source = {"checkoutSource": "a" * 40}
+        releases = Mock(root=self.root, output=self.root, builds={preparation.TARGET: {"commit": source["checkoutSource"]}})
+        releases.prove.return_value = {"forward": "forward", "rollback": "rollback"}
+        pair = {"daemon": {"executable": self.root / "v249"}, "helper": {"executable": self.root / "v196"}}
+        prior = {"executable": self.root / "v248"}
+        with patch.object(preparation.subprocess, "run"), patch.object(preparation, "source_evidence", return_value=source), \
+                patch.object(preparation.installed_origin, "Origin") as origin, \
+                patch.object(preparation.fleet_baselines, "acquire_pair", return_value=pair) as acquire_pair, \
+                patch.object(preparation.fleet_baselines, "acquire", return_value=prior) as acquire, \
+                patch.object(preparation, "verify_originals", return_value={}) as verify:
+            self.check_preparation_result(releases, source, verify, rejected)
+        releases.start_signer.assert_called_once_with()
+        releases.build.assert_called_once_with("v0.1.9001")
+        acquire_pair.assert_called_once_with(self.root / "public", preparation.HOST | {
+            "daemonSha256": capture.ORIGINAL, "helperSha256": preparation.HELPER})
+        acquire.assert_called_once_with(self.root / "public", "v0.1.248", preparation.PLATFORM, preparation.PRIOR)
+        if rejected:
+            releases.prove.assert_not_called()
+            releases.publish.assert_not_called()
+            origin.return_value.serve_tree.assert_not_called()
+            return
+        releases.prove.assert_called_once_with(self.root / "v249", "v0.1.9001")
+        releases.publish.assert_called_once_with("v0.1.9001", 0, [releases.prove.return_value])
+        origin.return_value.head.assert_called_once_with(releases.directory, "v0.1.9001")
+        self.assertFalse(json.loads((self.root / "preparation.json").read_text())["accepted"])
+
+    def check_preparation_result(self, releases, source, verify, rejected):
+        if not rejected:
+            preparation.prepare(releases, source)
+            return
+        verify.side_effect = RuntimeError("original published input bytes differ")
+        with self.assertRaisesRegex(RuntimeError, "original published input bytes differ"):
+            preparation.prepare(releases, source)
+
+    def test_source_metadata_requires_clean_checkout_and_exact_product_objects(self):
+        returns = [""] + ["b" * 40 + "\n" + "b" * 40] * len(preparation.PRODUCT) + ["a" * 40]
+        with patch.object(preparation, "git", side_effect=returns):
+            value = preparation.source_evidence()
+        self.assertEqual(value["checkoutSource"], "a" * 40)
+        self.assertEqual(value["historicalProductSource"], preparation.SOURCE)
+        self.assertEqual(set(value["identicalProductObjects"]), set(preparation.PRODUCT))
+        with patch.object(preparation, "git", return_value=" M modified.go"), self.assertRaisesRegex(RuntimeError, "clean reviewed checkout"):
+            preparation.source_evidence()
+        with patch.object(preparation, "git", side_effect=["", "a" * 40 + "\n" + "b" * 40]), \
+                self.assertRaisesRegex(RuntimeError, "differs from the pinned failure source"):
+            preparation.source_evidence()
+
+    def test_candidate_vcs_mismatch_stops_before_original_acquisition_or_proof(self):
+        releases = Mock(root=self.root, output=self.root, builds={preparation.TARGET: {"commit": "b" * 40}})
+        with patch.object(preparation.subprocess, "run"), patch.object(preparation.installed_origin, "Origin"), \
+                patch.object(preparation.fleet_baselines, "acquire_pair") as acquire, \
+                self.assertRaisesRegex(RuntimeError, "candidate VCS identity differs"):
+            preparation.prepare(releases, {"checkoutSource": "a" * 40})
+        acquire.assert_not_called()
+        releases.prove.assert_not_called()
+        releases.publish.assert_not_called()
+
+    def test_unconfirmed_preparation_descendants_keep_their_owned_scratch(self):
+        owned = VEHICLE.Run.__new__(VEHICLE.Run)
+        owned.case, owned.capture, owned.cleanup_error = None, None, None
+        owned.releases = SimpleNamespace(closed=True, transition_clean=False)
+        owned.root, owned.record = self.root, {}
+        owned.remove_scratch()
+        self.assertFalse(owned.record["scratchAbsent"])
+        self.assertTrue(self.root.exists())
+
+    def test_observer_caps_use_parent_deadlines_without_renewing_work_or_cleanup(self):
+        clock = installed_clock.Clock({"test": "observer-parent"})
+        with clock.activate():
+            original = clock.deadline_ns
+            earlier = clock.origin_ns + 60 * installed_clock.SECOND
+            self.assertEqual(trace.deadline(parent=earlier), earlier)
+            trace.wait(lambda: True, "armed", parent=earlier)
+            self.assertEqual(clock.deadline_ns, original)
+            clock.begin_cleanup(final=True)
+            cleanup = clock.cleanup_deadline_ns
+            self.assertLessEqual(trace.budget(), 120)
+            self.assertLessEqual(trace.deadline(), cleanup)
+            self.assertEqual(clock.cleanup_deadline_ns, cleanup)
 
     def test_partial_startup_marker_is_observed_without_starting_another_actor(self):
         marker = self.root / "start.json"
@@ -227,17 +291,8 @@ class DiagnosticTest(unittest.TestCase):
         marker.write_text('{"pid":123}')
         self.assertEqual(capture.read_start(marker), {"pid": 123})
 
-    def reject_zip(self, name, mode):
-        member = zipfile.ZipInfo(name)
-        member.external_attr = mode << 16
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as package:
-            package.writestr(member, "fixture")
-        with zipfile.ZipFile(stream) as package, self.assertRaises(RuntimeError if name.startswith("..") else ValueError):
-            inputs.validate_zip(package)
-
     def test_new_code_nesting_is_at_most_three(self):
-        paths = [Path(module.__file__) for module in (capture, inputs, trace, VEHICLE)] + [Path(__file__)]
+        paths = [Path(module.__file__) for module in (capture, preparation, trace, VEHICLE)] + [Path(__file__)]
         for path in paths:
             self.assertLessEqual(depth(ast.parse(path.read_text())), 3, str(path))
 
@@ -246,7 +301,7 @@ class DiagnosticTest(unittest.TestCase):
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", source.split("jobs:\n", 1)[1], re.MULTILINE | re.DOTALL))
         guarded = {"changes", "race", "integration", "test", "gates", "vulnerability", "packaging", "gate"}
         for name in guarded:
-            self.assertIn("inputs.client_interrupt_pin == ''", jobs[name])
+            self.assertIn("!inputs.client_interrupt", jobs[name])
         for name in set(jobs).difference(guarded, {"client-interrupt-diagnostic", "publish"}):
             self.assertRegex(jobs[name], r"(?m)^    needs: (?:changes|\[changes, update-proofs\])$")
             condition = re.findall(r"^    if: (.+)$", jobs[name], re.MULTILINE)
@@ -254,10 +309,14 @@ class DiagnosticTest(unittest.TestCase):
             self.assertNotIn("always()", condition[0])
         self.assertIn("needs.gate.result == 'success'", jobs["publish"])
         diagnostic = jobs["client-interrupt-diagnostic"]
-        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.client_interrupt_pin != ''", diagnostic)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.client_interrupt", diagnostic)
         self.assertNotIn("strategy:", diagnostic)
         self.assertNotIn("continue-on-error", diagnostic)
-        self.assertEqual(diagnostic.count("scripts/diagnose-client-interrupt.py --bundle"), 1)
+        self.assertEqual(diagnostic.count("scripts/diagnose-client-interrupt.py --output"), 1)
+        self.assertIn("uses: ./.github/actions/installed-go", diagnostic)
+        self.assertNotIn("download-artifact", diagnostic)
+        self.assertNotIn("GH_TOKEN", diagnostic)
+        self.assertNotIn("client_interrupt_pin", source)
         self.assertIn("path: ${{ runner.temp }}/client-interrupt-diagnostic", diagnostic)
         self.assertNotIn("path: ${{ runner.temp }}/client-interrupt-input", diagnostic)
 

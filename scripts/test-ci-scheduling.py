@@ -13,8 +13,8 @@ JOB = CONTRACT["job"]
 STEP = CONTRACT["step"]
 RUN_SCRIPT = CONTRACT["run_script"]
 STATUS = CONTRACT["status"]
-READY = "${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
-ALWAYS_READY = "${{ always() && inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
+READY = "${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
+ALWAYS_READY = "${{ always() && !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 REQUIRED = {"changes", "app-pill", "test", "socket-portability", "auth-cutover", "machine-naming",
             "helper-recovery", "gates", "vulnerability", "packaging"}
 

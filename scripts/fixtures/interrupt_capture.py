@@ -8,7 +8,7 @@ import time
 import uuid
 from pathlib import Path
 
-from fixtures import installed_native
+from fixtures import installed_clock, installed_native
 from fixtures import interrupt_trace as external
 
 ORIGINAL = "940d638ea8ea5be29f17c1ab311aedd4039be2f6a221bd1f28a4ae2f1aee9eda"
@@ -28,6 +28,7 @@ class Capture:
         self.lock = threading.Lock()
         self.original = {}
         self.control = None
+        self.parent_deadline = installed_clock.parent_deadline()
 
     def event(self, stage, **fields):
         data = json.dumps({"stage": stage, "unixNano": time.time_ns(),
@@ -46,11 +47,11 @@ class Capture:
         actor = external.identity(pid)
         if actor["uid"] != os.getuid() or actor["sha256"] != digest:
             raise RuntimeError("external observation refused another actor owner or image")
-        trace = external.Trace(self.directory, role, actor)
+        trace = external.Trace(self.directory, role, actor, parent=self.parent_deadline)
         self.traces[role] = trace
         self.event("tracer.before-attach", role=role, identity=actor, sockets=external.sockets(pid))
         trace.start()
-        external.wait(trace.armed, "external tracer did not cover all actor threads")
+        external.wait(trace.armed, "external tracer did not cover all actor threads", parent=self.parent_deadline, stop=self.stop)
         trace.require_identity()
         self.event("tracer.armed", role=role, tasks=external.tasks(pid), sockets=external.sockets(pid))
         return trace
@@ -78,7 +79,7 @@ class Capture:
         self.case.terminal.send("printf '__OBSERVED__%s__%s__\\n' " + token + " \"$$\"\n")
         self.case.terminal.expect(marker, since=start)
         external.wait(lambda: progressed(client, pair[0]["fd"], before[0]) and progressed(daemon, pair[1]["fd"], before[1]),
-                      "same original client and daemon socket traffic was not observed")
+                      "same original client and daemon socket traffic was not observed", parent=self.parent_deadline)
         for trace in (client, daemon):
             trace.require_identity()
             if not trace.armed():
@@ -132,7 +133,7 @@ class Capture:
     def close(self, primary=None):
         self.stop.set()
         if self.thread:
-            self.thread.join(timeout=30)
+            self.thread.join(timeout=external.budget())
             if self.thread.is_alive():
                 self.errors.append({"stage": "successor-collector", "type": "JoinTimeout"})
         for role, trace in self.traces.copy().items():
@@ -248,7 +249,7 @@ def retain_journal(output, since):
               "USER_UNIT", "MESSAGE_ID", "EXIT_CODE", "EXIT_STATUS", "JOB_TYPE", "JOB_RESULT")
     command = ["/usr/bin/journalctl", "--user", "-u", "mesh.service", "-u", "mesh-update-helper.service",
                "--since=@" + str(since), "--output=json", "--output-fields=" + ",".join(fields), "--no-pager", "-n", "256"]
-    result = subprocess.run(command, capture_output=True, timeout=10, check=False)
+    result = subprocess.run(command, capture_output=True, timeout=external.budget(), check=False)
     if len(result.stdout) > 1 << 20:
         raise ValueError("native journal exceeded its bound")
     rows = [{key: value[key] for key in fields if key in value} for value in

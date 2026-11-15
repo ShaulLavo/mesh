@@ -9,6 +9,7 @@ import threading
 import time
 from pathlib import Path
 
+from fixtures import installed_clock
 from fixtures import installed_transport_lifecycle as lifecycle
 
 RAW = "read,write,readv,writev,recvfrom,sendto,recvmsg,sendmsg,recvmmsg,sendmmsg"
@@ -95,7 +96,7 @@ def parse_line(line, pid):
 
 
 class Trace:
-    def __init__(self, directory, role, expected, *, executable="/usr/bin/strace", privileged=True):
+    def __init__(self, directory, role, expected, *, executable="/usr/bin/strace", privileged=True, parent=None):
         self.role, self.expected = role, expected
         self.path = Path(directory) / (role + ".jsonl")
         self.executable, self.privileged = executable, privileged
@@ -107,6 +108,7 @@ class Trace:
         self.stream = None
         self.tracer_pid = None
         self.tool = None
+        self.parent_deadline = parent
 
     def start(self):
         if identity(self.expected["pid"]) != self.expected:
@@ -115,7 +117,7 @@ class Trace:
         self.path.chmod(0o600)
         with Path(self.executable).open("rb") as tool:
             tool_digest = hashlib.file_digest(tool, "sha256").hexdigest()
-        version = subprocess.check_output([self.executable, "--version"], text=True, timeout=5).splitlines()[0]
+        version = subprocess.check_output([self.executable, "--version"], text=True, timeout=budget(self.parent_deadline)).splitlines()[0]
         self.tool = {"executable": str(self.executable), "sha256": tool_digest, "version": version[:256]}
         command = [self.executable, "-f", "-b", "execve", "-qq", "-ttt", "-T", "-yy", "-e", "trace=" + CALLS,
                    "-e", "raw=" + RAW, "-p", str(self.expected["pid"])]
@@ -198,8 +200,8 @@ class Trace:
             return
         if self.process.poll() is None:
             self.interrupt()
-        self.status = self.process.wait(timeout=10)
-        self.thread.join(timeout=10)
+        self.status = self.process.wait(timeout=budget())
+        self.thread.join(timeout=budget())
         if self.thread.is_alive():
             raise RuntimeError("trace pipe collector did not stop")
         self.process.stderr.close()
@@ -210,7 +212,7 @@ class Trace:
             raise RuntimeError("owned tracer group changed before detach")
         if self.privileged:
             subprocess.run(["sudo", "-n", "/bin/kill", "-INT", "--", "-" + str(self.process.pid)],
-                           check=True, capture_output=True, timeout=10)
+                           check=True, capture_output=True, timeout=budget())
             return
         os.killpg(self.process.pid, signal.SIGINT)
 
@@ -224,10 +226,22 @@ class Trace:
                             "syscallInjection": False, "followsThreadsAndForks": True, "detachesOnChildExec": True}}
 
 
-def wait(predicate, message, timeout=20):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def budget(parent=None):
+    maximum = installed_clock.timeout(120)
+    return maximum if parent is None else installed_clock.remaining_until(parent, maximum)
+
+
+def deadline(timeout=120, parent=None):
+    own = installed_clock.parent_deadline(timeout)
+    return own if parent is None else min(own, parent)
+
+
+def wait(predicate, message, timeout=120, *, parent=None, stop=None):
+    end = deadline(timeout, parent)
+    while time.monotonic_ns() < end:
+        if stop is not None and stop.is_set():
+            raise RuntimeError("observer stopped during attachment")
         if predicate():
             return
-        time.sleep(0.01)
+        time.sleep(installed_clock.remaining_until(end, 0.01))
     raise RuntimeError(message)

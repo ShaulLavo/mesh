@@ -86,8 +86,8 @@ class LifecycleControls(unittest.TestCase):
                 patch.object(lifecycle, "original_sockets", return_value={("127.0.0.1:35428", "127.0.0.1:56537")}), \
                 patch.object(installed_clock, "timeout", side_effect=lambda value: value) as timeout:
             observed = lifecycle.prove(self.case, {"running": self.running})
-            lifecycle.prove(self.case, {"running": self.running}, "later successful original attachment", maximum=20)
-        self.assertEqual(timeout.call_args_list[-1].args, (20,))
+            lifecycle.prove(self.case, {"running": self.running}, "later successful original attachment", maximum=120)
+        self.assertEqual(timeout.call_args_list[-1].args, (120,))
         mapped.assert_called_once_with(88, self.case.binary)
         self.assertEqual(observed["status"], "covered")
         self.assertEqual(observed["original"]["client"]["pid"], 42)
