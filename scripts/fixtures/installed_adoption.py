@@ -271,6 +271,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
     case = AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
     case.worker_group = group
     record = {"host": host["name"], "scenario": scenario, "passed": False, "supplementalSourceCandidate": True}
+    failure = None
     try:
         record["initial"] = case.prepare()
         case.seed_prior()
@@ -293,10 +294,21 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        failure = error
         raise
     finally:
-        finish_case(case, record, output)
+        finish_case_with_primary(case, record, output, failure)
     return case.root
+
+
+def finish_case_with_primary(case, record, output, primary):
+    try:
+        finish_case(case, record, output)
+    except BaseException as cleanup_error:
+        if primary is None:
+            raise
+        primary.add_note("installed case cleanup failed: " + str(cleanup_error))
+        raise primary from cleanup_error
 
 
 @installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
@@ -307,7 +319,7 @@ def finish_case(case, record, output):
             collect_service_snapshot(case)
         finally:
             case.close()
-        record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
+            record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
         record["passed"] = False
         record["cleanupError"] = str(error)

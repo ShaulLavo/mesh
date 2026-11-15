@@ -402,6 +402,49 @@ class InstalledModeShellTest(unittest.TestCase):
         self.assertTrue(json.loads((Path(temporary.name) / "cohort-control/fixture-launch.json").read_text())["started"])
 
 
+class AdoptionCleanupTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="adoption-cleanup-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.output = self.root / "output"
+        self.output.mkdir()
+        self.case = Mock(root=self.root, state=self.root / "state", host={"name": "owned"}, cohort=None, prior=None)
+
+    def test_snapshot_failure_still_records_successful_native_cleanup(self):
+        record = {"passed": True}
+        with patch.object(installed_adoption, "collect_service_snapshot", side_effect=RuntimeError("empty inspection reply")), \
+                patch.object(installed_native, "retain_logs"), self.assertRaisesRegex(RuntimeError, "empty inspection reply"):
+            installed_adoption.finish_case(self.case, record, self.output)
+        self.case.close.assert_called_once_with()
+        self.assertFalse(record["passed"])
+        retained = json.loads((self.output / "owned-native-pair.json").read_text())
+        self.assertEqual(retained["cleanup"], {"servicesAbsent": True, "processesAbsent": True})
+        self.assertEqual(retained["cleanupError"], "empty inspection reply")
+
+    def test_snapshot_failure_preserves_original_case_failure(self):
+        primary = installed_clock.ClockExpired("original installed case hang cap")
+        self.case.prepare.side_effect = primary
+        with patch.object(installed_adoption, "AdoptionCase", return_value=self.case), \
+                patch.object(installed_adoption, "collect_service_snapshot", side_effect=RuntimeError("empty inspection reply")), \
+                patch.object(installed_native, "retain_logs"), self.assertRaises(installed_clock.ClockExpired) as caught:
+            installed_adoption.run_case(self.root, self.output, {"name": "owned"}, {}, None, None, None, "adopt")
+        self.assertIs(caught.exception, primary)
+        self.assertIn("empty inspection reply", primary.__notes__[0])
+        self.case.close.assert_called_once_with()
+
+    def test_failed_native_close_never_records_cleanup_success(self):
+        self.case.close.side_effect = RuntimeError("native services remain")
+        record = {"passed": True}
+        with patch.object(installed_adoption, "collect_service_snapshot"), patch.object(installed_native, "retain_logs"), \
+                self.assertRaisesRegex(RuntimeError, "native services remain"):
+            installed_adoption.finish_case(self.case, record, self.output)
+        retained = json.loads((self.output / "owned-native-pair.json").read_text())
+        self.assertNotIn("cleanup", retained)
+        self.assertFalse(retained["passed"])
+        self.assertEqual(retained["cleanupError"], "native services remain")
+
+
 class ExactCohortInputTest(unittest.TestCase):
     def test_failed_verification_retains_streams_and_original_exception(self):
         cohort = object.__new__(installed_cohort.Cohort)
