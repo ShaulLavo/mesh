@@ -123,6 +123,9 @@ type AttachOptions struct {
 	// Nil uses os.Stderr.
 	// Close diagnostics are omitted when this writer is a terminal.
 	Stderr io.Writer
+	// CloseLogf routes transport diagnostics separately from client messages.
+	// Nil uses noninteractive Stderr. Command errors never use this callback.
+	CloseLogf func(string, ...any)
 }
 
 // AttachResult reports how an attachment ended.
@@ -422,11 +425,16 @@ func (s *attachmentOutput) logTransportClose(ctx context.Context, cause, result 
 	if s.acknowledged {
 		stage = "established-stream"
 	}
+	const format = "mesh: session=%s stage=%s classification=terminal failed=%t error=%q\r\n"
+	if s.opts.CloseLogf != nil {
+		s.opts.CloseLogf(format, s.opts.SessionID, stage, result != nil, cause)
+		return
+	}
 	sink := s.opts.Stderr
 	if sink == nil {
 		sink = os.Stderr
 	}
-	closelog.Fprintf(sink, "mesh: session=%s stage=%s classification=terminal failed=%t error=%q\r\n", s.opts.SessionID, stage, result != nil, cause)
+	closelog.Fprintf(sink, format, s.opts.SessionID, stage, result != nil, cause)
 }
 
 func (s *attachmentOutput) readError(ctx context.Context, err error, detached <-chan struct{}) error {
