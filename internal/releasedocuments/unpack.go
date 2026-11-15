@@ -91,7 +91,7 @@ func extract(ctx context.Context, file *os.File, root *os.Root, expected *Bindin
 		return result, documentError(err)
 	}
 	var value catalog
-	if err := DecodeJSON(data, &value); err != nil {
+	if err := decodeJSON(ctx, data, &value); err != nil {
 		return result, documentError(err)
 	}
 	if err := validateCatalog(value, expected); err != nil {

@@ -88,7 +88,7 @@ func verifySnapshot(ctx context.Context, root *os.Root, expected Binding) (snaps
 		return value, documentError(err)
 	}
 	var raw map[string]json.RawMessage
-	if err := DecodeJSON(data, &raw); err != nil {
+	if err := decodeJSON(ctx, data, &raw); err != nil {
 		return value, documentError(err)
 	}
 	if err := json.Unmarshal(data, &value); err != nil {

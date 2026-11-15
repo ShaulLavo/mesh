@@ -102,7 +102,7 @@ func installedSignConnection(t *testing.T, root *os.Root, fixture *signingFixtur
 		t.Fatal(err)
 	}
 	var request installedSignRequest
-	decoder := json.NewDecoder(io.LimitReader(connection, 64<<10))
+	decoder := json.NewDecoder(io.LimitReader(connection, 8<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		t.Fatal(err)

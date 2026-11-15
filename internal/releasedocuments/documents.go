@@ -187,14 +187,18 @@ func validateIdentity(ctx context.Context, root *os.Root, binding Binding) error
 
 // DecodeJSON rejects ambiguous object keys, unknown fields and trailing values.
 func DecodeJSON(data []byte, destination any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	return decodeJSON(context.Background(), data, destination)
+}
+
+func decodeJSON(ctx context.Context, data []byte, destination any) error {
+	decoder := json.NewDecoder(contextReader{ctx, bytes.NewReader(data)})
 	if err := uniqueValue(decoder, 0); err != nil {
 		return documentError(err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return errors.New("documents: trailing JSON")
 	}
-	decoder = json.NewDecoder(bytes.NewReader(data))
+	decoder = json.NewDecoder(contextReader{ctx, bytes.NewReader(data)})
 	decoder.DisallowUnknownFields()
 	return documentError(decoder.Decode(destination))
 }
