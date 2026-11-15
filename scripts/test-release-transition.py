@@ -30,7 +30,7 @@ class HelperRollbackWaitTest(unittest.TestCase):
             (root / "helper-probe.log").write_text("")
             (root / "managed-daemon.log").write_text("fixture source startup failure")
             script = '''set -euo pipefail
-helper_pid=$BASHPID
+helper_pid=$$
 state=unused
 fail() { printf '%s\\n' "$*" >&2; exit 1; }
 sleep() { :; }
