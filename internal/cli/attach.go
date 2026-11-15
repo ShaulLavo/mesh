@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/terminfo"
@@ -120,6 +121,7 @@ type AttachOptions struct {
 	Out *os.File
 	// Stderr receives client hints without changing the session's byte stream.
 	// Nil uses os.Stderr.
+	// Close diagnostics are omitted when this writer is a terminal.
 	Stderr io.Writer
 }
 
@@ -424,7 +426,7 @@ func (s *attachmentOutput) logTransportClose(ctx context.Context, cause, result 
 	if sink == nil {
 		sink = os.Stderr
 	}
-	_, _ = fmt.Fprintf(sink, "mesh: session=%s stage=%s classification=terminal failed=%t error=%q\r\n", s.opts.SessionID, stage, result != nil, cause)
+	closelog.Fprintf(sink, "mesh: session=%s stage=%s classification=terminal failed=%t error=%q\r\n", s.opts.SessionID, stage, result != nil, cause)
 }
 
 func (s *attachmentOutput) readError(ctx context.Context, err error, detached <-chan struct{}) error {

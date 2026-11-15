@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/protocol"
@@ -195,7 +195,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 
 func logClientStreamClose(ctx context.Context, attached bool, err error) {
 	if attached || !onlyNormalClientErrors(err) {
-		log.Printf("daemon: stage=client-stream-read classification=terminal attached=%t context=%v error=%q", attached, ctx.Err(), err)
+		closelog.Printf("daemon: stage=client-stream-read classification=terminal attached=%t context=%v error=%q", attached, ctx.Err(), err)
 	}
 }
 

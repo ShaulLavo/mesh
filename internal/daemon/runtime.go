@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/sshd"
@@ -601,7 +602,7 @@ func newWebSocketServer(ctx context.Context, cfg listenerConfig, connections *co
 
 func logWebSocketServeError(err error) {
 	if err != nil {
-		log.Printf("daemon: stage=websocket-serve classification=terminal error=%q", err)
+		closelog.Printf("daemon: stage=websocket-serve classification=terminal error=%q", err)
 	}
 }
 

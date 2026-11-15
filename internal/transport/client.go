@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/rand/v2"
 	"net/http"
 	"sort"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
@@ -207,7 +207,7 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 
 func (c *reconnectingConn) logReadFailure(ref connectionRef, err error) {
 	if c.ctx.Err() == nil {
-		log.Printf("transport: client stage=stream-read generation=%d reconnect=%t error=%q", ref.generation, retryableReadError(err), err)
+		closelog.Printf("transport: client stage=stream-read generation=%d reconnect=%t error=%q", ref.generation, retryableReadError(err), err)
 	}
 }
 
@@ -397,7 +397,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 			ref := connectionRef{link: link, generation: c.generation}
 			c.current = ref
 			c.stateMu.Unlock()
-			log.Printf("transport: client stage=reconnect-established generation=%d attempts=%d", ref.generation, attempt+1)
+			closelog.Printf("transport: client stage=reconnect-established generation=%d attempts=%d", ref.generation, attempt+1)
 			return ref, nil
 		}
 		if link != nil {
@@ -405,7 +405,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 		}
 		terminal := permanentReconnectError(err)
 		if c.ctx.Err() == nil && (attempt == 0 || terminal) {
-			log.Printf("transport: client stage=%s attempt=%d reconnect=%t error=%q", stage, attempt+1, !terminal, err)
+			closelog.Printf("transport: client stage=%s attempt=%d reconnect=%t error=%q", stage, attempt+1, !terminal, err)
 		}
 		if terminal {
 			return connectionRef{}, err
