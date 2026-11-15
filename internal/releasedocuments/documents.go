@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -95,7 +96,7 @@ func validName(name string) bool {
 func documentLimit(name string) int64 {
 	switch name {
 	case release.ManifestAssetName:
-		return 512 << 10
+		return int64(release.DocumentLimit(release.ManifestDocument))
 	case release.UpdateMetadataAssetName:
 		return release.MaxMetadataBytes
 	case release.DiscoveryRootAssetName:
@@ -192,7 +193,7 @@ func DecodeJSON(data []byte, destination any) error {
 
 func decodeJSON(ctx context.Context, data []byte, destination any) error {
 	decoder := json.NewDecoder(contextReader{ctx, bytes.NewReader(data)})
-	if err := uniqueValue(decoder, 0); err != nil {
+	if err := uniqueValue(decoder, 0, reflect.TypeOf(destination)); err != nil {
 		return documentError(err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
@@ -203,7 +204,7 @@ func decodeJSON(ctx context.Context, data []byte, destination any) error {
 	return documentError(decoder.Decode(destination))
 }
 
-func uniqueValue(decoder *json.Decoder, depth int) error {
+func uniqueValue(decoder *json.Decoder, depth int, kind reflect.Type) error {
 	if depth > 32 {
 		return errors.New("documents: JSON nesting exceeds bound")
 	}
@@ -212,13 +213,14 @@ func uniqueValue(decoder *json.Decoder, depth int) error {
 		return documentError(err)
 	}
 	if token == json.Delim('{') {
-		return uniqueObject(decoder, depth+1)
+		return uniqueObject(decoder, depth+1, jsonType(kind))
 	}
 	if token != json.Delim('[') {
 		return nil
 	}
+	kind = jsonElement(kind)
 	for decoder.More() {
-		if err := uniqueValue(decoder, depth+1); err != nil {
+		if err := uniqueValue(decoder, depth+1, kind); err != nil {
 			return documentError(err)
 		}
 	}
@@ -226,7 +228,7 @@ func uniqueValue(decoder *json.Decoder, depth int) error {
 	return documentError(err)
 }
 
-func uniqueObject(decoder *json.Decoder, depth int) error {
+func uniqueObject(decoder *json.Decoder, depth int, kind reflect.Type) error {
 	seen := map[string]bool{}
 	for decoder.More() {
 		key, err := decoder.Token()
@@ -238,12 +240,62 @@ func uniqueObject(decoder *json.Decoder, depth int) error {
 			return errors.New("documents: repeated JSON key")
 		}
 		seen[name] = true
-		if err := uniqueValue(decoder, depth); err != nil {
+		field, err := jsonField(kind, name)
+		if err != nil {
+			return err
+		}
+		if err := uniqueValue(decoder, depth, field); err != nil {
 			return documentError(err)
 		}
 	}
 	_, err := decoder.Token()
 	return documentError(err)
+}
+
+func jsonType(kind reflect.Type) reflect.Type {
+	for kind != nil && kind.Kind() == reflect.Pointer {
+		kind = kind.Elem()
+	}
+	return kind
+}
+
+func jsonElement(kind reflect.Type) reflect.Type {
+	kind = jsonType(kind)
+	if kind != nil && (kind.Kind() == reflect.Slice || kind.Kind() == reflect.Array || kind.Kind() == reflect.Map) {
+		return kind.Elem()
+	}
+	return nil
+}
+
+func jsonField(kind reflect.Type, name string) (reflect.Type, error) {
+	if kind == nil || kind.Kind() != reflect.Struct {
+		return jsonElement(kind), nil
+	}
+	for index := range kind.NumField() {
+		field := kind.Field(index)
+		if match := declaredJSONField(field, name); match != nil {
+			return match, nil
+		}
+	}
+	return nil, fmt.Errorf("documents: unknown JSON field %q", name)
+}
+
+func declaredJSONField(field reflect.StructField, name string) reflect.Type {
+	if !field.IsExported() {
+		return nil
+	}
+	tag := strings.Split(field.Tag.Get("json"), ",")[0]
+	if tag == "-" {
+		return nil
+	}
+	if field.Anonymous && tag == "" {
+		match, _ := jsonField(jsonType(field.Type), name)
+		return match
+	}
+	if tag == name || tag == "" && field.Name == name {
+		return field.Type
+	}
+	return nil
 }
 
 func sameBinding(a, b Binding) bool {

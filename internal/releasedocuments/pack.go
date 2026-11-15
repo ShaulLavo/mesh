@@ -50,7 +50,7 @@ func packCatalog(ctx context.Context, root *os.Root, members []string, binding B
 		}
 		catalog.Documents = append(catalog.Documents, Document{Name: name, SHA256: digest(data), Size: int64(len(data))})
 	}
-	return catalog, requiredMembers(catalog.Documents)
+	return catalog, validateCatalog(catalog, &binding)
 }
 
 func encodeArchive(ctx context.Context, root *os.Root, catalog catalog, output io.Writer) (Packed, error) {
