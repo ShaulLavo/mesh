@@ -39,7 +39,8 @@ def current_pages(directory, metadata):
         raw = read_document(directory, ref["name"], ref["sha256"])
         seen.add(ref["name"])
         page = json.loads(raw)
-        pending.extend(item["ref"] for item in page["back"])
+        if page["back"] is not None:
+            pending.extend(item["ref"] for item in page["back"])
     return seen
 
 
