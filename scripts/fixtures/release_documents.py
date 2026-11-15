@@ -108,8 +108,7 @@ def historical_manifest(history, documents, version):
     return manifest
 
 
-def legacy_projection(directory, documents, history, versions=None):
-    manifest = json.loads(read_document(directory, "mesh-release.json"))
+def legacy_projection(manifest, directory, documents, history, versions=None):
     versions = legacy_versions() if versions is None else versions
     names = set()
     for version in versions:

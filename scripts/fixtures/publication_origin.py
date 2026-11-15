@@ -99,6 +99,7 @@ class Origin:
         self.lock, self.stopping = threading.Lock(), threading.Event()
         self.connections, self.trust_connections, self.public_fetches = set(), 0, 0
         self.head_path, self.server, self.thread = None, None, None
+        self.requests = []
         self.certificates = self.root / "publication-tls"
         self.certificates.mkdir()
         tls.fixture_certificates(self.certificates)
@@ -140,9 +141,13 @@ class Origin:
         if not path.startswith(prefix) or len(parts) != 2 or any(Path(part).name != part or part in (".", "..") for part in parts):
             raise RuntimeError("request is outside approved release assets")
         version, name = parts
-        local = self.directory / version / name
-        if local.is_file():
-            return local
+        with self.lock:
+            self.requests.append(path)
+        snapshot = self.directory / version / "draft.json"
+        if snapshot.exists():
+            return self.physical_asset(snapshot, name)
+        if (self.directory / version).exists():
+            raise RuntimeError("candidate requires its declared physical snapshot; network fallback denied")
         public = self.root / "public" / version / name
         if not public.exists():
             data = published_releases.download(published_releases.ORIGIN + version + "/" + name, 128 << 20)
@@ -152,11 +157,26 @@ class Origin:
                 self.public_fetches += 1
         return public
 
+    @staticmethod
+    def physical_asset(snapshot, name):
+        import hashlib
+        import json
+        value = json.loads(snapshot.read_bytes())
+        assets = [item for item in value["assets"] if item["name"] == name]
+        if len(assets) != 1:
+            raise RuntimeError("candidate request is outside its declared physical asset inventory")
+        asset = assets[0]
+        local = snapshot.parent / name
+        if local.is_symlink() or not local.is_file() or local.stat().st_size != asset["size"]:
+            raise RuntimeError("candidate physical bytes are unavailable or changed")
+        with local.open("rb") as stream:
+            actual = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != asset["digest"]:
+            raise RuntimeError("candidate physical bytes differ from the actual uploaded snapshot")
+        return local
+
     def head(self, directory, version):
-        path = Path(directory) / version / "mesh-update-root.json"
-        if not path.exists():
-            path = self.asset("/ShaulLavo/mesh/releases/download/" + version + "/mesh-update-root.json")
-        self.head_path = path
+        self.head_path = self.asset("/ShaulLavo/mesh/releases/download/" + version + "/mesh-update-root.json")
 
     def inspect(self, state, output):
         self.read("inspect", state, output)

@@ -394,7 +394,7 @@ jobs:
           scripts/generate-release-manifest.sh -dist "$root/dist" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/dist/mesh-release.json"
           original="$RUNNER_TEMP/reader-native/update-native-linux-amd64/retained/release-v0.1.249/mesh"
           chmod +x "$original"
-          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence"
+          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence" --history-inventory "$RUNNER_TEMP/mesh-policy/history.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

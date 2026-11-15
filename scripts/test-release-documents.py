@@ -57,7 +57,8 @@ class DocumentsTests(unittest.TestCase):
         self.history.append({"tag": version, "assets": [{"name": "mesh-release.json", "sha256": digest}]})
 
     def project(self):
-        return documents.legacy_projection(self.logical, self.root, self.history)
+        manifest = json.loads((self.logical / "mesh-release.json").read_bytes())
+        return documents.legacy_projection(manifest, self.logical, self.root, self.history)
 
     def test_union_keeps_every_supported_source_on_all_platforms(self):
         self.assertEqual(self.versions, ["v0.1.249", "v0.1.255", "v0.1.257"])

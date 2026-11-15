@@ -472,7 +472,7 @@ class CompletionTests(unittest.TestCase):
         output = self.root / "linux-amd64"
         build = json.loads((output / "real-draft.json").read_bytes())["build"]
         with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=SOURCE), mock.patch.object(installed_publication, "verify_signature") as signature, mock.patch.object(index, "validate_index"), mock.patch.object(installed_publication.published_releases, "archive_binary", return_value=b"image"), mock.patch.object(installed_publication.subprocess, "check_output", return_value=groups.encode(build)):
-            releases = installed_publication.load_draft(self.root, output, directory, "linux/amd64", manifest["version"], SOURCE, "owned-draft")
+            releases = installed_publication.load_draft(self.root, output, directory, "linux/amd64", manifest["version"], SOURCE, "owned-draft", directory)
         self.assertIn(directory / "mesh-retention.json", signature.call_args.args[3])
         self.assertEqual(releases.verification["workerGroups"], groups.digest(b"{}"))
         self.assertEqual(releases.verification["manifest"], groups.digest(manifest_bytes))
@@ -553,8 +553,9 @@ class PublishedExecutionTests(unittest.TestCase):
         manifest = groups.encode({"version": target["version"], "commit": SOURCE,
                                   "artifacts": [{"platform": PLATFORM, "binarySha256": target["digest"]}]})
         metadata = groups.encode({"version": target["version"], "manifest": groups.digest(manifest)})
-        (self.root / "mesh-release.json").write_bytes(manifest)
-        (self.root / "mesh-update.json").write_bytes(metadata)
+        (self.root / target["version"]).mkdir(exist_ok=True)
+        (self.root / target["version"] / "mesh-release.json").write_bytes(manifest)
+        (self.root / target["version"] / "mesh-update.json").write_bytes(metadata)
         identity = {"version": target["version"], "binary": target["digest"], "metadata": groups.digest(metadata), "manifest": groups.digest(manifest)}
         plan = {"currentDigest": source["digest"], "target": identity, "next": identity}
         build = source if rollback else target

@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 
-from fixtures import tls
+from fixtures import tls, release_documents
 
 
 class Origin(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -99,8 +99,8 @@ def exercise(args, root, server):
     for transition in intermediate["compatibility"]["transitions"]:
         name = transition["proof"] + ".json"
         server.assets[asset_path("v0.1.255", name)] = (args.history / "v0.1.255" / name).read_bytes()
-    for transition in candidate["compatibility"]["transitions"]:
-        name = transition["proof"] + ".json"
+    history = json.loads(args.history_inventory.read_bytes())
+    for name in release_documents.legacy_projection(candidate, args.proofs, args.history, history):
         server.assets[asset_path(candidate["version"], name)] = (args.proofs / name).read_bytes()
     environment = {key: os.environ[key] for key in ("PATH", "LANG", "TMPDIR") if key in os.environ}
     environment.update(HOME=str(root), MESH_STATE_DIR=str(root / "state"), MESH_CONFIG_DIR=str(root / "config"),
@@ -175,6 +175,7 @@ def main():
     parser.add_argument("manifest", type=Path)
     parser.add_argument("proofs", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--history-inventory", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mlr-", dir=os.environ.get("MESH_SHORT_TMP")) as temporary:

@@ -1,5 +1,6 @@
 """Installed proof path boundaries and real native-service failure cleanup."""
 import json
+import hashlib
 import ast
 import http.server
 import io
@@ -583,6 +584,8 @@ class PublicationConsumerTest(unittest.TestCase):
         release.mkdir(parents=True)
         actual = b"publication transport control; never a signed release proof"
         (release / "asset.json").write_bytes(actual)
+        (release / "draft.json").write_text(json.dumps({"assets": [{"name": "asset.json", "size": len(actual),
+            "digest": "sha256:" + hashlib.sha256(actual).hexdigest()}]}))
         origin = publication_origin.Origin(root, release.parent, root / "unused-reader")
         self.addCleanup(origin.close)
         origin.start()

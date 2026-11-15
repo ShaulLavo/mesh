@@ -69,11 +69,8 @@ class DraftIntakeTests(unittest.TestCase):
         directory = self.root / VERSION
         shutil.copytree(self.directory, directory)
         release = copy.deepcopy(self.release)
-        manifest = json.dumps({"version": VERSION, "commit": SOURCE}).encode()
-        metadata = json.dumps({"version": VERSION, "manifest": hashlib.sha256(manifest).hexdigest()}).encode()
-        documents = {"mesh-release.json": manifest, "mesh-update.json": metadata}
-        for name in INTAKE.SIGNED + ("mesh-anchors-a.json", "forward.json", "back.rollback.json", "leaf.worker-group.json"):
-            self.add_asset(directory, release, name, documents.get(name, b'{"offlineControl":true}'))
+        for name in INTAKE.release_documents.PHYSICAL + ("mesh.rb",):
+            self.add_asset(directory, release, name, b'{"offlinePhysicalControl":true}')
         return directory, release
 
     def fake_api(self, source=None):
@@ -177,6 +174,8 @@ else:
         (scripts / "fixtures").mkdir(parents=True)
         shutil.copyfile(ROOT / "scripts/prepare-draft-intake.py", scripts / "prepare-draft-intake.py")
         shutil.copyfile(ROOT / "scripts/fixtures/draft_intake.py", scripts / "fixtures/draft_intake.py")
+        shutil.copytree(ROOT / "scripts/fixtures", scripts / "fixtures", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__"))
         (scripts / "fixtures/noindex_paths.py").write_text("")
         (scripts / "probe-update-reader.py").write_text(
             'import json, os, pathlib, sys\npathlib.Path(sys.argv[4]).write_text(json.dumps({"build": '

@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 
+from fixtures import release_documents, release_tool, release_worker_index
+
 REPOSITORY = "repos/ShaulLavo/mesh"
 ARCHIVES = {"linux/amd64": "mesh_linux_amd64.tar.gz", "linux/arm64": "mesh_linux_arm64.tar.gz",
             "darwin/arm64": "mesh_darwin_arm64.tar.gz"}
@@ -39,13 +41,23 @@ def identity(release, version, source):
 
 def inventory(release, version, source, signed=False):
     identity(release, version, source)
+    all_names = [item["name"] for item in release["assets"]]
+    if any(Path(name).name != name or "\\" in name or name == "draft.json" for name in all_names):
+        raise ValueError("draft intake asset lacks its local name")
+    if len(all_names) != len(set(all_names)):
+        raise ValueError("draft intake requires every unique physical asset name")
     frozen = release["frozen_baselines"]
     if not isinstance(frozen, list) or baseline_names(",".join(frozen)) != frozen:
         raise ValueError("draft intake has invalid frozen custom baseline inventory")
     if sorted(item["name"] for item in release["assets"] if BASELINE.fullmatch(item["name"])) != frozen:
         raise ValueError("draft intake differs from the frozen custom baseline inventory")
-    selected = [item for item in release["assets"] if item["name"] in NAMES or item["name"] in frozen or signed and item["name"].endswith(".json")]
-    required = set(NAMES + SIGNED if signed else NAMES) | set(frozen)
+    required = set(NAMES) | set(frozen)
+    if signed:
+        required.update(release_documents.PHYSICAL + ("mesh.rb",))
+    aliases = [item["name"] for item in release["assets"] if release_documents.RECEIPT.fullmatch(item["name"])] if signed else []
+    if signed and len(aliases) > len(release_documents.legacy_versions()) * len(ARCHIVES):
+        raise ValueError("draft intake exceeds its supported physical legacy projection")
+    selected = [item for item in release["assets"] if item["name"] in required or item["name"] in aliases]
     names = {item["name"] for item in selected}
     if not required <= names or len(selected) != len(names):
         raise ValueError("draft intake requires every unique candidate archive, checksum and required metadata asset")
@@ -87,8 +99,6 @@ def verify(directory, version, source, signed=False, baselines=None, run=None):
         if path.stat().st_size != item["size"] or "sha256:" + digest != item["digest"]:
             raise ValueError("draft intake asset differs from its exact uploaded bytes")
     verify_checksums(directory, assets)
-    if signed:
-        verify_signed_identity(directory, version, source)
     return release
 
 
@@ -141,22 +151,53 @@ def capture(directory, version, source, signed=False, candidate=None, baselines=
         if candidate is None:
             raise ValueError("signed draft capture requires its actual transition candidate")
         same_candidate(candidate, release, version, source)
+    release["assets"] = assets
     directory.mkdir(exist_ok=False)
     for item in assets:
-        with (directory / item["name"]).open("xb") as output:
-            subprocess.run(["gh", "api", REPOSITORY + f'/releases/assets/{item["id"]}',
-                            "-H", "Accept: application/octet-stream"], stdout=output, check=True, timeout=120)
+        acquire_asset(directory, item, candidate if signed else None)
     (directory / "draft.json").write_text(json.dumps(release, sort_keys=True) + "\n")
     return verify(directory, version, source, signed)
 
 
+def acquire_asset(directory, item, candidate=None):
+    cached = candidate / item["name"] if candidate is not None else None
+    if cached is not None and cached.is_file():
+        shutil.copyfile(cached, directory / item["name"])
+        return
+    with (directory / item["name"]).open("xb") as output:
+        subprocess.run(["gh", "api", REPOSITORY + f'/releases/assets/{item["id"]}',
+                        "-H", "Accept: application/octet-stream"], stdout=output, check=True, timeout=120)
+
+
 def documents(directory, version, source, destination, run):
     release = verify(directory, version, source, signed=True, run=run)
-    selected = [item["name"] for item in inventory(release, version, source, signed=True) if item["name"].endswith(".json")]
-    destination.mkdir(exist_ok=False)
-    for name in selected + ["draft.json"]:
-        shutil.copyfile(directory / name, destination / name)
+    release_tool.materialize(directory, release, destination, destination.with_name(destination.name + ".logical-inventory.json"))
+    verify_signed_identity(destination, version, source)
+    manifest = json.loads((destination / "mesh-release.json").read_bytes())
+    index = release_worker_index.validate_index(destination / "mesh-worker-groups.json", manifest)
+    aliases = release_documents.selection_projection(destination, index)
+    physical = {item["name"] for item in release["assets"] if release_documents.RECEIPT.fullmatch(item["name"])}
+    if physical != set(aliases):
+        raise ValueError("actual draft differs from the complete supported legacy projection")
     return release
+
+
+def compare_live(directory, version, source, run):
+    recorded = verify(directory, version, source, signed=True, run=run)
+    endpoint = REPOSITORY + f'/releases/{recorded["id"]}'
+    live = json.loads(subprocess.check_output(["gh", "api", endpoint], timeout=120))
+    live.update(repository="ShaulLavo/mesh", intake_run=int(run), frozen_baselines=recorded["frozen_baselines"])
+    identity(live, version, source)
+    if live["id"] != recorded["id"]:
+        raise ValueError("live draft has another release ID")
+    pages = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp", endpoint + "/assets?per_page=100"], timeout=120))
+    live["assets"] = [item for page in pages for item in page]
+    keys = ("id", "name", "size", "state", "digest")
+    before = sorted(tuple(item[key] for key in keys) for item in recorded["assets"])
+    after = sorted(tuple(item[key] for key in keys) for item in live["assets"])
+    if before != after:
+        raise ValueError("live draft differs from the actual signed snapshot physical inventory")
+    return live
 
 
 def native(directory, version, source, platform, report, run=None):
@@ -171,7 +212,7 @@ def native(directory, version, source, platform, report, run=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("capture", "verify", "native"))
+    parser.add_argument("operation", choices=("capture", "verify", "native", "documents"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("version")
     parser.add_argument("source")
@@ -181,7 +222,13 @@ def main():
     parser.add_argument("--run", type=int)
     parser.add_argument("--platform", choices=ARCHIVES)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--destination", type=Path)
     args = parser.parse_args()
+    if args.operation == "documents":
+        if args.destination is None or args.run is None:
+            parser.error("documents requires --destination and --run")
+        documents(args.directory, args.version, args.source, args.destination, args.run)
+        return
     if args.operation == "native":
         if args.platform is None or args.report is None:
             parser.error("native requires --platform and --report")
