@@ -14,9 +14,9 @@ and macOS ARM64. These fixture versions are private test inputs.
 First adoption from the published v249, v255 and v309 pairs has a separate scope.
 The retiring daemon can cut authentication, and the old client can exit with
 status 0 while its session survives. The fixture records the exit and the owner's
-need to reconnect. `strictContinuityPassed` is null on this hop, even when the old
-client resumes. Worker, shell, listener, data and update/rollback checks still
-apply. A live client that fails its challenge still fails the test.
+need to reconnect. `strictContinuityPassed` is null on this hop. A live old client
+is recorded without claiming or asserting resume. Worker, shell, listener, data
+and update/rollback checks still apply.
 
 | Consumer | Attachment scope |
 | --- | --- |

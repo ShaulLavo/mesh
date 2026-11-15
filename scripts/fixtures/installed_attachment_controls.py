@@ -114,24 +114,26 @@ class ContinuityPolicyTest(unittest.TestCase):
         self.assertIs(self.case.terminal, self.terminal)
         self.assertEqual(json.loads((self.root / continuity.RECORD).read_text()), [result])
 
-    def test_legacy_exit_during_resume_is_observed_but_live_timeout_fails(self):
+    def test_legacy_drop_after_live_observation_records_the_reconnect_requirement(self):
         self.seed(legacy=True)
-        self.terminal.poll.side_effect = [None, 0, 0]
-        self.case.wait_attachment_resume.side_effect = RuntimeError("old client exited")
+        live = continuity.inspect(self.case)
+        self.assertIsNone(live["observedResume"])
+        self.terminal.poll.return_value = 0
         result = continuity.inspect(self.case)
-        self.assertEqual(result["resumeError"], "old client exited")
         self.assertIsNone(result["strictContinuityPassed"])
-        self.terminal.poll.side_effect = None
-        self.terminal.poll.return_value = None
-        with self.assertRaisesRegex(RuntimeError, "old client exited"):
-            continuity.inspect(self.case)
+        self.assertTrue(result["ownerReconnectRequired"])
+        self.assertFalse(result["observedResume"])
 
-    def test_legacy_live_resume_is_an_observation_without_strict_claim(self):
+    def test_legacy_live_client_does_not_create_a_continuity_assertion(self):
         self.seed(legacy=True)
+        self.case.wait_attachment_resume.side_effect = RuntimeError("legacy resume is outside the strict gate")
+        self.case.io.side_effect = RuntimeError("legacy terminal I/O is outside the strict gate")
         result = continuity.inspect(self.case)
-        self.assertTrue(result["observedResume"])
+        self.assertIsNone(result["observedResume"])
         self.assertIsNone(result["strictContinuityPassed"])
-        self.case.io.assert_called_once_with()
+        self.assertFalse(result["ownerReconnectRequired"])
+        self.case.wait_attachment_resume.assert_not_called()
+        self.case.io.assert_not_called()
 
     def test_legacy_drop_keeps_preservation_worker_shell_and_listener_checks(self):
         self.seed(legacy=True)

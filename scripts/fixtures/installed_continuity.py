@@ -56,19 +56,10 @@ def inspect(case):
 
 
 def inspect_legacy(case):
-    error = None
-    try:
-        if case.terminal.poll() is None:
-            case.wait_attachment_resume()
-            case.io()
-    except RuntimeError as failure:
-        if case.terminal.poll() is None:
-            raise
-        error = str(failure)
     status = case.terminal.poll()
     return {"strictContinuityPassed": None, "exitStatus": status,
-            "observedResume": status is None, "ownerReconnectRequired": status is not None,
-            "resumeError": error, "reconnectAction": "owner reconnects with the current client" if status is not None else None}
+            "observedResume": None if status is None else False, "ownerReconnectRequired": status is not None,
+            "reconnectAction": "owner reconnects with the current client" if status is not None else None}
 
 
 def inspect_current(case):
