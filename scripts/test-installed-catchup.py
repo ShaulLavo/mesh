@@ -444,6 +444,77 @@ class AdoptionCleanupTest(unittest.TestCase):
         self.assertFalse(retained["passed"])
         self.assertEqual(retained["cleanupError"], "native services remain")
 
+    def write_failure_state(self, relative, data):
+        path = self.case.state / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def run_failed_case(self, primary, inspect=None):
+        self.case.prepare.side_effect = primary
+        with patch.object(installed_adoption, "AdoptionCase", return_value=self.case), \
+                patch.object(installed_adoption, "collect_service_snapshot", side_effect=inspect), \
+                patch.object(installed_native, "retain_logs"), self.assertRaises(type(primary)) as caught:
+            installed_adoption.run_case(self.root, self.output, {"name": "owned"}, {}, None, None, None, "adopt")
+        self.assertIs(caught.exception, primary)
+        self.case.close.assert_called_once_with()
+        return json.loads((self.output / "owned-native-pair.json").read_text())
+
+    def test_failure_state_keeps_exact_bytes_before_inspection_and_teardown(self):
+        adoption = b'{ "phase" : "activating" }\n\n'
+        installation = b'{"phase":"granted", "unparsed":"\xff"}\n'
+        operation = self.write_failure_state("updates/host-adoption.json", adoption)
+        journal = self.write_failure_state("update/installation.json", installation)
+        self.case.close.side_effect = lambda: shutil.rmtree(self.case.state)
+        record = self.run_failed_case(RuntimeError("primary failure"), lambda case: operation.write_bytes(b"mutated"))
+        files = record["failureState"]
+        self.assertEqual((self.output / files["updates/host-adoption.json"]["path"]).read_bytes(), adoption)
+        self.assertEqual((self.output / files["update/installation.json"]["path"]).read_bytes(), installation)
+        self.assertEqual(files["update/installation.json"]["bytes"], len(installation))
+        self.assertFalse(operation.exists())
+        self.assertFalse(journal.exists())
+
+    def test_missing_failure_state_is_explicit(self):
+        record = self.run_failed_case(RuntimeError("primary failure"))
+        self.assertEqual(record["failureState"], {"updates/host-adoption.json": {"absent": True},
+                                                  "update/installation.json": {"absent": True}})
+
+    def test_retention_write_failure_preserves_primary_and_native_cleanup(self):
+        self.write_failure_state("updates/host-adoption.json", b'{"phase":"waiting"}')
+        primary = installed_clock.ClockExpired("original installed case hang cap")
+        with patch.object(Path, "write_bytes", side_effect=OSError("retention disk full")):
+            record = self.run_failed_case(primary)
+        self.assertIn("retention disk full", primary.__notes__[0])
+        self.assertIn("retention disk full", record["failureState"]["updates/host-adoption.json"]["retentionError"])
+        self.assertEqual(record["cleanup"], {"servicesAbsent": True, "processesAbsent": True})
+
+    def test_oversized_failure_state_records_error_without_truncating(self):
+        self.write_failure_state("updates/host-adoption.json", b"x" * ((1 << 20) + 1))
+        record = self.run_failed_case(RuntimeError("primary failure"))
+        self.assertIn("1 MiB", record["failureState"]["updates/host-adoption.json"]["retentionError"])
+        self.assertFalse((self.output / "owned-failure-host-adoption.json").exists())
+
+    def test_nonregular_failure_state_does_not_block_native_cleanup(self):
+        source = self.case.state / "updates/host-adoption.json"
+        source.parent.mkdir(parents=True)
+        os.mkfifo(source)
+        record = self.run_failed_case(RuntimeError("primary failure"))
+        self.assertIn("not a regular file", record["failureState"]["updates/host-adoption.json"]["retentionError"])
+        self.assertEqual(record["cleanup"], {"servicesAbsent": True, "processesAbsent": True})
+
+    def test_success_does_not_capture_failure_state(self):
+        self.case.prepare.return_value = {}
+        self.case.start_adoption.return_value = {"pin": "expected"}
+        self.case.validate_result.return_value = {}
+        self.write_failure_state("updates/host-adoption.json", b"canonical")
+        with patch.object(installed_adoption, "AdoptionCase", return_value=self.case), \
+                patch.object(installed_adoption, "collect_service_snapshot"), patch.object(installed_native, "retain_logs"):
+            installed_adoption.run_case(self.root, self.output, {"name": "owned"}, {}, None, None, None, "adopt")
+        record = json.loads((self.output / "owned-native-pair.json").read_text())
+        self.assertTrue(record["passed"])
+        self.assertNotIn("failureState", record)
+        self.assertFalse((self.output / "owned-failure-host-adoption.json").exists())
+
 
 class ExactCohortInputTest(unittest.TestCase):
     def test_failed_verification_retains_streams_and_original_exception(self):
