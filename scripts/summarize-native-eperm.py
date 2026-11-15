@@ -15,7 +15,10 @@ def read_counter(path, run, attempt):
     provenance = value["provenance"]
     if value.get("schema") != 1 or "cap" not in value or value["cap"] is not None:
         raise ValueError("normal CI counter must explicitly disable the count gate")
-    if provenance["run"] != run or provenance["attempt"] != attempt or provenance["platform"] != "linux/amd64":
+    counter_attempt = provenance["attempt"]
+    if not isinstance(counter_attempt, str) or not re.fullmatch(r"[1-9][0-9]*", counter_attempt):
+        raise ValueError("counter has no valid run attempt")
+    if provenance["run"] != run or int(counter_attempt) > int(attempt) or provenance["platform"] != "linux/amd64":
         raise ValueError("counter belongs to another run, attempt or platform")
     shard = provenance["shard"]
     if type(shard) is not int or shard not in range(3) or not provenance.get("job"):
@@ -43,13 +46,13 @@ def aggregate(root, run, attempt):
     for path in sorted(root.rglob("eperm-counter.json")):
         try:
             shard, counter = read_counter(path, run, attempt)
-            retain_counter(counters, shard, counter)
+            retain_counter(counters, (shard, int(counter["provenance"]["attempt"])), counter)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             result["errors"].append({"path": str(path), "error": type(error).__name__ + ": " + str(error)})
-    for shard, counter in sorted(counters.items()):
+    for (shard, _counter_attempt), counter in sorted(counters.items()):
         result["counters"].append(counter)
-        result["recurrences"].extend(dict(row, run=run, runAttempt=attempt, shard=shard) for row in counter["recurrences"])
-    result["missingShards"] = sorted(set(range(3)) - set(counters))
+        result["recurrences"].extend(dict(row, run=run, runAttempt=counter["provenance"]["attempt"], shard=shard) for row in counter["recurrences"])
+    result["missingShards"] = sorted(set(range(3)) - {shard for shard, _attempt in counters})
     result["complete"] = not result["errors"] and not result["missingShards"]
     result["total"] = len(result["recurrences"])
     result["investigationRequired"] = result["total"] >= THRESHOLD

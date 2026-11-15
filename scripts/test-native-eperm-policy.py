@@ -474,12 +474,44 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result["total"], 3)
         self.assertEqual(len(result["errors"]), 1)
 
-    def test_previous_attempt_is_not_counted_in_current_attempt(self):
+    def test_future_attempt_is_not_counted_in_current_attempt(self):
         self.change(self.paths[0], lambda value: value["provenance"].update(attempt="2"))
         result = self.aggregate()
         self.assertEqual(result["total"], 2)
         self.assertFalse(result["complete"])
         self.assertEqual(result["missingShards"], [0])
+
+    def test_partial_rerun_preserves_successful_previous_attempt_shards(self):
+        self.change(self.paths[1], lambda value: value["provenance"].update(attempt="2"))
+        result = summary.aggregate(self.root, "123", "2")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["total"], 3)
+        self.assertEqual([row["runAttempt"] for row in result["recurrences"]], ["1", "2", "1"])
+
+    def test_rerun_summary_accepts_all_unchanged_proof_shards(self):
+        result = summary.aggregate(self.root, "123", "2")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["missingShards"], [])
+        self.assertEqual([row["runAttempt"] for row in result["recurrences"]], ["1"] * 3)
+
+    def test_separate_attempt_events_are_counted_with_their_original_identity(self):
+        directory = self.root / "rerun"
+        directory.mkdir()
+        value = json.loads(self.paths[0].read_bytes())
+        value["provenance"]["attempt"] = "2"
+        policy.write(directory / "eperm-counter.json", value)
+        result = summary.aggregate(self.root, "123", "2")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["total"], 4)
+        self.assertEqual([(row["shard"], row["runAttempt"]) for row in result["recurrences"]],
+                         [(0, "1"), (0, "2"), (1, "1"), (2, "1")])
+
+    def test_other_run_and_invalid_attempts_remain_rejected(self):
+        for attempt in (None, "", "0", "01", "-1", "3", 1):
+            self.change(self.paths[0], lambda value: value["provenance"].update(attempt=attempt))
+            self.assertFalse(summary.aggregate(self.root, "123", "2")["complete"])
+        self.change(self.paths[0], lambda value: value["provenance"].update(run="124", attempt="1"))
+        self.assertFalse(summary.aggregate(self.root, "123", "2")["complete"])
 
     def test_all_source_ids_are_reported_without_suppressing_later_events(self):
         self.change(self.paths[2], lambda value: value["recurrences"][0].update(sourceId="c" * 64))
