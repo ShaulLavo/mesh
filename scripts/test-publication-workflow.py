@@ -17,11 +17,10 @@ import subprocess
 import sys
 import unittest
 from unittest.mock import patch
-import urllib.error
 import warnings
 import zipfile
 
-from fixtures import release_worker_completion as completion
+from fixtures import installed_publication, release_worker_completion as completion
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = (ROOT / ".github/workflows/installed-catchup.yml").read_text()
@@ -119,6 +118,46 @@ class PublicationWorkflowTests(unittest.TestCase):
             self.roundtrip(platform, outputs)
         completion.validate(outputs, self.fixture.context, self.harness, self.fixture.fixture.selection)
 
+    def test_verified_signed_snapshot_feeds_complete_scheduler_and_aggregate(self):
+        snapshot = self.snapshot_fixture()
+        with patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main"):
+            workflow.draft("v0.1.99", self.harness, self.root / "verified-documents", snapshot, 42)
+        self.directory = self.root / "verified-documents"
+        self.fixture.context = completion.release_context(self.directory)
+        self.fixture.fixture.release = self.fixture.context
+        for platform in controls.controls.index.PLATFORMS:
+            shutil.rmtree(self.root / (platform["os"] + "-" + platform["arch"]))
+            self.fixture.fixture.write_completion(platform)
+            self.fixture.fixture.install_platform_routes(platform, self.fixture.context["routeContract"])
+        outputs = self.root / "verified-complete"
+        outputs.mkdir()
+        for platform in workflow.RUNNERS:
+            self.roundtrip(platform, outputs)
+        completion.validate(outputs, self.fixture.context, self.harness, self.fixture.fixture.selection)
+
+    def snapshot_fixture(self):
+        snapshot = self.root / "signed-snapshot"
+        shutil.copytree(self.directory, snapshot)
+        manifest = (snapshot / "mesh-release.json").read_bytes()
+        (snapshot / "mesh-update.json").write_text(json.dumps({"version": "v0.1.99", "offline": "no signature acceptance",
+            "manifest": hashlib.sha256(manifest).hexdigest()}))
+        for name in ("mesh-update-root.json", "mesh-workers.json"):
+            (snapshot / name).write_text('{"offline":"complete intake control"}')
+        checksums = []
+        for name in workflow.draft_intake.ARCHIVES.values():
+            data = ("offline archive control " + name).encode()
+            (snapshot / name).write_bytes(data)
+            checksums.append(hashlib.sha256(data).hexdigest() + "  " + name + "\n")
+        (snapshot / "checksums.txt").write_text("".join(checksums))
+        files = sorted(path for path in snapshot.iterdir() if path.is_file())
+        assets = [{"name": path.name, "id": number + 1, "state": "uploaded", "size": path.stat().st_size,
+                   "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()} for number, path in enumerate(files)]
+        release = {"id": 1, "draft": True, "tag_name": "v0.1.99", "target_commitish": self.harness,
+            "repository": "ShaulLavo/mesh", "url": "https://api.github.com/repos/ShaulLavo/mesh/releases/1",
+            "html_url": "https://github.com/ShaulLavo/mesh/releases/tag/v0.1.99", "intake_run": 42, "frozen_baselines": [], "assets": assets}
+        (snapshot / "draft.json").write_text(json.dumps(release))
+        return snapshot
+
     def roundtrip(self, platform, outputs):
         emitted = [self.emit_archive(platform, row, number) for number, row in enumerate(workflow.rows(self.directory, platform, self.harness))]
         artifacts = [item for item, _archive in emitted]
@@ -211,7 +250,7 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertTrue(json.loads((control / "tools-cleanup-decision.json").read_text())["inputsMayBeRemoved"])
 
     def test_prelaunch_failure_can_remove_owned_tools(self):
-        for name in ("native-worker-input.noindex", "native-tools.noindex", "publication-trust"):
+        for name in ("native-worker-input.noindex", "native-tools.noindex", "publication-trust", "publication-draft-input"):
             (self.root / name).mkdir()
         workflow.cleanup(self.root)
         self.assertFalse((self.root / "native-tools.noindex").exists())
@@ -227,12 +266,18 @@ class PublicationWorkflowTests(unittest.TestCase):
             self.assertNotIn("continue-on-error", job)
             self.assertNotRegex(job, r"^    if: always\(\)")
             self.assertIn("ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}", job)
+            self.assertIn("name: release-signed-draft", job)
+            self.assertIn("run-id: ${{ inputs.release_run || github.run_id }}", job)
+            self.assertIn("path: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}", job)
+            self.assertNotIn(": write", job)
         self.assertIn("timeout-minutes: 30", native)
         self.assertIn("--worker-registry", native)
         self.assertIn("installed_artifacts.py native", native)
         self.assertLess(native.index("main-only publication caller and real native manager"), native.index("actions/setup-go"))
         self.assertIn("--publication-task", native)
         self.assertIn("PUBLICATION_TASK: ${{ matrix.task }}", native)
+        self.assertIn("MESH_PUBLICATION_DRAFT: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}", native)
+        self.assertIn("MESH_PUBLICATION_RUN: ${{ inputs.release_run || github.run_id }}", native)
         self.assertIn("name: ${{ matrix.artifact }}", native)
         self.assertIn("name: installed-publication-${{ matrix.key }}", aggregate)
         self.assertNotIn("publication-trust", aggregate)
@@ -262,7 +307,7 @@ class PublicationWorkflowTests(unittest.TestCase):
     def test_aggregate_shell_stops_after_draft_or_fetch_or_aggregate_failure(self):
         command = wiring.step(wiring.job(WORKFLOW, "publication-aggregate"), "Acquire exact same-run child evidence and aggregate every task once")
         environment = os.environ | {"RUNNER_TEMP": str(self.root), "GITHUB_REPOSITORY": "ShaulLavo/mesh", "GITHUB_RUN_ID": "42",
-            "RELEASE_VERSION": "v0.1.99", "RELEASE_SOURCE": self.harness, "PLATFORM": "darwin/arm64", "MESH_HARNESS_SOURCE": self.harness}
+            "RELEASE_VERSION": "v0.1.99", "RELEASE_SOURCE": self.harness, "RELEASE_RUN": "42", "PLATFORM": "darwin/arm64", "MESH_HARNESS_SOURCE": self.harness}
         for failure, count in (("draft", 1), ("fetch", 2), ("aggregate", 3), ("none", 3)):
             wrapper = 'python3() { printf "%s\\n" "$2"; [[ $2 != "' + failure + '" ]]; };\n'
             result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", wrapper + command], env=environment,
@@ -281,73 +326,68 @@ class PublicationWorkflowTests(unittest.TestCase):
 
 class DraftIntakeTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = workflow.tempfile.TemporaryDirectory(prefix="publication-workflow-", dir=os.environ.get("TMPDIR", "/tmp"))
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        self.asset = {"id": 1, "name": "mesh-release.json", "size": 1}
-
-    def draft_response(self, assets):
-        value = {"isDraft": True, "tagName": "v0.1.99", "assets": assets}
-        return type("Response", (), {"stdout": json.dumps(value)})()
+        self.fixture = importlib.import_module("test-prepare-draft-intake").DraftIntakeTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.root = self.fixture.root
+        self.intake, self.release = self.fixture.signed_snapshot()
+        self.version = self.release["tag_name"]
+        self.source = self.release["target_commitish"]
 
     def hosted(self):
-        return patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main")
+        return patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main",
+                          MESH_PUBLICATION_DRAFT=str(self.intake), MESH_PUBLICATION_RUN="42")
 
-    def test_complete_draft_json_is_acquired_without_archives_or_signing_inputs(self):
-        manifest = json.dumps({"version": "v0.1.99", "commit": "a" * 40}).encode()
-        assets = [self.asset | {"size": len(manifest)}, {"id": 2, "name": "mesh_linux_amd64.tar.gz", "size": 999}]
-        with self.hosted(), patch.object(workflow.subprocess, "run", return_value=self.draft_response(assets)), \
-                patch.object(workflow, "download_draft_asset", side_effect=lambda _item, target: target.write_bytes(manifest)) as fetch:
-            workflow.draft("v0.1.99", "a" * 40, self.root / "draft")
-        fetch.assert_called_once_with(assets[0], self.root / "draft/mesh-release.json")
-        self.assertEqual({path.name for path in (self.root / "draft").iterdir()}, {"mesh-release.json"})
+    def test_scheduler_cli_copies_complete_verified_json_without_draft_network_access(self):
+        destination = self.root / "scheduler"
+        environment = os.environ | {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REF": "refs/heads/main"}
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/publication-workflow.py"), "draft", self.version, self.source,
+            str(destination), "--intake", str(self.intake), "--run", "42"], env=environment, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = {item["name"] for item in self.release["assets"] if item["name"].endswith(".json")} | {"draft.json"}
+        self.assertEqual({path.name for path in destination.iterdir()}, expected)
+        for name in expected:
+            self.assertEqual((destination / name).read_bytes(), (self.intake / name).read_bytes())
 
-    def test_duplicate_nonlocal_and_oversized_draft_inventories_stop_before_transfer(self):
-        for assets in ([self.asset, self.asset], [self.asset | {"name": "../escape.json"}], [self.asset | {"size": workflow.MAX_ARCHIVE + 1}]):
-            self.reject_draft_inventory(assets)
+    def test_native_stage_uses_the_exact_verified_directory_and_preserves_original_consumer(self):
+        output = self.root / "output"
+        output.mkdir()
+        with self.hosted(), patch.object(installed_publication, "load_draft", return_value="original-consumer") as consume, \
+                patch.object(installed_publication.subprocess, "run", side_effect=AssertionError("no draft network access")):
+            self.assertEqual(installed_publication.stage(self.root, output, "linux/amd64", self.version, self.source), "original-consumer")
+        consume.assert_called_once_with(self.root, output, self.intake, "linux/amd64", self.version, self.source, self.release["html_url"])
+        self.assertEqual(json.loads((output / "draft-intake.json").read_bytes()), self.release)
 
-    def reject_draft_inventory(self, assets):
-        with self.hosted(), patch.object(workflow.subprocess, "run", return_value=self.draft_response(assets)), \
-                patch.object(workflow, "download_draft_asset") as fetch, self.assertRaisesRegex(ValueError, "acquisition bound"):
-            workflow.draft("v0.1.99", "a" * 40, self.root / "draft")
-        fetch.assert_not_called()
-        self.assertFalse((self.root / "draft").exists())
+    def test_changed_source_run_missing_signature_and_changed_json_stop_before_native_consumption(self):
+        for version, source, run in ((self.version, "b" * 40, "42"), (self.version, self.source, "43"),
+                                     ("v0.1.999", self.source, "42")):
+            self.reject_native(version, source, run)
+        (self.intake / "mesh-update.sig.json").unlink()
+        self.reject_native(self.version, self.source, "42")
 
-    def test_changed_draft_source_and_truncated_assets_fail(self):
-        manifest = json.dumps({"version": "v0.1.99", "commit": "b" * 40}).encode()
-        asset = self.asset | {"size": len(manifest)}
-        with self.hosted(), patch.object(workflow.subprocess, "run", return_value=self.draft_response([asset])), \
-                patch.object(workflow, "download_draft_asset", side_effect=lambda _item, target: target.write_bytes(manifest)), \
-                self.assertRaisesRegex(ValueError, "exact release source"):
-            workflow.draft("v0.1.99", "a" * 40, self.root / "changed")
-        with patch.dict(os.environ, GH_TOKEN="offline-control"), patch.object(workflow.urllib.request, "build_opener") as builder:
-            builder.return_value.open.return_value = io.BytesIO(b"")
-            with self.assertRaisesRegex(ValueError, "pinned size"):
-                workflow.download_draft_asset(self.asset, self.root / "truncated.json")
+    def reject_native(self, version, source, run):
+        with self.hosted(), patch.dict(os.environ, MESH_PUBLICATION_RUN=run), \
+                patch.object(installed_publication, "load_draft") as consume, self.assertRaises(ValueError):
+            installed_publication.stage(self.root, self.root, "linux/amd64", version, source)
+        consume.assert_not_called()
 
-    def test_redirect_drops_authorization_and_stream_is_size_bounded(self):
-        redirect = urllib.error.HTTPError("https://api.github.com/asset", 302, "Found", {"Location": "https://release-assets.githubusercontent.com/object"}, None)
-        opener = unittest.mock.Mock()
-        opener.open.side_effect = redirect
-        self.addCleanup(redirect.close)
-        with patch.dict(os.environ, GH_TOKEN="offline-control"), patch.object(workflow.urllib.request, "build_opener", return_value=opener), \
-                patch.object(workflow.urllib.request, "urlopen", return_value=io.BytesIO(b"x")) as fetch:
-            workflow.download_draft_asset(self.asset, self.root / "asset.json")
-        fetch.assert_called_once_with("https://release-assets.githubusercontent.com/object", timeout=30)
-        self.assertEqual((self.root / "asset.json").read_bytes(), b"x")
-        with patch.dict(os.environ, GH_TOKEN="offline-control"), patch.object(workflow.urllib.request, "build_opener") as builder:
-            builder.return_value.open.return_value = io.BytesIO(b"too much")
-            with self.assertRaisesRegex(RuntimeError, "exceeds its pinned size"):
-                workflow.download_draft_asset(self.asset, self.root / "oversized.json")
+    def test_signed_identity_and_complete_namespace_refuse_wrong_source_extra_and_nonlocal_assets(self):
+        changed = self.intake / "mesh-release.json"
+        value = json.loads(changed.read_bytes()) | {"commit": "b" * 40}
+        changed.write_text(json.dumps(value))
+        with self.hosted(), self.assertRaises(ValueError):
+            workflow.draft(self.version, self.source, self.root / "changed", self.intake, 42)
+        for name in ("../escape.json", "draft.json", "back\\\\slash.json"):
+            release = copy.deepcopy(self.release)
+            release["assets"].append(dict(release["assets"][-1], name=name, id=999))
+            with self.assertRaisesRegex(ValueError, "local name"):
+                workflow.draft_intake.inventory(release, self.version, self.source, signed=True)
 
-    def test_non_main_or_non_draft_inputs_stop_before_asset_acquisition(self):
-        hosted = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REF": "refs/heads/main"}
-        response = type("Response", (), {"stdout": json.dumps({"isDraft": False, "tagName": "v0.1.99", "assets": [self.asset]})})()
-        for changes in ({"GITHUB_REF": "refs/pull/1/merge"}, {"RUNNER_ENVIRONMENT": "self-hosted"}, {}):
-            with patch.dict(os.environ, hosted | changes), patch.object(workflow.subprocess, "run", return_value=response), \
-                    patch.object(workflow, "download_draft_asset") as fetch, self.assertRaises(ValueError):
-                workflow.draft("v0.1.99", "a" * 40, self.root / "draft")
-            fetch.assert_not_called()
+    def test_non_main_cannot_consume_even_a_valid_writer_snapshot(self):
+        with self.hosted(), patch.dict(os.environ, GITHUB_REF="refs/pull/1/merge"), \
+                patch.object(workflow.draft_intake, "verify") as verify, self.assertRaisesRegex(ValueError, "main-only"):
+            workflow.draft(self.version, self.source, self.root / "rejected", self.intake, 42)
+        verify.assert_not_called()
 
 
 if __name__ == "__main__":

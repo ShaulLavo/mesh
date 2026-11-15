@@ -87,6 +87,9 @@ on:
       - 'scripts/fixtures/installed_clock.py'
       - 'scripts/test-installed-clock.py'
       - 'scripts/fixtures/installed_publication.py'
+      - 'scripts/fixtures/draft_intake.py'
+      - 'scripts/prepare-draft-intake.py'
+      - 'scripts/test-prepare-draft-intake.py'
       - 'scripts/publication-jobs.py'
       - 'scripts/publication-workflow.py'
       - 'scripts/test-publication-jobs.py'
@@ -149,20 +152,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-signed-draft
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}
       - name: Select every complete native case and route group
         id: inventory
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           RELEASE_SOURCE: ${{ inputs.release_source }}
+          RELEASE_RUN: ${{ inputs.release_run || github.run_id }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft"
+          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft" --intake "$RUNNER_TEMP/publication-draft-input/$RELEASE_VERSION" --run "$RELEASE_RUN"
           tasks=$(python3 scripts/publication-workflow.py matrix "$RUNNER_TEMP/publication-draft" "$MESH_HARNESS_SOURCE")
           printf 'tasks=%s\n' "$tasks" >> "$GITHUB_OUTPUT"
       - name: Remove scheduling draft inputs
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/publication-draft"
+        run: rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-draft-input"
 
   publication-native:
     needs: publication-plan
@@ -225,6 +235,12 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
             "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" \
             "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/publication-control/worker-download.json"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-signed-draft
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}
       - name: Exercise the actual signed draft through native services
         env:
           GH_TOKEN: ${{ github.token }}
@@ -237,6 +253,8 @@ jobs:
           HAS_BASELINE: ${{ steps.baseline.outputs.needed }}
           MESH_OWNED_WORKER_INPUT: ${{ runner.temp }}/native-worker-input.noindex
           MESH_PUBLICATION_TRUST_CACHE: ${{ runner.temp }}/publication-trust
+          MESH_PUBLICATION_DRAFT: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}
+          MESH_PUBLICATION_RUN: ${{ inputs.release_run || github.run_id }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           extra=()
@@ -281,15 +299,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_source || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-signed-draft
+          run-id: ${{ inputs.release_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}
       - name: Acquire exact same-run child evidence and aggregate every task once
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.release_version }}
           RELEASE_SOURCE: ${{ inputs.release_source }}
+          RELEASE_RUN: ${{ inputs.release_run || github.run_id }}
           PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft"
+          python3 scripts/publication-workflow.py draft "$RELEASE_VERSION" "$RELEASE_SOURCE" "$RUNNER_TEMP/publication-draft" --intake "$RUNNER_TEMP/publication-draft-input/$RELEASE_VERSION" --run "$RELEASE_RUN"
           python3 scripts/publication-workflow.py fetch "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$RUNNER_TEMP/publication-draft" "$PLATFORM" "$MESH_HARNESS_SOURCE" "$RUNNER_TEMP/publication-children.noindex"
           python3 scripts/publication-jobs.py aggregate "$RUNNER_TEMP/publication-draft" "$PLATFORM" "$MESH_HARNESS_SOURCE" --inputs "$RUNNER_TEMP/publication-children.noindex" --output "$RUNNER_TEMP/publication-complete"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -301,7 +326,7 @@ jobs:
       - name: Remove owned child evidence and aggregation staging
         if: always()
         run: |
-          rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-children.noindex" "$RUNNER_TEMP/publication-complete"
+          rm -rf -- "$RUNNER_TEMP/publication-draft" "$RUNNER_TEMP/publication-children.noindex" "$RUNNER_TEMP/publication-complete" "$RUNNER_TEMP/publication-draft-input"
           test ! -e "$RUNNER_TEMP/publication-children.noindex"
           test ! -e "$RUNNER_TEMP/publication-complete"
 

@@ -103,6 +103,31 @@ class BaselineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "previous published release"):
                 BASELINES.main(["v0.1.250", "v0.1.249", "linux/amd64", "", str(self.output), str(self.root / "list")])
 
+    def test_custom_baseline_uses_exact_frozen_writer_bytes_without_candidate_tag_download(self):
+        controls = importlib.import_module("test-prepare-draft-intake")
+        fixture = controls.DraftIntakeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        data = b"custom source image; offline control"
+        name = "baseline_linux_amd64_" + hashlib.sha256(data).hexdigest() + ".bin"
+        fixture.release["frozen_baselines"] = [name]
+        fixture.add_asset(fixture.directory, fixture.release, name, data)
+        published = self.output / "published/mesh"
+        published.parent.mkdir()
+        published.write_bytes(b"published baseline; offline control")
+        selection = self.root / "selection.json"
+        selection.write_text(json.dumps({"baselines": [{"version": "v0.1.309", "artifact": {"platform": {"os": "linux", "arch": "amd64"}}}]}))
+        environment = {"MESH_RELEASE_SELECTION": str(selection), "MESH_DRAFT_INTAKE": str(fixture.directory),
+                       "MESH_DRAFT_SOURCE": controls.SOURCE, "GITHUB_RUN_ID": "42"}
+        with mock.patch.dict(os.environ, environment), mock.patch.object(BASELINES, "prepare_item", return_value=published), \
+                mock.patch.object(BASELINES, "prepare_workers"), mock.patch.object(BASELINES, "acquire", side_effect=AssertionError("no draft download")):
+            BASELINES.main([controls.VERSION, "v0.1.309", "linux/amd64", name, str(self.output), str(self.root / "list")])
+        self.assertEqual((self.output / name).read_bytes(), data)
+        self.assertIn(str(self.output / name), (self.root / "list").read_text().splitlines())
+        (fixture.directory / name).write_bytes(b"changed")
+        with mock.patch.dict(os.environ, environment), self.assertRaisesRegex(ValueError, "exact uploaded bytes"):
+            BASELINES.custom_intake(controls.VERSION, name)
+
     def shard_sources(self):
         tools, retained = self.root / "tools", self.root / "retained"
         tools.mkdir()

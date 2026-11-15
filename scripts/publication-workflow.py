@@ -5,17 +5,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import stat
 import subprocess
 import tempfile
-import urllib.error
-import urllib.parse
-import urllib.request
 import zipfile
 
-from fixtures import installed_artifacts, installed_storage
+from fixtures import draft_intake, installed_artifacts, installed_storage
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNNERS = {"linux/amd64": "ubuntu-24.04", "linux/arm64": "ubuntu-24.04-arm", "darwin/arm64": "macos-15"}
@@ -24,53 +20,11 @@ MAX_UNPACKED = 1 << 30
 MAX_FILES = 32768
 
 
-def draft(version, source, destination):
+def draft(version, source, destination, intake, run):
     if (os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
             or os.environ.get("GITHUB_REF") != "refs/heads/main"):
         raise ValueError("publication scheduling requires the main-only hosted caller")
-    if not re.fullmatch(r"v\d+\.\d+\.\d+", version) or not re.fullmatch(r"[0-9a-f]{40}", source):
-        raise ValueError("publication scheduling requires an exact version and source")
-    result = subprocess.run(["gh", "release", "view", version, "--repo", "ShaulLavo/mesh", "--json", "isDraft,tagName,assets"],
-                            capture_output=True, text=True, check=True, timeout=30)
-    release = json.loads(result.stdout)
-    if release["isDraft"] is not True or release["tagName"] != version:
-        raise ValueError("publication scheduling requires the actual reserved draft")
-    assets = [item for item in release["assets"] if item["name"].endswith(".json")]
-    names = {item["name"] for item in assets}
-    size = sum(item["size"] for item in assets)
-    if (not assets or len(assets) > MAX_FILES or len(names) != len(assets) or size > MAX_ARCHIVE
-            or any(Path(item["name"]).name != item["name"] or type(item["size"]) is not int or item["size"] <= 0 for item in assets)):
-        raise ValueError("draft JSON inventory is nonlocal, repeated or exceeds its acquisition bound")
-    destination.mkdir(exist_ok=False)
-    if shutil.disk_usage(destination).free < size + (4 << 30):
-        raise RuntimeError("publication scheduling lacks space for draft JSON and aggregation")
-    for item in assets:
-        download_draft_asset(item, destination / item["name"])
-    if {path.name for path in destination.iterdir()} != names or any((destination / item["name"]).stat().st_size != item["size"] for item in assets):
-        raise ValueError("draft JSON acquisition differs from its complete asset inventory")
-    manifest = json.loads((destination / "mesh-release.json").read_bytes())
-    if manifest["version"] != version or manifest["commit"] != source:
-        raise ValueError("draft inventory differs from its exact release source and version")
-
-
-def download_draft_asset(item, destination):
-    if type(item.get("id")) is not int or item["id"] <= 0:
-        raise ValueError("draft asset lacks its exact positive ID")
-    request = urllib.request.Request(f'https://api.github.com/repos/ShaulLavo/mesh/releases/assets/{item["id"]}',
-        headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/octet-stream"})
-    try:
-        response = urllib.request.build_opener(installed_storage.NoRedirect).open(request, timeout=30)
-    except urllib.error.HTTPError as error:
-        location = error.headers.get("Location", "")
-        error.close()
-        if error.code != 302 or urllib.parse.urlsplit(location).scheme != "https":
-            raise RuntimeError("draft asset API did not supply an HTTPS download") from None
-        # The redirected asset request carries no GitHub authorization header.
-        response = urllib.request.urlopen(location, timeout=30)
-    with response, destination.open("xb") as target:
-        size, _digest = installed_artifacts.copy_archive(response, target, item["size"])
-    if size != item["size"]:
-        raise ValueError("draft JSON acquisition differs from its pinned size")
+    draft_intake.documents(intake, version, source, destination, run)
 
 
 def inventory(directory, platform, harness):
@@ -173,7 +127,7 @@ def cleanup(root):
     scratch = proof / "scratch-cleanup.json"
     removed = json.loads(scratch.read_bytes()) if scratch.exists() else {}
     absent = removed.get("absent") is True and isinstance(removed.get("root"), str) and not Path(removed["root"]).exists()
-    names = ("native-worker-input.noindex", "native-tools.noindex", "publication-trust")
+    names = ("native-worker-input.noindex", "native-tools.noindex", "publication-trust", "publication-draft-input")
     allowed = not launched or absent
     decision = {"inputsMayBeRemoved": allowed, "retained": [] if allowed else [str(root / name) for name in names]}
     (control / "tools-cleanup-decision.json").write_text(json.dumps(decision) + "\n")
@@ -194,6 +148,8 @@ def main():
     acquire.add_argument("version")
     acquire.add_argument("source")
     acquire.add_argument("destination", type=Path)
+    acquire.add_argument("--intake", type=Path, required=True)
+    acquire.add_argument("--run", type=int, required=True)
     plans = commands.add_parser("matrix")
     plans.add_argument("directory", type=Path)
     plans.add_argument("harness")
@@ -208,7 +164,7 @@ def main():
     remove.add_argument("root", type=Path)
     args = parser.parse_args()
     if args.command == "draft":
-        draft(args.version, args.source, args.destination)
+        draft(args.version, args.source, args.destination, args.intake, args.run)
         return
     if args.command == "matrix":
         print(json.dumps(matrix(args.directory, args.harness), separators=(",", ":")))

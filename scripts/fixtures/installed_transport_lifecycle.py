@@ -102,7 +102,7 @@ def ordered_attachment(events, session, attached_sequence):
     return True
 
 
-def prove(case, bootstrap, boundary="post-adoption before selected cohort"):
+def prove(case, bootstrap, boundary="post-adoption before selected cohort", *, maximum=installed_clock.HANG_SECONDS):
     if not enabled():
         return None
     original = case.transport_original
@@ -117,7 +117,7 @@ def prove(case, bootstrap, boundary="post-adoption before selected cohort"):
     image = images[daemon]
     if image["sha256"] != bootstrap["running"]["digest"]:
         raise CoverageIncomplete("coverage gate daemon differs from the actual adopted image")
-    deadline = time.monotonic() + installed_clock.timeout()
+    deadline = time.monotonic() + installed_clock.timeout(maximum)
     observed = await_original(case, daemon, bootstrap, deadline)
     if (observed["remote"], observed["local"]) not in original_sockets(case.terminal.pid) or case.terminal.poll() is not None:
         raise CoverageIncomplete("covered session does not belong to the live original client's TCP socket")

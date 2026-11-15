@@ -118,6 +118,12 @@ jobs:
         with:
           name: update-policy
           path: ${{ runner.temp }}/mesh-policy
+      - name: Recover exact reserved draft archives
+        if: inputs.draft
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cache/mesh-release-baselines
@@ -127,6 +133,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.policy.outputs.version }}
+          SOURCE: ${{ inputs.source_sha }}
           PREVIOUS: ${{ needs.policy.outputs.previous }}
           PLATFORM: ${{ matrix.platform }}
           ARCHIVE: ${{ matrix.archive }}
@@ -142,20 +149,24 @@ jobs:
           export MESH_BASELINE_CACHE="$HOME/.cache/mesh-release-baselines"
           export MESH_RELEASE_SELECTION="$RUNNER_TEMP/mesh-policy/selection.json"
           if [[ $DRAFT == true ]]; then
-            gh release download "$VERSION" --pattern "$ARCHIVE" --dir "$root"
-            scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION" "$root/$ARCHIVE"
+            intake="$RUNNER_TEMP/release-candidate"
+            python3 scripts/prepare-draft-intake.py verify "$intake" "$VERSION" "$SOURCE" --baselines "$BASELINE_ASSETS" --run "$GITHUB_RUN_ID"
+            export MESH_DRAFT_INTAKE="$intake" MESH_DRAFT_SOURCE="$SOURCE"
+            scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION" "$intake/$ARCHIVE"
           else
             scripts/prepare-update-proof-tools.sh "$root/tools" "$VERSION"
           fi
           python3 scripts/probe-update-reader.py "$root/tools/candidate" "$VERSION" "$PLATFORM" "$root/tools/candidate-reader.json"
+          if [[ $DRAFT == true ]]; then
+            python3 scripts/prepare-draft-intake.py native "$intake" "$VERSION" "$SOURCE" --platform "$PLATFORM" --report "$root/tools/candidate-reader.json" --run "$GITHUB_RUN_ID"
+          fi
           short=$(mktemp -d /tmp/mw-XXXXXX.noindex)
           trap 'rm -rf -- "$short"' EXIT
           TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
           grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
           scripts/prepare-release-baselines.sh "$VERSION" "$PREVIOUS" "$PLATFORM" "$BASELINE_ASSETS" "$root/retained" "$root/retained.list"
           if [[ $DRAFT == true ]]; then
-            python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list" "$root/$ARCHIVE"
-            rm "$root/$ARCHIVE"
+            python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list" "$intake/$ARCHIVE"
           else
             python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list"
           fi
@@ -172,7 +183,7 @@ jobs:
           retention-days: 7
       - name: Remove native staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/release-candidate"
 
   context:
     needs: prepare

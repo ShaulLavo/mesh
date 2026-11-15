@@ -7,6 +7,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      client_interrupt:
+        description: 'Diagnostic only: prepare the original PC fixture and observe one interrupted adoption'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,8 +21,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  client-interrupt-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.client_interrupt
+    name: Diagnostic only, one original-client interrupted adoption
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch only the immutable failed product source reference
+        run: git fetch --no-tags --depth=1 https://github.com/ShaulLavo/mesh.git e46caa27a11a534345376df844cf30566d034efa
+      - name: Refuse occupied canonical units before any native fixture work
+        run: |
+          mkdir -p "$RUNNER_TEMP/client-interrupt-diagnostic"
+          git rev-parse HEAD > "$RUNNER_TEMP/client-interrupt-diagnostic/source-sha.txt"
+          python3 -B scripts/diagnose-client-interrupt.py --check-host > "$RUNNER_TEMP/client-interrupt-diagnostic/host-baseline.json"
+      - name: Install the external observer on this disposable runner
+        run: sudo apt-get update && sudo apt-get install -y strace
+      - uses: ./.github/actions/installed-go
+      - name: Prepare the private PC fixture and observe one pc-interrupt
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python3 -B scripts/diagnose-client-interrupt.py --output "$RUNNER_TEMP/client-interrupt-diagnostic"
+      - name: Verify native and preparation cleanup
+        if: always()
+        run: |
+          python3 -B scripts/diagnose-client-interrupt.py --verify-cleanup --output "$RUNNER_TEMP/client-interrupt-diagnostic"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: client-interrupt-diagnostic
+          path: ${{ runner.temp }}/client-interrupt-diagnostic
+          retention-days: 7
+
   changes:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -99,7 +141,7 @@ jobs:
         run: node web/app-pill/tests/snap.mjs
 
   race:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Race tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -121,7 +163,7 @@ jobs:
         run: go test -race ./...
 
   integration:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Integration tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -139,7 +181,7 @@ jobs:
 
   test:
     name: Race tests and integrations
-    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ always() && !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     needs: [race, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -321,7 +363,7 @@ jobs:
           retention-days: 7
 
   gates:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Quality gates
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -381,7 +423,7 @@ jobs:
           retention-days: 7
 
   vulnerability:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Vulnerability scan
     runs-on: ubuntu-24.04
     steps:
@@ -394,7 +436,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   packaging:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Packaging contract
     runs-on: ubuntu-24.04
     steps:
@@ -439,9 +481,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@726604933f6b668010bd002c67963dd526b9d6ce
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@81af3bf2275921c8b5b257491b9446021b16ddc5
     with:
-      harness_source: 726604933f6b668010bd002c67963dd526b9d6ce
+      harness_source: 81af3bf2275921c8b5b257491b9446021b16ddc5
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
@@ -450,7 +492,7 @@ jobs:
     name: Complete CI gate
     permissions:
       statuses: write
-    if: always()
+    if: ${{ always() && !inputs.client_interrupt }}
     needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, installed-catchup, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
@@ -510,7 +552,7 @@ jobs:
   publish:
     name: Publish tested main commit
     needs: gate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: ${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     permissions:
       actions: write
       statuses: write

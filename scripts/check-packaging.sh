@@ -187,6 +187,7 @@ check_source_contract() {
   scripts/test-prepare-release-baselines.sh
   python3 scripts/test-release-transition.py
   python3 scripts/test-release-signing.py
+  python3 scripts/test-prepare-draft-intake.py
   python3 scripts/test-acquire-release-history.py
   python3 scripts/test-update-reader-publication.py
   python3 scripts/test-release-workers.py

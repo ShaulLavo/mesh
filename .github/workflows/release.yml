@@ -95,6 +95,22 @@ jobs:
             dist/mesh_linux_arm64.tar.gz \
             dist/checksums.txt \
             dist/homebrew/Casks/mesh.rb
+      - name: Capture exact reserved draft archives for read-only proofs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+          BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
+        run: python3 scripts/prepare-draft-intake.py capture "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" --baselines "$BASELINE_ASSETS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove candidate intake staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/release-candidate"
 
   reconcile-cask:
     name: Reconcile published Cask
@@ -157,14 +173,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
       - name: Recover draft artifacts and proofs
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
         run: |
           mkdir -p dist/homebrew/Casks proofs "$RUNNER_TEMP/release-json"
-          gh release download "$VERSION" --pattern 'mesh_*.tar.gz' --dir dist
-          gh release download "$VERSION" --pattern checksums.txt --dir dist
+          python3 scripts/prepare-draft-intake.py verify "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID"
+          cp "$RUNNER_TEMP/release-candidate"/mesh_*.tar.gz "$RUNNER_TEMP/release-candidate/checksums.txt" dist/
           gh release download "$VERSION" --pattern mesh.rb --dir dist/homebrew/Casks
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -254,6 +275,19 @@ jobs:
           shopt -s nullglob
           assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json proofs/groups/leaves/*.worker-group.json)
           gh release upload "$VERSION" --clobber "${assets[@]}"
+      - name: Capture actual signed draft for read-only publication consumers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+          BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
+        run: python3 scripts/prepare-draft-intake.py capture "$RUNNER_TEMP/release-signed-draft" "$VERSION" "$SOURCE" --signed --candidate "$RUNNER_TEMP/release-candidate" --baselines "$BASELINE_ASSETS"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signed-draft
+          path: ${{ runner.temp }}/release-signed-draft
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-publication-input
@@ -264,6 +298,9 @@ jobs:
           name: update-publication-trust
           path: ${{ runner.temp }}/mesh-release-trust
           retention-days: 7
+      - name: Remove signed draft intake staging
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate"
 
   verify-readers:
     name: Verify original permitted readers (${{ matrix.platform }})
@@ -310,10 +347,15 @@ jobs:
           path: ~/.cache/mesh-release-baselines
           key: mesh-native-baselines-${{ matrix.key }}-${{ needs.reserve.outputs.version }}
           restore-keys: mesh-native-baselines-${{ matrix.key }}-
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-signed-draft
+          path: ${{ runner.temp }}/publication-draft-input/${{ needs.reserve.outputs.version }}
       - name: Require the original source verifier to accept each automatic edge
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
           PLATFORM: ${{ matrix.platform }}
           MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
         shell: bash
@@ -324,8 +366,7 @@ jobs:
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/mesh-policy"
-          mkdir -p "$root/documents/$VERSION"
-          gh release download "$VERSION" --pattern '*.json' --dir "$root/documents/$VERSION"
+          python3 scripts/publication-workflow.py draft "$VERSION" "$SOURCE" "$root/documents/$VERSION" --intake "$RUNNER_TEMP/publication-draft-input/$VERSION" --run "$GITHUB_RUN_ID"
           go run ./cmd/mesh-release-routes -operation packets -input "$root/input.json" -documents "$root/documents" -platform "$PLATFORM" -output-dir "$RUNNER_TEMP/reader-packets"
           python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets" "$PLATFORM" "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$RUNNER_TEMP/reader-evidence"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -336,7 +377,7 @@ jobs:
           retention-days: 7
       - name: Remove original reader staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/reader-evidence"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/reader-evidence" "$RUNNER_TEMP/publication-draft-input"
 
   publication-native:
     name: Installed signed draft gate
@@ -345,9 +386,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@726604933f6b668010bd002c67963dd526b9d6ce
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@81af3bf2275921c8b5b257491b9446021b16ddc5
     with:
-      harness_source: 726604933f6b668010bd002c67963dd526b9d6ce
+      harness_source: 81af3bf2275921c8b5b257491b9446021b16ddc5
       publication_only: true
       release_version: ${{ needs.reserve.outputs.version }}
       release_source: ${{ needs.reserve.outputs.source }}

@@ -3,7 +3,6 @@ import errno
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import signal
 import socket
@@ -12,7 +11,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
+from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion
 
 
 def require_main():
@@ -22,30 +21,17 @@ def require_main():
 
 def stage(root, output, native, version, source):
     require_main()
-    if not re.fullmatch(r"v\d+\.\d+\.\d+", version) or not re.fullmatch(r"[0-9a-f]{40}", source):
-        raise RuntimeError("publication requires an exact real draft version and source SHA")
-    result = subprocess.run(["gh", "release", "view", version, "--repo", "ShaulLavo/mesh", "--json", "isDraft,tagName,assets,url"],
-                            capture_output=True, text=True, check=False, timeout=installed_clock.timeout())
-    if result.returncode:
-        raise RuntimeError("required main-only signed draft does not exist or is not readable yet")
-    release = json.loads(result.stdout)
-    if release["isDraft"] is not True or release["tagName"] != version:
-        raise RuntimeError("publication consumer requires the reserved unpublished real draft")
-    selected = [asset for asset in release["assets"] if asset["name"].endswith(".json") or re.fullmatch(r"mesh_.*\.tar\.gz", asset["name"])]
-    if any(Path(asset["name"]).name != asset["name"] for asset in selected):
-        raise RuntimeError("real release contains a non-local asset name")
-    required = sum(asset["size"] for asset in selected) + (4 << 30)
+    directory = Path(os.environ["MESH_PUBLICATION_DRAFT"])
+    release = draft_intake.verify(directory, version, source, signed=True, run=int(os.environ["MESH_PUBLICATION_RUN"]))
+    if directory.name != version:
+        raise ValueError("publication intake directory must name its exact draft version")
+    required = 4 << 30
     free = shutil.disk_usage(root).free
     (output / "publication-storage.json").write_text(json.dumps({"root": str(root), "freeBytes": free, "requiredBytes": required}) + "\n")
-    if not selected or free < required:
+    if free < required:
         raise RuntimeError("native runner lacks space for real draft assets and installed scratch")
-    directory = root / "releases" / version
-    directory.mkdir(parents=True)
-    downloaded = subprocess.run(["gh", "release", "download", version, "--repo", "ShaulLavo/mesh", "--pattern", "*.json", "--pattern", "mesh_*.tar.gz", "--dir", str(directory)],
-                                capture_output=True, check=False, timeout=installed_clock.timeout())
-    if downloaded.returncode:
-        raise RuntimeError("real signed draft asset acquisition failed")
-    return load_draft(root, output, directory, native, version, source, release["url"])
+    (output / "draft-intake.json").write_text(json.dumps(release, sort_keys=True) + "\n")
+    return load_draft(root, output, directory, native, version, source, release["html_url"])
 
 
 def load_draft(root, output, directory, native, version, source, url):
