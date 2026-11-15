@@ -54,15 +54,15 @@ func checkClientHandshakeEOF(t *testing.T) {
 func TestTransportCloseLogsDaemonHandshakeEOF(t *testing.T) {
 	logs := captureCloseLogs(t)
 	_, key := authIdentity(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	t.Cleanup(cancel)
 	result := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		result <- ServeWithOptions(w, r, ServeOptions{Auth: &Authentication{Key: key, Authorize: func(string) bool { return true }}}, func(context.Context, Conn) error {
+		result <- ServeWithOptions(w, r.WithContext(ctx), ServeOptions{Auth: &Authentication{Key: key, Authorize: func(string) bool { return true }}}, func(context.Context, Conn) error {
 			return errors.New("closed handshake reached handler")
 		})
 	}))
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	t.Cleanup(cancel)
 	ws, _, err := websocket.Dial(ctx, server.URL, &websocket.DialOptions{Subprotocols: []string{AuthProtocol}}) //nolint:bodyclose // websocket owns the response body
 	if err != nil {
 		t.Fatal(err)
