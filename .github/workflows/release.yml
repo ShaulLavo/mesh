@@ -181,6 +181,7 @@ jobs:
       - name: Configure explicit trusted tool paths
         run: |
           echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/release-source-tools/linux-amd64/mesh-release-sign" >> "$GITHUB_ENV"
+          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/mesh-release-trust" >> "$GITHUB_ENV"
       - name: Build the reviewed SOURCE release tool once per target
         env:
           SOURCE: ${{ needs.reserve.outputs.source }}
@@ -193,6 +194,7 @@ jobs:
             directory="$RUNNER_TEMP/release-source-tools/$system-$architecture"
             mkdir -p "$directory"
             GOOS="$system" GOARCH="$architecture" CGO_ENABLED=0 go build -trimpath -o "$directory/mesh-release-sign" ./cmd/mesh-release-sign
+            GOOS="$system" GOARCH="$architecture" CGO_ENABLED=0 go build -trimpath -o "$directory/mesh-release-routes" ./cmd/mesh-release-routes
             PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool record "$directory" "$SOURCE" "$GITHUB_RUN_ID" source "$target"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -264,8 +266,16 @@ jobs:
             "$MESH_RELEASE_TOOL" refresh "$MESH_RELEASE_TRUST_CACHE" || status=$?
           done
           (( status == 0 )) || exit "$status"
-          go run ./cmd/mesh-release-routes -operation publish -input "$root/input.json" -documents "$root/documents" -output-dir dist | tee -a "$GITHUB_STEP_SUMMARY"
+          "$RUNNER_TEMP/release-source-tools/linux-amd64/mesh-release-routes" -operation publish -input "$root/input.json" -documents "$root/documents" -output-dir dist | tee -a "$GITHUB_STEP_SUMMARY"
           python3 scripts/stage-metadata-page.py dist "$root/documents" "$RUNNER_TEMP/metadata-page.json"
+      - name: Pack the complete metadata and worker evidence closure
+        env:
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+        run: |
+          python3 scripts/prepare-release-documents.py "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" \
+            dist proofs "$RUNNER_TEMP/mesh-policy/documents" "$RUNNER_TEMP/mesh-policy/fresh-history.json" \
+            "$RUNNER_TEMP/release-bundle" "$GITHUB_RUN_ID"
       - name: Attest final manifest and archives
         id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
@@ -276,6 +286,7 @@ jobs:
             dist/mesh-retention.json
             dist/mesh-workers.json
             dist/mesh-worker-groups.json
+            dist/mesh-documents.tar.gz
             dist/mesh_*.tar.gz
       - name: Verify original bundle and candidate verifier
         env:
@@ -285,7 +296,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz; do
+          for subject in dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-documents.tar.gz dist/mesh_*.tar.gz; do
             gh attestation verify "$subject" --bundle "$BUNDLE" \
               --repo ShaulLavo/mesh \
               --signer-workflow ShaulLavo/mesh/.github/workflows/release.yml \
@@ -299,18 +310,17 @@ jobs:
           done
           (( status == 0 )) || exit "$status"
           "$signer" wrap "$BUNDLE" dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-documents.tar.gz dist/mesh_*.tar.gz
           "$signer" verify dist/mesh-update.sig.json \
-            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh_*.tar.gz
+            dist/mesh-release.json dist/mesh-update.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-documents.tar.gz dist/mesh_*.tar.gz
           "$signer" verify-metadata dist/mesh-update.json dist/mesh-update.sig.json dist/mesh-release.json "$RUNNER_TEMP/metadata-page.json"
       - name: Upload signed draft assets
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
         run: |
-          shopt -s nullglob
-          assets=(dist/mesh-release.json dist/mesh-update.json dist/mesh-update-root.json dist/mesh-update.sig.json dist/mesh-retention.json dist/mesh-workers.json dist/mesh-worker-groups.json dist/mesh-anchors-*.json proofs/*.json proofs/rollback/*.rollback.json proofs/groups/leaves/*.worker-group.json)
-          gh release upload "$VERSION" --clobber "${assets[@]}"
+          python3 scripts/upload-signed-draft.py "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" "$RUNNER_TEMP/release-bundle/uploads.json"
       - name: Capture actual signed draft for read-only publication consumers
         env:
           GH_TOKEN: ${{ github.token }}
@@ -318,6 +328,11 @@ jobs:
           SOURCE: ${{ needs.reserve.outputs.source }}
           BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
         run: python3 scripts/prepare-draft-intake.py capture "$RUNNER_TEMP/release-signed-draft" "$VERSION" "$SOURCE" --signed --candidate "$RUNNER_TEMP/release-candidate" --baselines "$BASELINE_ASSETS"
+      - name: Authenticate the actual captured bundle and complete semantic closure
+        env:
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+        run: python3 scripts/prepare-draft-intake.py documents "$RUNNER_TEMP/release-signed-draft" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID" --destination "$RUNNER_TEMP/release-captured-logical"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-signed-draft
@@ -336,7 +351,7 @@ jobs:
           retention-days: 7
       - name: Remove signed draft intake staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate"
+        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/release-bundle" "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/release-captured-logical.logical-inventory.json"
 
   verify-readers:
     name: Verify original permitted readers (${{ matrix.platform }})
@@ -366,10 +381,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.reserve.outputs.source }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Configure explicit trusted tool paths
         run: |
           echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/release-source-tools/mesh-release-sign" >> "$GITHUB_ENV"
@@ -409,13 +420,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$PLATFORM"
+          test "$(PYTHONPATH=scripts python3 -c 'from fixtures.release_tool import native_target; p=native_target(); print(p["os"]+"/"+p["arch"])')" = "$PLATFORM"
           scratch=$(mktemp -d /tmp/ms-XXXXXX)
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/mesh-policy"
           python3 scripts/publication-workflow.py draft "$VERSION" "$SOURCE" "$root/documents/$VERSION" --intake "$RUNNER_TEMP/publication-draft-input/$VERSION" --run "$GITHUB_RUN_ID"
-          go run ./cmd/mesh-release-routes -operation packets -input "$root/input.json" -documents "$root/documents" -platform "$PLATFORM" -output-dir "$RUNNER_TEMP/reader-packets"
+          "$RUNNER_TEMP/release-source-tools/mesh-release-routes" -operation packets -input "$root/input.json" -documents "$root/documents" -platform "$PLATFORM" -output-dir "$RUNNER_TEMP/reader-packets"
           python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets" "$PLATFORM" "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$RUNNER_TEMP/reader-evidence"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -464,10 +475,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.reserve.outputs.source }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Configure explicit trusted tool paths
         run: |
           echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/release-source-tools/mesh-release-sign" >> "$GITHUB_ENV"

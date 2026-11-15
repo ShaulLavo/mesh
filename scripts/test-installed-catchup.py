@@ -593,6 +593,28 @@ class PublicationConsumerTest(unittest.TestCase):
         self.assertEqual(data, actual)
         self.assertFalse(origin.close()["testSignatureRootUsed"])
 
+    def test_candidate_origin_denies_loose_members_and_network_fallback_over_tls(self):
+        temporary = tempfile.TemporaryDirectory(prefix="ipub-layout-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp"))
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        release = root / "releases/v0.1.1"
+        release.mkdir(parents=True)
+        actual = b"actual opaque bundle bytes"
+        (release / "mesh-documents.tar.gz").write_bytes(actual)
+        (release / "mesh-update.json").write_text("must never be served as a loose candidate asset")
+        (release / "draft.json").write_text(json.dumps({"assets": [{"name": "mesh-documents.tar.gz", "size": len(actual),
+            "digest": "sha256:" + hashlib.sha256(actual).hexdigest()}]}))
+        origin = publication_origin.Origin(root, release.parent, root / "unused-reader")
+        self.addCleanup(origin.close)
+        origin.start()
+        with patch.object(publication_origin.published_releases, "download", side_effect=AssertionError("candidate network fallback")) as download:
+            self.assertEqual(publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/mesh-documents.tar.gz"), actual)
+            with self.assertRaisesRegex(RuntimeError, "exact asset"):
+                publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/mesh-update.json")
+            with self.assertRaisesRegex(RuntimeError, "exact asset"):
+                publication_request(origin, "/ShaulLavo/mesh/releases/download/v0.1.1/missing.json")
+        download.assert_not_called()
+
     def test_owned_activation_port_fault_releases_at_actual_rollback_phase(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

@@ -39,7 +39,7 @@ class ReleaseSigningTests(unittest.TestCase):
             (root / "scripts").mkdir()
             (root / "dist").mkdir()
             for name in ("mesh-release.json", "mesh-update.json", "mesh-update-root.json", "mesh-update.sig.json", "mesh-retention.json", "mesh-workers.json", "mesh-worker-groups.json", "mesh_linux_amd64.tar.gz",
-                         "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz"):
+                         "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz", "mesh-documents.tar.gz"):
                 (root / "dist" / name).write_text("fixture")
             fake = """#!/usr/bin/env bash
 set -euo pipefail
@@ -56,6 +56,12 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
                 path = root / "bin" / name
                 path.write_text(fake)
                 path.chmod(0o700)
+            verifier = root / "mesh-release-sign"
+            verifier.write_text(fake)
+            verifier.chmod(0o700)
+            (root / "scripts/upload-signed-draft.py").write_text('import os\n'
+                'with open(os.environ["CALLS"], "a") as calls: calls.write("upload-signed-draft.py\\n")\n'
+                'raise SystemExit(1 if os.environ.get("FAIL") == "upload" else 0)\n')
             finalizer = root / "scripts/finalize-release.sh"
             finalizer.write_text('#!/usr/bin/env bash\nset -euo pipefail\ntouch "$PUBLISHED"\n')
             finalizer.chmod(0o700)
@@ -65,6 +71,7 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
                        RUNNER_TEMP=str(root), MESH_RELEASE_TRUST_CACHE=str(root / "trust"),
                        RESUMED=str(root / "resumed"),
                        VERSION="v0.1.1", SOURCE="a" * 40, PREVIOUS_TAG="v0.1.0")
+            env["MESH_RELEASE_TOOL"] = str(verifier)
             result = subprocess.run(["bash", "-euo", "pipefail", "-c", VERIFY + "\n" + UPLOAD + "\n" + PUBLISH],
                                     cwd=root, env=env, capture_output=True, text=True, check=False)
             published = (root / "published").exists()
@@ -75,9 +82,9 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
         result, published, calls = self.run_publication("")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(published)
-        self.assertEqual(calls.count("gh attestation verify"), 8)
+        self.assertEqual(calls.count("gh attestation verify"), 9)
         self.assertLess(calls.index("mesh-release-sign verify"),
-                        calls.index("gh release upload"))
+                        calls.index("upload-signed-draft.py"))
 
     def test_official_or_candidate_failure_keeps_draft_unpublished(self):
         for failure in ("official", "trust", "wrap", "candidate", "metadata"):
@@ -85,7 +92,12 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
                 result, published, calls = self.run_publication(failure)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(published)
-                self.assertNotIn("gh release upload", calls)
+                self.assertNotIn("upload-signed-draft.py", calls)
+
+    def test_upload_failure_keeps_the_draft_unpublished(self):
+        result, published, _calls = self.run_publication("upload")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(published)
 
     def test_budget_status_resumes_only_the_authenticated_refresh(self):
         result, published, calls = self.run_publication("resume")
@@ -114,7 +126,8 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
     def test_original_reader_jobs_are_required_before_finalization(self):
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
         self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", finalize)
-        self.assertNotIn("always()", finalize)
+        condition = next(line for line in finalize.splitlines() if line.startswith("    if:"))
+        self.assertNotIn("always()", condition)
         readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
         self.assertIn("scripts/run-original-update-readers.py", readers)
         self.assertNotIn("continue-on-error", readers)

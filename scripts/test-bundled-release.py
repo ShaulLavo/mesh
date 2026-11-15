@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Complete offline proof corpus and fixed physical publication controls."""
 import hashlib
+import contextlib
 import importlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fixtures import release_documents as documents, release_tool
+from fixtures import draft_intake, installed_publication, release_worker_completion
 
 groups = importlib.import_module("test-release-worker-groups")
 VERSION = "v0.1.324"
@@ -138,6 +142,116 @@ class CompleteCorpusTests(unittest.TestCase):
         (self.logical / companion["groups"][0]["cleanup"]["name"]).unlink()
         with self.assertRaises((OSError, ValueError)):
             documents.members(self.logical)
+
+    def snapshot(self):
+        physical = self.root / "physical" / VERSION
+        physical.mkdir(parents=True)
+        aliases = documents.legacy_projection(self.manifest, self.logical, self.history, self.retained)
+        for name in documents.PHYSICAL + tuple(aliases):
+            source = self.logical / name
+            (physical / name).write_bytes(source.read_bytes() if source.exists() else b"opaque signed physical control")
+        checksums = []
+        for name in draft_intake.ARCHIVES.values():
+            shutil.copyfile(self.dist / name, physical / name)
+            checksums.append(hashlib.sha256((physical / name).read_bytes()).hexdigest() + "  " + name + "\n")
+        (physical / "checksums.txt").write_text("".join(checksums))
+        (physical / "mesh.rb").write_text("offline Cask")
+        (self.logical / documents.ENVELOPE).write_bytes((physical / documents.ENVELOPE).read_bytes())
+        release = {"repository": "ShaulLavo/mesh", "intake_run": 42, "frozen_baselines": [], "draft": True, "id": 123,
+            "tag_name": VERSION, "target_commitish": groups.SOURCE, "url": "https://api.github.com/repos/ShaulLavo/mesh/releases/123",
+            "html_url": "https://github.com/ShaulLavo/mesh/releases/tag/" + VERSION, "assets": []}
+        release["assets"] = [self.asset(path, number + 1) for number, path in enumerate(sorted(physical.iterdir()))]
+        (physical / "draft.json").write_text(json.dumps(release))
+        return physical, release, aliases
+
+    @staticmethod
+    def asset(path, number):
+        return {"name": path.name, "id": number, "size": path.stat().st_size, "state": "uploaded",
+                "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    def materialize_control(self, _snapshot, _release, destination, _inventory):
+        shutil.copytree(self.logical, destination)
+
+    def test_physical_snapshot_feeds_full_semantic_native_intake_and_fifteen_tasks(self):
+        physical, release, _aliases = self.snapshot()
+        output = self.root / "verified"
+        with patch.object(release_tool, "materialize", side_effect=self.materialize_control):
+            observed = draft_intake.documents(physical, VERSION, groups.SOURCE, output, 42)
+        self.assertEqual(observed, release)
+        self.assertFalse((output / "draft.json").exists())
+        self.assertEqual(len(observed["assets"]), 18)
+        counts = {platform["os"] + "/" + platform["arch"]: len(release_worker_completion.task_inventory(
+            output, platform["os"] + "/" + platform["arch"], groups.SOURCE)["tasks"]) for platform in groups.index.PLATFORMS}
+        self.assertEqual(counts, {"linux/amd64": 7, "linux/arm64": 4, "darwin/arm64": 4})
+        native_root = self.root / "native-input"
+        native_root.mkdir()
+        evidence = self.root / "evidence"
+        evidence.mkdir()
+        environment = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REF": "refs/heads/main",
+                       "MESH_PUBLICATION_DRAFT": str(physical), "MESH_PUBLICATION_RUN": "42"}
+        with patch.dict(os.environ, environment), patch.object(release_tool, "materialize", side_effect=self.materialize_control):
+            with patch.object(installed_publication, "load_draft", return_value="authenticated native consumer") as consumer:
+                self.assertEqual(installed_publication.stage(native_root, evidence, "linux/amd64", VERSION, groups.SOURCE), "authenticated native consumer")
+        self.assertEqual(consumer.call_args.args[-1], physical)
+
+    def test_missing_or_wrong_but_byte_valid_alias_is_rejected_by_semantic_projection(self):
+        physical, release, aliases = self.snapshot()
+        missing = physical / aliases[0]
+        missing.unlink()
+        release["assets"] = [item for item in release["assets"] if item["name"] != aliases[0]]
+        (physical / "draft.json").write_text(json.dumps(release))
+        with patch.object(release_tool, "materialize", side_effect=self.materialize_control):
+            with self.assertRaisesRegex(ValueError, "complete supported legacy projection"):
+                draft_intake.documents(physical, VERSION, groups.SOURCE, self.root / "missing", 42)
+        other = next(item["proof"] + ".json" for item in self.manifest["compatibility"]["transitions"]
+                     if item["proof"] + ".json" not in aliases)
+        shutil.copyfile(self.logical / other, physical / other)
+        release["assets"].append(self.asset(physical / other, 9999))
+        (physical / "draft.json").write_text(json.dumps(release))
+        with patch.object(release_tool, "materialize", side_effect=self.materialize_control):
+            with self.assertRaisesRegex(ValueError, "complete supported legacy projection"):
+                draft_intake.documents(physical, VERSION, groups.SOURCE, self.root / "wrong", 42)
+
+    def test_final_live_comparison_binds_every_physical_asset_and_declines_mutation(self):
+        physical, release, _aliases = self.snapshot()
+        responses = [json.dumps(release).encode(), json.dumps([release["assets"]]).encode()]
+        with patch.object(draft_intake.subprocess, "check_output", side_effect=responses) as api:
+            draft_intake.compare_live(physical, VERSION, groups.SOURCE, 42)
+        self.assertEqual(api.call_count, 2)
+        changed = json.loads(json.dumps(release))
+        changed["assets"][0]["id"] += 100
+        with patch.object(draft_intake.subprocess, "check_output", side_effect=[json.dumps(changed).encode(), json.dumps([changed["assets"]]).encode()]):
+            with self.assertRaisesRegex(ValueError, "physical inventory"):
+                draft_intake.compare_live(physical, VERSION, groups.SOURCE, 42)
+
+    def test_owned_upload_calls_are_constant_with_thirteen_declared_metadata_assets(self):
+        controls = importlib.import_module("test-upload-signed-draft")
+        physical, release, aliases = self.snapshot()
+        candidate = self.root / "candidate"
+        candidate.mkdir()
+        candidate_release = dict(release, assets=[item for item in release["assets"] if item["name"] in draft_intake.NAMES])
+        for name in draft_intake.NAMES:
+            shutil.copyfile(physical / name, candidate / name)
+        (candidate / "draft.json").write_text(json.dumps(candidate_release))
+        initial = dict(release, assets=[item for item in release["assets"] if item["name"] in draft_intake.NAMES + ("mesh.rb",)])
+        for name in documents.PHYSICAL:
+            shutil.copyfile(physical / name, self.dist / name)
+        paths = [self.dist / name for name in documents.PHYSICAL] + [self.proofs / name for name in aliases]
+        counts = []
+        for number in (1, 1000):
+            (self.dist / documents.BUNDLE).write_bytes(b"opaque logical document\n" * number)
+            fake = controls.FakeCLI(initial)
+            self.publish_control(controls, fake, candidate, paths)
+            counts.append(len(fake.calls))
+            self.assertEqual(sum(call[0] == "POST" for call in fake.calls), 13)
+        self.assertEqual(counts, [30, 30])
+
+    def publish_control(self, controls, fake, candidate, paths):
+        api = controls.uploader
+        with patch.dict(os.environ, GITHUB_REPOSITORY="ShaulLavo/mesh", GITHUB_RUN_ID="42"), contextlib.chdir(self.root), \
+                patch.object(api.subprocess, "run", side_effect=fake.run), patch.object(api.time, "sleep", side_effect=fake.sleep), \
+                patch.object(api.time, "monotonic", side_effect=lambda: fake.clock), patch.object(api.time, "time", side_effect=lambda: fake.clock):
+            api.Publisher(api.API(), candidate, VERSION, groups.SOURCE, paths).run()
 
     @unittest.skipUnless(os.environ.get("MESH_TEST_RELEASE_TOOL"), "real CLI supplied by the owned build runner")
     def test_actual_go_packer_preserves_complete_exact_inventory_and_is_deterministic(self):

@@ -10,7 +10,7 @@ import tarfile
 from pathlib import Path
 
 from fixtures import installed_origin, native_services, installed_clock
-from fixtures import release_workers, release_worker_groups
+from fixtures import release_workers, release_worker_groups, release_worker_index, release_documents
 
 REPO = Path(__file__).resolve().parents[2]
 PLATFORMS = ("linux/amd64", "linux/arm64", "darwin/arm64")
@@ -75,6 +75,7 @@ class Releases:
         self.transition_clean = True
         self.registry, self.probe = None, None
         self.builds, self.manifests, self.metadata, self.startup = {}, {}, {}, {}
+        self.document_members = {}
         self.server_kind = "signer"
 
     def environment(self):
@@ -249,10 +250,16 @@ class Releases:
         shutil.copy2(receipt, self.directory / target / receipt.name)
         shutil.copy2(rollback, self.directory / target / rollback.name)
         for path in directory.glob("*.worker-groups.json"):
-            shutil.copy2(path, self.directory / target / path.name)
-        for path in (directory / "groups" / "leaves").glob("*.worker-group.json"):
-            shutil.copy2(path, self.directory / target / path.name)
+            reference = release_worker_index.reference(path)
+            names = release_worker_index.closure({"sources": [reference]}, release_worker_index.resolver(directory))
+            self.document_members.setdefault(target, set()).update(names)
+            self.copy_group_documents(directory, target, names)
         return {"forward": receipt.stem, "rollback": rollback.name.removesuffix(".rollback.json")}
+
+    def copy_group_documents(self, directory, target, names):
+        for name in names:
+            source = directory / name if name.endswith(".worker-groups.json") else directory / "groups/leaves" / name
+            shutil.copy2(source, self.directory / target / name)
 
     @installed_clock.timed("native-transition", lambda self, source, target, *_args: Path(source).parent.name + ":" + target)
     def run_transition(self, source, target, directory, environment, output):
@@ -323,12 +330,25 @@ class Releases:
             "page": {"tag": version, "name": page_name, "sha256": digest(page_data)},
             "updater": {"schema": 1, "epoch": reader_epoch, "position": position if reader_epoch == epoch else {"anchor": True, "ordinal": 0}}}
         write_json(directory / "mesh-update.json", metadata)
-        subjects = [directory / "mesh-update.json"]
-        subjects.extend(sorted(directory.glob("mesh_*.tar.gz")))
-        installed_origin.sign(self.root, subjects, directory / "mesh-update.sig.json")
-        self.metadata[version] = metadata
         write_json(directory / "mesh-update-root.json", {"format": 1, "epoch": epoch,
             "head": {"tag": version, "name": "mesh-update.json", "sha256": digest((directory / "mesh-update.json").read_bytes())}})
+        self.sign_publication(directory, version, page_name, rollbacks)
+        self.metadata[version] = metadata
+
+    def sign_publication(self, directory, version, page_name, rollbacks):
+        manifest = self.manifests[version]
+        members = self.document_members.get(version, set()) | {"mesh-release.json", "mesh-update.json", "mesh-update-root.json", page_name}
+        receipts = {item["proof"] + ".json" for item in manifest["compatibility"]["transitions"]}
+        members.update(receipts)
+        members.update(item["rollback"] + ".rollback.json" for item in rollbacks)
+        archives = [item["archive"] for item in manifest["artifacts"]]
+        subjects = [directory / name for name in ("mesh-release.json", "mesh-update.json") + tuple(archives)]
+        binding = {"version": version, "source": manifest["commit"], "releaseId": 1, "writerRun": 1,
+                   "platforms": sorted((item["platform"] for item in manifest["artifacts"]), key=lambda item: (item["os"], item["arch"]))}
+        installed_origin.sign(self.root, subjects, directory / release_documents.ENVELOPE, documents={
+            "directory": str(directory.relative_to(self.root)), "members": sorted(members), "binding": binding,
+            "output": str((directory / release_documents.BUNDLE).relative_to(self.root))})
+        write_json(directory / "physical-assets.json", sorted(set(release_documents.PHYSICAL) | set(archives) | receipts))
 
     def close(self):
         if self.closed:

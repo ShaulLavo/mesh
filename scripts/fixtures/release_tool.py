@@ -45,7 +45,7 @@ def record(directory, source, run, role, target):
         raise ValueError("release tool requires its explicit writer run and source role")
     value.update(run=int(run), role=role, mode=0o755)
     value["companions"] = {}
-    for name in ("native-helper", "publication-reader"):
+    for name in ("native-helper", "publication-reader", "mesh-release-routes"):
         helper = directory / name
         if helper.exists():
             value["companions"][name] = {"sha256": digest(helper), "mode": 0o755}
@@ -75,7 +75,7 @@ def verify(directory, source, run, role):
         raise ValueError("release tool differs from its artifact run or SOURCE/H role")
     validate_identity(identity(tool), source, native_target(), value["sha256"])
     for name, companion in value["companions"].items():
-        if name not in ("native-helper", "publication-reader") or companion.get("mode") != 0o755:
+        if name not in ("native-helper", "publication-reader", "mesh-release-routes") or companion.get("mode") != 0o755:
             raise ValueError("release tool artifact contains an undeclared companion")
         helper = directory / name
         if helper.is_symlink() or digest(helper) != companion["sha256"] or stat.S_IMODE(helper.stat().st_mode) != 0o755:
@@ -153,7 +153,7 @@ def download(repository, run, source, role, key, destination):
 
 
 def extract(archive, destination):
-    allowed = {"mesh-release-sign", "release-tool.json", "native-helper", "publication-reader"}
+    allowed = {"mesh-release-sign", "release-tool.json", "native-helper", "publication-reader", "mesh-release-routes"}
     with zipfile.ZipFile(archive) as package:
         members = package.infolist()
         if (not {"mesh-release-sign", "release-tool.json"} <= {item.filename for item in members}

@@ -132,13 +132,9 @@ def same_candidate(candidate, release, version, source):
 
 
 def capture(directory, version, source, signed=False, candidate=None, baselines=""):
-    # The tag endpoint is for published releases; listing drafts needs push access.
-    pages = json.loads(subprocess.check_output(
-        ["gh", "api", "--paginate", "--slurp", REPOSITORY + "/releases?per_page=100"], timeout=120))
-    matches = [item for page in pages for item in page if item["tag_name"] == version]
-    if len(matches) != 1:
-        raise ValueError("reserved draft is missing or unavailable to the release writer")
-    release = matches[0]
+    if signed and candidate is None:
+        raise ValueError("signed draft capture requires its actual transition candidate")
+    release = find_release(version, source, candidate if signed else None)
     release["repository"] = "ShaulLavo/mesh"
     release["intake_run"] = int(os.environ["GITHUB_RUN_ID"])
     release["frozen_baselines"] = baseline_names(baselines)
@@ -148,8 +144,6 @@ def capture(directory, version, source, signed=False, candidate=None, baselines=
     release["assets"] = [item for page in pages for item in page]
     assets = inventory(release, version, source, signed)
     if signed:
-        if candidate is None:
-            raise ValueError("signed draft capture requires its actual transition candidate")
         same_candidate(candidate, release, version, source)
     release["assets"] = assets
     directory.mkdir(exist_ok=False)
@@ -157,6 +151,19 @@ def capture(directory, version, source, signed=False, candidate=None, baselines=
         acquire_asset(directory, item, candidate if signed else None)
     (directory / "draft.json").write_text(json.dumps(release, sort_keys=True) + "\n")
     return verify(directory, version, source, signed)
+
+
+def find_release(version, source, candidate):
+    if candidate is not None:
+        original = verify(candidate, version, source, run=int(os.environ["GITHUB_RUN_ID"]))
+        return json.loads(subprocess.check_output(["gh", "api", REPOSITORY + f'/releases/{original["id"]}'], timeout=120))
+    # The tag endpoint is for published releases; finding the initial draft needs push access.
+    pages = json.loads(subprocess.check_output(
+        ["gh", "api", "--paginate", "--slurp", REPOSITORY + "/releases?per_page=100"], timeout=120))
+    matches = [item for page in pages for item in page if item["tag_name"] == version]
+    if len(matches) != 1:
+        raise ValueError("reserved draft is missing or unavailable to the release writer")
+    return matches[0]
 
 
 def acquire_asset(directory, item, candidate=None):

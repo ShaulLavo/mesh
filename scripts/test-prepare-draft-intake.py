@@ -90,6 +90,8 @@ elif args == ["api", "--paginate", "--slurp", "repos/ShaulLavo/mesh/releases/445
     value = json.loads((source / "draft.json").read_text())
     middle = len(value["assets"]) // 2
     print(json.dumps([value["assets"][:middle], value["assets"][middle:]]))
+elif args == ["api", "repos/ShaulLavo/mesh/releases/445605054"] and os.environ["AUTHORITY"] == "write":
+    print((source / "draft.json").read_text())
 elif args[0] == "api" and "/releases/assets/" in args[1] and os.environ["AUTHORITY"] == "write":
     value = json.loads((source / "draft.json").read_text())
     item = next(item for item in value["assets"] if str(item["id"]) == args[1].rsplit("/", 1)[1])
@@ -219,7 +221,7 @@ else:
         self.assertLess(build.index('prepare-draft-intake.py capture'), build.index('name: release-candidate'))
         publish = GATE.job(RELEASE, "publish")
         self.assertIn("needs: [reserve, build, prove-transition]", publish)
-        self.assertLess(publish.index('gh release upload'), publish.index('name: release-signed-draft'))
+        self.assertLess(publish.index('scripts/upload-signed-draft.py'), publish.index('name: release-signed-draft'))
         self.assertIn('capture "$RUNNER_TEMP/release-signed-draft"', publish)
         self.assertIn('--signed --candidate "$RUNNER_TEMP/release-candidate"', publish)
         self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", GATE.job(RELEASE, "finalize"))
@@ -240,6 +242,10 @@ else:
         self.assertEqual(INTAKE.verify(output, VERSION, SOURCE, signed=True, run=42), release)
         for item in release["assets"]:
             self.assertEqual((output / item["name"]).read_bytes(), (directory / item["name"]).read_bytes())
+        calls = [json.loads(line) for line in (self.root / "calls").read_text().splitlines()]
+        gets = [call for call in calls if len(call) > 1 and "/releases/assets/" in call[1]]
+        self.assertEqual(len(gets), len(INTAKE.release_documents.PHYSICAL) + 1)
+        self.assertFalse(any("/releases?" in " ".join(call) for call in calls))
 
     def test_changed_candidate_bytes_asset_id_release_id_and_run_are_refused(self):
         directory, release = self.signed_snapshot()

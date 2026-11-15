@@ -90,6 +90,7 @@ jobs:
               - 'cmd/**'
               - 'internal/cli/**'
               - 'internal/release/**'
+              - 'internal/releasedocuments/**'
               - 'internal/update*/**'
               - 'internal/storage/**'
               - 'internal/worker/**'

@@ -16,8 +16,7 @@ class Origin:
 
     @installed_clock.timed("serve", lambda self, directory: Path(directory).name)
     def serve_tree(self, directory):
-        files = {path.relative_to(directory).as_posix(): str(path.relative_to(self.root))
-                 for path in Path(directory).rglob("*") if path.is_file() and path.name != "mesh"}
+        files = physical_files(self.root, Path(directory))
         request(self.root, {"put": files})
 
     @installed_clock.timed("head", lambda self, directory, version: version)
@@ -53,6 +52,23 @@ def request(root, value, timeout=installed_clock.HANG_SECONDS):
         raise RuntimeError("installed fixture producer did not complete")
 
 
-def sign(root, files, output=None, stop=False):
-    request(root, {"files": [str(Path(path).relative_to(root)) for path in files],
-        "output": str(Path(output).relative_to(root)) if output else "", "stop": stop})
+def sign(root, files, output=None, stop=False, *, documents=None):
+    value = {"files": [str(Path(path).relative_to(root)) for path in files],
+        "output": str(Path(output).relative_to(root)) if output else "", "stop": stop}
+    if documents is not None:
+        value["documents"] = documents
+    request(root, value)
+
+
+def physical_files(root, directory):
+    files = {}
+    for path in directory.rglob("*"):
+        if not path.is_file() or path.name == "mesh" or path.name == "physical-assets.json":
+            continue
+        layout = path.parent / "physical-assets.json"
+        if layout.exists() and path.name not in json.loads(layout.read_bytes()):
+            continue
+        if (path.parent / "mesh-update.json").exists() and not layout.exists():
+            raise RuntimeError("signed fixture requires its declared bundled physical layout")
+        files[path.relative_to(directory).as_posix()] = str(path.relative_to(root))
+    return files
