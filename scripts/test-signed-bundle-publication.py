@@ -80,6 +80,7 @@ class SignedPublicationTests(unittest.TestCase):
 
     def test_real_signed_snapshot_to_scheduler_native_intake_aggregation_and_finalizer(self):
         control, physical, release, aliases = self.signed_snapshot()
+        physical = self.capture(physical, release)
         with patch.dict(os.environ, self.environment(physical)):
             logical = self.root / "authenticated"
             draft_intake.documents(physical, corpus.VERSION, groups.SOURCE, logical, 42)
@@ -92,6 +93,33 @@ class SignedPublicationTests(unittest.TestCase):
             self.check_finalizer(physical, release, completed)
             self.check_go_authentication_refuses_changed_snapshot(physical, release)
         self.assertEqual(len(aliases), 9)
+
+    def capture(self, physical, release):
+        calls = []
+        def output(command, **_kwargs):
+            calls.append(command)
+            if command[-1].endswith("/releases?per_page=100"):
+                return json.dumps([[release]]).encode()
+            if command[-1].endswith("/assets?per_page=100"):
+                return json.dumps([release["assets"]]).encode()
+            return json.dumps(release).encode()
+        def download(command, **kwargs):
+            calls.append(command)
+            number = int(command[2].rsplit("/", 1)[1])
+            item = next(item for item in release["assets"] if item["id"] == number)
+            kwargs["stdout"].write((physical / item["name"]).read_bytes())
+            return subprocess.CompletedProcess(command, 0)
+        candidate, captured = self.root / "candidate", self.root / "captured" / corpus.VERSION
+        captured.parent.mkdir()
+        with patch.dict(os.environ, GITHUB_RUN_ID="42"), patch.object(draft_intake.subprocess, "check_output", side_effect=output), \
+                patch.object(draft_intake.subprocess, "run", side_effect=download):
+            draft_intake.capture(candidate, corpus.VERSION, groups.SOURCE)
+            draft_intake.capture(captured, corpus.VERSION, groups.SOURCE, signed=True, candidate=candidate)
+        self.assertEqual(len(calls), 22)
+        self.assertEqual(sum("/releases/assets/" in " ".join(call) for call in calls), 18)
+        for item in release["assets"]:
+            self.assertEqual((captured / item["name"]).read_bytes(), (physical / item["name"]).read_bytes())
+        return captured
 
     def check_native_intake(self, physical):
         root, output = self.root / "native-intake", self.root / "native-evidence"
