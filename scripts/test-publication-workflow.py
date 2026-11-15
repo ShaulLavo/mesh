@@ -120,7 +120,10 @@ class PublicationWorkflowTests(unittest.TestCase):
 
     def test_verified_signed_snapshot_feeds_complete_scheduler_and_aggregate(self):
         snapshot = self.snapshot_fixture()
-        with patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main"):
+        with patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main"), \
+                patch.object(workflow.draft_intake.release_tool, "materialize", side_effect=self.materialize_control), \
+                patch.object(workflow.draft_intake.release_worker_index, "validate_index"), \
+                patch.object(workflow.draft_intake.release_documents, "selection_projection", return_value=[]):
             workflow.draft("v0.1.99", self.harness, self.root / "verified-documents", snapshot, 42)
         self.directory = self.root / "verified-documents"
         self.fixture.context = completion.release_context(self.directory)
@@ -137,12 +140,17 @@ class PublicationWorkflowTests(unittest.TestCase):
 
     def snapshot_fixture(self):
         snapshot = self.root / "signed-snapshot"
-        shutil.copytree(self.directory, snapshot)
-        manifest = (snapshot / "mesh-release.json").read_bytes()
-        (snapshot / "mesh-update.json").write_text(json.dumps({"version": "v0.1.99", "offline": "no signature acceptance",
+        self.control_logical = self.root / "signed-logical"
+        shutil.copytree(self.directory, self.control_logical)
+        snapshot.mkdir()
+        manifest = (self.control_logical / "mesh-release.json").read_bytes()
+        (self.control_logical / "mesh-update.json").write_text(json.dumps({"version": "v0.1.99", "offline": "no signature acceptance",
             "manifest": hashlib.sha256(manifest).hexdigest()}))
         for name in ("mesh-update-root.json", "mesh-workers.json"):
-            (snapshot / name).write_text('{"offline":"complete intake control"}')
+            (self.control_logical / name).write_text('{"offline":"complete intake control"}')
+        for name in workflow.draft_intake.release_documents.PHYSICAL + ("mesh.rb",):
+            source = self.control_logical / name
+            (snapshot / name).write_bytes(source.read_bytes() if source.exists() else b"offline physical control")
         checksums = []
         for name in workflow.draft_intake.ARCHIVES.values():
             data = ("offline archive control " + name).encode()
@@ -157,6 +165,9 @@ class PublicationWorkflowTests(unittest.TestCase):
             "html_url": "https://github.com/ShaulLavo/mesh/releases/tag/v0.1.99", "intake_run": 42, "frozen_baselines": [], "assets": assets}
         (snapshot / "draft.json").write_text(json.dumps(release))
         return snapshot
+
+    def materialize_control(self, _snapshot, _release, destination, _inventory):
+        shutil.copytree(self.control_logical, destination)
 
     def roundtrip(self, platform, outputs):
         emitted = [self.emit_archive(platform, row, number) for number, row in enumerate(workflow.rows(self.directory, platform, self.harness))]
@@ -258,9 +269,9 @@ class PublicationWorkflowTests(unittest.TestCase):
     def test_workflow_dependencies_fail_closed_and_keep_finalizer_and_five_pins_unchanged(self):
         native = wiring.job(WORKFLOW, "publication-native")
         aggregate = wiring.job(WORKFLOW, "publication-aggregate")
-        self.assertIn("needs: publication-plan", native)
+        self.assertIn("needs: [publication-plan, publication-tools]", native)
         self.assertIn("matrix: ${{ fromJSON(needs.publication-plan.outputs.tasks) }}", native)
-        self.assertIn("needs: [publication-plan, publication-native]", aggregate)
+        self.assertIn("needs: [publication-plan, publication-native, publication-tools]", aggregate)
         for job in (wiring.job(WORKFLOW, "publication-plan"), native, aggregate):
             self.assertIn("github.ref == 'refs/heads/main'", job)
             self.assertNotIn("continue-on-error", job)
@@ -273,14 +284,17 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 30", native)
         self.assertIn("--worker-registry", native)
         self.assertIn("installed_artifacts.py native", native)
-        self.assertLess(native.index("main-only publication caller and real native manager"), native.index("actions/setup-go"))
+        self.assertNotIn("actions/setup-go", native)
+        self.assertNotIn("go build", native)
+        self.assertNotIn("go test", native)
+        self.assertIn("Acquire the exact same-run reviewed H tool artifact", native)
         self.assertIn("--publication-task", native)
         self.assertIn("PUBLICATION_TASK: ${{ matrix.task }}", native)
         self.assertIn("MESH_PUBLICATION_DRAFT: ${{ runner.temp }}/publication-draft-input/${{ inputs.release_version }}", native)
         self.assertIn("MESH_PUBLICATION_RUN: ${{ inputs.release_run || github.run_id }}", native)
         self.assertIn("name: ${{ matrix.artifact }}", native)
         self.assertIn("name: installed-publication-${{ matrix.key }}", aggregate)
-        self.assertNotIn("publication-trust", aggregate)
+        self.assertIn("publication-trust", aggregate)
         pin = importlib.import_module("test-installed-gate-wiring").PIN
         for name in ("release", "ci"):
             caller = (ROOT / ".github/workflows" / (name + ".yml")).read_text()
@@ -338,24 +352,39 @@ class DraftIntakeTests(unittest.TestCase):
         return patch.dict(os.environ, GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="github-hosted", GITHUB_REF="refs/heads/main",
                           MESH_PUBLICATION_DRAFT=str(self.intake), MESH_PUBLICATION_RUN="42")
 
-    def test_scheduler_cli_copies_complete_verified_json_without_draft_network_access(self):
+    def test_scheduler_requires_explicit_codec_and_keeps_logical_and_physical_separate(self):
         destination = self.root / "scheduler"
         environment = os.environ | {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_REF": "refs/heads/main"}
         result = subprocess.run([sys.executable, str(ROOT / "scripts/publication-workflow.py"), "draft", self.version, self.source,
             str(destination), "--intake", str(self.intake), "--run", "42"], env=environment, capture_output=True, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        expected = {item["name"] for item in self.release["assets"] if item["name"].endswith(".json")} | {"draft.json"}
-        self.assertEqual({path.name for path in destination.iterdir()}, expected)
-        for name in expected:
-            self.assertEqual((destination / name).read_bytes(), (self.intake / name).read_bytes())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"MESH_RELEASE_TOOL", result.stderr)
+        with self.hosted(), patch.object(workflow.draft_intake.release_tool, "materialize", side_effect=self.materialize_control), \
+                patch.object(workflow.draft_intake.release_worker_index, "validate_index"), \
+                patch.object(workflow.draft_intake.release_documents, "selection_projection", return_value=[]):
+            workflow.draft(self.version, self.source, destination, self.intake, 42)
+        self.assertEqual({path.name for path in destination.iterdir()}, set(workflow.draft_intake.SIGNED))
+        self.assertNotIn("draft.json", {path.name for path in destination.iterdir()})
+        self.assertTrue((self.intake / "draft.json").exists())
+
+    def materialize_control(self, _snapshot, _release, destination, _inventory):
+        destination.mkdir()
+        manifest = json.dumps({"version": self.version, "commit": self.source}).encode()
+        for name in workflow.draft_intake.SIGNED:
+            (destination / name).write_bytes(b"{}")
+        (destination / "mesh-release.json").write_bytes(manifest)
+        (destination / "mesh-update.json").write_text(json.dumps({"version": self.version, "manifest": hashlib.sha256(manifest).hexdigest()}))
 
     def test_native_stage_uses_the_exact_verified_directory_and_preserves_original_consumer(self):
         output = self.root / "output"
         output.mkdir()
         with self.hosted(), patch.object(installed_publication, "load_draft", return_value="original-consumer") as consume, \
+                patch.object(installed_publication.draft_intake, "documents", return_value=self.release) as materialize, \
                 patch.object(installed_publication.subprocess, "run", side_effect=AssertionError("no draft network access")):
             self.assertEqual(installed_publication.stage(self.root, output, "linux/amd64", self.version, self.source), "original-consumer")
-        consume.assert_called_once_with(self.root, output, self.intake, "linux/amd64", self.version, self.source, self.release["html_url"])
+        logical = self.root / "logical" / self.version
+        materialize.assert_called_once_with(self.intake, self.version, self.source, logical, 42)
+        consume.assert_called_once_with(self.root, output, logical, "linux/amd64", self.version, self.source, self.release["html_url"], self.intake)
         self.assertEqual(json.loads((output / "draft-intake.json").read_bytes()), self.release)
 
     def test_changed_source_run_missing_signature_and_changed_json_stop_before_native_consumption(self):

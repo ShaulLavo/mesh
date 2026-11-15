@@ -188,6 +188,7 @@ check_source_contract() {
   python3 scripts/test-release-transition.py
   python3 scripts/test-release-signing.py
   python3 scripts/test-prepare-draft-intake.py
+  check_bundled_release
   python3 scripts/test-acquire-release-history.py
   python3 scripts/test-update-reader-publication.py
   python3 scripts/test-release-workers.py
@@ -215,6 +216,19 @@ check_source_contract() {
   sh -n scripts/install.sh scripts/install/linux.sh scripts/install/darwin.sh
   bash -n scripts/check-packaging.sh scripts/render-demos.sh integration/*.sh
 }
+
+check_bundled_release() (
+  local tool_root
+  tool_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-bundle-controls.XXXXXX")
+  trap 'rm -rf -- "$tool_root"' EXIT
+  if [[ -z ${MESH_TEST_RELEASE_TOOL:-} ]]; then
+    go build -trimpath -o "$tool_root/mesh-release-sign" ./cmd/mesh-release-sign
+    export MESH_TEST_RELEASE_TOOL="$tool_root/mesh-release-sign"
+    export MESH_TEST_RELEASE_TOOL_SOURCE
+    MESH_TEST_RELEASE_TOOL_SOURCE=$(git rev-parse HEAD)
+  fi
+  python3 scripts/test-bundled-release.py
+)
 
 check_cross_builds() (
   local build_root
