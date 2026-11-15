@@ -8,7 +8,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -630,7 +632,7 @@ class WiringTests(unittest.TestCase):
         prepare = self.workflow.split("\n  prepare:\n", 1)[1].split("\n  context:\n", 1)[0]
         save = prepare.split("      - name: Cache this exact native preparation", 1)[1].split("      - uses:", 1)[0]
         restore = self.prove.split("      - name: Restore this exact producer", 1)[1].split("      - name:", 1)[0]
-        key = "mesh-native-inputs-v1-${{ matrix.key }}-${{ inputs.source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+        key = "mesh-native-inputs-v1-${{ matrix.key }}-${{ needs.policy.outputs.cache_identity }}-${{ github.run_id }}-${{ github.run_attempt }}"
         for step in (save, restore):
             self.assertIn("key: " + key, step)
             self.assertIn("path: ${{ runner.temp }}/mesh-native.noindex", step)
@@ -646,6 +648,30 @@ class WiringTests(unittest.TestCase):
         self.assertLess(prepare.index("actions/cache/save@"), prepare.index("Remove native staging"))
         self.assertIn("pattern: update-native-*", self.workflow.split("\n  reader:\n", 1)[1])
         self.assertIn("if: steps.native-download.outcome == 'failure'", self.prove)
+
+    def cache_identity(self, inputs, selection, version="v0.1.325", previous="v0.1.309"):
+        line = next(line.strip() for line in self.workflow.splitlines() if line.strip().startswith("identity=$(python3 -c "))
+        command = shlex.split(line.removeprefix("identity=$(").removesuffix(")"))
+        with tempfile.TemporaryDirectory(prefix="native-cache-key-") as scratch:
+            path = Path(scratch) / "selection.json"
+            path.write_text(json.dumps(selection))
+            return subprocess.check_output([sys.executable, "-c", command[2], str(path), version, previous],
+                env=os.environ | {"NATIVE_CACHE_INPUTS": json.dumps(inputs)}, text=True).strip()
+
+    def test_cache_identity_separates_draft_configuration_and_selected_inputs(self):
+        inputs = {"source_sha": "a" * 40, "draft": False, "version": "", "previous_tag": "", "baseline_assets": ""}
+        selection = {"sources": ["first", "second"]}
+        expected = self.cache_identity(inputs, selection)
+        self.assertRegex(expected, r"^[0-9a-f]{64}$")
+        self.assertEqual(self.cache_identity(dict(reversed(list(inputs.items()))), selection), expected)
+        for key, value in (("source_sha", "b" * 40), ("draft", True), ("version", "v0.1.325"),
+                           ("previous_tag", "v0.1.309"), ("baseline_assets", "baseline_pc.bin")):
+            self.assertNotEqual(self.cache_identity(inputs | {key: value}, selection), expected)
+        self.assertNotEqual(self.cache_identity(inputs, {"sources": ["other"]}), expected)
+        self.assertNotEqual(self.cache_identity(inputs, selection, version="v0.1.326"), expected)
+        self.assertNotEqual(self.cache_identity(inputs, selection, previous="v0.1.308"), expected)
+        self.assertIn("cache_identity: ${{ steps.select.outputs.cache_identity }}", self.workflow)
+        self.assertIn("NATIVE_CACHE_INPUTS: ${{ toJSON(inputs) }}", self.workflow)
 
     def test_single_existing_blocking_gate_contains_integration_controls(self):
         gates = (REPO / "scripts/check-packaging.sh").read_text()
