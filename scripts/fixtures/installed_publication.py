@@ -159,13 +159,13 @@ class DraftCase(installed_adoption.AdoptionCase):
         milestone = result.get("adopted") or {}
         if successful and (milestone.get("workersPreserved") != self.expected_workers or milestone.get("metadata") != pin):
             raise RuntimeError("real draft confirmation lost its original worker")
-        self.inspect_retained()
+        attachment = self.inspect_retained()
         helper = self.validate_helper(version)
         if self.prior and installed_chain.read_journal(self)["settings"] != self.prior["settings"]:
             raise RuntimeError("real draft adoption changed its genuine prior installation settings")
         return {"running": running, "helper": helper, "phase": result["details"]["phase"], "confirmed": result.get("confirmed"),
                 "worker": self.worker, "shell": self.shell, "client": self.terminal.pid, "listener": self.listener,
-                "route": self.route_observer.snapshot()}
+                "route": self.route_observer.snapshot(), "attachment": attachment}
 
     def interrupt_real_helper(self, version):
         if self.adoption_status().get("confirmed"):
@@ -435,13 +435,13 @@ def observe_published_hop(case, record, first, target, seen):
         return
     os.kill(pid, signal.SIGSTOP)
     try:
+        case.releases.builds[build["version"]] = build
         case.inspect_retained()
         if image["sha256"] != expected["binary"]:
             raise RuntimeError("published intermediate helper differs from its authenticated release")
         record["hops"].append({"expected": expected, "build": build, "helper": image,
                                "workers": case.cohort.verify(release_worker_completion.hop_label(record, build["version"]))})
         seen.add(build["version"])
-        case.releases.builds[build["version"]] = build
         extend_expected_route(case, record, target)
     finally:
         os.kill(pid, signal.SIGCONT)

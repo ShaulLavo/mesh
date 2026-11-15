@@ -10,6 +10,7 @@ import sys
 import time
 
 from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort, release_worker_groups, installed_clock
+from fixtures import installed_continuity
 
 
 class AdoptionCase(installed_native.Installation):
@@ -104,9 +105,9 @@ class AdoptionCase(installed_native.Installation):
         if meta["pid"] != self.shell:
             raise RuntimeError("adoption replaced retained shell")
         self.open_stream()
-        self.wait_attachment_resume()
-        self.io()
+        attachment = installed_continuity.inspect(self)
         self.route_observer.recovered()
+        return attachment
 
     def start_adoption(self, version):
         self.check_manager_context()
@@ -201,7 +202,7 @@ class AdoptionCase(installed_native.Installation):
         digest = expected["digest"] if successful else expected["binarySha256"]
         if running["digest"] != digest:
             raise RuntimeError("native daemon image differs after adoption/failure")
-        self.inspect_retained()
+        attachment = self.inspect_retained()
         cohort = self.cohort.verify("after-" + self.scenario) if self.cohort else None
         helper = self.validate_helper(version)
         if self.prior:
@@ -215,7 +216,7 @@ class AdoptionCase(installed_native.Installation):
                 raise RuntimeError("explicit adoption policy was not present at the first native candidate start")
         return {"phase": phase, "confirmed": result.get("confirmed", False), "running": running,
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "client": self.terminal.pid, "helper": helper,
-            "observedCohort": cohort, "route": self.route_observer.snapshot()}
+            "observedCohort": cohort, "route": self.route_observer.snapshot(), "attachment": attachment}
 
     def close_session(self):
         actions = [super().close_session]

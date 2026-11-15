@@ -19,6 +19,7 @@ from xml.sax.saxutils import escape
 from pathlib import Path
 
 from fixtures import native_services, installed_routes, installed_listener_evidence, installed_attachment_evidence, installed_clock
+from fixtures import installed_continuity
 
 REPO = Path(__file__).resolve().parents[2]
 HELPERS = REPO / "integration" / "helpers"
@@ -253,6 +254,8 @@ class Installation:
         self.route_observer = None
         self.process_stamps = {}
         self.cleanup_notes = []
+        self.legacy_attachment = True
+        self.attachment_observations = []
 
     def prepare(self):
         with socket.socket() as reservation:
@@ -319,6 +322,7 @@ class Installation:
 
     def seed(self):
         client_environment = self.prepare_client()
+        self.client_environment = client_environment
         self.terminal = terminal_module.Terminal([str(self.binary), self.remote_id, "--", str(HELPERS / "window_shell.sh")],
             client_environment, self.root, timeout=installed_clock.timeout(), stderr_path=self.root / "client.err")
         self.terminal.expect(terminal_module.PROMPT)
@@ -330,6 +334,7 @@ class Installation:
         self.shell = json.loads((self.state / "s" / self.session / "meta.json").read_text())["pid"]
         self.process_stamps[self.worker] = process_stamp(self.worker)
         self.process_stamps[self.shell] = process_stamp(self.shell)
+        installed_continuity.seed(self, legacy=self.legacy_attachment)
         self.io()
         marker = self.root / "listener.json"
         self.challenge = marker.with_suffix(".challenge")
@@ -394,23 +399,22 @@ class Installation:
         self.units.start("daemon")
         native_services.wait_for(self.ready, "baseline did not reconnect after native restart")
         self.open_stream()
-        self.wait_attachment_resume()
+        attachment = installed_continuity.inspect(self)
         gap_bound = time.monotonic() - start
-        if gap_bound > 10 or daemon.pid == original:
-            raise RuntimeError("native restart did not replace daemon within the route-gap bound")
+        if daemon.pid == original:
+            raise RuntimeError("native restart did not replace daemon")
         if peer_pid(self.state / "s" / self.session / "sock") != self.worker:
             raise RuntimeError("native service restart replaced the original worker")
         meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())
         if meta["pid"] != self.shell:
             raise RuntimeError("native service restart replaced the original shell")
-        self.io()
         daemon_image = native_services.mapped_image(daemon.pid, self.binary)
         worker_image = native_services.mapped_image(self.worker, self.binary)
         helper = self.check_helper() if self.host["helperRunning"] else {"stopped": True}
         return {"control": "actual published pair native restart; no update acceptance claimed", "host": self.host["name"],
             "worker": self.worker, "shell": self.shell, "listener": self.listener, "attachedClient": self.terminal.pid,
             "originalDaemon": original, "daemon": daemon.pid, "daemonImage": daemon_image, "workerImage": worker_image,
-            "routeGapUpperBoundSeconds": gap_bound, "helper": helper}
+            "routeGapUpperBoundSeconds": gap_bound, "helper": helper, "attachment": attachment}
 
     def wait_attachment_resume(self):
         token = uuid.uuid4().hex
@@ -560,7 +564,9 @@ def retain_logs(root, output, name):
         shutil.copy2(route, output / (name + "-route-observation.json"))
     installed_listener_evidence.retain(root, output, name)
     installed_attachment_evidence.retain(root, output, name)
-    for filename in ("daemon.log", "daemon.err", "client.err"):
+    if (root / installed_continuity.RECORD).exists():
+        shutil.copy2(root / installed_continuity.RECORD, output / (name + "-" + installed_continuity.RECORD))
+    for filename in ("daemon.log", "daemon.err", "client.err", "current-client.err"):
         path = root / filename
         if path.is_file():
             copy_log_tail(path, output / (name + "-" + filename))

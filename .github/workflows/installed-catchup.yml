@@ -57,6 +57,8 @@ on:
       - 'scripts/fixtures/fleet-baselines.json'
       - 'scripts/fixtures/fleet_baselines.py'
       - 'scripts/fixtures/installed_native.py'
+      - 'scripts/fixtures/installed_continuity.py'
+      - 'scripts/fixtures/installed_attachment_controls.py'
       - 'scripts/fixtures/installed_listener.py'
       - 'scripts/fixtures/installed_listener_evidence.py'
       - 'scripts/fixtures/installed_listener_controls.py'
@@ -506,7 +508,7 @@ jobs:
 
   fresh-managed:
     if: inputs.publication_only != true && (github.event_name != 'pull_request' || inputs.reusable_call || !github.event.pull_request.draft)
-    name: Fresh native automatic first start (${{ matrix.platform }})
+    name: Strict current-to-current native update (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -537,12 +539,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
           bash scripts/prove-installed-catchup.sh "$RUNNER_TEMP/fresh-control"
       - uses: ./.github/actions/installed-go
-      - name: Prepare the real helper before the first managed daemon activation
+      - name: Prove fresh preparation and same-client update between current source builds
         env:
           INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
-          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed \
+          python3 scripts/prove-installed-catchup.py "$RUNNER_TEMP/fresh-proof" --native-preflight --fresh-managed
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

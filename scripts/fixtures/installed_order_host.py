@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence, installed_clock
 from fixtures import installed_order_trace as order_trace
+from fixtures import installed_continuity
 
 
 class Origin(installed_origin.Origin):
@@ -67,7 +68,9 @@ class Host:
         if operation == "adopt":
             version = value["version"]
             started = self.case.start_adoption(version)
-            return self.case.validate_result(self.case.await_result(version), version, started["pin"])
+            result = self.case.validate_result(self.case.await_result(version), version, started["pin"])
+            result["explicitReconnect"] = installed_continuity.reconnect_current(self.case, version)
+            return result
         if operation == "inspect":
             return self.inspect(value.get("active", True))
         if operation == "fault":
@@ -119,7 +122,7 @@ class Host:
             return result | {"ready": False}
         result["ready"] = True
         result["build"] = case.control("host.info")["host"]["build"]
-        case.inspect_retained()
+        result["attachment"] = case.inspect_retained()
         result["route"] = case.route_observer.snapshot()
         receipt = json.loads((case.state / "update/helper/installed.json").read_text())
         manager = case.units.managers["helper"]
@@ -148,7 +151,8 @@ class Host:
 
 def export_logs(root):
     result = {}
-    for name in ("preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err"):
+    for name in ("preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err",
+                 "client.err", "current-client.err", installed_continuity.RECORD):
         path = root / name
         if not path.exists():
             continue

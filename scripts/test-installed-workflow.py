@@ -68,6 +68,23 @@ class WorkflowControls(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
+    def test_required_current_continuity_job_runs_real_fresh_update_on_all_native_platforms(self):
+        source = job(CATCHUP, "fresh-managed")
+        self.assertEqual(re.findall(r"^          - platform: (.+)$", source, re.M),
+                         ["linux/amd64", "linux/arm64", "darwin/arm64"])
+        self.assertNotIn("worker_artifact_prefix", source.split("\n    name:", 1)[0])
+        self.assertNotIn("continue-on-error", source)
+        command = step(source, "Prove fresh preparation and same-client update between current source builds")
+        output = self.root / "command.json"
+        mock = 'python3() { printf "%s\\n" "$@" > "$COMMAND_OUTPUT"; }\n'
+        environment = os.environ | {"RUNNER_TEMP": str(self.root), "COMMAND_OUTPUT": str(output)}
+        result = subprocess.run(["bash", "-e", "-c", mock + command], env=environment,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(output.read_text().splitlines(), ["scripts/prove-installed-catchup.py",
+                         str(self.root / "fresh-proof"), "--native-preflight", "--fresh-managed"])
+        self.assertIn("'scripts/fixtures/installed_continuity.py'", CATCHUP)
+
     def test_fixture_cache_domain_covers_lockfiles_source_imports_and_recipe(self):
         self.assertIn("go-version-file: go.mod", CACHE)
         self.assertIn("cache: true", CACHE)
