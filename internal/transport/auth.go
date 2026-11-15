@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/shaul/mesh/internal/access"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -208,7 +209,13 @@ func (c *handshakeConn) Read(p []byte) (int, error) {
 	return n, err //nolint:wrapcheck // TLS consumes the underlying EOF and network errors
 }
 
-func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication, server bool) (*tls.Conn, AuthenticatedPeer, error) {
+func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication, server bool) (_ *tls.Conn, _ AuthenticatedPeer, resultErr error) {
+	stage := "authentication-config"
+	defer func() {
+		if resultErr != nil {
+			log.Printf("transport: server=%t stage=%s classification=terminal error=%q", server, stage, resultErr)
+		}
+	}()
 	cfg, err := observedAuthentication(ctx, auth, server).config(server)
 	if err != nil {
 		return nil, AuthenticatedPeer{}, err
@@ -230,11 +237,13 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	})
 	defer stop()
 	deadline, _ := handshakeCtx.Deadline()
+	stage = "authentication-set-deadline"
 	if err := secure.SetDeadline(deadline); err != nil {
 		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: set handshake deadline: %w", ErrAuthentication, err)
 	}
 	transporttrace.Emit(ctx, transporttrace.HandshakeBegin, nil)
+	stage = "tls-handshake"
 	err = secure.HandshakeContext(handshakeCtx)
 	transporttrace.Emit(ctx, transporttrace.HandshakeDone, err)
 	if err != nil {
@@ -247,12 +256,14 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 		peer.grant = auth.bind(peer.Identity)
 		observeGrant(ctx, peer.grant.Class)
 	}
+	stage = "peer-acceptance"
 	err = confirmAuthentication(ctx, secure, auth, server, peer)
 	transporttrace.Emit(ctx, transporttrace.AcceptanceDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: peer acceptance: %w", ErrAuthentication, err)
 	}
+	stage = "authentication-clear-deadline"
 	if err := secure.SetDeadline(time.Time{}); err != nil {
 		closeObservedHandshake(ctx, ws)
 		return nil, AuthenticatedPeer{}, fmt.Errorf("%w: clear handshake deadline: %w", ErrAuthentication, err)

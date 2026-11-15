@@ -14,6 +14,7 @@ import (
 )
 
 func TestReconnectReturnsAuthenticationEOFWithoutRetry(t *testing.T) {
+	logs := captureCloseLogs(t)
 	old := newTestLink(false)
 	conn := reconnectTestConnection(t, old, nil)
 	cause := fmt.Errorf("%w: read Mesh peer acceptance: %w", ErrAuthentication, io.EOF)
@@ -35,5 +36,10 @@ func TestReconnectReturnsAuthenticationEOFWithoutRetry(t *testing.T) {
 	}
 	if attempts.Load() != 1 || conn.current.link != nil {
 		t.Fatalf("reconnect retained link or retried authentication: attempts=%d", attempts.Load())
+	}
+	for _, want := range []string{"stage=stream-read", "reconnect=true", "stage=reconnect-dial", "reconnect=false", "read Mesh peer acceptance: EOF"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("transport log %q missing %q", logs.String(), want)
+		}
 	}
 }

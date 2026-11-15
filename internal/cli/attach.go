@@ -398,8 +398,9 @@ func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detach
 	for {
 		frame, err := conn.ReadFrame()
 		if err != nil {
-			err = s.readError(ctx, err, detached)
-			return s.result, err
+			resultErr := s.readError(ctx, err, detached)
+			s.logTransportClose(ctx, err, resultErr)
+			return s.result, resultErr
 		}
 		done, err := s.accept(frame)
 		if done || err != nil {
@@ -409,6 +410,21 @@ func (s *attachmentOutput) read(ctx context.Context, conn transport.Conn, detach
 			return s.result, err
 		}
 	}
+}
+
+func (s *attachmentOutput) logTransportClose(ctx context.Context, cause, result error) {
+	if s.result.Detached || ctx.Err() != nil {
+		return
+	}
+	stage := "attach-response"
+	if s.acknowledged {
+		stage = "established-stream"
+	}
+	sink := s.opts.Stderr
+	if sink == nil {
+		sink = os.Stderr
+	}
+	_, _ = fmt.Fprintf(sink, "mesh: session=%s stage=%s classification=terminal failed=%t error=%q\r\n", s.opts.SessionID, stage, result != nil, cause)
 }
 
 func (s *attachmentOutput) readError(ctx context.Context, err error, detached <-chan struct{}) error {

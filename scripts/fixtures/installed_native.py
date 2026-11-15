@@ -320,7 +320,7 @@ class Installation:
     def seed(self):
         client_environment = self.prepare_client()
         self.terminal = terminal_module.Terminal([str(self.binary), self.remote_id, "--", str(HELPERS / "window_shell.sh")],
-            client_environment, self.root, timeout=installed_clock.timeout())
+            client_environment, self.root, timeout=installed_clock.timeout(), stderr_path=self.root / "client.err")
         self.terminal.expect(terminal_module.PROMPT)
         sessions = self.control("session.list")["sessions"]
         if len(sessions) != 1:
@@ -560,7 +560,7 @@ def retain_logs(root, output, name):
         shutil.copy2(route, output / (name + "-route-observation.json"))
     installed_listener_evidence.retain(root, output, name)
     installed_attachment_evidence.retain(root, output, name)
-    for filename in ("daemon.log", "daemon.err"):
+    for filename in ("daemon.log", "daemon.err", "client.err"):
         path = root / filename
         if path.is_file():
             copy_log_tail(path, output / (name + "-" + filename))

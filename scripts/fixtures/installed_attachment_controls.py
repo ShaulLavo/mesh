@@ -105,6 +105,20 @@ class AttachmentEvidenceTest(unittest.TestCase):
         installed_native.retain_logs(self.root, output, "pc-chain")
         self.assertEqual((output / ("pc-chain-" + evidence.FAILURE)).read_text(), '{"schema":1}')
 
+    def test_client_stderr_is_retained_without_changing_terminal_bytes_or_exit_status(self):
+        command = [sys.executable, "-c", "import os; os.write(1, b'valid terminal bytes'); os.write(2, b'transport: stage=peer-acceptance error=EOF\\n')"]
+        terminal = installed_native.terminal_module.Terminal(command, {}, self.root, stderr_path=self.root / "client.err")
+        self.addCleanup(terminal.close)
+        terminal.expect_exit()
+        self.assertEqual(terminal.poll(), 0)
+        self.assertEqual(terminal.drain(), b"valid terminal bytes")
+        output = self.root / "retained"
+        output.mkdir()
+        (self.root / "daemon.err").write_bytes(b"daemon: stage=client-stream-read error=EOF\n")
+        installed_native.retain_logs(self.root, output, "pc-chain")
+        self.assertEqual((output / "pc-chain-client.err").read_bytes(), b"transport: stage=peer-acceptance error=EOF\n")
+        self.assertEqual((output / "pc-chain-daemon.err").read_bytes(), (self.root / "daemon.err").read_bytes())
+
     def test_child_entry_point_reads_only_synthetic_fixture_files(self):
         expected = {"state": str(self.root / "absent-state"), "session": "ABCD", "client": {"exitStatus": 0},
             "processes": {}, "stamps": {}, "challenge": {"token": "token"},

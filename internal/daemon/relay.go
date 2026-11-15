@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -201,6 +202,7 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 
 	worker, err := r.workers.ConnectWorker(dialCtx, id)
 	if err != nil {
+		log.Printf("daemon: session=%s stage=attach-worker-connect classification=terminal context=%v error=%q", id.String(), dialCtx.Err(), err)
 		return workerAttachOperationError(dialCtx, id, "connect worker", err)
 	}
 	if worker == nil {
@@ -226,11 +228,13 @@ func (r *clientRelay) attach(ctx context.Context, id protocol.SessionID, frame p
 	defer stopCandidate()
 
 	if err := worker.WriteFrame(frame); err != nil {
+		log.Printf("daemon: session=%s stage=attach-worker-write classification=terminal context=%v error=%q", id.String(), dialCtx.Err(), err)
 		return workerAttachOperationError(dialCtx, id, "write attach", err)
 	}
 
 	first, err := worker.ReadFrame()
 	if err != nil {
+		log.Printf("daemon: session=%s stage=attach-worker-response classification=terminal context=%v error=%q", id.String(), dialCtx.Err(), err)
 		return workerAttachOperationError(dialCtx, id, "read attach response", err)
 	}
 	response, err := validateWorkerAttachResponse(id, first)
@@ -557,6 +561,7 @@ func (r *clientRelay) writeClientLoop() {
 				queued.written <- err
 			}
 			if err != nil {
+				log.Printf("daemon: stage=client-stream-write classification=terminal error=%q", err)
 				go func() { _ = r.Close() }()
 				return
 			}

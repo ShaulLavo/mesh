@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"net/http"
 	"sort"
@@ -183,6 +184,7 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 		}
 		frame, err := ref.link.ReadFrame()
 		if err != nil {
+			c.logReadFailure(ref, err)
 			if !retryableReadError(err) {
 				c.retire(ref)
 				return protocol.Frame{}, err
@@ -200,6 +202,12 @@ func (c *reconnectingConn) ReadFrame() (protocol.Frame, error) {
 			continue
 		}
 		return frame, nil
+	}
+}
+
+func (c *reconnectingConn) logReadFailure(ref connectionRef, err error) {
+	if c.ctx.Err() == nil {
+		log.Printf("transport: client stage=stream-read generation=%d reconnect=%t error=%q", ref.generation, retryableReadError(err), err)
 	}
 }
 
@@ -360,6 +368,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 	recovered := false
 	var nextRecovery time.Time
 	for attempt := 0; ; attempt++ {
+		stage := "reconnect-dial"
 		link, err := c.dial(c.ctx, c.url, c.dialOpts, c.keepAlive)
 		if err == nil {
 			c.stateMu.Lock()
@@ -371,6 +380,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 			c.connecting = link
 			c.stateMu.Unlock()
 
+			stage = "resume-write"
 			err = c.sendResumes(link)
 			c.stateMu.Lock()
 			c.connecting = nil
@@ -387,12 +397,17 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 			ref := connectionRef{link: link, generation: c.generation}
 			c.current = ref
 			c.stateMu.Unlock()
+			log.Printf("transport: client stage=reconnect-established generation=%d attempts=%d", ref.generation, attempt+1)
 			return ref, nil
 		}
 		if link != nil {
 			_ = link.Close()
 		}
-		if errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) || errors.Is(err, ErrControlAuthenticationRequired) {
+		terminal := errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) || errors.Is(err, ErrControlAuthenticationRequired)
+		if c.ctx.Err() == nil && (attempt == 0 || terminal) {
+			log.Printf("transport: client stage=%s attempt=%d reconnect=%t error=%q", stage, attempt+1, !terminal, err)
+		}
+		if terminal {
 			return connectionRef{}, err
 		}
 		if !recovered && attempt >= 2 && !now().Before(nextRecovery) {

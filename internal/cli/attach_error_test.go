@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -35,7 +36,8 @@ func checkAttachmentTerminalError(t *testing.T, cause error, fail bool) {
 	t.Helper()
 	conn := &terminalErrorConn{err: cause}
 	var cancellations atomic.Int32
-	result, err := AttachWithTerminal(t.Context(), AttachOptions{SessionID: "7K3D", Conn: conn}, AttachTerminal{
+	var diagnostics bytes.Buffer
+	result, err := AttachWithTerminal(t.Context(), AttachOptions{SessionID: "7K3D", Conn: conn, Stderr: &diagnostics}, AttachTerminal{
 		Input: bytes.NewReader(nil), Output: io.Discard, Size: terminal.Size{Cols: 80, Rows: 24},
 		CancelInput: func() { cancellations.Add(1) },
 	})
@@ -47,6 +49,24 @@ func checkAttachmentTerminalError(t *testing.T, cause error, fail bool) {
 	}
 	if !conn.closed.Load() || cancellations.Load() != 1 {
 		t.Fatal("attachment retained its connection or input relay")
+	}
+	for _, want := range []string{"stage=established-stream", "classification=terminal", fmt.Sprintf("failed=%t", fail), fmt.Sprintf("error=%q", cause)} {
+		if !strings.Contains(diagnostics.String(), want) {
+			t.Errorf("diagnostic %q missing %q", diagnostics.String(), want)
+		}
+	}
+}
+
+func TestAttachmentCloseLogsUnexpectedEOFBeforeAcknowledgment(t *testing.T) {
+	var diagnostics bytes.Buffer
+	conn := &terminalErrorConn{read: true, err: fmt.Errorf("attach response: %w", io.EOF)}
+	state := attachmentOutput{opts: AttachOptions{SessionID: "7K3D", Stderr: &diagnostics}}
+	result, err := state.read(t.Context(), conn, make(chan struct{}))
+	if err != nil || result != (AttachResult{}) {
+		t.Fatalf("logging changed EOF outcome: %#v, %v", result, err)
+	}
+	if !strings.Contains(diagnostics.String(), `stage=attach-response classification=terminal failed=false error="attach response: EOF"`) {
+		t.Fatalf("attachment close cause missing: %q", diagnostics.String())
 	}
 }
 

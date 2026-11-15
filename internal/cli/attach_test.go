@@ -226,6 +226,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	defer out.Close() //nolint:errcheck // test resource cleanup
 
 	initialSeq := uint64(0)
+	var diagnostics bytes.Buffer
 	result, err := Attach(context.Background(), AttachOptions{
 		SocketPath:         socketPath,
 		SessionID:          sid.String(),
@@ -233,6 +234,7 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 		LastSeq:            &initialSeq,
 		In:                 in,
 		Out:                out,
+		Stderr:             &diagnostics,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +257,9 @@ func TestAttachRendersSnapshotWithoutAdvancingResumeSequence(t *testing.T) {
 	}
 	if !bytes.Equal(got, []byte("snapshotlive")) {
 		t.Fatalf("output = %q, want snapshot and live data", got)
+	}
+	if diagnostics.Len() != 0 {
+		t.Fatalf("successful attachment wrote diagnostics: %q", diagnostics.String())
 	}
 }
 
