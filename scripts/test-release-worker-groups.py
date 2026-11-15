@@ -366,19 +366,20 @@ class CompletionTests(unittest.TestCase):
         native = platform["os"] + "/" + platform["arch"]
         output = self.root / native.replace("/", "-")
         output.mkdir(exist_ok=True)
-        build = {"version": "v0.1.99", "commit": SOURCE, "platform": platform, "modified": False,
+        harness = getattr(self, "harness", SOURCE)
+        build = {"version": self.release["version"], "commit": SOURCE, "platform": platform, "modified": False,
                  "digest": "c" * 64, "stateVersion": 2, "workerProtocol": 2}
-        draft = completion.release_binding(self.release) | {"testTrustRoot": False, "build": build, "installedHarness": SOURCE,
+        draft = completion.release_binding(self.release) | {"testTrustRoot": False, "build": build, "installedHarness": harness,
                                                           "routeContract": self.release["routeContract"]}
         (output / "real-draft.json").write_bytes(groups.encode(draft))
-        (output / "harness-source.json").write_bytes(groups.encode({"expected": SOURCE, "actual": SOURCE, "workerGrouping": {}}))
-        publication = {"release": completion.release_binding(self.release), "candidate": build, "harness": SOURCE}
+        (output / "harness-source.json").write_bytes(groups.encode({"expected": harness, "actual": harness, "workerGrouping": {}}))
+        publication = {"release": completion.release_binding(self.release), "candidate": build, "harness": harness}
         refs = [self.write_case(output, name, completion.expected_case(name, native, publication, self.selection))
                 for name in completion.expected_pairs(native)]
         observation = output / "first-published-updater.json"
         observation.write_bytes(groups.encode(self.release["routeContract"]))
-        value = {"schema": 2, "version": "v0.1.99", "releaseSource": SOURCE, "platform": native,
-                 "signedIndexSha256": self.release["workerGroups"], "firstPublishedUpdater": None, "installedHarness": SOURCE,
+        value = {"schema": 2, "version": self.release["version"], "releaseSource": SOURCE, "platform": native,
+                 "signedIndexSha256": self.release["workerGroups"], "firstPublishedUpdater": None, "installedHarness": harness,
                  "routeContract": self.release["routeContract"], "routeObservation": completion.asset(output, observation),
                  "draft": completion.asset(output, output / "real-draft.json"),
                  "harnessObservation": completion.asset(output, output / "harness-source.json"), "cases": refs, "routes": []}
@@ -386,7 +387,7 @@ class CompletionTests(unittest.TestCase):
 
     def write_case(self, output, name, publication):
         candidate, original = publication["candidate"], publication["original"]
-        record = {"passed": True, "cleanup": {"servicesAbsent": True, "processesAbsent": True}, "realDraft": "v0.1.99",
+        record = {"passed": True, "cleanup": {"servicesAbsent": True, "processesAbsent": True}, "realDraft": publication["release"]["version"],
                   "testTrustRoot": False, "publication": publication}
         if publication["scenario"] == "fresh":
             record.update(running=candidate, initial={"helperBeforeDaemon": {"sha256": candidate["digest"]},

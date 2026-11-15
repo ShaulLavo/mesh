@@ -230,6 +230,7 @@ check_bundled_release() (
     MESH_TEST_RELEASE_TOOL_SOURCE=$(git rev-parse HEAD)
   fi
   python3 scripts/test-bundled-release.py
+  python3 scripts/test-signed-bundle-publication.py
 )
 
 check_cross_builds() (

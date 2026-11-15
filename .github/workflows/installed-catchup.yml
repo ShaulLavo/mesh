@@ -95,6 +95,7 @@ on:
       - 'scripts/test-release-documents.py'
       - 'scripts/test-release-tool.py'
       - 'scripts/test-bundled-release.py'
+      - 'scripts/test-signed-bundle-publication.py'
       - 'scripts/upload-signed-draft.py'
       - 'scripts/prepare-release-documents.py'
       - 'internal/releasedocuments/**'
