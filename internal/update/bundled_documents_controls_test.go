@@ -86,6 +86,7 @@ func malformedDocumentBundle(t *testing.T, original []byte, kind string) []byte 
 
 func mutateBundleMember(header *tar.Header, data *[]byte, kind string) {
 	if header.Name == "bundle.json" {
+		*data = mutateHistoryCatalog(*data, kind)
 		if kind == "duplicate-key" {
 			*data = append([]byte(`{"schema":1,`), (*data)[1:]...)
 			header.Size = int64(len(*data))

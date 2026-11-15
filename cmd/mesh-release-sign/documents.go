@@ -65,6 +65,12 @@ func materializeDocuments(args []string) error {
 	if err := readDocumentInput(args[1], &binding); err != nil {
 		return signingError(err)
 	}
+	return runMaterialization(func(ctx context.Context, trust release.TrustRoot) (releasedocuments.Inventory, error) {
+		return releasedocuments.Materialize(ctx, args[0], binding, trust, args[2])
+	})
+}
+
+func runMaterialization(operation func(context.Context, release.TrustRoot) (releasedocuments.Inventory, error)) error {
 	if os.Getenv("MESH_RELEASE_TRUST_CACHE") == "" {
 		return errors.New("materialize: explicit authenticated trust cache required")
 	}
@@ -74,7 +80,7 @@ func materializeDocuments(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	result, err := releasedocuments.Materialize(ctx, args[0], binding, trust, args[2])
+	result, err := operation(ctx, trust)
 	if err != nil {
 		return signingError(err)
 	}
@@ -96,6 +102,19 @@ func toolIdentity(args []string) error {
 		SHA256   string           `json:"sha256"`
 		Modified bool             `json:"modified"`
 	}{1, build.Commit, build.Platform, build.Digest, build.Modified}))
+}
+
+func materializeHistory(args []string) error {
+	if len(args) != 3 {
+		return errors.New("usage: mesh-release-sign materialize-history CAPTURE EXPECTED_IDENTITY_JSON DESTINATION")
+	}
+	var expected releasedocuments.HistoricalIdentity
+	if err := readDocumentInput(args[1], &expected); err != nil {
+		return signingError(err)
+	}
+	return runMaterialization(func(ctx context.Context, trust release.TrustRoot) (releasedocuments.Inventory, error) {
+		return releasedocuments.MaterializeHistory(ctx, args[0], expected, trust, args[2])
+	})
 }
 
 func signingError(err error) error {

@@ -100,10 +100,11 @@ func verifySnapshot(ctx context.Context, root *os.Root, expected Binding) (snaps
 	if len(value.Assets) < 9 || len(value.Assets) > 128 {
 		return value, errors.New("documents: physical asset count exceeds bounds")
 	}
-	return value, verifyAssets(ctx, root, value.Assets)
+	required := []string{ArchiveName, EnvelopeName, release.ManifestAssetName, release.DiscoveryRootAssetName, "checksums.txt", "mesh_linux_amd64.tar.gz", "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz"}
+	return value, verifyAssets(ctx, root, value.Assets, "draft.json", required)
 }
 
-func verifyAssets(ctx context.Context, root *os.Root, assets []physicalAsset) error {
+func verifyAssets(ctx context.Context, root *os.Root, assets []physicalAsset, record string, required []string) error {
 	seen, ids := map[string]bool{}, map[int64]bool{}
 	var total int64
 	for _, asset := range assets {
@@ -119,7 +120,7 @@ func verifyAssets(ctx context.Context, root *os.Root, assets []physicalAsset) er
 	if total > 512<<20 {
 		return errors.New("documents: physical snapshot exceeds bound")
 	}
-	for _, name := range []string{ArchiveName, EnvelopeName, release.ManifestAssetName, release.DiscoveryRootAssetName, "checksums.txt", "mesh_linux_amd64.tar.gz", "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz"} {
+	for _, name := range required {
 		if !seen[name] {
 			return fmt.Errorf("documents: required physical asset %s missing", name)
 		}
@@ -133,7 +134,7 @@ func verifyAssets(ctx context.Context, root *os.Root, assets []physicalAsset) er
 	if err != nil {
 		return documentError(err)
 	}
-	if len(entries) != len(seen)+1 {
+	if len(entries) != len(seen)+1 || seen[record] {
 		return errors.New("documents: physical directory differs from inventory")
 	}
 	return nil

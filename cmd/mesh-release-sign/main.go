@@ -25,7 +25,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: mesh-release-sign metadata|wrap|verify|verify-metadata|refresh|pack-documents|materialize-documents|identity ...")
+		return errors.New("usage: mesh-release-sign metadata|wrap|verify|verify-metadata|refresh|pack-documents|materialize-documents|materialize-history|identity ...")
 	}
 	switch args[0] {
 	case "metadata":
@@ -42,6 +42,8 @@ func run(args []string) error {
 		return packDocuments(args[1:])
 	case "materialize-documents":
 		return materializeDocuments(args[1:])
+	case "materialize-history":
+		return materializeHistory(args[1:])
 	case "identity":
 		return toolIdentity(args[1:])
 	default:
