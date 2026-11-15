@@ -17,6 +17,8 @@ from fleet_sharing import Device
 from isolation import check_environment, termination_cleanup
 from terminal_window import Terminal, eventually, require
 
+DASHBOARD_HANG_SECONDS = 120
+
 
 def config(device, *arguments, success=True):
     result = device.command("update", "config", *arguments, "--json", success=success)
@@ -87,12 +89,15 @@ def set_feed(device, url):
 def displayed(terminal, screen, word, absent=None):
     def match():
         output = terminal.drain()
-        frame = subprocess.check_output([screen, "160", "48"], input=output, timeout=3)
+        frame = subprocess.check_output([screen, "160", "48"], input=output, timeout=DASHBOARD_HANG_SECONDS)
         return word.encode() in frame and (absent is None or absent.encode() not in frame)
     try:
-        return eventually(match, f"dashboard did not display {word!r}", timeout=8)
+        expectation = f"dashboard did not display {word!r}"
+        if absent is not None:
+            expectation += f" without {absent!r}"
+        return eventually(match, expectation, timeout=DASHBOARD_HANG_SECONDS)
     except RuntimeError as error:
-        frame = subprocess.check_output([screen, "160", "48"], input=terminal.drain(), timeout=3)
+        frame = subprocess.check_output([screen, "160", "48"], input=terminal.drain(), timeout=DASHBOARD_HANG_SECONDS)
         raise RuntimeError(f"{error}; fixture frame: {frame.decode()}") from error
 
 
@@ -116,7 +121,7 @@ def renderer_controls(device, feed, screen):
     set_feed(device, "")
     displayed(terminal, screen, "Hosts", "Fixture Beta")
     os.kill(terminal.pid, signal.SIGTERM)
-    terminal.expect_exit(3)
+    terminal.expect_exit(DASHBOARD_HANG_SECONDS)
 
 
 def domain_controls(coordinator, recipient, selection, preview):

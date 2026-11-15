@@ -10,6 +10,8 @@ import (
 	"github.com/shaul/mesh/internal/terminal"
 )
 
+const maxCaptureBytes = 2 << 20
+
 func capture() error {
 	if len(os.Args) != 3 {
 		return fmt.Errorf("capture requires columns and rows")
@@ -22,15 +24,22 @@ func capture() error {
 	if err != nil {
 		return fmt.Errorf("capture rows: %w", err)
 	}
-	data, err := io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	return captureScreen(os.Stdin, os.Stdout, columns, rows)
+}
+
+func captureScreen(input io.Reader, output io.Writer, columns, rows int) error {
+	data, err := io.ReadAll(io.LimitReader(input, maxCaptureBytes+1))
 	if err != nil {
 		return fmt.Errorf("capture input: %w", err)
+	}
+	if len(data) > maxCaptureBytes {
+		return fmt.Errorf("capture input exceeds %d bytes", maxCaptureBytes)
 	}
 	screen := terminal.NewScreen(columns, rows)
 	if _, err := screen.Write(data); err != nil {
 		return fmt.Errorf("capture terminal: %w", err)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(screen.Preview(columns, rows).Lines); err != nil {
+	if err := json.NewEncoder(output).Encode(screen.Preview(columns, rows).Lines); err != nil {
 		return fmt.Errorf("capture output: %w", err)
 	}
 	return nil
