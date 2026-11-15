@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -137,6 +138,11 @@ class ProcessTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(json.JSONDecodeError):
             await runner.command((sys.executable, "-c", "print('bad JSON')"), Path.cwd(), os.environ,
                                  json.loads)
+
+    async def test_metadata_command_failure_preserves_stderr_and_exit_status(self):
+        source = "import sys; print('partial metadata'); print('metadata failed',file=sys.stderr); sys.exit(7)"
+        with self.assertRaisesRegex(RuntimeError, "exited 7: partial metadata\\nmetadata failed"):
+            await runner.command((sys.executable, "-c", source), Path.cwd(), os.environ, separate_stderr=True)
 
     async def test_command_and_protocol_failure_stop_surviving_child(self):
         with tempfile.TemporaryDirectory(prefix="native-failure-") as directory:
@@ -353,9 +359,19 @@ class BinaryTest(unittest.TestCase):
         (package / "fixture_test.go").write_text(GO_FIXTURE)
         binaries = root / "binaries"
         binaries.mkdir()
-        env = os.environ | {"NATIVE_FIXTURE_CWD": str(package)}
-        with patch.object(runner, "command", wraps=runner.command) as commands:
+        tools = root / "tools"
+        tools.mkdir()
+        real_go = shutil.which("go")
+        wrapper = tools / "go"
+        wrapper.write_text(f"#!{sys.executable}\nimport os,sys\n"
+                           "if sys.argv[1] == 'list': print('go: downloading fixture metadata', file=sys.stderr)\n"
+                           f"os.execv({real_go!r}, [{real_go!r}] + sys.argv[1:])\n")
+        wrapper.chmod(0o755)
+        env = os.environ | {"NATIVE_FIXTURE_CWD": str(package), "PATH": str(tools) + os.pathsep + os.environ["PATH"]}
+        diagnostics = io.StringIO()
+        with patch.object(runner, "command", wraps=runner.command) as commands, contextlib.redirect_stderr(diagnostics):
             shards = asyncio.run(runner.prepare(root, binaries, env, ("cli",)))
+        self.assertIn("go: downloading fixture metadata", diagnostics.getvalue())
         builds = [call.args[0] for call in commands.call_args_list if call.args[0][:2] == ("go", "test")]
         self.assertEqual(len(builds), 1)
         self.assertIn("-race", builds[0])
