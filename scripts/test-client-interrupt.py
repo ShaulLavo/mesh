@@ -72,6 +72,49 @@ class DiagnosticTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
+    def retained_capture(self, role=None, field=None):
+        owned = capture.Capture.__new__(capture.Capture)
+        owned.case = SimpleNamespace(terminal=SimpleNamespace(pid=1, poll=lambda: None),
+                                     worker=2, shell=3, listener={"pid": 4}, session="OWND")
+        owned.original = {name: {"pid": pid, "ppid": parent, "uid": 1001,
+                                 "birthTicks": pid * 100, "sha256": "a" * 64}
+                          for name, pid, parent in (("client", 1, 99), ("worker", 2, 90),
+                                                     ("shell", 3, 2), ("listener", 4, 3))}
+        current = {value["pid"]: value.copy() for value in owned.original.values()}
+        current[2]["ppid"] = 99
+        if role:
+            prior = current[owned.original[role]["pid"]][field]
+            current[owned.original[role]["pid"]][field] = "b" * 64 if field == "sha256" else prior + 1
+        owned.event = Mock()
+        return owned, current
+
+    def test_worker_reparenting_keeps_the_same_actor_and_is_recorded(self):
+        owned, current = self.retained_capture()
+        with patch.object(trace, "identity", side_effect=lambda pid: current[pid]):
+            owned.retained_identity()
+        observation = owned.event.call_args_list[1].kwargs
+        self.assertEqual(observation["before"]["ppid"], 90)
+        self.assertEqual(observation["after"]["ppid"], 99)
+        self.assertEqual(observation["changed"], [])
+        self.assertEqual(owned.event.call_args.kwargs["identities"]["worker"], current[2])
+
+    def test_worker_identity_fields_remain_strict_after_reparenting(self):
+        for field in ("pid", "uid", "birthTicks", "sha256"):
+            self.reject_actor_change("worker", field)
+
+    def test_client_shell_and_listener_parent_relationships_remain_strict(self):
+        for role in ("client", "shell", "listener"):
+            self.reject_actor_change(role, "ppid")
+
+    def reject_actor_change(self, role, field):
+        owned, current = self.retained_capture(role, field)
+        with patch.object(trace, "identity", side_effect=lambda pid: current[pid]):
+            with self.assertRaisesRegex(RuntimeError, role + ": " + field):
+                owned.retained_identity()
+        observation = owned.event.call_args.kwargs
+        self.assertEqual(observation["changed"], [field])
+        self.assertNotEqual(observation["before"][field], observation["after"][field])
+
     def test_real_two_actor_trace_preserves_identity_excludes_payload_and_observes_eof(self):
         self.assertTrue(STRACE, "set MESH_TEST_STRACE to the installed test observer")
         server = self.actor("server")

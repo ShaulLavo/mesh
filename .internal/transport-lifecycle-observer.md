@@ -1,7 +1,8 @@
 # Diagnostic transport lifecycle observer
 
-Status: Approved for implementation. Hosted execution requires independent source
-and vehicle review, then the parent runs one focused Linux AMD64 chain-final profile.
+Status: Reusable diagnostic tooling. Hosted execution requires independent source
+and vehicle review and a coordinator-approved case. Current interruption evidence
+and its disposition are recorded below.
 
 `mesh_installed_fixture` builds enable this tooling only when the fixture sets
 `MESH_TRANSPORT_LIFECYCLE_DIR`. Ordinary binaries never configure it. Fixture
@@ -58,4 +59,34 @@ branch. `source_sha` separately pins the reviewed source commit. The vehicle
 prepares genuinely signed current-source assets and runs only the complete AMD64
 chain-final profile, with original v0.1.249 and every authoritative selected group.
 It runs neither order workloads nor additional profiles, and preserves existing
-job, source, product, I/O, soak, rollback and group deadlines.
+source, product, I/O, rollback and group outcomes within generous hang caps.
+
+## Original-client interruption, November 15, 2026
+
+Managing classified the early client exit as not reproducing after the faithful
+instrumented replay. This is not a product fix. Keep the strict original-client
+resume assertion in normal CI. Run PR 460's normal CI once more; if that early
+exit recurs, stop and return both runs' evidence without an automatic retry.
+
+- [Ordinary failure, run 43649781233](https://github.com/ShaulLavo/mesh/actions/runs/43649781233/job/132627688178):
+  the v249 client exited before its resume marker while its worker, shell and
+  listener survived. Artifact 14137736968 is 96,961 bytes, SHA-256
+  `07645b7963ceaa419dc8c8f8a26a3ada282add33f96f5419142e6b1d4d63eaf8`.
+- [Instrumented replay, run 43666589946](https://github.com/ShaulLavo/mesh/actions/runs/43666589946):
+  the original client reconnected, authenticated, resumed and completed fresh
+  shell I/O. It was alive at cleanup; its later SIGKILL preceded the server reset.
+  All three traces had zero drops. Artifact 14141704071 is 226,387 bytes, SHA-256
+  `0066029d0af8fe4e9526fd6403951727943f2dfeffa1d3688425ef193fc3cd83`.
+
+The replay failed afterward because the observer compared a worker's PPID across
+retirement of its daemon parent. Worker reparenting is expected. The corrected
+observer keeps PID, birth, UID and image checks, records before/after identities,
+and retains parent checks for the client, shell and listener. The early assertion
+also prevented the final coverage record; raw successor events survived.
+
+Ptrace changes scheduling, and the original client discards its final Go error
+chain. The replay therefore establishes no cause for the ordinary failure.
+Both archives were verified against API sizes and digests and passed ZIP checks.
+The replay reports canonical units, signer, proof descendants and scratch absent.
+Detailed evidence is retained by the Mesh lane in `repair-pr460` reports. No
+further diagnostic replay is implied by this disposition.

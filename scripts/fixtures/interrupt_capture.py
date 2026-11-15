@@ -120,11 +120,22 @@ class Capture:
         case = self.case
         if case.terminal.pid != self.original["client"]["pid"] or case.terminal.poll() is not None:
             raise RuntimeError("original diagnostic client exited or changed")
+        observed = {}
         for role, pid in (("client", case.terminal.pid), ("worker", case.worker),
                           ("shell", case.shell), ("listener", case.listener["pid"])):
-            if external.identity(pid) != self.original[role]:
-                raise RuntimeError("original diagnostic actor identity changed: " + role)
-        self.event("outcome.original-identities", session=case.session, identities=self.original)
+            observed[role] = self.retained_actor(role, pid)
+        self.event("outcome.original-identities", session=case.session, identities=observed)
+
+    def retained_actor(self, role, pid):
+        before, after = self.original[role], external.identity(pid)
+        fields = ("pid", "uid", "birthTicks", "sha256")
+        if role != "worker":
+            fields += ("ppid",)
+        changed = [field for field in fields if before[field] != after[field]]
+        self.event("outcome.actor-identity", role=role, before=before, after=after, changed=changed)
+        if changed:
+            raise RuntimeError("original diagnostic actor identity changed: " + role + ": " + ", ".join(changed))
+        return after
 
     def state(self, stage):
         self.event(stage, clientExitStatus=self.case.terminal.poll(), session=self.case.session,
