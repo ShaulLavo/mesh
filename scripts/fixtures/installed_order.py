@@ -15,10 +15,13 @@ import time
 
 from fixtures import installed_accounts, installed_native, installed_origin, installed_paths, installed_releases, installed_account_run, installed_listener_evidence, installed_clock
 from fixtures import installed_order_trace as order_trace
+from fixtures import installed_continuity
 
 SOAK_NS = 5_000_000_000
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 RFC3339 = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})\Z")
+ACCOUNT_LOG_FILES = ("preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err",
+                     "client.err", "current-client.err", installed_continuity.RECORD)
 
 
 class Driver:
@@ -113,7 +116,7 @@ def publish_logs(payload, output, name, diagnostics=None):
     if len(payload) > 2 << 20:
         raise RuntimeError("ordered account evidence exceeds its transfer bound")
     files = json.loads(payload)
-    allowed = {"preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err", installed_listener_evidence.FAILURE} | order_trace.ACCOUNT_FILES
+    allowed = set(ACCOUNT_LOG_FILES) | {installed_listener_evidence.FAILURE} | order_trace.ACCOUNT_FILES
     if not isinstance(files, dict) or not files.keys() <= allowed:
         raise RuntimeError("ordered account evidence contains an unexpected file")
     decoded = {filename: bytes.fromhex(data) for filename, data in files.items()}

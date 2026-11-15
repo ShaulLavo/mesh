@@ -335,6 +335,21 @@ class ListenerEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "transfer bound"):
             installed_order.publish_logs("x" * ((2 << 20) + 1), self.root, "host")
 
+    def test_ordered_transport_logs_and_continuity_record_round_trip(self):
+        files = {"client.err": b"client close cause\n", "current-client.err": b"current close cause\n",
+                 "attachment-continuity.json": b'[{"strictContinuityPassed":true}]\n'}
+        for name, data in files.items():
+            (self.root / name).write_bytes(data)
+        output = self.root / "exported"
+        output.mkdir()
+        with patch("sys.stdout", new_callable=io.StringIO) as stream:
+            installed_order_host.export_logs(self.root)
+        installed_order.publish_logs(stream.getvalue(), output, "canary-ordered")
+        for name, data in files.items():
+            self.assertEqual((output / ("canary-ordered-" + name)).read_bytes(), data)
+        with self.assertRaisesRegex(RuntimeError, "unexpected file"):
+            installed_order.publish_logs(json.dumps({"unrecognized.log": "78"}), output, "canary-ordered")
+
     def test_diagnostic_read_or_export_errors_cannot_replace_primary_failure(self):
         (self.root / evidence.FAILURE).write_bytes(b"x" * (evidence.MAXIMUM + 1))
         output = self.root / "export"

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from fixtures import installed_adoption, installed_origin, native_services, installed_chain, installed_listener_evidence, installed_clock
 from fixtures import installed_order_trace as order_trace
 from fixtures import installed_continuity
+from fixtures.installed_order import ACCOUNT_LOG_FILES
 
 
 class Origin(installed_origin.Origin):
@@ -151,8 +152,7 @@ class Host:
 
 def export_logs(root):
     result = {}
-    for name in ("preserved-before.json", "preserved-after.json", "route-observation.json", "daemon.log", "daemon.err",
-                 "client.err", "current-client.err", installed_continuity.RECORD):
+    for name in ACCOUNT_LOG_FILES:
         path = root / name
         if not path.exists():
             continue
