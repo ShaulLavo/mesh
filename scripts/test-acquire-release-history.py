@@ -119,6 +119,23 @@ class HistoryTests(unittest.TestCase):
                            "mesh_linux_amd64.tar.gz", "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz")))
         return item, assets, payloads
 
+    def test_signed_history_preserves_the_public_manifest_byte_limit(self):
+        self.assertEqual(HISTORY.LIMITS["mesh-release.json"], 1 << 20)
+        item, assets, _payloads = self.signed_assets()
+        raw = b" " * (1 << 20)
+        asset = next(asset for asset in assets if asset["name"] == "mesh-release.json")
+        asset.update(size=len(raw), digest="sha256:" + hashlib.sha256(raw).hexdigest())
+        destination = self.cache / "capture"
+        destination.mkdir()
+        with mock.patch.object(HISTORY, "download", return_value=raw) as download:
+            HISTORY.capture_history(item, [asset], self.cache, destination, threading.Event())
+            self.assertEqual((destination / "mesh-release.json").read_bytes(), raw)
+            self.assertEqual(download.call_args.args[1], len(raw))
+            asset["size"] += 1
+            with self.assertRaisesRegex(ValueError, "actual uploaded API"):
+                HISTORY.capture_history(item, [asset], self.cache, destination, threading.Event())
+        self.assertEqual(download.call_count, 1)
+
     def materialize_control(self, count):
         def materialize(capture, release, destination, _inventory):
             snapshot = json.loads((capture / "history.json").read_bytes())

@@ -17,7 +17,7 @@ from fixtures import published_releases, release_documents, release_tool, releas
 REPOSITORY = "ShaulLavo/mesh"
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 PROOF = re.compile(r"[0-9a-f]{64}(?:\.rollback)?\.json\Z")
-LIMITS = {"mesh-release.json": 512 << 10, "mesh-update.json": 64 << 10,
+LIMITS = {"mesh-release.json": 1 << 20, "mesh-update.json": 64 << 10,
           "mesh-update.sig.json": 256 << 10, "mesh-update-root.json": 4 << 10,
           "mesh-retention.json": 16 << 20}
 LIMITS["mesh-workers.json"] = 8 << 20
@@ -152,7 +152,7 @@ def acquire_bundled_release(item, assets, cache, documents, cancelled):
 def capture_history(item, assets, cache, destination, cancelled):
     hits = 0
     limits = {release_documents.BUNDLE: 32 << 20, release_documents.ENVELOPE: 256 << 10,
-              "mesh-release.json": 512 << 10, "mesh-update-root.json": 4 << 10}
+              "mesh-release.json": LIMITS["mesh-release.json"], "mesh-update-root.json": 4 << 10}
     for asset in assets:
         if cancelled.is_set():
             raise RuntimeError("release acquisition cancelled after a required source failed")

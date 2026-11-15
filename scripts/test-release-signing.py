@@ -132,6 +132,14 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
         self.assertIn("scripts/run-original-update-readers.py", readers)
         self.assertNotIn("continue-on-error", readers)
 
+    def test_original_reader_tools_have_artifact_download_permission(self):
+        readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
+        permissions = readers.split("    permissions:\n", 1)[1].split("    strategy:\n", 1)[0]
+        self.assertIn("      contents: read\n", permissions)
+        self.assertIn("      actions: read\n", permissions)
+        self.assertNotIn(": write", permissions)
+        self.assertIn("fixtures.release_tool download", readers)
+
 
 if __name__ == "__main__":
     unittest.main()
