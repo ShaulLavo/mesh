@@ -9,8 +9,10 @@ import re
 import subprocess
 import sys
 import threading
+import tempfile
+import os
 
-from fixtures import published_releases, release_worker_groups, release_worker_index
+from fixtures import published_releases, release_documents, release_tool, release_worker_groups, release_worker_index
 
 REPOSITORY = "ShaulLavo/mesh"
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
@@ -99,6 +101,10 @@ def acquire_release(item, cache, documents, cancelled):
     names = [asset["name"] for asset in assets]
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate release assets: {item['tag_name']}")
+    if release_documents.BUNDLE in names:
+        return acquire_bundled_release(item, assets, cache, documents, cancelled)
+    if release_documents.ENVELOPE in names or "mesh-update.json" in names:
+        raise ValueError("signed updater history requires its current authenticated bundle transport")
     directory = documents / item["tag_name"]
     directory.mkdir(parents=True, exist_ok=True)
     hits = 0
@@ -121,6 +127,70 @@ def acquire_release(item, cache, documents, cancelled):
     if (directory / "mesh-worker-groups.json").exists():
         release_worker_index.validate_index(directory / "mesh-worker-groups.json", json.loads((directory / "mesh-release.json").read_bytes()))
     return {"tag": item["tag_name"], "publishedAt": item["published_at"], "assets": retained}, hits
+
+
+def acquire_bundled_release(item, assets, cache, documents, cancelled):
+    selected = [asset for asset in assets if asset["name"] in release_documents.PHYSICAL]
+    if len(selected) != len(release_documents.PHYSICAL) or item.get("draft") is not False:
+        raise ValueError("signed history requires every current physical metadata asset and explicit publication state")
+    documents.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".history-", dir=documents.parent) as temporary:
+        staging = pathlib.Path(temporary)
+        capture = staging / "physical"
+        capture.mkdir()
+        hits = capture_history(item, selected, cache, capture, cancelled)
+        value = release_tool.materialize_history(capture, item, staging / "logical", staging / "logical-inventory.json")
+        manifest = json.loads((staging / "logical/mesh-release.json").read_bytes())
+        release_worker_index.validate_index(staging / "logical/mesh-worker-groups.json", manifest)
+        retained = history_references(value["documents"], manifest, assets)
+        destination = documents / item["tag_name"]
+        publish_logical(staging / "logical", destination, value["documents"])
+    (documents / (item["tag_name"] + ".physical.json")).write_text(json.dumps(dict(item, assets=assets), sort_keys=True) + "\n")
+    return {"tag": item["tag_name"], "publishedAt": item["published_at"], "assets": retained}, hits
+
+
+def capture_history(item, assets, cache, destination, cancelled):
+    hits = 0
+    limits = {release_documents.BUNDLE: 32 << 20, release_documents.ENVELOPE: 256 << 10,
+              "mesh-release.json": 512 << 10, "mesh-update-root.json": 4 << 10}
+    for asset in assets:
+        if cancelled.is_set():
+            raise RuntimeError("release acquisition cancelled after a required source failed")
+        require_history_asset(asset, limits[asset["name"]])
+        raw, hit = cache_asset(asset, cache, limits[asset["name"]])
+        if len(raw) != asset["size"]:
+            raise ValueError("historical metadata differs from its actual API asset size")
+        hits += int(hit)
+        (destination / asset["name"]).write_bytes(raw)
+    snapshot = dict(item, repository=REPOSITORY, assets=assets)
+    (destination / "history.json").write_text(json.dumps(snapshot, sort_keys=True) + "\n")
+    return hits
+
+
+def require_history_asset(asset, limit):
+    if (type(asset.get("id")) is not int or asset["id"] <= 0 or asset.get("state") != "uploaded"
+            or type(asset.get("size")) is not int or not 0 < asset["size"] <= limit
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", asset.get("digest") or "")):
+        raise ValueError("signed historical metadata requires its actual uploaded API ID, size and digest")
+
+
+def history_references(documents, manifest, assets):
+    retained = [{"name": item["name"], "sha256": item["sha256"]} for item in documents]
+    for artifact in manifest["artifacts"]:
+        matches = [item for item in assets if item["name"] == artifact["archive"]]
+        if len(matches) != 1 or matches[0].get("digest") not in (None, "sha256:" + artifact["sha256"]):
+            raise ValueError("historical native inventory differs from its authenticated manifest")
+        retained.append({"name": artifact["archive"], "sha256": artifact["sha256"]})
+    if len({item["name"] for item in retained}) != len(retained):
+        raise ValueError("logical history repeats an authenticated document or native artifact")
+    return retained
+
+
+def publish_logical(source, destination, entries):
+    if destination.exists():
+        release_tool.validate_logical_inventory(destination, entries)
+        return
+    os.replace(source, destination)
 
 
 def collect_releases(pool, history, cache, documents):

@@ -101,18 +101,30 @@ def binding(release):
 
 
 def materialize(snapshot, release, destination, inventory_path):
+    return materialize_operation("materialize-documents", snapshot, binding(release), destination, inventory_path)
+
+
+def materialize_history(snapshot, release, destination, inventory_path):
+    expected = {"version": release["tag_name"], "source": release["target_commitish"], "releaseId": release["id"]}
+    return materialize_operation("materialize-history", snapshot, expected, destination, inventory_path)
+
+
+def materialize_operation(operation, snapshot, expected, destination, inventory_path):
     tool = configured()
     trust = Path(os.environ["MESH_RELEASE_TRUST_CACHE"])
     if not trust.is_absolute() or not trust.is_dir():
         raise ValueError("materialization requires the explicitly provisioned trust directory")
     with tempfile.TemporaryDirectory(prefix="bundle-binding-", dir=destination.parent) as temporary:
-        expected = binding(release)
         input_path = Path(temporary) / "binding.json"
         input_path.write_text(json.dumps(expected))
-        output = subprocess.check_output([str(tool), "materialize-documents", str(snapshot), str(input_path),
+        output = subprocess.check_output([str(tool), operation, str(snapshot), str(input_path),
                                           str(destination)], timeout=180)
     value = json.loads(output)
-    if value.get("schema") != 1 or value.get("binding") != expected:
+    observed = value.get("binding", {})
+    if (value.get("schema") != 1 or any(observed.get(key) != expected[key] for key in expected)
+            or type(observed.get("writerRun")) is not int or observed["writerRun"] <= 0
+            or observed.get("platforms") != sorted(release_documents.release_worker_index.PLATFORMS,
+                key=lambda item: (item["os"], item["arch"]))):
         raise ValueError("materialized logical inventory differs from the explicit release binding")
     validate_logical_inventory(destination, value["documents"])
     inventory_path.write_text(json.dumps(value, sort_keys=True) + "\n")

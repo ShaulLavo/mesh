@@ -107,6 +107,77 @@ class HistoryTests(unittest.TestCase):
             release, _ = HISTORY.acquire_release(item, self.cache, self.cache / "documents", threading.Event())
             self.assertEqual(release["assets"][0]["name"], "retained-page.json")
 
+    def signed_assets(self):
+        item = {"tag_name": "v0.1.324", "id": 42, "target_commitish": "a" * 40, "draft": False,
+                "published_at": "2026-11-15T00:00:00Z"}
+        payloads = {name: ("exact physical " + name).encode() for name in HISTORY.release_documents.PHYSICAL}
+        assets = [{"id": number + 1, "name": name, "state": "uploaded", "size": len(raw),
+                   "digest": "sha256:" + hashlib.sha256(raw).hexdigest(), "browser_download_url": name}
+                  for number, (name, raw) in enumerate(payloads.items())]
+        assets.extend({"id": 10 + number, "name": name, "state": "uploaded", "size": 40,
+                       "digest": "sha256:" + "b" * 64} for number, name in enumerate((
+                           "mesh_linux_amd64.tar.gz", "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz")))
+        return item, assets, payloads
+
+    def materialize_control(self, count):
+        def materialize(capture, release, destination, _inventory):
+            snapshot = json.loads((capture / "history.json").read_bytes())
+            self.assertIs(snapshot["draft"], False)
+            self.assertNotIn("intake_run", snapshot)
+            self.assertEqual({item["name"] for item in snapshot["assets"]}, set(HISTORY.release_documents.PHYSICAL))
+            self.assertEqual({path.name for path in capture.iterdir()}, set(HISTORY.release_documents.PHYSICAL) | {"history.json"})
+            destination.mkdir()
+            names = list(HISTORY.release_documents.FIXED) + [HISTORY.release_documents.ENVELOPE]
+            names.extend(f"{number:064x}.worker-group.json" for number in range(count))
+            for name in names:
+                (destination / name).write_bytes(b"{}")
+            manifest = {"version": release["tag_name"], "commit": release["target_commitish"], "artifacts": [
+                {"archive": name, "sha256": "b" * 64} for name in ("mesh_linux_amd64.tar.gz", "mesh_linux_arm64.tar.gz", "mesh_darwin_arm64.tar.gz")]}
+            (destination / "mesh-release.json").write_text(json.dumps(manifest))
+            return {"schema": 1, "binding": {"version": release["tag_name"], "source": release["target_commitish"], "releaseId": release["id"], "writerRun": 77},
+                "documents": [{"name": name, "size": (destination / name).stat().st_size,
+                               "sha256": hashlib.sha256((destination / name).read_bytes()).hexdigest()} for name in names]}
+        return materialize
+
+    def test_signed_history_constant_four_metadata_downloads_and_logical_updater_identity(self):
+        item, assets, payloads = self.signed_assets()
+        for count in (1, 1000):
+            output = self.cache / ("signed-" + str(count))
+            with mock.patch.object(HISTORY, "api", return_value=assets) as api, \
+                    mock.patch.object(HISTORY, "download", side_effect=lambda url, _limit: payloads[url]) as download, \
+                    mock.patch.object(HISTORY.release_tool, "materialize_history", side_effect=self.materialize_control(count)), \
+                    mock.patch.object(HISTORY.release_worker_index, "validate_index") as semantic:
+                result, _hits = HISTORY.acquire_release(item, self.cache, output, threading.Event())
+            self.assertEqual(api.call_count, 1)
+            self.assertEqual(download.call_count, 4 if count == 1 else 0)
+            self.assertEqual(len(result["assets"]), count + 10)
+            logical = {entry["name"] for entry in result["assets"]}
+            self.assertIn("mesh-update.json", logical)
+            self.assertNotIn(HISTORY.release_documents.BUNDLE, logical)
+            self.assertTrue(all("id" not in entry for entry in result["assets"]))
+            self.assertEqual(json.loads((output / (item["tag_name"] + ".physical.json")).read_bytes())["assets"], assets)
+            semantic.assert_called_once()
+
+    def test_flat_signed_or_failed_current_bundle_never_becomes_unsigned_history(self):
+        item, assets, payloads = self.signed_assets()
+        without = [asset for asset in assets if asset["name"] != HISTORY.release_documents.BUNDLE]
+        with mock.patch.object(HISTORY, "api", return_value=without), self.assertRaisesRegex(ValueError, "current authenticated bundle"):
+            HISTORY.acquire_release(item, self.cache, self.cache / "refused-flat", threading.Event())
+        with mock.patch.object(HISTORY, "api", return_value=assets), mock.patch.object(HISTORY, "download", side_effect=lambda url, _limit: payloads[url]), \
+                mock.patch.object(HISTORY.release_tool, "materialize_history", side_effect=ValueError("untrusted bundle")):
+            with self.assertRaisesRegex(ValueError, "untrusted bundle"):
+                HISTORY.acquire_release(item, self.cache, self.cache / "refused-bundle", threading.Event())
+        self.assertFalse((self.cache / "refused-bundle" / item["tag_name"]).exists())
+
+    def test_native_hash_mismatch_and_missing_actual_metadata_pin_are_refused(self):
+        item, assets, _payloads = self.signed_assets()
+        assets[0]["digest"] = None
+        with mock.patch.object(HISTORY, "api", return_value=assets), self.assertRaisesRegex(ValueError, "actual uploaded API"):
+            HISTORY.acquire_release(item, self.cache, self.cache / "missing-pin", threading.Event())
+        with self.assertRaisesRegex(ValueError, "native inventory"):
+            HISTORY.history_references([], {"artifacts": [{"archive": "native.tar.gz", "sha256": "b" * 64}]},
+                                       [{"name": "native.tar.gz", "digest": "sha256:" + "c" * 64}])
+
 
 if __name__ == "__main__":
     unittest.main()

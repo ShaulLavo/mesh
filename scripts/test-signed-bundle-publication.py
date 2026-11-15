@@ -21,6 +21,7 @@ corpus = importlib.import_module("test-bundled-release")
 groups = importlib.import_module("test-release-worker-groups")
 workflow = importlib.import_module("publication-workflow")
 finalizer = importlib.import_module("verify-worker-publication")
+history = importlib.import_module("acquire-release-history")
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -92,6 +93,7 @@ class SignedPublicationTests(unittest.TestCase):
             self.check_native_intake(physical)
             completed = self.aggregate(logical)
             self.check_finalizer(physical, release, completed)
+            self.check_history(physical, release)
             self.check_go_authentication_refuses_changed_snapshot(physical, release)
             self.check_alias_semantics(control, physical, release, aliases)
             self.check_signed_semantic_contradiction(control, physical, release)
@@ -185,6 +187,24 @@ class SignedPublicationTests(unittest.TestCase):
         (physical / "draft.json").write_text(json.dumps(release))
         with self.assertRaisesRegex(ValueError, "writer run"):
             draft_intake.documents(physical, corpus.VERSION, groups.SOURCE, self.root / "other-run", 43)
+
+    def check_history(self, physical, release):
+        published = {key: release[key] for key in ("id", "tag_name", "target_commitish", "url", "html_url")}
+        published.update(draft=False, published_at="2026-11-15T00:00:00Z")
+        assets = [dict(item, browser_download_url=item["name"]) for item in release["assets"]]
+        cache, documents = self.root / "history-cache", self.root / "published-history"
+        cache.mkdir()
+        import threading
+        with patch.object(history, "api", return_value=assets) as api, \
+                patch.object(history, "download", side_effect=lambda name, _limit: (physical / name).read_bytes()) as download:
+            retained, _hits = history.acquire_release(published, cache, documents, threading.Event())
+        self.assertEqual(api.call_count, 1)
+        self.assertEqual(download.call_count, 4)
+        self.assertEqual(len(retained["assets"]), len(corpus.documents.members(documents / corpus.VERSION)) + 1 + 3)
+        self.assertTrue(all("id" not in item for item in retained["assets"]))
+        contract = completion.route_contract(corpus.VERSION, "v0.1.325", [retained])
+        self.assertEqual(contract["first"], corpus.VERSION)
+        self.assertNotIn(release_documents.BUNDLE, {item["name"] for item in retained["assets"]})
 
     def copy_snapshot(self, physical, label):
         destination = self.root / label / corpus.VERSION
