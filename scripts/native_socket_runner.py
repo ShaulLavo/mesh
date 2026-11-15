@@ -68,10 +68,11 @@ async def terminate_group(pid):
     await asyncio.sleep(0.1)
 
 
-async def command(args, cwd, env, consume=None):
+async def command(args, cwd, env, consume=None, *, separate_stderr=False):
     creation = asyncio.create_task(asyncio.create_subprocess_exec(
         *map(str, args), cwd=cwd, env=env, start_new_session=True,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE if separate_stderr else asyncio.subprocess.STDOUT,
         # A test can log a large JSON line, matching go test -json's streaming behavior.
         limit=16 * 1024 * 1024,
     ))
@@ -103,9 +104,11 @@ async def join_cleanup(task):
 
 async def collect(process, consume):
     if consume is None:
-        output, _ = await process.communicate()
+        output, errors = await process.communicate()
         if process.returncode:
-            raise RuntimeError(f"command exited {process.returncode}: {output.decode(errors='replace')}")
+            raise RuntimeError(f"command exited {process.returncode}: {(output + (errors or b'')).decode(errors='replace')}")
+        if errors:
+            sys.stderr.write(errors.decode(errors="replace"))
         return output
     async for line in process.stdout:
         consume(line)
@@ -160,7 +163,8 @@ def isolated_environment(env, root):
 async def prepare(repo, binaries, env, packages, runtime_root=None):
     runtime_root = runtime_root or binaries.parent / "runtime"
     selected = [f"./internal/{name}" for name in packages]
-    metadata = await command(("go", "list", "-f", "{{.ImportPath}}\t{{.Dir}}\t{{.Name}}", *selected), repo, env)
+    metadata = await command(("go", "list", "-f", "{{.ImportPath}}\t{{.Dir}}\t{{.Name}}", *selected), repo, env,
+                             separate_stderr=True)
     rows = [line.split("\t") for line in metadata.decode().splitlines()]
     if len(rows) != len(packages) or len({row[2] for row in rows}) != len(packages):
         raise ValueError("native test packages must have distinct binary names")

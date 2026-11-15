@@ -4,15 +4,143 @@ import contextlib
 import copy
 import hashlib
 import importlib
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import io
 import json
 import os
+from pathlib import Path
+import shutil
 import subprocess
+import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 uploader = importlib.import_module("upload-signed-draft")
 controls = importlib.import_module("test-prepare-draft-intake")
+
+
+class CaptureUpload(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.connection.settimeout(10)
+        data = self.read_body()
+        self.server.captured = (self.path, self.headers, data)
+        status = 201 if self.headers.get("Content-Length") else 400
+        body = json.dumps({"message": "created" if status == 201 else "Content-Length required"}).encode()
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-GitHub-Request-Id", "fixture-request")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_body(self):
+        if self.headers.get("Transfer-Encoding") != "chunked":
+            return self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        data = bytearray()
+        while True:
+            size = int(self.rfile.readline().strip(), 16)
+            if not size:
+                self.rfile.readline()
+                return bytes(data)
+            data.extend(self.rfile.read(size))
+            self.rfile.read(2)
+
+    def log_message(self, *_args):
+        pass
+
+
+@unittest.skipUnless(shutil.which("gh"), "installed gh is required for transport controls")
+class TransportTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="upload-gh-")
+        self.addCleanup(self.directory.cleanup)
+        self.server = HTTPServer(("127.0.0.1", 0), CaptureUpload)
+        self.addCleanup(self.server.server_close)
+        self.worker = threading.Thread(target=self.server.serve_forever)
+        self.worker.start()
+        self.addCleanup(self.stop_server)
+        environment = {"PATH": os.environ["PATH"], "HOME": self.directory.name,
+                       "GH_CONFIG_DIR": self.directory.name, "GH_TOKEN": "fixture-token",
+                       "GH_PROMPT_DISABLED": "1", "NO_PROXY": "127.0.0.1"}
+        self.environment = patch.dict(os.environ, environment, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.endpoint = (f"http://127.0.0.1:{self.server.server_port}"
+                         "/repos/ShaulLavo/mesh/releases/446344101/assets?name=mesh-documents.tar.gz")
+
+    def stop_server(self):
+        self.server.shutdown()
+        self.worker.join()
+
+    def test_installed_gh_sends_exact_length_name_and_binary_bytes(self):
+        data = b"\x1f\x8b\x00signed fixture\r\n\xff" * 1000
+        reply = uploader.API().once("POST", self.endpoint, data)
+        path, headers, received = self.server.captured
+        self.assertEqual(reply.status, 201)
+        self.assertEqual(path, urlsplit(self.endpoint).path + "?" + urlsplit(self.endpoint).query)
+        self.assertEqual(headers.get("Content-Length"), str(len(data)))
+        self.assertIsNone(headers.get("Transfer-Encoding"))
+        self.assertEqual(headers.get("Content-Type"), "application/octet-stream")
+        self.assertEqual(received, data)
+        self.assertIn(headers.get("Authorization"), (None, "token fixture-token"))
+        self.assertFalse((Path(self.directory.name) / "hosts.yml").exists())
+
+
+class ErrorTests(unittest.TestCase):
+    def reject(self, body, method="POST", retry_number=0):
+        output = (b"HTTP/2.0 400 Bad Request\r\nX-GitHub-Request-Id: fixture-request\r\n\r\n" + body)
+        result = subprocess.CompletedProcess([], 1, output, b"private stderr sentinel")
+        stdout = io.StringIO()
+        environment = {"GH_TOKEN": "secret-token-sentinel", "MESH_SIGNING_KEY": "private-key-sentinel"}
+        with patch.dict(os.environ, environment), contextlib.redirect_stdout(stdout):
+            with patch.object(uploader.subprocess, "run", return_value=result):
+                error = self.request_error(method, retry_number)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertNotIn("private stderr sentinel", error)
+        return error
+
+    def request_error(self, method, retry_number):
+        endpoint = "https://uploads.github.com/repos/ShaulLavo/mesh/releases/446344101/assets?name=mesh-documents.tar.gz"
+        with self.assertRaises(ValueError) as caught:
+            uploader.API().request(method, endpoint, b"private signed body sentinel", retry_number=retry_number)
+        error = str(caught.exception)
+        self.assertNotIn("private signed body sentinel", error)
+        self.assertIn("HTTP 400", error)
+        self.assertIn(method, error)
+        self.assertIn("fixture-request", error)
+        self.assertIn("mesh-documents.tar.gz", error)
+        self.assertIn("draft retained", error)
+        return error
+
+    def test_json_rejection_names_message_errors_request_and_asset(self):
+        body = {"message": "Invalid request secret-token-sentinel",
+                "errors": [{"resource": "ReleaseAsset", "field": "size", "code": "missing"}],
+                "ignored": "private-key-sentinel"}
+        error = self.reject(json.dumps(body).encode())
+        self.assertIn("Invalid request [redacted]", error)
+        self.assertIn('"field": "size"', error)
+        self.assertIn('"code": "missing"', error)
+        self.assertNotIn("secret-token-sentinel", error)
+        self.assertNotIn("ignored", error)
+
+    def test_non_json_rejection_is_retained_redacted_escaped_and_bounded(self):
+        body = (b"<html>Bad framing secret-token-sentinel private-key-sentinel ghp_fixturetoken\x1b\n\xff"
+                + b"x" * 5000)
+        error = self.reject(body)
+        self.assertIn("<html>Bad framing", error)
+        self.assertIn("[redacted]", error)
+        self.assertNotIn("secret-token-sentinel", error)
+        self.assertNotIn("private-key-sentinel", error)
+        self.assertNotIn("ghp_fixturetoken", error)
+        self.assertNotIn("\x1b", error)
+        self.assertNotIn("\n", error)
+        self.assertLess(len(error), 2200)
+
+    def test_exhausted_asset_preserves_last_error_details(self):
+        error = self.reject(b'{"message":"Bad framing"}', retry_number=uploader.ASSET_RETRIES)
+        self.assertIn("retry bound", error)
+        self.assertIn("Bad framing", error)
 
 
 class FakeCLI:
