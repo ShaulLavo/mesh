@@ -43,7 +43,7 @@ with incomplete observer coverage fails as coverage-incomplete, not nonreproduct
 The approved helper observer's sampled inode/device metadata can accompany a
 helper exception without rereading or changing the exception.
 
-Render the independent vehicle with:
+Render the earlier chain-final vehicle with:
 
 ```sh
 python3 scripts/fixtures/transport_lifecycle_vehicle.py /work/path/vehicle.yml
@@ -53,9 +53,10 @@ Recorder construction, configuration and disk writing compile only with the
 `mesh_installed_fixture` tag. The observer tests use that same tag and run in the
 required native-platform authentication CI job. Normal builds keep the inactive hook behavior.
 
-The parent installs that file as the already registered
-`.github/workflows/rollback-proof-investigation.yml` on an independent vehicle
-branch. `source_sha` separately pins the reviewed source commit. The vehicle
+Earlier captures used `.github/workflows/rollback-proof-investigation.yml` on an
+independent vehicle branch; that registration has since been retired. The current
+interruption vehicle uses registered `ci.yml` with `client_interrupt=true`.
+For the earlier rendered vehicle, `source_sha` pins the reviewed source commit. It
 prepares genuinely signed current-source assets and runs only the complete AMD64
 chain-final profile, with original v0.1.249 and every authoritative selected group.
 It runs neither order workloads nor additional profiles, and preserves existing
