@@ -38,6 +38,12 @@ func run(args []string) error {
 		return verifyMetadata(args[1:])
 	case "refresh":
 		return refresh(args[1:])
+	case "pack-documents":
+		return packDocuments(args[1:])
+	case "materialize-documents":
+		return materializeDocuments(args[1:])
+	case "identity":
+		return toolIdentity(args[1:])
 	default:
 		return fmt.Errorf("unknown release signing command %q", args[0])
 	}
