@@ -91,7 +91,7 @@ def check_filtered_outcomes(command, results, code, proofs):
 def check_gate(ci, recovery):
     check_recovery(ci, recovery)
     gate = job(ci, "gate")
-    assert "name: Complete CI gate" in gate and "if: always()" in gate
+    assert "name: Complete CI gate" in gate and "if: ${{ always() && inputs.client_interrupt_pin == '' }}" in gate
     needed = re.search(r"^    needs: \[(.+)\]$", gate, re.M)
     assert needed
     dependencies = {name.strip() for name in needed.group(1).split(",")}

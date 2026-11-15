@@ -7,6 +7,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      client_interrupt_pin:
+        description: 'Diagnostic only: reviewed JSON pin for one signed pc-interrupt input artifact'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -16,8 +21,55 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  client-interrupt-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.client_interrupt_pin != ''
+    name: Diagnostic only, one original-client interrupted adoption
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Refuse occupied canonical units before any native fixture work
+        run: |
+          mkdir -p "$RUNNER_TEMP/client-interrupt-diagnostic"
+          git rev-parse HEAD > "$RUNNER_TEMP/client-interrupt-diagnostic/source-sha.txt"
+          python3 -B scripts/diagnose-client-interrupt.py --check-host > "$RUNNER_TEMP/client-interrupt-diagnostic/host-baseline.json"
+      - name: Install the external observer on this disposable runner
+        run: sudo apt-get update && sudo apt-get install -y strace
+      - name: Download only the reviewed bounded input handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESH_INTERRUPT_INPUT_PIN: ${{ inputs.client_interrupt_pin }}
+          PYTHONPATH: scripts
+        run: |
+          mkdir -p "$RUNNER_TEMP/client-interrupt-diagnostic"
+          python3 -B -m fixtures.interrupt_inputs "$RUNNER_TEMP/client-interrupt-input" "$RUNNER_TEMP/client-interrupt-diagnostic/input-pin.json"
+      - name: Observe one pc-interrupt with strict original-client outcomes
+        env:
+          MESH_INTERRUPT_INPUT_PIN: ${{ inputs.client_interrupt_pin }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          expected=$(python3 -c 'import json,os; print(json.loads(os.environ["MESH_INTERRUPT_INPUT_PIN"])["descriptorSha256"])')
+          python3 -B scripts/diagnose-client-interrupt.py --bundle "$RUNNER_TEMP/client-interrupt-input" \
+            --descriptor-sha256 "$expected" --output "$RUNNER_TEMP/client-interrupt-diagnostic"
+      - name: Verify native cleanup before removing the owned input handoff
+        if: always()
+        run: |
+          python3 -B scripts/diagnose-client-interrupt.py --verify-cleanup --output "$RUNNER_TEMP/client-interrupt-diagnostic"
+          rm -rf -- "$RUNNER_TEMP/client-interrupt-input"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: client-interrupt-diagnostic
+          path: ${{ runner.temp }}/client-interrupt-diagnostic
+          retention-days: 7
+
   changes:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -99,7 +151,7 @@ jobs:
         run: node web/app-pill/tests/snap.mjs
 
   race:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Race tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -121,7 +173,7 @@ jobs:
         run: go test -race ./...
 
   integration:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Integration tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -139,7 +191,7 @@ jobs:
 
   test:
     name: Race tests and integrations
-    if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ always() && inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     needs: [race, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -321,7 +373,7 @@ jobs:
           retention-days: 7
 
   gates:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Quality gates
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -381,7 +433,7 @@ jobs:
           retention-days: 7
 
   vulnerability:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Vulnerability scan
     runs-on: ubuntu-24.04
     steps:
@@ -394,7 +446,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
   packaging:
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ inputs.client_interrupt_pin == '' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Packaging contract
     runs-on: ubuntu-24.04
     steps:
@@ -450,7 +502,7 @@ jobs:
     name: Complete CI gate
     permissions:
       statuses: write
-    if: always()
+    if: ${{ always() && inputs.client_interrupt_pin == '' }}
     needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, installed-catchup, gates, vulnerability, packaging]
     runs-on: ubuntu-24.04
     steps:
