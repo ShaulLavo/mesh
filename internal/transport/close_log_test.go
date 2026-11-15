@@ -28,6 +28,12 @@ func captureCloseLogs(t *testing.T) *bytes.Buffer {
 
 func TestTransportCloseLogsClientHandshakeEOF(t *testing.T) {
 	logs := captureCloseLogs(t)
+	checkClientHandshakeEOF(t)
+	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
+}
+
+func checkClientHandshakeEOF(t *testing.T) {
+	t.Helper()
 	serverID, _ := authIdentity(t)
 	_, key := authIdentity(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +49,6 @@ func TestTransportCloseLogsClientHandshakeEOF(t *testing.T) {
 	if conn != nil || !errors.Is(err, ErrAuthentication) || !errors.Is(err, io.EOF) {
 		t.Fatalf("handshake outcome = %v, %v", conn, err)
 	}
-	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
 }
 
 func TestTransportCloseLogsDaemonHandshakeEOF(t *testing.T) {

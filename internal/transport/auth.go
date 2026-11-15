@@ -10,9 +10,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/shaul/mesh/internal/access"
 	"io"
-	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,6 +19,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
@@ -311,7 +311,7 @@ func logAuthenticationFailure(server bool, stage string, err error) {
 	if errors.Is(err, errAuthenticationInterrupted) {
 		classification = "link-failed"
 	}
-	log.Printf("transport: server=%t stage=%s classification=%s error=%q", server, stage, classification, err)
+	closelog.Printf("transport: server=%t stage=%s classification=%s error=%q", server, stage, classification, err)
 }
 
 func closeObservedHandshake(ctx context.Context, ws *websocket.Conn) {

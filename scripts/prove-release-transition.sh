@@ -377,15 +377,15 @@ rollback_source() {
 }
 
 wait_for_helper_rollback() {
-  local label=$1 phase
-  for _ in $(seq 120); do
+  local label=$1 phase=unobserved rollback_deadline=$((SECONDS + 120))
+  while (( SECONDS < rollback_deadline )); do
     kill -0 "$helper_pid" 2>/dev/null || fail "helper exited before rollback at $label"
     phase=$(fixture rollback-phase "$state")
     [[ $phase != rollback_failed ]] || fail "source did not start at $label: $(cat "$test_root/managed-daemon.log")"
     [[ $phase != rolled_back ]] || return 0
     sleep 0.05
   done
-  fail "helper rollback did not finish at $label: $(cat "$test_root/helper-$label.log")"
+  fail "helper rollback did not finish at $label (phase $phase): $(cat "$test_root/helper-$label.log")"
 }
 
 apply_boundary() {

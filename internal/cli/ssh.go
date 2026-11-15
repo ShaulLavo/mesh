@@ -10,6 +10,7 @@ import (
 
 	uv "github.com/charmbracelet/ultraviolet"
 
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/daemon"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -314,6 +315,7 @@ func (a sshApplication) attach(ctx context.Context, client sshd.Session, target 
 	return AttachWithTerminal(ctx, AttachOptions{
 		SocketPath: a.socket, SessionID: target.id,
 		IfDetached: target.ifDetached, LastSeq: target.lastSeq, Stderr: client.Err,
+		CloseLogf: closelog.Printf,
 	}, AttachTerminal{
 		Input: input, Output: client.Out, Size: client.Size(), Resizes: client.WindowChanges,
 		CancelInput: func() { input.Cancel() },

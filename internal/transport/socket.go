@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/closelog"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transporttrace"
 )
@@ -258,7 +258,7 @@ func (c *socketConn) fail(err error) {
 	}
 	status := websocket.CloseStatus(err)
 	if status != websocket.StatusNormalClosure && status != websocket.StatusGoingAway {
-		log.Printf("transport: stage=established-stream classification=link-failed error=%q", err)
+		closelog.Printf("transport: stage=established-stream classification=link-failed error=%q", err)
 	}
 	c.cancel()
 	c.trace.Emit(c.ctx, transporttrace.StreamAbortBegin, nil)
