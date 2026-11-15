@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fixtures import draft_intake as intake
 from fixtures import release_documents
@@ -41,11 +41,36 @@ def response(output):
     status = int(lines[0].split()[1])
     try:
         value = json.loads(body) if body.strip() else None
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         if 200 <= status < 300:
             raise ValueError("gh api returned invalid JSON") from None
-        value = None
+        value = body.decode("utf-8", errors="replace")
     return Response(status, headers, value)
+
+
+def diagnostic(value):
+    text = json.dumps(value, ensure_ascii=True)
+    secrets = (value for key, value in os.environ.items()
+               if value and re.search(r"TOKEN|SECRET|PASSWORD|PRIVATE_KEY|SIGNING_KEY", key))
+    for secret in secrets:
+        text = text.replace(json.dumps(secret, ensure_ascii=True)[1:-1], "[redacted]")
+    text = re.sub(r"(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+", "[redacted]", text)
+    return text[:2048]
+
+
+def failure(reply, method, endpoint, reason=""):
+    target = urlsplit(endpoint)
+    details = {"method": method, "path": target.path}
+    name = parse_qs(target.query).get("name")
+    if name:
+        details["asset"] = name[0]
+    if "x-github-request-id" in reply.headers:
+        details["request_id"] = reply.headers["x-github-request-id"]
+    if isinstance(reply.body, dict):
+        details.update((key, reply.body[key]) for key in ("message", "errors") if key in reply.body)
+    elif reply.body is not None:
+        details["body"] = reply.body
+    return ValueError(f"draft upload HTTP {reply.status}{reason}; {diagnostic(details)}; draft retained")
 
 
 def retry_wait(reply, attempt, now):
@@ -97,7 +122,8 @@ class API:
         command = ["gh", "api", "--hostname", "github.com", "--include", "--method", method, endpoint,
                    "-H", "Accept: application/vnd.github+json"]
         if data is not None:
-            command += ["-H", "Content-Type: application/octet-stream", "--input", "-"]
+            # gh streams stdin with chunked framing unless given GitHub's required length.
+            command += ["-H", "Content-Type: application/octet-stream", "-H", f"Content-Length: {len(data)}", "--input", "-"]
         env = dict(os.environ)
         env.pop("GH_DEBUG", None)
         try:
@@ -120,9 +146,9 @@ class API:
                 return reply.body
             seconds = retry_wait(reply, attempt + retry_number, time.time())
             if method != "GET" and retry_number == ASSET_RETRIES:
-                raise ValueError(f"draft asset exhausted its retry bound at HTTP {reply.status}; draft retained")
+                raise failure(reply, method, endpoint, "; draft asset exhausted its retry bound")
             if seconds is None or attempt == ASSET_RETRIES:
-                raise ValueError(f"draft upload HTTP {reply.status}; draft retained")
+                raise failure(reply, method, endpoint)
             self.backoff(seconds)
             if method != "GET":
                 raise Reconcile
