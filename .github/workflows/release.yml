@@ -258,14 +258,14 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/mesh-policy"
-          python3 scripts/acquire-release-history.py "$root/documents" "$HOME/.cache/mesh-release-evidence" "$root/fresh-history.json"
-          python3 scripts/stage-release-publication.py "$root" "$VERSION" dist proofs "$RUNNER_TEMP/proof-shards"
           status=75
           while (( status == 75 )); do
             status=0
             "$MESH_RELEASE_TOOL" refresh "$MESH_RELEASE_TRUST_CACHE" || status=$?
           done
           (( status == 0 )) || exit "$status"
+          python3 scripts/acquire-release-history.py "$root/documents" "$HOME/.cache/mesh-release-evidence" "$root/fresh-history.json"
+          python3 scripts/stage-release-publication.py "$root" "$VERSION" dist proofs "$RUNNER_TEMP/proof-shards"
           "$RUNNER_TEMP/release-source-tools/linux-amd64/mesh-release-routes" -operation publish -input "$root/input.json" -documents "$root/documents" -output-dir dist | tee -a "$GITHUB_STEP_SUMMARY"
           python3 scripts/stage-metadata-page.py dist "$root/documents" "$RUNNER_TEMP/metadata-page.json"
       - name: Pack the complete metadata and worker evidence closure
