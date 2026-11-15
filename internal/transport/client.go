@@ -403,7 +403,7 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 		if link != nil {
 			_ = link.Close()
 		}
-		terminal := errors.Is(err, ErrAuthentication) || errors.Is(err, ErrAuthenticationRequired) || errors.Is(err, ErrControlAuthenticationRequired)
+		terminal := permanentReconnectError(err)
 		if c.ctx.Err() == nil && (attempt == 0 || terminal) {
 			log.Printf("transport: client stage=%s attempt=%d reconnect=%t error=%q", stage, attempt+1, !terminal, err)
 		}
@@ -429,6 +429,16 @@ func (c *reconnectingConn) connectionLocked(failed connectionRef) (connectionRef
 			return connectionRef{}, ErrClosed
 		}
 	}
+}
+
+// permanentReconnectError separates a peer's decision from a lost link. An
+// authentication the link cut short is a link failure: ending the attachment
+// there would report a live session as finished.
+func permanentReconnectError(err error) bool {
+	if errors.Is(err, ErrAuthenticationRequired) || errors.Is(err, ErrControlAuthenticationRequired) {
+		return true
+	}
+	return errors.Is(err, ErrAuthentication) && !errors.Is(err, errAuthenticationInterrupted)
 }
 
 func (c *reconnectingConn) recoverSessions() bool {

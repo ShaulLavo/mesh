@@ -171,8 +171,8 @@ func lifecycleAttachHandler(_ context.Context, conn Conn) error {
 func TestServerLifecycleKeepsBoundGrantRejectionTerminal(t *testing.T) {
 	calls := 0
 	peer := AuthenticatedPeer{grant: Authorization{Current: func() bool { calls++; return false }}}
-	err := confirmAuthentication(t.Context(), nil, nil, true, peer)
-	if calls != 1 || err == nil || err.Error() != "transport: device grant removed during authentication" {
-		t.Fatalf("grant rejection changed: calls=%d, error=%v", calls, err)
+	acceptance, err := serverAcceptance(t.Context(), peer)
+	if calls != 1 || acceptance != refusedAcceptance || err == nil || err.Error() != "transport: device grant removed during authentication" {
+		t.Fatalf("grant rejection changed: calls=%d, acceptance=%d, error=%v", calls, acceptance, err)
 	}
 }

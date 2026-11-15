@@ -43,7 +43,7 @@ func TestTransportCloseLogsClientHandshakeEOF(t *testing.T) {
 	if conn != nil || !errors.Is(err, ErrAuthentication) || !errors.Is(err, io.EOF) {
 		t.Fatalf("handshake outcome = %v, %v", conn, err)
 	}
-	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=terminal", "TLS handshake:", "EOF")
+	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
 }
 
 func TestTransportCloseLogsDaemonHandshakeEOF(t *testing.T) {
@@ -67,7 +67,7 @@ func TestTransportCloseLogsDaemonHandshakeEOF(t *testing.T) {
 	if !errors.Is(err, ErrAuthentication) || !errors.Is(err, io.EOF) {
 		t.Fatalf("daemon handshake outcome = %v", err)
 	}
-	assertCloseLog(t, logs.String(), "server=true", "stage=tls-handshake", "classification=terminal", "TLS handshake:", "EOF")
+	assertCloseLog(t, logs.String(), "server=true", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
 }
 
 func TestTransportCloseLogsEstablishedEOFWithoutTerminalPayload(t *testing.T) {
