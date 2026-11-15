@@ -103,7 +103,7 @@ def acquire_release(item, cache, documents, cancelled):
         raise ValueError(f"duplicate release assets: {item['tag_name']}")
     if release_documents.BUNDLE in names:
         return acquire_bundled_release(item, assets, cache, documents, cancelled)
-    if release_documents.ENVELOPE in names or "mesh-update.json" in names:
+    if any(name.startswith("mesh-update") for name in names):
         raise ValueError("signed updater history requires its current authenticated bundle transport")
     directory = documents / item["tag_name"]
     directory.mkdir(parents=True, exist_ok=True)
@@ -145,7 +145,7 @@ def acquire_bundled_release(item, assets, cache, documents, cancelled):
         retained = history_references(value["documents"], manifest, assets)
         destination = documents / item["tag_name"]
         publish_logical(staging / "logical", destination, value["documents"])
-    (documents / (item["tag_name"] + ".physical.json")).write_text(json.dumps(dict(item, assets=assets), sort_keys=True) + "\n")
+    (documents / (item["tag_name"] + ".physical.json")).write_text(json.dumps(dict(item, repository=REPOSITORY, assets=assets), sort_keys=True) + "\n")
     return {"tag": item["tag_name"], "publishedAt": item["published_at"], "assets": retained}, hits
 
 
@@ -178,7 +178,8 @@ def history_references(documents, manifest, assets):
     retained = [{"name": item["name"], "sha256": item["sha256"]} for item in documents]
     for artifact in manifest["artifacts"]:
         matches = [item for item in assets if item["name"] == artifact["archive"]]
-        if len(matches) != 1 or matches[0].get("digest") not in (None, "sha256:" + artifact["sha256"]):
+        if (len(matches) != 1 or matches[0].get("state") != "uploaded" or type(matches[0].get("id")) is not int
+                or matches[0]["id"] <= 0 or matches[0].get("digest") not in (None, "sha256:" + artifact["sha256"])):
             raise ValueError("historical native inventory differs from its authenticated manifest")
         retained.append({"name": artifact["archive"], "sha256": artifact["sha256"]})
     if len({item["name"] for item in retained}) != len(retained):
