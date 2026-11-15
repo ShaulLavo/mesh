@@ -9,6 +9,8 @@ import unittest
 from unittest.mock import patch
 
 from fixtures import release_documents as documents
+from fixtures import installed_origin, installed_releases, installed_publication
+from types import SimpleNamespace
 
 
 def write(directory, name, value):
@@ -115,6 +117,61 @@ class DocumentsTests(unittest.TestCase):
     def test_new_code_stays_within_three_blocks(self):
         self.assertLessEqual(depth(ast.parse(Path(documents.__file__).read_text())), 3)
         self.assertLessEqual(depth(ast.parse(Path(__file__).read_text())), 3)
+
+
+class PrivateProducerTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="private-bundle-")
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.directory = self.root / "releases" / "v0.1.324"
+        self.directory.mkdir(parents=True)
+
+    def test_producer_packs_explicit_members_before_signing_and_declares_physical_only_layout(self):
+        producer = object.__new__(installed_releases.Releases)
+        producer.root, producer.directory = self.root, self.directory.parent
+        producer.metadata, producer.document_members = {}, {"v0.1.324": {"leaf.worker-group.json"}}
+        producer.manifests = {"v0.1.324": {"version": "v0.1.324", "commit": "a" * 40,
+            "artifacts": [{"platform": platform, "archive": "mesh_" + platform["os"] + "_" + platform["arch"] + ".tar.gz"}
+                          for platform in documents.release_worker_index.PLATFORMS],
+            "compatibility": {"transitions": [{"proof": "b" * 64}]}}}
+        (self.directory / "planning-helper.json").write_text("must not be packed")
+        with patch.object(installed_origin, "request") as request:
+            producer.publish.__wrapped__(producer, "v0.1.324", 0, [{"forward": "b" * 64, "rollback": "c" * 64}])
+        value = request.call_args.args[1]
+        self.assertEqual(value["documents"]["directory"], "releases/v0.1.324")
+        self.assertEqual(value["documents"]["output"], "releases/v0.1.324/mesh-documents.tar.gz")
+        members = set(value["documents"]["members"])
+        self.assertTrue({"mesh-release.json", "mesh-update.json", "mesh-update-root.json", "leaf.worker-group.json",
+                         "b" * 64 + ".json", "c" * 64 + ".rollback.json"} <= members)
+        self.assertNotIn("planning-helper.json", members)
+        self.assertNotIn(documents.ENVELOPE, members)
+        root = json.loads((self.directory / "mesh-update-root.json").read_bytes())
+        self.assertEqual(root["head"]["sha256"], hashlib.sha256((self.directory / "mesh-update.json").read_bytes()).hexdigest())
+        physical = json.loads((self.directory / "physical-assets.json").read_bytes())
+        self.assertIn(documents.BUNDLE, physical)
+        self.assertNotIn("mesh-update.json", physical)
+
+    def test_read_only_serving_never_invokes_the_signing_role_or_exposes_members(self):
+        names = list(documents.PHYSICAL)
+        (self.directory / "physical-assets.json").write_text(json.dumps(names))
+        for name in names + ["mesh-update.json", "proof.worker-group.json"]:
+            (self.directory / name).write_bytes(b"offline physical selection")
+        files = installed_origin.physical_files(self.root, self.directory.parent)
+        self.assertEqual(set(files), {"v0.1.324/" + name for name in names})
+        self.assertNotIn("v0.1.324/mesh-update.json", files)
+        (self.directory / "physical-assets.json").unlink()
+        with self.assertRaisesRegex(RuntimeError, "declared bundled physical layout"):
+            installed_origin.physical_files(self.root, self.directory.parent)
+
+    def test_published_hop_metadata_uses_authenticated_logical_retention_without_flat_http(self):
+        digest = "d" * 64
+        (self.directory / "mesh-retention.json").write_text(json.dumps([{"tag": "v0.1.323",
+            "assets": [{"name": "mesh-update.json", "sha256": digest}]}]))
+        releases = SimpleNamespace(directory=self.directory.parent, verification={"version": "v0.1.324"})
+        self.assertEqual(installed_publication.logical_digest(releases, "v0.1.323", "mesh-update.json"), digest)
+        with self.assertRaisesRegex(ValueError, "logical retention reference"):
+            installed_publication.logical_digest(releases, "v0.1.322", "mesh-update.json")
 
 
 if __name__ == "__main__":

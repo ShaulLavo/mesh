@@ -167,7 +167,9 @@ check_source_contract() {
   contains .github/workflows/release.yml 'artifact-metadata: write'
   contains .github/workflows/release.yml 'gh attestation verify'
   contains .github/workflows/release.yml '--source-ref refs/heads/main --deny-self-hosted-runners'
-  contains .github/workflows/release.yml "go build -o \"\$signer\" ./cmd/mesh-release-sign"
+  contains .github/workflows/release.yml "go build -trimpath -o \"\$directory/mesh-release-sign\" ./cmd/mesh-release-sign"
+  contains .github/workflows/release.yml 'scripts/prepare-release-documents.py'
+  contains .github/workflows/release.yml 'scripts/upload-signed-draft.py'
   contains .github/workflows/release.yml "\"\$signer\" refresh \"\$MESH_RELEASE_TRUST_CACHE\""
   contains .github/workflows/release.yml "\"\$signer\" wrap"
   contains .github/workflows/release.yml "\"\$signer\" verify"

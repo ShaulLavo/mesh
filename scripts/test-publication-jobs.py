@@ -129,7 +129,8 @@ class PublicationJobsTests(unittest.TestCase):
         root = self.root / "native-run"
         directory = root / "releases" / self.context["version"]
         shutil.copytree(self.directory, directory)
-        releases = SimpleNamespace(native="linux/amd64", directory=directory.parent, verification=draft)
+        releases = SimpleNamespace(native="linux/amd64", directory=directory.parent, physical_directory=directory.parent, verification=draft)
+        (root / "publication-reader").write_bytes(b"provided H inspector control")
         case = SimpleNamespace(host={"name": "fresh-managed"}, root=root, retained=lambda: {}, snapshots={},
             prepare=lambda: {"helperBeforeDaemon": {"sha256": draft["build"]["digest"]},
                 "firstNativeStart": {"mappedImage": {"sha256": draft["build"]["digest"]}}}, seed=lambda: None,
@@ -140,6 +141,7 @@ class PublicationJobsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=controls.SOURCE), \
                 mock.patch.object(installed_publication, "stage", side_effect=lambda *_args: self.stage_fixture(output, source, releases)), \
                 mock.patch.object(installed_publication.subprocess, "run"), \
+                mock.patch.object(installed_publication.release_tool, "configured", return_value=root / "mesh-release-sign"), \
                 mock.patch.object(installed_publication.publication_origin, "Origin", return_value=origin), \
                 mock.patch.object(installed_publication.installed_fresh, "FreshCase", return_value=case), \
                 mock.patch.object(installed_publication.installed_fresh, "collect_diagnostics"), \

@@ -478,11 +478,12 @@ def read_route_plan(case, target):
                             env=case.environment, capture_output=True, text=True, check=True, timeout=installed_clock.timeout())
     plan = json.loads(result.stdout)
     current = case.control("host.info")["host"]["build"]
-    metadata = (case.releases.directory / target / "mesh-update.json").read_bytes()
-    manifest = (case.releases.directory / target / "mesh-release.json").read_bytes()
+    manifest = case.origin.asset("/ShaulLavo/mesh/releases/download/" + target + "/mesh-release.json").read_bytes()
     if plan["currentDigest"] != current["digest"] or not plan.get("next"):
         raise RuntimeError("read-only authenticated route plan does not match the executing published source")
-    if plan["target"]["version"] != target or plan["target"]["metadata"] != published_releases.digest(metadata) or plan["target"]["manifest"] != published_releases.digest(manifest):
+    if (plan["target"]["version"] != target or plan["target"]["metadata"] != logical_digest(case.releases, target, "mesh-update.json")
+            or plan["target"]["manifest"] != logical_digest(case.releases, target, "mesh-release.json")
+            or published_releases.digest(manifest) != plan["target"]["manifest"]):
         raise RuntimeError("authenticated route target differs from the actual signed draft")
     platform = dict(zip(("os", "arch"), case.releases.native.split("/")))
     artifacts = [item for item in json.loads(manifest)["artifacts"] if item["platform"] == platform]
@@ -499,9 +500,10 @@ def next_expected_hop(record, version):
 
 
 def authenticate_hop(case, build, expected):
-    manifest = (case.releases.directory / expected["version"] / "mesh-release.json").read_bytes()
-    metadata = (case.releases.directory / expected["version"] / "mesh-update.json").read_bytes()
-    if published_releases.digest(manifest) != expected["manifest"] or published_releases.digest(metadata) != expected["metadata"]:
+    manifest = case.origin.asset("/ShaulLavo/mesh/releases/download/" + expected["version"] + "/mesh-release.json").read_bytes()
+    if (published_releases.digest(manifest) != expected["manifest"]
+            or logical_digest(case.releases, expected["version"], "mesh-release.json") != expected["manifest"]
+            or logical_digest(case.releases, expected["version"], "mesh-update.json") != expected["metadata"]):
         raise RuntimeError("observed intermediate bytes differ from the authenticated route plan")
     value = json.loads(manifest)
     platform = dict(zip(("os", "arch"), case.releases.native.split("/")))
@@ -510,6 +512,18 @@ def authenticate_hop(case, build, expected):
         raise RuntimeError("authenticated intermediate manifest names another native image")
     if build["version"] != expected["version"] or build["digest"] != expected["binary"] or build["commit"] != value["commit"] or build["modified"] or build["platform"] != platform:
         raise RuntimeError("executing intermediate differs from its authenticated release identity")
+
+
+def logical_digest(releases, version, name):
+    local = releases.directory / version / name
+    if local.is_file():
+        return published_releases.digest(local.read_bytes())
+    directory = releases.directory / releases.verification["version"]
+    history = json.loads((directory / "mesh-retention.json").read_bytes())
+    matches = [asset["sha256"] for item in history if item["tag"] == version for asset in item["assets"] if asset["name"] == name]
+    if len(matches) != 1:
+        raise ValueError("published route requires its exact authenticated logical retention reference")
+    return matches[0]
 
 
 def extend_expected_route(case, record, target):

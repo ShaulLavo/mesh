@@ -132,7 +132,8 @@ class InstalledGateWiringTests(unittest.TestCase):
     def test_failed_or_skipped_installed_gate_cannot_finalize(self):
         finalize = GATE.job(RELEASE, "finalize")
         self.assertEqual(field(finalize, "needs"), "[reserve, publish, verify-readers, publication-native]")
-        self.assertNotIn("always()", finalize)
+        condition = next(line for line in finalize.splitlines() if line.startswith("    if:"))
+        self.assertNotIn("always()", condition)
         condition = field(finalize, "if")
         values = {"needs.reserve.outputs.action": "publish", "github.ref": "refs/heads/main",
                   "needs.verify-readers.result": "success", "needs.publication-native.result": "success"}

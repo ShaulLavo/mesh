@@ -563,7 +563,7 @@ class PublishedExecutionTests(unittest.TestCase):
             control=mock.Mock(side_effect=[{"host": {"build": value}} for value in (source, source, build, build)]),
             units=mock.Mock(), mapped_helper=lambda: {"sha256": build["digest"]}, inspect_retained=mock.Mock(),
             cohort=mock.Mock(), route_observer=mock.Mock(),
-            origin=SimpleNamespace(head=mock.Mock(), asset=lambda path: self.root / Path(path).name),
+            origin=SimpleNamespace(head=mock.Mock(), asset=lambda path: self.root / Path(path).parent.name / Path(path).name),
             releases=SimpleNamespace(directory=self.root, native="linux/amd64", builds={
                 source["version"]: source | {"path": "original"}, target["version"]: target | {"path": "candidate"}}))
         journal = {"phase": "rolled_back" if rollback else "committed", "request": {"current": source, "manifest": {"version": target["version"]}}}
