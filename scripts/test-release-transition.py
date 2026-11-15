@@ -20,6 +20,47 @@ TRANSITION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TRANSITION)
 
 
+class HelperRollbackWaitTest(unittest.TestCase):
+    def run_wait(self, mode):
+        definition = re.search(r"^wait_for_helper_rollback\(\) \{.*?^\}", SOURCE, re.M | re.S)
+        self.assertIsNotNone(definition)
+        with tempfile.TemporaryDirectory(prefix="rollback-wait-") as directory:
+            root = Path(directory)
+            (root / "count").write_text("0\n")
+            (root / "helper-probe.log").write_text("")
+            (root / "managed-daemon.log").write_text("fixture source startup failure")
+            script = '''set -euo pipefail
+helper_pid=$BASHPID
+state=unused
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+sleep() { :; }
+fixture() {
+  read -r count < "$test_root/count"
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$test_root/count"
+  if [[ $ROLLBACK_MODE == failed ]]; then printf rollback_failed;
+  elif (( count > 120 )); then printf rolled_back;
+  else printf rolling_back; fi
+}
+'''
+            script += definition.group(0) + '\nwait_for_helper_rollback probe\nprintf completed\n'
+            result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=10,
+                                    env=dict(os.environ, test_root=str(root), ROLLBACK_MODE=mode), check=False)
+            return result, int((root / "count").read_text())
+
+    def test_rollback_outcome_can_arrive_after_the_old_poll_count(self):
+        result, count = self.run_wait("late")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "completed")
+        self.assertEqual(count, 121)
+
+    def test_failed_rollback_still_fails_immediately_with_its_error(self):
+        result, count = self.run_wait("failed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(count, 1)
+        self.assertIn("source did not start at probe: fixture source startup failure", result.stderr)
+
+
 class CandidateWritePathTest(unittest.TestCase):
     def test_symlinked_state_keeps_exact_physical_target_check(self):
         with tempfile.TemporaryDirectory(prefix="proof-path-") as directory:
