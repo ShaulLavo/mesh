@@ -605,6 +605,7 @@ class NativeOwnership:
     def __init__(self, process, root, output, deadline_ns):
         self.process, self.root, self.output = process, Path(root), Path(output)
         self.owned, self.expected, self.pending, self.correlated = {}, set(), set(), set()
+        self.reaped_startups = set()
         self.unresolved, self.scans, self.observation_ns, self.verification_ns = [], 0, 0, 0
         self.vanished_record_reads = 0
         self.observed_records = set()
@@ -683,6 +684,8 @@ class NativeOwnership:
             self.note_worker(record, rows)
 
     def note_worker(self, record, rows):
+        for attempt in record.get("startupAttempts", []):
+            self.note_reaped_startup(attempt)
         pid, shell = record.get("pid"), record.get("shellPid")
         if type(pid) is not int or pid <= 0:
             return
@@ -690,8 +693,23 @@ class NativeOwnership:
         if type(shell) is int and shell > 0:
             self.note_pid(shell, rows)
             self.pending.discard(pid)
-        else:
+        elif pid not in self.reaped_startups:
             self.pending.add(pid)
+
+    def note_reaped_startup(self, attempt):
+        from fixtures import release_worker_eperm
+        pid, failure = attempt.get("pid"), attempt.get("startupFailure", {})
+        if type(pid) is not int or pid <= 0 or attempt.get("outcome") != "EPERM" or attempt.get("shellPid") != 0:
+            return
+        if failure.get("pid") != pid or not release_worker_eperm.eligible(attempt):
+            return
+        cleanup = attempt.get("cleanup", {})
+        if cleanup.get("worker") not in ("reaped", "birth-checked and reaped") or cleanup.get("shell") != "no published child PID":
+            return
+        # The inner parent reaped this pre-exec failure. It may fit entirely between outer snapshots.
+        self.expected.add(pid)
+        self.reaped_startups.add(pid)
+        self.pending.discard(pid)
 
     def note_pid(self, pid, rows):
         self.expected.add(pid)
@@ -710,7 +728,7 @@ class NativeOwnership:
     def verify_absence(self, deadline_ns):
         rows = process_snapshot(deadline_ns)
         self.read_native_records(rows)
-        missing = sorted(self.expected.difference(self.correlated))
+        missing = sorted(self.expected.difference(self.correlated, self.reaped_startups))
         changed = [pid for pid in self.expected if pid in rows and (pid, rows[pid]["birth"]) not in self.owned]
         live = [row for (pid, birth), row in self.owned.items() if pid in rows and rows[pid]["birth"] == birth]
         if self.launch_birth is None or not self.expected or missing or changed or self.pending or self.unresolved or live:
@@ -726,6 +744,7 @@ class NativeOwnership:
                  "owned": list(self.owned.values()), "expectedPids": sorted(self.expected),
                  "pendingWorkers": sorted(self.pending), "unresolved": self.unresolved,
                  "correlatedPids": sorted(self.correlated),
+                 "reapedStartupPids": sorted(self.reaped_startups),
                  "scans": self.scans, "observation_ns": self.observation_ns, "verification_ns": self.verification_ns,
                   "vanished_record_reads": self.vanished_record_reads,
                  "absenceVerified": self.verified,

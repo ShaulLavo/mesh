@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import shutil
 import shlex
@@ -1025,6 +1026,161 @@ class NativeOwnershipTest(unittest.TestCase):
     def rows(self):
         return {pid: {"pid": pid, "parent": parent, "group": pid, "uid": os.getuid(), "birth": "birth-" + str(pid)}
                 for pid, parent in ((10, 1), (20, 10), (30, 20))}
+
+    def failed_attempt(self, pid=40):
+        return {"pid": pid, "shellPid": 0, "outcome": "EPERM", "startupFailure": {
+            "pid": pid, "workerLogTail": 'worker: start /bin/sh: child-start path="/bin/sh" errno=1 stage=unavailable: fork/exec /bin/sh: operation not permitted\n'},
+            "cleanup": {"worker": "reaped", "shell": "no published child PID"}}
+
+    def startup_ownership(self):
+        path = self.root / "startup.cohort.json"
+        path.write_text(json.dumps({"workers": [{"pid": 40, "shellPid": 0}]}))
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        return ownership, path, deadline
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux EPERM startup records")
+    def test_reaped_preexec_attempt_does_not_need_outer_live_correlation(self):
+        ownership, path, deadline = self.startup_ownership()
+        self.assertEqual(ownership.pending, {40})
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30, "startupAttempts": [self.failed_attempt()]}]}))
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership.observe(deadline)
+        path.unlink()
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            ownership.verify(deadline)
+        self.assertNotIn(40, ownership.correlated)
+        self.assertFalse(any(pid == 40 for pid, _birth in ownership.owned))
+        self.assertEqual(ownership.pending, set())
+        ownership.save()
+        self.assertEqual(json.loads((self.root / "fixture-native-ownership.json").read_text())["reapedStartupPids"], [40])
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux EPERM startup records")
+    def test_failed_startup_reaped_without_retry_can_finish_cleanup(self):
+        ownership, path, deadline = self.startup_ownership()
+        attempt = self.failed_attempt()
+        attempt["cleanup"]["worker"] = "birth-checked and reaped"
+        path.write_text(json.dumps({"workers": [{"pid": 40, "shellPid": 0, "startupAttempts": [attempt]}]}))
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            ownership.verify(deadline)
+            ownership.verify(deadline)
+        self.assertNotIn(40, ownership.correlated)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux EPERM startup records")
+    def test_first_record_after_retry_retains_failed_pid_absence_check(self):
+        path = self.root / "retry.cohort.json"
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30, "startupAttempts": [self.failed_attempt()]}]}))
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+        self.assertEqual(ownership.expected, {20, 30, 40})
+        self.assertEqual(ownership.correlated, {20, 30})
+        path.unlink()
+        replacement = {40: self.rows()[20] | {"pid": 40, "parent": 1}}
+        with patch.object(clocks, "process_snapshot", return_value=replacement), self.assertRaisesRegex(RuntimeError, "changedLifetimes.*40"):
+            ownership.verify(deadline)
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            ownership.verify(deadline)
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux EPERM startup records")
+    def test_actual_short_lived_child_reaped_between_outer_snapshots(self):
+        path = self.root / "short-lived.cohort.json"
+        code = (
+            "import json,pathlib,subprocess,sys\n"
+            "from fixtures import release_worker_eperm as eperm\n"
+            "path=pathlib.Path(sys.argv[1])\n"
+            "sys.stdin.readline()\n"
+            "child=subprocess.Popen([sys.executable,'-c','raise SystemExit(1)'])\n"
+            "row=json.loads(sys.argv[2]); row['pid']=row['startupFailure']['pid']=child.pid\n"
+            "path.write_text(json.dumps({'workers':[{'pid':child.pid,'shellPid':0}]}))\n"
+            "child.wait(timeout=5)\n"
+            "print(child.pid,flush=True)\n"
+            "sys.stdin.readline()\n"
+            "row['cleanup']=eperm.reconcile(child,row['startupFailure'])\n"
+            "path.write_text(json.dumps({'workers':[dict(row,startupAttempts=[row])]}))\n"
+            "print('reaped',flush=True)\n"
+            "sys.stdin.readline()\n")
+        environment = os.environ | {"PYTHONPATH": str(Path(__file__).resolve().parent), "PYTHONDONTWRITEBYTECODE": "1"}
+        process = subprocess.Popen([sys.executable, "-B", "-c", code, str(path), json.dumps(self.failed_attempt())],
+                                   env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+        self.addCleanup(self.stop_reaped_launcher, process)
+        deadline = clocks.time.monotonic_ns() + 10 * clocks.SECOND
+        ownership = clocks.NativeOwnership(process, self.root, self.root, deadline)
+        child = int(self.advance_reaped_launcher(process))
+        ownership.observe(deadline)
+        self.assertEqual(ownership.pending, {child})
+        self.assertIsNone(clocks.process_birth(child, deadline))
+        self.assertEqual(self.advance_reaped_launcher(process), "reaped")
+        ownership.observe(deadline)
+        path.unlink()
+        self.stop_reaped_launcher(process)
+        ownership.verify(deadline)
+        self.assertNotIn(child, ownership.correlated)
+        self.assertEqual(ownership.reaped_startups, {child})
+
+    def advance_reaped_launcher(self, process):
+        process.stdin.write("next\n")
+        process.stdin.flush()
+        ready, _, _ = select.select([process.stdout], [], [], 5)
+        self.assertTrue(ready, "short-lived child control did not answer")
+        return process.stdout.readline().strip()
+
+    def stop_reaped_launcher(self, process):
+        if process.stdout.closed:
+            return
+        try:
+            process.communicate("next\n" * 3, timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+            self.fail("short-lived child launcher did not finish")
+        deadline = clocks.time.monotonic_ns() + 5 * clocks.SECOND
+        self.assertIsNone(clocks.process_birth(process.pid, deadline))
+
+    def test_unconfirmed_startup_cannot_retire_missing_worker(self):
+        changes = [{"cleanup": {}}, {"cleanup": {"worker": "not reaped", "shell": "no published child PID"}},
+                   {"cleanup": {"worker": "reaped", "shell": "unknown"}}, {"shellPid": 50}, {"outcome": "failed"},
+                   {"startupFailure": {"pid": 41, "workerLogTail": self.failed_attempt()["startupFailure"]["workerLogTail"]}},
+                   {"startupFailure": {"pid": 40, "workerLogTail": "worker: unrelated startup failure"}}]
+        for change in changes:
+            self.check_unconfirmed_startup(change)
+
+    def check_unconfirmed_startup(self, change):
+        ownership, path, deadline = self.startup_ownership()
+        attempt = self.failed_attempt() | change
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30, "startupAttempts": [attempt]}]}))
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership.observe(deadline)
+        with patch.object(clocks, "process_snapshot", return_value={}), self.assertRaisesRegex(RuntimeError, "missing.*40"):
+            ownership.verify(deadline)
+        self.assertFalse(ownership.verified)
+
+    def test_reaped_attempt_still_refuses_live_unknown_or_reused_pid(self):
+        ownership, path, deadline = self.startup_ownership()
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30, "startupAttempts": [self.failed_attempt()]}]}))
+        unknown = {40: self.rows()[20] | {"pid": 40, "parent": 1, "birth": "replacement"}}
+        with patch.object(clocks, "process_snapshot", return_value=unknown), self.assertRaisesRegex(RuntimeError, "changedLifetimes.*40"):
+            ownership.verify(deadline)
+        with patch.object(clocks, "process_birth", return_value="replacement"), patch.object(clocks, "signal_process") as send:
+            clocks.signal_descendants({40: "original"}, signal.SIGKILL, deadline)
+        send.assert_not_called()
+
+    def test_reaped_attempt_cannot_hide_live_or_unobserved_shell(self):
+        ownership, path, deadline = self.startup_ownership()
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30, "startupAttempts": [self.failed_attempt()]}]}))
+        with patch.object(clocks, "process_snapshot", return_value={30: self.rows()[30]}), self.assertRaisesRegex(RuntimeError, "live.*30"):
+            ownership.verify(deadline)
+        path.write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 50, "startupAttempts": [self.failed_attempt()]}]}))
+        with patch.object(clocks, "process_snapshot", return_value={}), self.assertRaisesRegex(RuntimeError, "missing.*50"):
+            ownership.verify(deadline)
+
+    def test_removal_before_reap_observation_still_refuses_cleanup(self):
+        ownership, path, deadline = self.startup_ownership()
+        path.unlink()
+        with patch.object(clocks, "process_snapshot", return_value={}), self.assertRaisesRegex(RuntimeError, "missing.*40"):
+            ownership.verify(deadline)
 
     def test_observation_batches_all_native_records_into_one_process_command(self):
         output = self.root / "proof"
