@@ -4,6 +4,7 @@
 No candidate executable, native service, public API or release mutation runs here.
 """
 import importlib
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -92,6 +93,8 @@ class SignedPublicationTests(unittest.TestCase):
             completed = self.aggregate(logical)
             self.check_finalizer(physical, release, completed)
             self.check_go_authentication_refuses_changed_snapshot(physical, release)
+            self.check_alias_semantics(control, physical, release, aliases)
+            self.check_signed_semantic_contradiction(control, physical, release)
         self.assertEqual(len(aliases), 9)
 
     def capture(self, physical, release):
@@ -172,11 +175,57 @@ class SignedPublicationTests(unittest.TestCase):
         archive = physical / release_documents.BUNDLE
         original = archive.read_bytes()
         archive.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
-        with self.assertRaises(ValueError):
+        changed = json.loads(json.dumps(release))
+        entry = next(item for item in changed["assets"] if item["name"] == release_documents.BUNDLE)
+        entry["digest"] = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+        (physical / "draft.json").write_text(json.dumps(changed))
+        with self.assertRaises(subprocess.CalledProcessError):
             draft_intake.documents(physical, corpus.VERSION, groups.SOURCE, self.root / "changed", 42)
         archive.write_bytes(original)
+        (physical / "draft.json").write_text(json.dumps(release))
         with self.assertRaisesRegex(ValueError, "writer run"):
             draft_intake.documents(physical, corpus.VERSION, groups.SOURCE, self.root / "other-run", 43)
+
+    def copy_snapshot(self, physical, label):
+        destination = self.root / label / corpus.VERSION
+        shutil.copytree(physical, destination)
+        return destination
+
+    def check_alias_semantics(self, control, physical, release, aliases):
+        partial = self.copy_snapshot(physical, "missing-alias")
+        (partial / aliases[0]).unlink()
+        value = json.loads(json.dumps(release))
+        value["assets"] = [item for item in value["assets"] if item["name"] != aliases[0]]
+        (partial / "draft.json").write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "complete supported legacy projection"):
+            draft_intake.documents(partial, corpus.VERSION, groups.SOURCE, self.root / "partial-logical", 42)
+        wrong = self.copy_snapshot(partial, "wrong-alias")
+        name = next(item["proof"] + ".json" for item in control.manifest["compatibility"]["transitions"]
+                    if item["proof"] + ".json" not in aliases)
+        shutil.copyfile(control.logical / name, wrong / name)
+        value["assets"].append(control.asset(wrong / name, 9999))
+        (wrong / "draft.json").write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "complete supported legacy projection"):
+            draft_intake.documents(wrong, corpus.VERSION, groups.SOURCE, self.root / "wrong-logical", 42)
+
+    def check_signed_semantic_contradiction(self, control, physical, release):
+        logical = self.root / "contradictory-logical"
+        shutil.copytree(control.logical, logical)
+        index = json.loads((logical / "mesh-worker-groups.json").read_bytes())
+        index["selection"]["workers"].pop()
+        (logical / "mesh-worker-groups.json").write_bytes(groups.groups.encode(index))
+        snapshot = self.copy_snapshot(physical, "contradictory-snapshot")
+        (snapshot / release_documents.BUNDLE).unlink()
+        subjects = [logical / name for name in ("mesh-release.json", "mesh-update.json", "mesh-retention.json",
+                                                "mesh-workers.json", "mesh-worker-groups.json")]
+        subjects.extend(snapshot / name for name in draft_intake.ARCHIVES.values())
+        installed_origin.sign(self.root, subjects, snapshot / release_documents.ENVELOPE, documents={
+            "directory": str(logical.relative_to(self.root)), "members": control.members, "binding": release_tool.binding(release),
+            "output": str((snapshot / release_documents.BUNDLE).relative_to(self.root))})
+        value = dict(release, assets=[control.asset(path, number + 1) for number, path in enumerate(sorted(snapshot.iterdir())) if path.name != "draft.json"])
+        (snapshot / "draft.json").write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError, "authoritative registry"):
+            draft_intake.documents(snapshot, corpus.VERSION, groups.SOURCE, self.root / "contradictory-output", 42)
 
 
 if __name__ == "__main__":
