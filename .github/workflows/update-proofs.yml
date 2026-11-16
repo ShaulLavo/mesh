@@ -283,8 +283,9 @@ jobs:
           MESH_WORKER_EPERM_SUDO: '1'
           PYTHONDONTWRITEBYTECODE: '1'
           SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.policy.outputs.shards }}
         run: |
-          python3 scripts/native-eperm-policy.py initialize "$RUNNER_TEMP/update-proof" --shard "$SHARD"
+          python3 scripts/native-eperm-policy.py initialize "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$SHARDS"
           printf 'MESH_WORKER_EPERM_LEDGER=%s\nMESH_WORKER_EPERM_SUDO=1\n' "$RUNNER_TEMP/update-proof/eperm-ledger.json" >> "$GITHUB_ENV"
       - name: Create owned excluded native extraction root
         run: |
@@ -376,7 +377,7 @@ jobs:
         run: rm -rf -- "$RUNNER_TEMP/update-proof"
 
   eperm-summary:
-    needs: prove
+    needs: [policy, prove]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -391,7 +392,8 @@ jobs:
         if: always()
         env:
           PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 scripts/summarize-native-eperm.py "$RUNNER_TEMP/eperm-summary/inputs" "$RUNNER_TEMP/eperm-summary/result/summary.json" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+          SHARDS: ${{ needs.policy.outputs.shards }}
+        run: python3 scripts/summarize-native-eperm.py "$RUNNER_TEMP/eperm-summary/inputs" "$RUNNER_TEMP/eperm-summary/result/summary.json" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --shards "$SHARDS"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

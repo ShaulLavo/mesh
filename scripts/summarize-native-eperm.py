@@ -6,11 +6,13 @@ import os
 from pathlib import Path
 import re
 
+from fixtures.native_proof_shards import declared_shards
+
 
 THRESHOLD = 2
 
 
-def read_counter(path, run, attempt):
+def read_counter(path, run, attempt, shards):
     value = json.loads(path.read_bytes())
     provenance = value["provenance"]
     if value.get("schema") != 1 or "cap" not in value or value["cap"] is not None:
@@ -21,7 +23,7 @@ def read_counter(path, run, attempt):
     if provenance["run"] != run or int(counter_attempt) > int(attempt) or provenance["platform"] != "linux/amd64":
         raise ValueError("counter belongs to another run, attempt or platform")
     shard = provenance["shard"]
-    if type(shard) is not int or shard not in range(3) or not provenance.get("job"):
+    if type(shard) is not int or shard not in shards or not isinstance(provenance.get("job"), str) or not provenance["job"]:
         raise ValueError("counter has no physical AMD64 shard identity")
     rows = value["recurrences"]
     if type(value["events"]) is not int or value["events"] != len(rows):
@@ -38,21 +40,23 @@ def read_counter(path, run, attempt):
     return shard, value
 
 
-def aggregate(root, run, attempt):
+def aggregate(root, run, attempt, shards):
+    shards = declared_shards(shards)
     result = {"schema": 1, "run": run, "attempt": attempt, "platform": "linux/amd64", "cap": None,
+              "expectedShards": shards,
               "investigationThreshold": THRESHOLD, "thresholdPurpose": "parent investigation only; never a CI count gate",
               "counters": [], "recurrences": [], "errors": []}
     counters = {}
     for path in sorted(root.rglob("eperm-counter.json")):
         try:
-            shard, counter = read_counter(path, run, attempt)
+            shard, counter = read_counter(path, run, attempt, shards)
             retain_counter(counters, (shard, int(counter["provenance"]["attempt"])), counter)
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             result["errors"].append({"path": str(path), "error": type(error).__name__ + ": " + str(error)})
     for (shard, _counter_attempt), counter in sorted(counters.items()):
         result["counters"].append(counter)
         result["recurrences"].extend(dict(row, run=run, runAttempt=counter["provenance"]["attempt"], shard=shard) for row in counter["recurrences"])
-    result["missingShards"] = sorted(set(range(3)) - {shard for shard, _attempt in counters})
+    result["missingShards"] = sorted(set(shards) - {shard for shard, _attempt in counters})
     result["complete"] = not result["errors"] and not result["missingShards"]
     result["total"] = len(result["recurrences"])
     result["investigationRequired"] = result["total"] >= THRESHOLD
@@ -85,8 +89,9 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--run", required=True)
     parser.add_argument("--attempt", required=True)
+    parser.add_argument("--shards", type=json.loads, required=True)
     args = parser.parse_args()
-    result = aggregate(args.root, args.run, args.attempt)
+    result = aggregate(args.root, args.run, args.attempt, args.shards)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     summary = render(result)

@@ -9,6 +9,7 @@ import shutil
 import sys
 
 from fixtures import linux_eperm_control as control, release_worker_eperm as eperm
+from fixtures.native_proof_shards import declared_shards
 
 
 def write(path, value):
@@ -22,10 +23,11 @@ def require_host():
         raise ValueError("EPERM integration requires Linux AMD64")
 
 
-def initialize(root, shard):
+def initialize(root, shard, shards):
     require_host()
-    if type(shard) is not int or shard not in range(3):
-        raise ValueError("normal AMD64 proof requires shard 0, 1 or 2")
+    shards = declared_shards(shards)
+    if type(shard) is not int or shard not in shards:
+        raise ValueError("normal AMD64 proof shard must belong to the declared shards")
     provenance = {"run": os.environ["GITHUB_RUN_ID"], "attempt": os.environ["GITHUB_RUN_ATTEMPT"],
                   "job": os.environ["GITHUB_JOB"], "platform": "linux/amd64", "shard": shard}
     root.mkdir(parents=True, exist_ok=True)
@@ -179,10 +181,11 @@ def main():
     parser.add_argument("root", type=Path)
     parser.add_argument("value", nargs="?")
     parser.add_argument("--shard", type=int)
+    parser.add_argument("--shards", type=json.loads)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.operation == "initialize":
-        initialize(root, args.shard)
+        initialize(root, args.shard, args.shards)
     if args.operation == "begin":
         begin(root, args.value)
     if args.operation == "returned":
