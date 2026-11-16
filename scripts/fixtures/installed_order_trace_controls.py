@@ -1,11 +1,13 @@
-"""Pure diagnostic controls. No native host or product process is executed."""
+"""Diagnostic controls with mocks and owned executable processes, never native services."""
 import copy
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import io
+import platform
 from pathlib import Path
+import subprocess
 import tempfile
 import threading
 import time
@@ -41,11 +43,179 @@ class CompetingDriver:
 class OrderFailureEvidenceTest(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.addCleanup(self.assert_root_removed)
+        self.addCleanup(temporary.cleanup)
         self.deadline = time.monotonic_ns() + 10_000_000_000
         self.native_command = self.enterContext(patch.object(native_services, "command",
             side_effect=AssertionError("pure control invoked a native command")))
+        self.processes = []
+        self.addCleanup(self.stop_processes)
+
+    def assert_root_removed(self):
+        self.assertFalse(self.root.exists())
+
+    def stop_processes(self):
+        for process in self.processes:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+            self.assertIsNotNone(process.returncode)
+
+    def start_process(self, executable):
+        process = subprocess.Popen([str(executable), "60"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.processes.append(process)
+        return process
+
+    def helper_handoff(self):
+        if platform.system() != "Linux":
+            self.skipTest("owned /proc executable control requires Linux")
+        host, _receipt = self.host()
+        data = Path("/bin/sleep").read_bytes()
+        previous, receipt = self.helper_copy(host, data), self.helper_copy(host, data + b"replacement-helper")
+        process = self.start_process(previous["executable"])
+        host.helper_image = native_services.mapped_image(process.pid, previous["executable"])
+        (host.case.state / "update/helper/installed.json").write_text(json.dumps(receipt))
+        host.case.units.managers["helper"].manager_pid.return_value = process.pid
+        return host, process, receipt
+
+    def helper_copy(self, host, data):
+        digest = hashlib.sha256(data).hexdigest()
+        executable = host.case.state / "update/helper" / digest / "mesh"
+        executable.parent.mkdir()
+        executable.write_bytes(data)
+        executable.chmod(0o700)
+        return {"executable": str(executable), "digest": digest, "servicePath": "/units/helper.service"}
+
+    def test_owned_receipt_precedes_async_restart_and_requires_replacement(self):
+        host, previous, receipt = self.helper_handoff()
+        prior = host.helper_image
+        with self.assertRaisesRegex(RuntimeError, "mapped another executable inode") as original:
+            native_services.mapped_image(previous.pid, receipt["executable"])
+        self.assertEqual(original.exception.mapped_image["mapped"]["inode"], prior["inode"])
+        self.assertEqual(original.exception.mapped_image["expected"]["inode"], Path(receipt["executable"]).stat().st_ino)
+        def handoff(predicate, _message):
+            self.assertIsNone(predicate())
+            self.assertEqual(host.helper_image, prior)
+            previous.terminate()
+            previous.wait(timeout=5)
+            replacement = self.start_process(receipt["executable"])
+            host.case.units.managers["helper"].manager_pid.return_value = replacement.pid
+            return predicate()
+        with installed_clock.handoff(self.deadline), patch.object(native_services, "wait_for", side_effect=handoff) as wait:
+            result = host.inspect(True)
+        wait.assert_called_once()
+        self.assertEqual(result["helper"]["sha256"], receipt["digest"])
+        self.assertNotEqual(result["helper"]["pid"], prior["pid"])
+        self.assertNotEqual(result["helper"]["inode"], prior["inode"])
+        event = host.diagnostics.events["helper.handoff:::"]["last"]["details"]
+        self.assertEqual(event["previous"], prior)
+        self.assertEqual(event["mapping"]["mapped"]["inode"], prior["inode"])
+        self.assertNotIn("helperInspectionFailure", host.diagnostics.reserved)
+
+    def test_owned_restarting_manager_is_incomplete_until_verified(self):
+        host, previous, _receipt = self.helper_handoff()
+        manager = host.case.units.managers["helper"]
+        manager.manager_pid.return_value = 0
+        self.assertIsNone(host.sample_helper({}))
+        self.assertEqual(host.helper_image["pid"], previous.pid)
+        self.assertIn("helper.restarting:::", host.diagnostics.events)
+
+    def test_owned_prior_identity_must_match_every_verified_field(self):
+        host, _previous, _receipt = self.helper_handoff()
+        host.helper_image = host.helper_image | {"inode": host.helper_image["inode"] + 1}
+        with installed_clock.handoff(self.deadline), self.assertRaisesRegex(RuntimeError, "mapped another executable inode"):
+            host.inspect(True)
+
+    def test_promoted_receipt_bad_digest_is_not_a_handoff(self):
+        host, _previous, receipt = self.helper_handoff()
+        image = dict(host.helper_image)
+        with installed_clock.handoff(self.deadline), patch.object(native_services, "mapped_image", return_value=image) as mapped:
+            with self.assertRaisesRegex(RuntimeError, "ordered native helper executes another image"):
+                host.inspect(True)
+        mapped.assert_called_once_with(image["pid"], receipt["executable"])
+        saved = host.diagnostics.reserved["helperInspectionFailure"]["details"]
+        self.assertEqual(saved["verifiedMapping"], image)
+        self.assertEqual(saved["receipt"], receipt)
+
+    def test_manager_change_during_mapping_requires_another_observation(self):
+        host, _receipt = self.host()
+        host.helper_image = {"pid": 1234, "inode": 22, "device": 11, "sha256": "e" * 64}
+        manager = host.case.units.managers["helper"]
+        errors = (self.mapping_error(), FileNotFoundError("process exited"))
+        for error in errors:
+            manager.manager_pid.side_effect = [1234, 5678]
+            with patch.object(native_services, "mapped_image", side_effect=error):
+                self.assertIsNone(host.sample_helper({}))
+        self.assertEqual(host.helper_image["pid"], 1234)
+
+    def test_mapping_deadline_failure_never_becomes_a_handoff(self):
+        host, _receipt = self.host()
+        host.helper_image = {"pid": 1234, "inode": 22, "device": 11, "sha256": "e" * 64}
+        error = installed_clock.ClockExpired("existing parent deadline")
+        with patch.object(native_services, "mapped_image", side_effect=error) as mapped:
+            with self.assertRaises(installed_clock.ClockExpired) as caught:
+                host.sample_helper({})
+        self.assertIs(caught.exception, error)
+        mapped.assert_called_once_with(1234, "/receipt/helper")
+
+    def test_noncanonical_receipt_does_not_authorize_retiring_process(self):
+        host, _previous, receipt = self.helper_handoff()
+        receipt["executable"] = str(self.root / "unrelated-helper")
+        (host.case.state / "update/helper/installed.json").write_text(json.dumps(receipt))
+        self.assertFalse(host.promoted_helper(receipt))
+        with installed_clock.handoff(self.deadline), self.assertRaises(FileNotFoundError):
+            host.inspect(True)
+
+    def test_owned_unrelated_inode_is_still_a_hard_failure(self):
+        host, _previous, _receipt = self.helper_handoff()
+        unrelated = self.start_process("/bin/sleep")
+        host.case.units.managers["helper"].manager_pid.return_value = unrelated.pid
+        with installed_clock.handoff(self.deadline), self.assertRaisesRegex(RuntimeError, "mapped another executable inode"):
+            host.inspect(True)
+        saved = host.diagnostics.reserved["helperInspectionFailure"]["details"]
+        self.assertEqual(saved["service"]["pid"], unrelated.pid)
+        self.assertNotEqual(saved["mapping"]["mapped"]["inode"], host.helper_image["inode"])
+
+    def test_owned_permanent_prior_helper_never_reports_readiness(self):
+        host, previous, receipt = self.helper_handoff()
+        def expire_after_observation(predicate, _message):
+            self.assertIsNone(predicate())
+            raise installed_clock.ClockExpired("existing fixture hang cap")
+        with installed_clock.handoff(self.deadline), patch.object(native_services, "wait_for", side_effect=expire_after_observation):
+            with self.assertRaisesRegex(installed_clock.ClockExpired, "existing fixture hang cap"):
+                host.inspect(True)
+        saved = host.diagnostics.reserved["helperInspectionFailure"]["details"]
+        self.assertEqual(saved["receipt"], receipt)
+        self.assertEqual(saved["service"]["pid"], previous.pid)
+        self.assertEqual(saved["mapping"]["mapped"]["inode"], host.helper_image["inode"])
+
+    def test_success_requires_stable_manager_and_receipt(self):
+        host, receipt = self.host()
+        image = {"pid": 1234, "inode": 22, "device": 11, "sha256": receipt["digest"]}
+        manager = host.case.units.managers["helper"]
+        manager.manager_pid.side_effect = [1234, 5678, 1234, 1234]
+        with patch.object(native_services, "mapped_image", return_value=image):
+            self.assertIsNone(host.sample_helper({}))
+            self.assertEqual(host.sample_helper({}), image)
+        self.assertEqual(host.helper_image, image)
+        changed = receipt | {"digest": "e" * 64}
+        manager.manager_pid.side_effect = None
+        with patch.object(native_services, "mapped_image", return_value=image), patch.object(Path, "read_text", side_effect=[json.dumps(receipt), json.dumps(changed)]):
+            self.assertIsNone(host.sample_helper({}))
+
+    def test_digest_mismatch_and_same_generation_inode_mismatch_still_fail(self):
+        host, receipt = self.host()
+        image = {"pid": 1234, "inode": 22, "device": 11, "sha256": "e" * 64}
+        host.helper_image = image | {"sha256": receipt["digest"]}
+        error = self.mapping_error()
+        with patch.object(native_services, "mapped_image", side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                host.sample_helper({})
+        self.assertIs(caught.exception, error)
+        with patch.object(native_services, "mapped_image", return_value=image):
+            with self.assertRaisesRegex(RuntimeError, "ordered native helper executes another image"):
+                host.sample_helper({})
 
     def mapping_error(self):
         expected = SimpleNamespace(st_dev=11, st_ino=22)

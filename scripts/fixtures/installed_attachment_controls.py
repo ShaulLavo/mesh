@@ -255,12 +255,14 @@ class ContinuityPolicyTest(unittest.TestCase):
         host = object.__new__(installed_order_host.Host)
         host.case = Mock()
         host.case.start_adoption.return_value = {"pin": "metadata-pin"}
-        host.case.validate_result.return_value = {"attachment": {"strictContinuityPassed": None}}
+        helper = {"pid": 1234, "inode": 22, "device": 11, "sha256": "d" * 64}
+        host.case.validate_result.return_value = {"attachment": {"strictContinuityPassed": None}, "helper": helper}
         with patch.object(continuity, "reconnect_current", return_value={"scope": "current-to-current"}) as reconnect:
             result = host.dispatch_operation("adopt", {"version": self.first})
         reconnect.assert_called_once_with(host.case, self.first)
         self.assertEqual(result["explicitReconnect"], {"scope": "current-to-current"})
         self.assertIsNone(result["attachment"]["strictContinuityPassed"])
+        self.assertEqual(host.helper_image, helper)
 
     def test_public_intermediate_is_authenticated_before_strict_image_inspection(self):
         case = self.case
