@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pure/mock controls for the three parallel normal AMD64 proof jobs."""
+"""Pure/mock controls for the declared parallel normal AMD64 proof jobs."""
 import ast
 from copy import deepcopy
 import hashlib
@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from fixtures import linux_eperm_control as control, release_worker_eperm as eperm
+from fixtures import linux_eperm_control as control, native_proof_shards, release_worker_eperm as eperm
 
 
 def module(name, filename):
@@ -29,6 +29,8 @@ policy = module("native_eperm", "native-eperm-policy.py")
 runner = module("ordinary_proofs", "run-update-proofs.py")
 summary = module("native_eperm_summary", "summarize-native-eperm.py")
 REPO = Path(__file__).resolve().parents[1]
+INVALID_SHARDS = (None, "", "[0,1,2]", 3, {}, [], [0, 0], [0, 1, 2, 2], [-1, 0], [False, 1], [0, 1.0], [0, "1"], [None],
+                  [1], [0, 2], [0, 1, 2, 4], [2, 4, 7])
 
 
 def snapshot_value():
@@ -53,6 +55,7 @@ class PolicyTests(unittest.TestCase):
         self.parent = Path(temporary.name)
         self.enterContext(patch.dict(os.environ, GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1", GITHUB_JOB="prove"))
         self.root = self.parent / "update-proof"
+        self.shards = [0, 1, 2]
         self.root.mkdir()
         self.native = self.parent / "mesh-native.noindex"
         self.native.mkdir()
@@ -67,7 +70,7 @@ class PolicyTests(unittest.TestCase):
         (self.root / "eperm-state.json").unlink()
         self.ledger.unlink()
         with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy:
-            policy.initialize(self.root, 0)
+            policy.initialize(self.root, 0, self.shards)
         healthy.assert_called_once_with(self.root / "positive-control.json")
 
     def test_exclusive_initialization_precedes_control_and_cannot_reset(self):
@@ -76,7 +79,7 @@ class PolicyTests(unittest.TestCase):
         inode = self.ledger.stat().st_ino
         with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy:
             with self.assertRaises(FileExistsError):
-                policy.initialize(self.root, 0)
+                policy.initialize(self.root, 0, self.shards)
         healthy.assert_not_called()
         self.assertEqual(self.ledger.read_bytes(), original)
         self.assertEqual(self.ledger.stat().st_ino, inode)
@@ -87,7 +90,7 @@ class PolicyTests(unittest.TestCase):
         self.ledger.write_bytes(original)
         with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy:
             with self.assertRaises(FileExistsError):
-                policy.initialize(self.root, 0)
+                policy.initialize(self.root, 0, self.shards)
         healthy.assert_not_called()
         self.assertEqual(self.ledger.read_bytes(), original)
 
@@ -96,7 +99,7 @@ class PolicyTests(unittest.TestCase):
         self.ledger.unlink()
         with patch.object(policy, "require_host"), patch.object(control, "positive_control", side_effect=RuntimeError("healthy failed")):
             with self.assertRaisesRegex(RuntimeError, "healthy failed"):
-                policy.initialize(self.root, 0)
+                policy.initialize(self.root, 0, self.shards)
         policy.write(self.root / "positive-control.json", {"passed": False})
         with self.assertRaisesRegex(ValueError, "healthy control"):
             policy.begin(self.root, "/tmp/ms-mock.noindex")
@@ -105,6 +108,50 @@ class PolicyTests(unittest.TestCase):
     def test_runtime_refuses_local_host(self):
         with patch.dict(os.environ, {}, clear=True), self.assertRaisesRegex(ValueError, "hosted-only"):
             policy.require_host()
+
+    def test_declared_three_four_and_five_shards_initialize_independent_ledgers(self):
+        for count in (3, 4, 5):
+            self.check_declared_ledgers(list(range(count)))
+
+    def check_declared_ledgers(self, shards):
+        paths = []
+        for shard in shards:
+            root = self.parent / f"declared-{len(shards)}-{shard}" / "update-proof"
+            with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy:
+                policy.initialize(root, shard, shards)
+            healthy.assert_called_once_with(root / "positive-control.json")
+            paths.append(root / "eperm-ledger.json")
+            value = json.loads(paths[-1].read_bytes())
+            self.assertIsNone(value["cap"])
+            self.assertEqual(value["provenance"]["shard"], shard)
+        self.assertEqual(len({path.stat().st_ino for path in paths}), len(shards))
+        policy.write(paths[0], {"schema": 1, "cap": None, "events": [{"retained": "original"}]})
+        self.assertTrue(all(json.loads(path.read_bytes())["events"] == [] for path in paths[1:]))
+
+    def test_initialization_accepts_reordered_complete_runner_partitions(self):
+        self.check_declared_ledgers([2, 0, 1])
+
+    def test_invalid_declarations_and_unexpected_shards_fail_before_control_or_state(self):
+        root = self.parent / "invalid"
+        cases = [(0, shards) for shards in INVALID_SHARDS]
+        cases.extend((shard, [0, 1, 2]) for shard in (None, -1, 3, 8, True, 2.0, "2", []))
+        for shard, shards in cases:
+            with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy, self.assertRaises(ValueError):
+                policy.initialize(root, shard, shards)
+            healthy.assert_not_called()
+            self.assertFalse(root.exists())
+
+    def test_initialize_command_requires_declaration_without_a_fallback(self):
+        root = self.parent / "command"
+        args = ["policy", "initialize", str(root), "--shard", "3"]
+        with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy, patch.object(sys, "argv", args), self.assertRaises(ValueError):
+            policy.main()
+        healthy.assert_not_called()
+        self.assertFalse(root.exists())
+        with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy, patch.object(sys, "argv", args + ["--shards", "[0,1,2,3]"]):
+            policy.main()
+        healthy.assert_called_once_with(root / "positive-control.json")
+        self.assertEqual(json.loads((root / "eperm-ledger.json").read_bytes())["provenance"]["shard"], 3)
 
     def test_begin_inherits_one_shared_ledger_without_reset(self):
         original = self.ledger.read_bytes()
@@ -307,6 +354,28 @@ class PolicyTests(unittest.TestCase):
                      "artifact": {"binarySha256": hashlib.sha256(binary.read_bytes()).hexdigest()}})
         return binary
 
+    def test_declared_plan_assigns_every_source_once_in_actual_runner(self):
+        tools, listing = self.runner_inputs()
+        sources = listing.read_text().splitlines()
+        sources.extend(str(self.runner_source(index)) for index in range(4, 10))
+        listing.write_text("\n".join(sources))
+        for count in (3, 4, 5):
+            self.check_runner_plan(tools, listing, list(reversed(range(count))))
+
+    def check_runner_plan(self, tools, listing, shards):
+        selected = []
+        def run(command, _env, log):
+            log.write_text("--- PASS: TestLegacyWorkerProcessProtocolAndVersion\n")
+            if command[0] == str(REPO / "scripts/prove-release-transition.sh"):
+                selected.append(command[1])
+        for shard in native_proof_shards.declared_shards(shards):
+            output = self.parent / f"runner-{len(shards)}-{shard}"
+            args = ["runner", str(tools), str(listing), "linux/amd64", str(output), "--shard", str(shard),
+                    "--shards", str(len(shards)), "--manifest", str(self.native / "manifest.json")]
+            with patch.object(sys, "argv", args), patch.object(runner, "run", side_effect=run), patch.object(runner.signal, "signal"):
+                runner.main()
+        self.assertEqual(sorted(selected), sorted(listing.read_text().splitlines()))
+
 
     def test_normal_initialization_has_null_cap_and_exact_physical_shard_provenance(self):
         self.initialize()
@@ -332,25 +401,6 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual([row["sourceId"] for row in counter["recurrences"]], ["b" * 64] * 3)
         self.assertFalse(self.native.exists())
         self.assertEqual(json.loads(self.ledger.read_bytes())["events"], events)
-
-    def test_three_shards_own_independent_exclusive_ledgers(self):
-        paths = []
-        for shard in range(3):
-            root = self.parent / f"physical-{shard}" / "update-proof"
-            self.initialize_shard(root, shard)
-            value = json.loads((root / "eperm-ledger.json").read_bytes())
-            self.assertIsNone(value["cap"])
-            self.assertEqual(value["provenance"]["shard"], shard)
-            paths.append(root / "eperm-ledger.json")
-        self.assertEqual(len({path.stat().st_ino for path in paths}), 3)
-        policy.write(paths[0], {"schema": 1, "cap": None, "events": [{"retained": "original"}]})
-        self.assertEqual(json.loads(paths[1].read_bytes())["events"], [])
-        self.assertEqual(json.loads(paths[2].read_bytes())["events"], [])
-
-    def initialize_shard(self, root, shard):
-        with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy:
-            policy.initialize(root, shard)
-        healthy.assert_called_once_with(root / "positive-control.json")
 
     def test_snapshot_gap_does_not_erase_the_count_or_original_event(self):
         value = {"schema": 1, "cap": None, "events": [{"session": "W00D", "failure": {"pid": 9753}}]}
@@ -379,19 +429,71 @@ class SummaryTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="eperm-summary-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.paths = []
-        for shard in range(3):
-            directory = self.root / f"update-proofs-linux-amd64-{shard}"
-            directory.mkdir()
-            path = directory / "eperm-counter.json"
-            policy.write(path, {"schema": 1, "cap": None, "events": 1, "ledgerConfirmed": True,
-                         "provenance": {"run": "123", "attempt": "1", "platform": "linux/amd64", "shard": shard, "job": "prove"},
+        self.shards = [0, 1, 2]
+        self.paths = [self.add_counter(shard) for shard in self.shards]
+
+    def add_counter(self, shard, attempt="1", name=None):
+        directory = self.root / (name or f"update-proofs-linux-amd64-{shard}")
+        directory.mkdir()
+        path = directory / "eperm-counter.json"
+        policy.write(path, {"schema": 1, "cap": None, "events": 1, "ledgerConfirmed": True,
+                         "provenance": {"run": "123", "attempt": attempt, "platform": "linux/amd64", "shard": shard, "job": "prove"},
                          "recurrences": [{"index": 1, "sourceId": "b" * 64, "version": "v0.1.308", "digest": "a" * 64,
                                           "session": "W00D", "cohort": f"/owned/proofs/groups/{'b' * 64}/forward-only/{shard}/cohort.json"}]})
-            self.paths.append(path)
+        return path
 
-    def aggregate(self):
-        return summary.aggregate(self.root, "123", "1")
+    def aggregate(self, attempt="1"):
+        return summary.aggregate(self.root, "123", attempt, self.shards)
+
+    def test_three_four_and_five_declared_shards_require_every_counter(self):
+        for count in (3, 4, 5):
+            self.check_expected_counters(count)
+
+    def check_expected_counters(self, count):
+        if count > len(self.shards):
+            self.paths.append(self.add_counter(count - 1))
+        self.shards = list(range(count))
+        result = self.aggregate()
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["expectedShards"], self.shards)
+        self.assertEqual(result["total"], count)
+        self.assertEqual([row["shard"] for row in result["recurrences"]], self.shards)
+        original = self.paths[-1].read_bytes()
+        self.paths[-1].unlink()
+        missing = self.aggregate()
+        self.assertFalse(missing["complete"])
+        self.assertEqual(missing["missingShards"], [count - 1])
+        self.assertEqual(missing["total"], count - 1)
+        self.paths[-1].write_bytes(original)
+
+    def test_declaration_can_reorder_complete_runner_partitions(self):
+        self.shards = [2, 0, 1]
+        result = self.aggregate()
+        self.assertTrue(result["complete"])
+        self.assertEqual([row["shard"] for row in result["recurrences"]], [0, 1, 2])
+
+    def test_invalid_declarations_are_rejected(self):
+        for shards in INVALID_SHARDS:
+            with self.assertRaises(ValueError):
+                summary.aggregate(self.root, "123", "1", shards)
+
+    def test_invalid_unexpected_and_missing_counter_identities_are_rejected(self):
+        for shard in (None, True, False, -1, "0", 0.0, 3, [], {}):
+            self.change(self.paths[0], lambda value: value["provenance"].update(shard=shard))
+            result = self.aggregate()
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["missingShards"], [0])
+            self.assertEqual(result["total"], 2)
+            self.assertEqual(len(result["errors"]), 1)
+        self.change(self.paths[0], lambda value: value["provenance"].pop("shard"))
+        self.assertFalse(self.aggregate()["complete"])
+
+    def test_duplicate_shard_cannot_replace_a_missing_declared_shard(self):
+        self.change(self.paths[1], lambda value: value["provenance"].update(shard=0))
+        result = self.aggregate()
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["missingShards"], [1])
+        self.assertEqual(len(result["errors"]), 1)
 
     def test_three_shards_are_counted_once_even_with_shared_source_and_session_ids(self):
         result = self.aggregate()
@@ -485,13 +587,13 @@ class SummaryTests(unittest.TestCase):
 
     def test_partial_rerun_preserves_successful_previous_attempt_shards(self):
         self.change(self.paths[1], lambda value: value["provenance"].update(attempt="2"))
-        result = summary.aggregate(self.root, "123", "2")
+        result = self.aggregate("2")
         self.assertTrue(result["complete"])
         self.assertEqual(result["total"], 3)
         self.assertEqual([row["runAttempt"] for row in result["recurrences"]], ["1", "2", "1"])
 
     def test_rerun_summary_accepts_all_unchanged_proof_shards(self):
-        result = summary.aggregate(self.root, "123", "2")
+        result = self.aggregate("2")
         self.assertTrue(result["complete"])
         self.assertEqual(result["missingShards"], [])
         self.assertEqual([row["runAttempt"] for row in result["recurrences"]], ["1"] * 3)
@@ -502,7 +604,7 @@ class SummaryTests(unittest.TestCase):
         value = json.loads(self.paths[0].read_bytes())
         value["provenance"]["attempt"] = "2"
         policy.write(directory / "eperm-counter.json", value)
-        result = summary.aggregate(self.root, "123", "2")
+        result = self.aggregate("2")
         self.assertTrue(result["complete"])
         self.assertEqual(result["total"], 4)
         self.assertEqual([(row["shard"], row["runAttempt"]) for row in result["recurrences"]],
@@ -511,9 +613,30 @@ class SummaryTests(unittest.TestCase):
     def test_other_run_and_invalid_attempts_remain_rejected(self):
         for attempt in (None, "", "0", "01", "-1", "3", 1):
             self.change(self.paths[0], lambda value: value["provenance"].update(attempt=attempt))
-            self.assertFalse(summary.aggregate(self.root, "123", "2")["complete"])
+            self.assertFalse(self.aggregate("2")["complete"])
         self.change(self.paths[0], lambda value: value["provenance"].update(run="124", attempt="1"))
-        self.assertFalse(summary.aggregate(self.root, "123", "2")["complete"])
+        self.assertFalse(self.aggregate("2")["complete"])
+
+    def test_five_shard_partial_rerun_keeps_attempts_sources_and_same_attempt_conflicts(self):
+        self.shards = [0, 1, 2, 3, 4]
+        self.paths.extend([self.add_counter(3, attempt="2"), self.add_counter(4, attempt="3")])
+        self.change(self.paths[3], lambda value: value["recurrences"][0].update(sourceId="c" * 64))
+        repeated = self.add_counter(0, attempt="3", name="rerun")
+        self.change(repeated, lambda value: value["recurrences"][0].update(sourceId="d" * 64))
+        result = self.aggregate("3")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["total"], 6)
+        self.assertEqual(result["sourceIds"], ["b" * 64, "c" * 64, "d" * 64])
+        self.assertEqual([(row["shard"], row["runAttempt"], row["sourceId"]) for row in result["recurrences"]],
+                         [(0, "1", "b" * 64), (0, "3", "d" * 64), (1, "1", "b" * 64),
+                          (2, "1", "b" * 64), (3, "2", "c" * 64), (4, "3", "b" * 64)])
+        conflict = self.add_counter(4, attempt="3", name="conflict")
+        self.change(conflict, lambda value: value["recurrences"][0].update(sourceId="e" * 64))
+        result = self.aggregate("3")
+        self.assertFalse(result["complete"])
+        self.assertEqual(result["total"], 6)
+        self.assertEqual(result["missingShards"], [])
+        self.assertEqual(len(result["errors"]), 1)
 
     def test_all_source_ids_are_reported_without_suppressing_later_events(self):
         self.change(self.paths[2], lambda value: value["recurrences"][0].update(sourceId="c" * 64))
@@ -547,10 +670,28 @@ class SummaryTests(unittest.TestCase):
     def test_summary_command_succeeds_above_investigation_threshold(self):
         output = self.root / "result.json"
         markdown = self.root / "step-summary.md"
-        with patch.object(summary, "aggregate", return_value=self.aggregate()), patch.object(policy.sys, "argv", ["summary", str(self.root), str(output), "--run", "123", "--attempt", "1"]), patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(markdown)):
+        with patch.object(sys, "argv", ["summary", str(self.root), str(output), "--run", "123", "--attempt", "1", "--shards", json.dumps(self.shards)]), patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(markdown)):
             summary.main()
         self.assertEqual(json.loads(output.read_bytes())["total"], 3)
         self.assertIn("parent investigation", markdown.read_text())
+
+    def test_summary_command_requires_valid_declaration_without_a_fallback(self):
+        output = self.root / "result.json"
+        args = ["summary", str(self.root), str(output), "--run", "123", "--attempt", "1"]
+        for extra in ([], ["--shards", "broken"], ["--shards", ""], ["--shards", "[]"], ["--shards", "[0,0]"]):
+            with patch.object(sys, "argv", args + extra), patch.object(sys, "stderr", new_callable=io.StringIO), self.assertRaises((SystemExit, ValueError)):
+                summary.main()
+            self.assertFalse(output.exists())
+
+    def test_summary_command_writes_incomplete_evidence_and_fails_for_missing_declared_counter(self):
+        output = self.root / "result.json"
+        args = ["summary", str(self.root), str(output), "--run", "123", "--attempt", "1", "--shards", "[0,1,2,3]"]
+        with patch.object(sys, "argv", args), patch.dict(os.environ, GITHUB_STEP_SUMMARY=""), self.assertRaisesRegex(SystemExit, "incomplete"):
+            summary.main()
+        value = json.loads(output.read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["missingShards"], [3])
+        self.assertEqual(value["total"], 3)
 
     def change(self, path, operation):
         value = json.loads(path.read_bytes())
@@ -593,20 +734,22 @@ class WiringTests(unittest.TestCase):
         self.workflow = (REPO / ".github/workflows/update-proofs.yml").read_text()
         self.prove = self.workflow.split("\n  prove:\n", 1)[1].split("\n  eperm-summary:\n", 1)[0]
 
-    def test_all_three_parallel_amd64_jobs_enable_policy(self):
+    def test_all_declared_parallel_amd64_jobs_enable_policy(self):
         condition = "matrix.platform == 'linux/amd64'"
         self.assertIn("if: " + condition, self.prove.split("Initialize this AMD64", 1)[1].split("- name: Create", 1)[0])
         self.assertEqual(self.prove.count("native-eperm-policy.py initialize"), 1)
         self.assertIn('--shard "$SHARD"', self.prove)
         self.assertIn("SHARD: ${{ matrix.shard }}", self.prove)
+        initialize = self.prove.split("Initialize this AMD64", 1)[1].split("- name: Create", 1)[0]
+        self.assertIn("SHARDS: ${{ needs.policy.outputs.shards }}", initialize)
+        self.assertIn('--shard "$SHARD" --shards "$SHARDS"', initialize)
+        self.assertIn("shard: ${{ fromJSON(needs.policy.outputs.shards) }}", self.prove)
+        self.assertNotIn("max-parallel:", self.prove)
         self.assertIn("platform: [linux/amd64, linux/arm64, darwin/arm64]", self.prove)
         self.assertIn("fail-fast: false", self.prove)
         self.assertIn("name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}", self.prove)
         self.assertIn("path: ${{ runner.temp }}/update-proof", self.prove)
         self.assertEqual(self.workflow.count("MESH_WORKER_EPERM_LEDGER="), 1)
-        enabled = [(platform, shard) for platform in ("linux/amd64", "linux/arm64", "darwin/arm64") for shard in range(3)
-                   if platform == "linux/amd64"]
-        self.assertEqual(enabled, [("linux/amd64", shard) for shard in range(3)])
         self.assertNotIn("workflow_dispatch:", self.workflow)
 
     def test_healthy_control_before_intake_and_cleanup_before_always_upload(self):
@@ -713,18 +856,19 @@ class WiringTests(unittest.TestCase):
 
     def test_summary_waits_for_all_shards_and_uploads_outside_proof_reader_prefix(self):
         section = self.workflow.split("\n  eperm-summary:\n", 1)[1].split("\n  reader:\n", 1)[0]
-        self.assertIn("needs: prove\n    if: always()", section)
+        self.assertIn("needs: [policy, prove]\n    if: always()", section)
+        self.assertIn("SHARDS: ${{ needs.policy.outputs.shards }}", section)
         self.assertIn("pattern: native-eperm-counter-linux-amd64-*", section)
         self.assertIn("name: native-eperm-counter-linux-amd64-${{ matrix.shard }}", self.prove)
         self.assertIn("steps.counter-upload.outcome == 'success'", self.prove)
         self.assertIn("name: native-eperm-run-summary", section)
-        self.assertIn(' --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"', section)
+        self.assertIn(' --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --shards "$SHARDS"', section)
         self.assertIn("if: always()\n        with:\n          name: native-eperm-run-summary", section)
         self.assertNotIn("timeout-minutes: 25", self.workflow)
         self.assertNotIn("prove-amd64:", self.workflow)
 
     def test_added_code_stays_within_three_block_levels(self):
-        for path in (Path(policy.__file__), Path(control.__file__), Path(eperm.__file__), Path(summary.__file__), Path(__file__)):
+        for path in (Path(policy.__file__), Path(control.__file__), Path(eperm.__file__), Path(summary.__file__), Path(native_proof_shards.__file__), Path(__file__)):
             self.assertLessEqual(depth(ast.parse(path.read_text())), 3, str(path))
 
 

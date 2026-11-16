@@ -20,6 +20,21 @@ groups = importlib.import_module("test-release-worker-groups")
 VERSION = "v0.1.324"
 
 
+def legacy_corpus_baseline():
+    inventory = release_worker_completion.fleet_baselines.load() | {"firstPublishedUpdater": None}
+    return patch.object(release_worker_completion.fleet_baselines, "load", return_value=inventory)
+
+
+def legacy_corpus_source(root):
+    scripts = root / "scripts"
+    shutil.copytree(documents.ROOT / "scripts/fixtures", scripts / "fixtures")
+    shutil.copyfile(documents.ROOT / "scripts/publication-jobs.py", scripts / "publication-jobs.py")
+    baseline = scripts / "fixtures/fleet-baselines.json"
+    inventory = json.loads(baseline.read_text()) | {"firstPublishedUpdater": None}
+    baseline.write_text(json.dumps(inventory))
+    return root
+
+
 class NativeGroup(groups.Bundle):
     def startup(self):
         values = super().startup()
@@ -116,6 +131,7 @@ def historical(root, history, selection):
 
 class CompleteCorpusTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(legacy_corpus_baseline())
         self.scratch = tempfile.TemporaryDirectory(prefix="bundle-corpus-")
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)

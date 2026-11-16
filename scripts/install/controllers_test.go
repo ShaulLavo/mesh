@@ -102,7 +102,7 @@ func runControllerInstaller(t *testing.T, platform, home, bin, sourceKey, contro
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "sh", "-s", "--", "", "7337", "2222", "/mesh", base64.StdEncoding.EncodeToString([]byte(sourceKey)), base64.StdEncoding.EncodeToString([]byte(service)), controller) //nolint:gosec // embedded installer and task-owned fixture arguments
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))

@@ -13,6 +13,10 @@ from fixtures import installed_continuity
 from fixtures.installed_order import ACCOUNT_LOG_FILES
 
 
+def helper_observation_changed(manager, pid, receipt_path, receipt):
+    return manager.manager_pid() != pid or json.loads(receipt_path.read_text()) != receipt
+
+
 class Origin(installed_origin.Origin):
     def __init__(self, root, diagnostics):
         super().__init__(root)
@@ -70,6 +74,7 @@ class Host:
             version = value["version"]
             started = self.case.start_adoption(version)
             result = self.case.validate_result(self.case.await_result(version), version, started["pin"])
+            self.helper_image = result["helper"]
             result["explicitReconnect"] = installed_continuity.reconnect_current(self.case, version)
             return result
         if operation == "inspect":
@@ -121,21 +126,80 @@ class Host:
             return result
         if not case.ready():
             return result | {"ready": False}
+        result["helper"] = self.inspect_helper(result)
         result["ready"] = True
         result["build"] = case.control("host.info")["host"]["build"]
         result["attachment"] = case.inspect_retained()
         result["route"] = case.route_observer.snapshot()
-        receipt = json.loads((case.state / "update/helper/installed.json").read_text())
-        manager = case.units.managers["helper"]
-        pid = manager.manager_pid()
-        try:
-            result["helper"] = native_services.mapped_image(pid, receipt["executable"])
-            if result["helper"]["sha256"] != receipt["digest"]:
-                raise RuntimeError("ordered native helper executes another image")
-        except BaseException as error:
-            order_trace.helper_inspection_failure(self, error, manager, pid, receipt, result)
-            raise
         return result
+
+    def inspect_helper(self, result):
+        self.helper_sample = None
+        try:
+            return native_services.wait_for(lambda: self.sample_helper(result), "ordered helper handoff did not settle")
+        except BaseException as error:
+            if self.helper_sample is not None:
+                manager, pid, receipt, primary = self.helper_sample
+                order_trace.helper_inspection_failure(self, primary or error, manager, pid, receipt, result)
+            raise
+
+    def sample_helper(self, result):
+        result.pop("helper", None)
+        receipt_path = self.case.state / "update/helper/installed.json"
+        receipt = json.loads(receipt_path.read_text())
+        manager = self.case.units.managers["helper"]
+        pid = manager.manager_pid()
+        self.helper_sample = manager, pid, receipt, None
+        if pid == 0 and self.promoted_helper(receipt):
+            order_trace.event(self, "helper.restarting", receipt=order_trace.limited_identity(receipt, ("executable", "digest")))
+            return None
+        try:
+            image = native_services.mapped_image(pid, receipt["executable"])
+            result["helper"] = image
+        except (FileNotFoundError, ProcessLookupError):
+            if getattr(self, "helper_image", None) is None or not helper_observation_changed(manager, pid, receipt_path, receipt):
+                raise
+            order_trace.event(self, "helper.observation-changed", pid=pid)
+            return None
+        except installed_clock.ClockExpired:
+            raise
+        except RuntimeError as error:
+            self.helper_sample = manager, pid, receipt, error
+            if getattr(self, "helper_image", None) is not None and helper_observation_changed(manager, pid, receipt_path, receipt):
+                order_trace.event(self, "helper.observation-changed", pid=pid)
+                return None
+            if not self.retiring_helper(pid, receipt):
+                raise
+            order_trace.event(self, "helper.handoff", pid=pid, receipt=order_trace.limited_identity(receipt, ("executable", "digest")),
+                previous=self.helper_image, mapping=order_trace.mapping_identity(getattr(error, "mapped_image", None)))
+            return None
+        if image["sha256"] != receipt["digest"]:
+            raise RuntimeError("ordered native helper executes another image")
+        if helper_observation_changed(manager, pid, receipt_path, receipt):
+            order_trace.event(self, "helper.observation-changed", pid=pid)
+            return None
+        self.helper_image = image
+        return image
+
+    def retiring_helper(self, pid, receipt):
+        prior = getattr(self, "helper_image", None)
+        if not self.promoted_helper(receipt) or pid != prior["pid"]:
+            return False
+        # A receipt is published before the helper requests its own asynchronous
+        # restart. Only the exact previously verified process may bridge it.
+        try:
+            retiring = native_services.mapped_image(pid, self.case.state / "update/helper" / prior["sha256"] / "mesh")
+        except installed_clock.ClockExpired:
+            raise
+        except (RuntimeError, OSError):
+            return False
+        return retiring == prior
+
+    def promoted_helper(self, receipt):
+        prior = getattr(self, "helper_image", None)
+        if prior is None or receipt["digest"] == prior["sha256"]:
+            return False
+        return receipt["executable"] == str(self.case.state / "update/helper" / receipt["digest"] / "mesh")
 
     def close(self):
         if self.closed:

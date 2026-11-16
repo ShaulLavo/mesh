@@ -949,6 +949,37 @@ class ChainObservationTest(unittest.TestCase):
             installed_native.controls.receive(connection, 5)
         self.assertNotIsInstance(caught.exception, installed_native.controls.EmptyResponse)
 
+    def test_zero_byte_header_reset_is_only_an_unobserved_sample(self):
+        connection = self.connection()
+        connection.recv.side_effect = ConnectionResetError(104, "daemon replaced")
+        self.socket_factory.side_effect = [connection, self.connection(self.middle)]
+        self.assertFalse(self.observe())
+        self.assert_unobserved()
+        self.assertTrue(self.observe())
+        self.checkpoint.assert_called_once_with(self.case, self.middle, "observed intermediate hop")
+        self.assertEqual(len(self.record["hops"]), 1)
+
+    def test_direct_control_keeps_preheader_reset_as_a_failure_with_its_cause(self):
+        connection = self.connection()
+        error = ConnectionResetError(104, "daemon replaced")
+        connection.recv.side_effect = error
+        self.socket_factory.return_value = connection
+        with self.assertRaises(installed_native.controls.EmptyResponse) as caught:
+            self.case.control("host.info")
+        self.assertIs(caught.exception.__cause__, error)
+        self.assertIn("0 response bytes", error.__notes__[0])
+
+    def test_partial_header_and_payload_resets_still_fail(self):
+        header = b"\x01" + struct.pack(">I", 2)
+        for size in range(1, len(header)):
+            self.check_frame_error([header[:size], ConnectionResetError(104, "reset")], ConnectionResetError)
+        self.check_frame_error([header, ConnectionResetError(104, "reset")], ConnectionResetError)
+        self.check_frame_error([header, b"{", ConnectionResetError(104, "reset")], ConnectionResetError)
+
+    def test_connect_and_send_resets_still_fail(self):
+        self.check_connect_error(ConnectionResetError(104, "reset"))
+        self.check_exchange_error("sendall", ConnectionResetError(104, "reset"))
+
     def test_partial_header_and_body_closes_propagate(self):
         header = b"\x01" + struct.pack(">I", 2)
         for size in range(1, len(header)):

@@ -20,12 +20,22 @@ def remaining_socket_time(deadline_ns):
     return remaining
 
 
+def receive_chunk(connection, length, response_header, received):
+    try:
+        return connection.recv(length)
+    except ConnectionResetError as error:
+        error.add_note(f"received {received} response bytes; header={response_header}")
+        if response_header and received == 0:
+            raise EmptyResponse("daemon reset before response header") from error
+        raise
+
+
 def receive(connection, length, *, deadline_ns=None, response_header=False):
     result = b""
     while len(result) < length:
         if deadline_ns is not None:
             connection.settimeout(remaining_socket_time(deadline_ns))
-        chunk = connection.recv(length - len(result))
+        chunk = receive_chunk(connection, length - len(result), response_header, len(result))
         if not chunk and response_header and not result:
             raise EmptyResponse("daemon closed before response header")
         if not chunk:

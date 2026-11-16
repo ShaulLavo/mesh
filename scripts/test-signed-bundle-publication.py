@@ -27,9 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class SignedPublicationTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(corpus.legacy_corpus_baseline())
         self.scratch = tempfile.TemporaryDirectory(prefix="signed-bundle-")
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
+        self.enterContext(patch.object(workflow, "ROOT", corpus.legacy_corpus_source(self.root / "publication-source")))
         self.clock = installed_clock.Clock({"test": "offline signed bundle"})
         active = self.clock.activate()
         active.__enter__()

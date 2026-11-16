@@ -222,32 +222,112 @@ func boolToInstallInt(value bool) int {
 	return 0
 }
 
-func TestLiveRootInstallerDefersHelperPreparationUntilSignedPublication(t *testing.T) {
+func TestRootInstallerPreparesHelperBeforeDaemonAndRetries(t *testing.T) {
 	for _, goos := range []string{"linux", "darwin"} {
-		t.Run(goos, func(t *testing.T) { checkLiveRootInstaller(t, goos) })
+		t.Run(goos, func(t *testing.T) { checkRootInstallerDefaults(t, goos) })
 	}
 }
 
-func checkLiveRootInstaller(t *testing.T, goos string) {
+func checkRootInstallerDefaults(t *testing.T, goos string) {
 	t.Helper()
 	f := newInstallerDefaultsFixture(t, goos)
-	if output, err := f.runRoot(t, "FAIL_HELPER", false); err != nil {
-		t.Fatalf("live root installer requires unpublished helper API: %v\n%s", err, output)
+	if output, err := f.runRoot(t, "FAIL_HELPER", false); err == nil {
+		t.Fatalf("root installer accepted failed helper: %s", output)
+	}
+	if _, err := os.Stat(f.active); !os.IsNotExist(err) {
+		t.Fatalf("root installer started daemon before helper: %v", err)
+	}
+	marker := filepath.Join(f.home, ".local", "state", "mesh", "activation.pending")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("failed helper preparation cleared retry marker: %v", err)
+	}
+	if output, err := f.runRoot(t, "NO_FAILURE", false); err != nil {
+		t.Fatalf("root installer retry: %v\n%s", err, output)
 	}
 	log, err := os.ReadFile(f.log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(log) != "daemon\n" {
-		t.Fatalf("live root installer reached unpublished helper API: %q", log)
+	state := filepath.Join(f.home, ".local", "state", "mesh")
+	if want := "helper " + state + "\nhelper " + state + "\ndaemon\ncheck " + state + "\n"; string(log) != want {
+		t.Fatalf("root installer ordering: %q, want %q", log, want)
+	}
+}
+
+func TestRootInstallerRetainsPendingMarkerWhenHelperCheckFails(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) { checkRootInstallerReadinessMarker(t, goos) })
+	}
+}
+
+func checkRootInstallerReadinessMarker(t *testing.T, goos string) {
+	t.Helper()
+	f := newInstallerDefaultsFixture(t, goos)
+	if output, err := f.runRoot(t, "FAIL_CHECK", false); err == nil {
+		t.Fatalf("failed root installation check was accepted: %s", output)
+	}
+	marker := filepath.Join(f.home, ".local", "state", "mesh", "activation.pending")
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("failed root helper check cleared retry marker: %v", err)
+	}
+	if output, err := f.runRoot(t, "NO_FAILURE", false); err != nil {
+		t.Fatalf("root installation check retry: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("successful root retry retained marker: %v", err)
+	}
+	if output, err := f.runRoot(t, "NO_FAILURE", false); err != nil {
+		t.Fatalf("unchanged root installation: %v\n%s", err, output)
+	}
+	log, err := os.ReadFile(f.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(f.home, ".local", "state", "mesh")
+	want := "helper " + state + "\ndaemon\ncheck " + state + "\nhelper " + state + "\ndaemon\ncheck " + state + "\nhelper " + state + "\ncheck " + state + "\n"
+	if string(log) != want {
+		t.Fatalf("root retry/unchanged ordering: %q, want %q", log, want)
+	}
+}
+
+func TestRootInstallerPreservesRunningDaemonWhenHelperPreparationFails(t *testing.T) {
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) { checkRootInstallerRunningDaemon(t, goos) })
+	}
+}
+
+func checkRootInstallerRunningDaemon(t *testing.T, goos string) {
+	t.Helper()
+	f := newInstallerDefaultsFixture(t, goos)
+	if output, err := f.runRoot(t, "NO_FAILURE", false); err != nil {
+		t.Fatalf("initial root installation: %v\n%s", err, output)
+	}
+	if output, err := f.runRoot(t, "FAIL_HELPER", false); err == nil {
+		t.Fatalf("root installer accepted failed helper: %s", output)
 	}
 	if _, err := os.Stat(f.active); err != nil {
-		t.Fatalf("live root installer did not start daemon: %v", err)
+		t.Fatalf("failed helper preparation stopped running daemon: %v", err)
+	}
+	log, err := os.ReadFile(f.log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(f.home, ".local", "state", "mesh")
+	want := "helper " + state + "\ndaemon\ncheck " + state + "\nhelper " + state + "\n"
+	if string(log) != want {
+		t.Fatalf("failed helper changed running daemon: %q, want %q", log, want)
 	}
 }
 
 func TestRootClientOnlyInstallerDoesNotPrepareHelper(t *testing.T) {
-	f := newInstallerDefaultsFixture(t, "linux")
+	for _, goos := range []string{"linux", "darwin"} {
+		t.Run(goos, func(t *testing.T) { checkRootClientOnlyInstaller(t, goos) })
+	}
+}
+
+func checkRootClientOnlyInstaller(t *testing.T, goos string) {
+	t.Helper()
+	f := newInstallerDefaultsFixture(t, goos)
 	if output, err := f.runRoot(t, "FAIL_HELPER", true); err != nil {
 		t.Fatalf("client-only install: %v\n%s", err, output)
 	}
