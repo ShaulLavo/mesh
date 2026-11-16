@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-PIN = "3d67d436a2ffe18bbbce5b22298362134575b49d"
+PIN = "d336c98e1917eedc07e7d976ca2a1ea37d37c874"
 WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()
@@ -97,7 +97,7 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertEqual(re.findall(r"^            key: (.+)$", prepare, re.M),
                          ["linux-amd64", "linux-arm64", "darwin-arm64"])
         self.assertIn("ref: ${{ inputs.source_sha }}", prepare)
-        self.assertNotIn("continue-on-error", prepare)
+        self.assert_only_cache_save_is_optional(prepare)
         for output in ("worker_artifact_source", "worker_artifact_run"):
             self.assertIn(f"      {output}:\n", PROOFS.split("\njobs:", 1)[0])
         self.assertIn("value: ${{ jobs.context.outputs.source }}", PROOFS)
@@ -115,6 +115,28 @@ class InstalledGateWiringTests(unittest.TestCase):
             output.unlink()
             self.assertNotEqual(GATE.status(GATE.run_script(export), dict(environment, SOURCE="0" * 40)), 0)
             self.assertFalse(output.exists())
+
+    def assert_only_cache_save_is_optional(self, prepare):
+        sections = re.split(r"^      - ", prepare, flags=re.M)
+        self.assertNotIn("continue-on-error", sections[0])
+        for step in sections[1:]:
+            if step.startswith("name: Cache this exact native preparation for parallel proof shards\n"):
+                self.assertIn("uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25", step)
+                self.assertIn("continue-on-error: true", step)
+                continue
+            self.assertNotIn("continue-on-error", step)
+
+    def test_native_build_upload_and_job_failures_cannot_be_optional(self):
+        prepare = GATE.job(PROOFS, "prepare")
+        for marker in ("    needs: policy", "      - name: Build the native candidate and startup-fault fixture once",
+                       "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1"):
+            changed = prepare.replace(marker, marker + "\n        continue-on-error: true", 1)
+            with self.assertRaises(AssertionError):
+                self.assert_only_cache_save_is_optional(changed)
+        changed = prepare.replace("uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25",
+                                  "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+        with self.assertRaises(AssertionError):
+            self.assert_only_cache_save_is_optional(changed)
 
     def test_publication_uses_the_actual_signed_reserved_draft(self):
         installed = GATE.job(RELEASE, "publication-native")

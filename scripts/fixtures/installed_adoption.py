@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -271,6 +272,7 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
     case = AdoptionCase(root, host, pair, preparer, origin, releases, scenario, previous)
     case.worker_group = group
     record = {"host": host["name"], "scenario": scenario, "passed": False, "supplementalSourceCandidate": True}
+    failure = None
     try:
         record["initial"] = case.prepare()
         case.seed_prior()
@@ -293,10 +295,49 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        failure = error
+        retain_failure_state(case, record, output, error)
         raise
     finally:
-        finish_case(case, record, output)
+        finish_case_with_primary(case, record, output, failure)
     return case.root
+
+
+def retain_failure_state(case, record, output, primary):
+    files = record["failureState"] = {}
+    for relative in ("updates/host-adoption.json", "update/installation.json"):
+        destination = output / (case.host["name"] + "-failure-" + Path(relative).name)
+        try:
+            files[relative] = retain_failure_state_file(case.state / relative, destination)
+        except BaseException as error:
+            note = type(error).__name__ + ": " + str(error)[:512]
+            files[relative] = {"retentionError": note}
+            primary.add_note("installed failure state " + relative + " unavailable: " + note)
+
+
+def retain_failure_state_file(source, destination):
+    try:
+        descriptor = os.open(source, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return {"absent": True}
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("failure state is not a regular file")
+        data = stream.read((1 << 20) + 1)
+    if len(data) > 1 << 20:
+        raise ValueError("failure state exceeds 1 MiB; exact snapshot was not retained")
+    destination.write_bytes(data)
+    return {"path": destination.name, "bytes": len(data)}
+
+
+def finish_case_with_primary(case, record, output, primary):
+    try:
+        finish_case(case, record, output)
+    except BaseException as cleanup_error:
+        if primary is None:
+            raise
+        primary.add_note("installed case cleanup failed: " + str(cleanup_error))
+        raise primary from cleanup_error
 
 
 @installed_clock.timed("case-cleanup", lambda case, *_args: case.host["name"])
@@ -307,7 +348,7 @@ def finish_case(case, record, output):
             collect_service_snapshot(case)
         finally:
             case.close()
-        record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
+            record["cleanup"] = {"servicesAbsent": True, "processesAbsent": True}
     except BaseException as error:
         record["passed"] = False
         record["cleanupError"] = str(error)
