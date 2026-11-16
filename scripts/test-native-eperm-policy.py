@@ -29,7 +29,8 @@ policy = module("native_eperm", "native-eperm-policy.py")
 runner = module("ordinary_proofs", "run-update-proofs.py")
 summary = module("native_eperm_summary", "summarize-native-eperm.py")
 REPO = Path(__file__).resolve().parents[1]
-INVALID_SHARDS = (None, "", "[0,1,2]", 3, {}, [], [0, 0], [0, 1, 2, 2], [-1, 0], [False, 1], [0, 1.0], [0, "1"], [None])
+INVALID_SHARDS = (None, "", "[0,1,2]", 3, {}, [], [0, 0], [0, 1, 2, 2], [-1, 0], [False, 1], [0, 1.0], [0, "1"], [None],
+                  [1], [0, 2], [0, 1, 2, 4], [2, 4, 7])
 
 
 def snapshot_value():
@@ -127,13 +128,13 @@ class PolicyTests(unittest.TestCase):
         policy.write(paths[0], {"schema": 1, "cap": None, "events": [{"retained": "original"}]})
         self.assertTrue(all(json.loads(path.read_bytes())["events"] == [] for path in paths[1:]))
 
-    def test_initialization_accepts_exact_noncontiguous_declared_identities(self):
-        self.check_declared_ledgers([2, 4, 7])
+    def test_initialization_accepts_reordered_complete_runner_partitions(self):
+        self.check_declared_ledgers([2, 0, 1])
 
     def test_invalid_declarations_and_unexpected_shards_fail_before_control_or_state(self):
         root = self.parent / "invalid"
         cases = [(0, shards) for shards in INVALID_SHARDS]
-        cases.extend((shard, [2, 4, 7]) for shard in (None, -1, 0, 3, 8, True, 2.0, "2", []))
+        cases.extend((shard, [0, 1, 2]) for shard in (None, -1, 3, 8, True, 2.0, "2", []))
         for shard, shards in cases:
             with patch.object(policy, "require_host"), patch.object(control, "positive_control") as healthy, self.assertRaises(ValueError):
                 policy.initialize(root, shard, shards)
@@ -353,6 +354,28 @@ class PolicyTests(unittest.TestCase):
                      "artifact": {"binarySha256": hashlib.sha256(binary.read_bytes()).hexdigest()}})
         return binary
 
+    def test_declared_plan_assigns_every_source_once_in_actual_runner(self):
+        tools, listing = self.runner_inputs()
+        sources = listing.read_text().splitlines()
+        sources.extend(str(self.runner_source(index)) for index in range(4, 10))
+        listing.write_text("\n".join(sources))
+        for count in (3, 4, 5):
+            self.check_runner_plan(tools, listing, list(reversed(range(count))))
+
+    def check_runner_plan(self, tools, listing, shards):
+        selected = []
+        def run(command, _env, log):
+            log.write_text("--- PASS: TestLegacyWorkerProcessProtocolAndVersion\n")
+            if command[0] == str(REPO / "scripts/prove-release-transition.sh"):
+                selected.append(command[1])
+        for shard in native_proof_shards.declared_shards(shards):
+            output = self.parent / f"runner-{len(shards)}-{shard}"
+            args = ["runner", str(tools), str(listing), "linux/amd64", str(output), "--shard", str(shard),
+                    "--shards", str(len(shards)), "--manifest", str(self.native / "manifest.json")]
+            with patch.object(sys, "argv", args), patch.object(runner, "run", side_effect=run), patch.object(runner.signal, "signal"):
+                runner.main()
+        self.assertEqual(sorted(selected), sorted(listing.read_text().splitlines()))
+
 
     def test_normal_initialization_has_null_cap_and_exact_physical_shard_provenance(self):
         self.initialize()
@@ -443,13 +466,11 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(missing["total"], count - 1)
         self.paths[-1].write_bytes(original)
 
-    def test_exact_declaration_controls_membership_without_assuming_a_range(self):
-        self.shards = [2, 4, 7]
-        self.change(self.paths[0], lambda value: value["provenance"].update(shard=7))
-        self.change(self.paths[1], lambda value: value["provenance"].update(shard=4))
+    def test_declaration_can_reorder_complete_runner_partitions(self):
+        self.shards = [2, 0, 1]
         result = self.aggregate()
         self.assertTrue(result["complete"])
-        self.assertEqual([row["shard"] for row in result["recurrences"]], [2, 4, 7])
+        self.assertEqual([row["shard"] for row in result["recurrences"]], [0, 1, 2])
 
     def test_invalid_declarations_are_rejected(self):
         for shards in INVALID_SHARDS:

@@ -8,4 +8,6 @@ def declared_shards(value):
         raise ValueError("declared shard identities must be nonnegative integers")
     if len(set(value)) != len(value):
         raise ValueError("declared shard identities must be unique")
+    if sorted(value) != list(range(len(value))):
+        raise ValueError("declared shards must cover every runner partition")
     return value
