@@ -122,8 +122,10 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertEqual(field(installed, "needs"), "[reserve, prove-transition, publish]")
         self.assertEqual(field(installed, "if"), field(GATE.job(RELEASE, "publish"), "if"))
         for setting in ("publication_only: true", "release_version: ${{ needs.reserve.outputs.version }}",
-                        "release_source: ${{ needs.reserve.outputs.source }}", "release_run: ${{ github.run_id }}"):
+                        "release_source: ${{ needs.reserve.outputs.source }}", "release_run: ${{ fromJSON(github.run_id) }}"):
             self.assertIn(setting, installed)
+        harness = (WORKFLOWS / "installed-catchup.yml").read_text()
+        self.assertIn("      release_run:\n        type: number\n", harness)
         publish = GATE.job(RELEASE, "publish")
         self.assertLess(publish.index("name: Upload signed draft assets"), publish.index("name: update-publication-trust"))
         self.assertIn("path: ${{ runner.temp }}/mesh-release-trust", publish)

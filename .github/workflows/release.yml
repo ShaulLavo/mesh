@@ -452,7 +452,7 @@ jobs:
       publication_only: true
       release_version: ${{ needs.reserve.outputs.version }}
       release_source: ${{ needs.reserve.outputs.source }}
-      release_run: ${{ github.run_id }}
+      release_run: ${{ fromJSON(github.run_id) }}
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.prove-transition.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.prove-transition.outputs.worker_artifact_source }}
