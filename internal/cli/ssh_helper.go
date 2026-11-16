@@ -62,7 +62,14 @@ func serveSSHHelper(ctx context.Context, listener *net.UnixListener, state strin
 	ctx, cancel := context.WithCancel(ctx)
 	pool := &sshCommandPool{ctx: ctx, entries: make(map[sshPoolKey]*sshPoolEntry), dial: dialMeshSSHWithKey}
 	var handlers sync.WaitGroup
-	defer func() { cancel(); handlers.Wait(); pool.connecting.Wait(); pool.expire(time.Now(), true) }()
+	defer func() {
+		cancel()
+		handlers.Wait()
+		pool.connecting.Wait()
+		pool.expire(time.Now(), true)
+		pool.setups.Wait()
+		pool.lifetimes.Wait()
+	}()
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
 	defer stop()
 	slots := make(chan struct{}, 32)
@@ -249,8 +256,8 @@ func readSSHSignals(decoder *json.Decoder, signals chan<- ssh.Signal, cancel con
 	}
 }
 
-func runSSHPipes(ctx context.Context, client *ssh.Client, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
-	channel, err := client.NewSession()
+func runSSHPipes(ctx context.Context, client *sshCommandLease, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
+	channel, err := client.setup(ctx, client.NewSession)
 	if err != nil {
 		return sshHelperResult{Code: 1, Error: fmt.Sprintf("open SSH channel: %v", err)}
 	}
@@ -266,12 +273,12 @@ func runSSHPipes(ctx context.Context, client *ssh.Client, request sshd.RunReques
 	}
 	channel.Stdout, channel.Stderr = files[1], files[2]
 	payload, _ := json.Marshal(request)
-	if err := channel.Start("run " + string(payload)); err != nil {
+	if _, err := client.setup(ctx, func() (*ssh.Session, error) { return startSSHPipe(ctx, channel, payload) }); err != nil {
 		return sshHelperResult{Code: 1, Error: fmt.Sprintf("start SSH command: %v", err)}
 	}
 	inputDone := make(chan struct{})
 	go func() { defer close(inputDone); _, _ = io.Copy(input, files[0]); _ = input.Close() }()
-	defer func() { _ = files[0].Close(); _ = input.Close(); <-inputDone }()
+	defer func() { _ = files[0].Close(); <-inputDone }()
 	done := make(chan struct{})
 	relayDone := make(chan struct{})
 	go func() { defer close(relayDone); relaySSHPipeSignals(channel, signals, done) }()
@@ -286,6 +293,13 @@ func runSSHPipes(ctx context.Context, client *ssh.Client, request sshd.RunReques
 		return sshHelperResult{Code: 1, Error: fmt.Sprintf("SSH connection ended: %v", err)}
 	}
 	return sshHelperResult{}
+}
+
+func startSSHPipe(ctx context.Context, channel *ssh.Session, payload []byte) (*ssh.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return channel, fmt.Errorf("SSH launch canceled: %w", err)
+	}
+	return channel, channel.Start("run " + string(payload)) //nolint:wrapcheck // caller adds the launch context
 }
 
 func relaySSHPipeSignals(channel *ssh.Session, signals <-chan ssh.Signal, done <-chan struct{}) {

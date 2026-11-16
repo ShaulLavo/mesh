@@ -53,6 +53,15 @@ daemon installation. It keeps at most eight destinations, sixteen commands per
 destination, and thirty-two active or pending local requests. Excess requests
 fail with a diagnostic. The host's existing admission limit also applies.
 
+Pending channel setup, including cancelled waits for a late SSH reply, counts
+against those limits. An additional bound of 128 setup operations covers all
+destinations and connections being cleaned up. Cancelling a pending channel open
+prevents it from starting a command after a late reply. If an execution request
+was already sent, its outcome can be uncertain; Mesh reports the error and never
+replays it. A transport with abandoned setup closes after its last active caller
+leaves, so a cancelled setup cannot retain resources indefinitely after siblings
+finish.
+
 Interactive shells retain their own SSH connection. Destination identity checks
 and device grant revocation apply to both modes.
 

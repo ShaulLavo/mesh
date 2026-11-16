@@ -114,7 +114,7 @@ func (a *application) runSSHRequest(ctx context.Context, client *ssh.Client, req
 	}
 	inputDone := make(chan struct{})
 	go func() { defer close(inputDone); _, _ = io.Copy(input, terminal.Input); _ = input.Close() }()
-	defer func() { terminal.CancelInput(); _ = input.Close(); <-inputDone }()
+	defer func() { terminal.CancelInput(); <-inputDone }()
 	relayContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	relayDone := make(chan struct{})

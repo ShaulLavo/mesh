@@ -26,6 +26,13 @@ bytes, setup time, and idle lifetime. A shared dial belongs to the pool, so one
 waiter's cancellation cannot cancel other waiters. Map locks cover bookkeeping;
 dialling, command execution, and stream forwarding run independently.
 
+SSH has no cancellation message for an unconfirmed channel open. Cancelled setup
+remains accounted until the reply arrives or the transport closes. There are at
+most 128 setup operations across all keys, including connections being reclaimed.
+A transport with abandoned setup closes when its last active user leaves. Late
+channel acceptance is closed without a launch. An already-sent execution request
+has an uncertain outcome and is never replayed.
+
 The helper uses memory and descriptors while idle. It closes idle connections and
 exits after one unused minute. It installs no service. The existing server
 admission policy remains in force and can reject bursts even on a reused transport.

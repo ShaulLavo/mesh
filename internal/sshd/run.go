@@ -85,6 +85,9 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	}
 	defer input.Close()  //nolint:errcheck // process result owns the exit status
 	defer writer.Close() //nolint:errcheck // release relay on every exit
+	if err := ctx.Err(); err != nil {
+		return 1, fmt.Errorf("SSH launch canceled: %w", err)
+	}
 	var master *os.File
 	if state != nil {
 		size := state.size()

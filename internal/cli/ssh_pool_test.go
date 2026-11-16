@@ -17,6 +17,10 @@ import (
 )
 
 func poolTestServer(t *testing.T) (HostRecord, uint16) {
+	return poolTestServerWith(t, nil)
+}
+
+func poolTestServerWith(t *testing.T, handler func(context.Context, ssh.NewChannel)) (HostRecord, uint16) {
 	t.Helper()
 	owner, key, err := identity.LoadOrCreate(t.TempDir())
 	if err != nil {
@@ -35,23 +39,23 @@ func poolTestServer(t *testing.T) (HostRecord, uint16) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var connections sync.WaitGroup
 	done := make(chan struct{})
-	go acceptPoolTestConnections(ctx, listener, config, &connections, done)
+	go acceptPoolTestConnections(ctx, listener, config, &connections, done, handler)
 	t.Cleanup(func() { cancel(); _ = listener.Close(); <-done; connections.Wait() })
 	return HostRecord{MeshIdentity: owner.ID, Endpoint: "ws://127.0.0.1:1/mesh"}, uint16(listener.Addr().(*net.TCPAddr).Port) //nolint:gosec // OS-assigned port
 }
 
-func acceptPoolTestConnections(ctx context.Context, listener net.Listener, config *ssh.ServerConfig, connections *sync.WaitGroup, done chan<- struct{}) {
+func acceptPoolTestConnections(ctx context.Context, listener net.Listener, config *ssh.ServerConfig, connections *sync.WaitGroup, done chan<- struct{}, handler func(context.Context, ssh.NewChannel)) {
 	defer close(done)
 	for {
 		raw, err := listener.Accept()
 		if err != nil {
 			return
 		}
-		connections.Go(func() { rejectPoolTestChannels(ctx, raw, config) })
+		connections.Go(func() { rejectPoolTestChannels(ctx, raw, config, handler) })
 	}
 }
 
-func rejectPoolTestChannels(ctx context.Context, raw net.Conn, config *ssh.ServerConfig) {
+func rejectPoolTestChannels(ctx context.Context, raw net.Conn, config *ssh.ServerConfig, handler func(context.Context, ssh.NewChannel)) {
 	defer raw.Close() //nolint:errcheck // fixture owns the stream
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
@@ -60,10 +64,23 @@ func rejectPoolTestChannels(ctx context.Context, raw net.Conn, config *ssh.Serve
 		return
 	}
 	defer conn.Close() //nolint:errcheck // fixture shutdown
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { _ = conn.Wait(); cancel() }()
+	var channelsDone sync.WaitGroup
+	defer channelsDone.Wait()
 	go ssh.DiscardRequests(requests)
 	for channel := range channels {
-		_ = channel.Reject(ssh.Prohibited, "test channel denied")
+		channelsDone.Go(func() { handlePoolTestChannel(ctx, channel, handler) })
 	}
+}
+
+func handlePoolTestChannel(ctx context.Context, channel ssh.NewChannel, handler func(context.Context, ssh.NewChannel)) {
+	if handler != nil {
+		handler(ctx, channel)
+		return
+	}
+	_ = channel.Reject(ssh.Prohibited, "test channel denied")
 }
 
 func TestSSHPoolFirstWaiterCancellationDoesNotCancelDial(t *testing.T) {
@@ -85,7 +102,12 @@ func TestSSHPoolFirstWaiterCancellationDoesNotCancelDial(t *testing.T) {
 		}
 		return dialMeshSSHWithKey(ctx, target, key, port)
 	}
-	t.Cleanup(func() { pool.connecting.Wait(); pool.expire(time.Now(), true) })
+	t.Cleanup(func() {
+		pool.connecting.Wait()
+		pool.expire(time.Now(), true)
+		pool.setups.Wait()
+		pool.lifetimes.Wait()
+	})
 	first, cancel := context.WithCancel(t.Context())
 	failed := make(chan error, 1)
 	go func() {
@@ -96,7 +118,7 @@ func TestSSHPoolFirstWaiterCancellationDoesNotCancelDial(t *testing.T) {
 		failed <- err
 	}()
 	<-entered
-	second := make(chan *ssh.Client, 1)
+	second := make(chan *sshCommandLease, 1)
 	go func() {
 		client, release, err := pool.acquire(t.Context(), host, state, port)
 		if err == nil {
@@ -124,7 +146,7 @@ func TestSSHPoolFirstWaiterCancellationDoesNotCancelDial(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	if again != client || dials.Load() != 1 {
+	if again.Client != client.Client || dials.Load() != 1 {
 		t.Fatal("channel denial discarded a live shared transport")
 	}
 }
