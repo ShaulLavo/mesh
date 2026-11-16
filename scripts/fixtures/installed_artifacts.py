@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -22,17 +23,29 @@ def verify_harness(expected, output):
         "imageBudgetBytes": release_worker_groups.MAX_IMAGES, "independentStates": True}}) + "\n")
 
 
+# GitHub answers 502 on every 100-job page of a large CI run (90 jobs, run
+# 43912968125) while 30-job pages of the same run succeed.
+PAGE_SIZE = 30
+SERVER_ERROR_RETRIES = (2, 5, 10)
+SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
+
+
 def api(endpoint):
-    result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=True, timeout=30)
-    return json.loads(result.stdout)
+    for delay in SERVER_ERROR_RETRIES + (None,):
+        result = subprocess.run(["gh", "api", endpoint], capture_output=True, timeout=30)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        if delay is None or not SERVER_ERROR.search(result.stderr):
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+        time.sleep(delay)
 
 
 def pages(endpoint, field):
     result, page = [], 1
     while True:
-        batch = api(f"{endpoint}?per_page=100&page={page}")[field]
+        batch = api(f"{endpoint}?per_page={PAGE_SIZE}&page={page}")[field]
         result.extend(batch)
-        if len(batch) < 100:
+        if len(batch) < PAGE_SIZE:
             return result
         page += 1
 
