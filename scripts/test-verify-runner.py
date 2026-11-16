@@ -27,6 +27,7 @@ from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 LINUX = sys.platform == "linux"
+HANG_SECONDS = 120
 COPIED = ("scripts/verify.sh", "scripts/verify_runner.py", "integration/helpers/isolate.sh",
           "integration/helpers/isolation.py", "integration/helpers/owned_command.py",
           "integration/helpers/process_tree.py", "integration/helpers/process_diagnostics.py")
@@ -187,7 +188,7 @@ sys.exit(7 if mode == "fail" and role == "fixture" else 0)
 '''
 
 
-def wait_until(predicate, description, timeout=120):
+def wait_until(predicate, description, timeout=HANG_SECONDS):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -398,7 +399,7 @@ class RunnerCase(unittest.TestCase):
         shutil.rmtree(self.scene.root)
         self.assertFalse(self.scene.root.exists())
 
-    def finish(self, expected, timeout=20):
+    def finish(self, expected, timeout=HANG_SECONDS):
         stdout, stderr = self.scene.runner.communicate(timeout=timeout)
         self.assertEqual(self.scene.runner.returncode, expected, stdout + stderr)
         self.assertIsNone(self.sentinel.poll(), "unrelated sentinel was signalled")

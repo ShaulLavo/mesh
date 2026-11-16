@@ -61,6 +61,15 @@ class TerminalDrainTest(unittest.TestCase):
 
 
 class FixtureEnvironmentTest(unittest.TestCase):
+    def test_back_output_waits_for_a_healthy_command(self):
+        with tempfile.TemporaryDirectory(prefix="m-back-output-") as temporary:
+            root = Path(temporary)
+            command = root / "mesh"
+            command.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(6)\nprint('back completed')\n")
+            command.chmod(0o700)
+            fixture = Fixture(str(command), root)
+            self.assertEqual(fixture.back_output("fixture-terminal"), "back completed\n")
+
     def test_caller_environment_is_not_inherited(self):
         caller = {
             "PATH": "/usr/bin:/bin",

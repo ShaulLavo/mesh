@@ -25,12 +25,11 @@ import termios
 import time
 
 from isolation import protected_cleanup, refuse_live_paths, termination_cleanup
-from mesh_control import HANG_SECONDS
+from mesh_control import HANG_SECONDS, round_trip
 from owned_command import DEFAULTS
 from worker_failure import WorkerFailure
 
 sys.dont_write_bytecode = True
-from mesh_control import round_trip
 
 
 PROMPT = b"MESH_PROMPT> "
@@ -392,7 +391,7 @@ class Fixture:
         self.validate_destinations()
         environment = dict(self.environment, MESH_TERMINAL_ID=terminal_id)
         result = subprocess.run([self.binary, "back"], env=environment, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=5)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=HANG_SECONDS)
         return result.stdout.decode()
 
     def shell_identity(self, terminal):
@@ -434,10 +433,10 @@ class Fixture:
         require(response.get("type") == "host.info.result", f"remote identity request failed: {response}")
         self.remote_id = response["host"]["id"]
         source = subprocess.run([self.binary, "device", "identity", "--json"], env=self.environment,
-                                capture_output=True, check=True, timeout=5)
+                                capture_output=True, check=True, timeout=HANG_SECONDS)
         source_id = json.loads(source.stdout)["id"]
         subprocess.run([self.binary, "device", "approve", "--allow-root", "--", source_id],
-                       env=environment, capture_output=True, check=True, timeout=5)
+                       env=environment, capture_output=True, check=True, timeout=HANG_SECONDS)
 
         def listening():
             try:
@@ -459,7 +458,7 @@ class Fixture:
 
     def adopt_remote_name(self, host):
         subprocess.run([self.binary, "serve", "ls"],
-                       env=self.environment, capture_output=True, check=True, timeout=5)
+                       env=self.environment, capture_output=True, check=True, timeout=HANG_SECONDS)
         claim = json.loads((self.config / "machine-names" / (self.remote_id + ".json")).read_text())
         require(claim["id"] == self.remote_id and claim["machineName"] == host["machineName"],
                 "authenticated service read did not adopt the destination declaration")
@@ -610,7 +609,7 @@ def window_death(fixture):
 
 def window_entry(fixture):
     refused = subprocess.run([fixture.binary, "--window"], env=fixture.environment, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=HANG_SECONDS)
     require(refused.returncode != 0 and b"terminal" in refused.stdout.lower(), f"non-TTY window was accepted: {refused.stdout!r}")
     first = fixture.window(take=True)
     before_prompt = first.expect(PROMPT).split(PROMPT, 1)[0]

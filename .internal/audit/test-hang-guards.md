@@ -72,6 +72,18 @@ process cleanup. Local builds are sufficient for these checks.
 
 ## Verification
 
+The review correction applies the shared guard to terminal back output, device
+identity and approval, name adoption, and the non-TTY entry check. Normal runner
+completion now shares its two-minute observation guard; explicit cancellation
+controls retain their injected stage bounds. A real six-second command covers
+the former back-output cutoff. The specialized clipboard campaign still has a
+containing-owner deadline and needs its own lifecycle audit before changing it.
+The six-second control fails against the original helper with `TimeoutExpired`.
+It and the runner's real success and failure-aggregation controls pass three
+times on each of Python 3.12 and 3.14. Repository-configured Ruff and diff checks
+pass. The subprocess is direct, and its timeout path kills and reaps it before
+temporary state is removed; no task processes remain.
+
 Use the explicit local runner with Go 1.27.4 and the default online module proxy.
 Logs are under `/work/reports/mesh-test-hang-guards-20261116-9hAzla`.
 
