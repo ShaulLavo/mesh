@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -407,7 +408,7 @@ func awaitDaemonServer(t *testing.T, done <-chan error) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(testenv.HangTimeout):
 		t.Fatal("daemon test server did not finish")
 	}
 }

@@ -18,6 +18,9 @@ SOURCE = (ROOT / "prove-release-transition.sh").read_text()
 SPEC = importlib.util.spec_from_file_location("transition_fixture", ROOT / "fixtures/release_transition.py")
 TRANSITION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(TRANSITION)
+LEGACY_SPEC = importlib.util.spec_from_file_location("legacy_reader", ROOT / "prove-legacy-release-reader.py")
+LEGACY = importlib.util.module_from_spec(LEGACY_SPEC)
+LEGACY_SPEC.loader.exec_module(LEGACY)
 
 
 class HelperRollbackWaitTest(unittest.TestCase):
@@ -59,6 +62,74 @@ fixture() {
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(count, 1)
         self.assertIn("source did not start at probe: fixture source startup failure", result.stderr)
+
+
+class ProofHangGuardTest(unittest.TestCase):
+    def run_helper(self, name, setup, call):
+        definition = re.search(r"^" + name + r"\(\) \{.*?^\}", SOURCE, re.M | re.S)
+        self.assertIsNotNone(definition)
+        return subprocess.run(["bash", "-c", "set -euo pipefail\n" + setup + definition.group(0) + "\n" + call],
+                              capture_output=True, text=True, timeout=120, check=False)
+
+    def test_exit_can_arrive_after_the_old_poll_count(self):
+        setup = '''count=0
+kill() { count=$((count + 1)); (( count <= 120 )); }
+sleep() { :; }
+'''
+        result = self.run_helper("wait_for_exit", setup, 'wait_for_exit 123; printf "%s" "$count"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "121")
+
+    def test_exit_polling_still_has_one_finite_deadline(self):
+        setup = '''SECONDS=0
+kill() { return 0; }
+sleep() { SECONDS=$((SECONDS + 120)); }
+'''
+        result = self.run_helper("wait_for_exit", setup, 'wait_for_exit 123')
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_stop_does_not_treat_an_expired_listing_as_socket_absence(self):
+        setup = '''SECONDS=0
+state=unused
+kill() { return 1; }
+wait() { :; }
+mesh() { SECONDS=$((SECONDS + 120)); return 1; }
+rm() { printf removed; }
+fail() { printf '%s' "$*" >&2; exit 1; }
+'''
+        result = self.run_helper("stop_daemon", setup, 'stop_daemon 123 binary')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("socket absence was not established", result.stderr)
+
+
+class LegacyReaderHangGuardTest(unittest.TestCase):
+    def test_readiness_queries_consume_one_deadline(self):
+        process = mock.Mock()
+        process.poll.return_value = None
+        replies = [mock.Mock(returncode=1), mock.Mock(returncode=1), mock.Mock(returncode=0)]
+        with mock.patch.object(LEGACY.installed_clock, "parent_deadline", return_value=123) as deadline, \
+                mock.patch.object(LEGACY.installed_clock, "remaining_until", side_effect=[120, 100, 80]) as remaining, \
+                mock.patch.object(LEGACY.subprocess, "run", side_effect=replies) as run, \
+                mock.patch.object(LEGACY.time, "sleep"):
+            LEGACY.wait_daemon(Path("original"), {}, process)
+        deadline.assert_called_once_with(120)
+        self.assertEqual(remaining.call_args_list, [mock.call(123, 120)] * 3)
+        self.assertEqual([call.kwargs["timeout"] for call in run.call_args_list], [120, 100, 80])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list],
+                         ["--timeout=120s", "--timeout=100s", "--timeout=80s"])
+
+    def test_termination_and_reap_share_cleanup_deadline(self):
+        process = mock.Mock()
+        process.wait.side_effect = [subprocess.TimeoutExpired("daemon", 10), 0]
+        with mock.patch.object(LEGACY.installed_clock, "cleanup_deadline", return_value=456) as deadline, \
+                mock.patch.object(LEGACY.installed_clock, "remaining_until", side_effect=[10, 80]) as remaining:
+            LEGACY.terminate(process)
+        deadline.assert_called_once_with()
+        self.assertEqual(remaining.call_args_list, [mock.call(456, 10), mock.call(456, 120)])
+        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=10), mock.call(timeout=80)])
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
 
 
 class CandidateWritePathTest(unittest.TestCase):

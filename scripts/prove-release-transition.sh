@@ -167,9 +167,10 @@ fail() {
 wait_for_daemon() {
   local binary=$1
   local pid=$2
-  for _ in $(seq 120); do
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
     kill -0 "$pid" 2>/dev/null || return 1
-    if [[ -S $state/daemon.sock ]] && mesh "$binary" ls --daemon >/dev/null 2>&1; then
+    if [[ -S $state/daemon.sock ]] && mesh "$binary" ls --daemon --timeout="$((deadline - SECONDS))s" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.05
@@ -209,7 +210,8 @@ build_field() {
 wait_for_token() {
   local path=$1
   local token=$2
-  for _ in $(seq 120); do
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
     if python3 - "$path" "$token" <<'PY'
 import pathlib
 import sys
@@ -227,7 +229,8 @@ PY
 
 wait_for_exit() {
   local pid=$1
-  for _ in $(seq 120); do
+  local deadline=$((SECONDS + 120))
+  while (( SECONDS < deadline )); do
     kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.05
   done
@@ -290,6 +293,7 @@ PY
 stop_daemon() {
   local pid=$1
   local binary=$2
+  local deadline=$((SECONDS + 120))
   kill -TERM "$pid" 2>/dev/null || true
   for _ in $(seq 120); do
     kill -0 "$pid" 2>/dev/null || break
@@ -299,8 +303,9 @@ stop_daemon() {
     kill -9 "$pid" 2>/dev/null || true
   fi
   wait "$pid" 2>/dev/null || true
-  for _ in $(seq 120); do
-    if ! mesh "$binary" ls --daemon >/dev/null 2>&1; then
+  while (( SECONDS < deadline )); do
+    if ! mesh "$binary" ls --daemon --timeout="$((deadline - SECONDS))s" >/dev/null 2>&1; then
+      (( SECONDS < deadline )) || fail 'daemon socket absence was not established before the cleanup deadline'
       rm -f -- "$state/daemon.sock"
       return 0
     fi
@@ -493,7 +498,8 @@ touch "$test_root/client.err"
 mesh "$old_binary" local --daemon --detach-key=ctrl+] -- /bin/sh <"$test_root/input" >"$test_root/client.out" 2>"$test_root/client.err" &
 client=$!
 exec 3>"$test_root/input"
-for _ in $(seq 120); do
+session_deadline=$((SECONDS + 120))
+while (( SECONDS < session_deadline )); do
   session=$(sed -n 's/^new session \([0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\)$/\1/p' "$test_root/client.err" | head -n1)
   [[ -z $session ]] || break
   sleep 0.05

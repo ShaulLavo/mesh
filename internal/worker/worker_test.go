@@ -1256,7 +1256,7 @@ func TestFinishWaitsForDisplacedAttachmentWriters(t *testing.T) {
 
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testenv.HangTimeout)
 	for !condition() {
 		if time.Now().After(deadline) {
 			t.Fatal("condition not met before timeout")

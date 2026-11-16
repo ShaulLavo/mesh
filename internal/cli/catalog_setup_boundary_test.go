@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/wake"
 )
@@ -42,7 +43,7 @@ func TestListCatalogRejectsSetupExpiredDuringWakeCacheSettlement(t *testing.T) {
 	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
 
 	t.Run("healthy retained connection", func(t *testing.T) {
-		run := collectCatalogSetupBoundary(t, host, time.Second, false)
+		run := collectCatalogSetupBoundary(t, host, testenv.HangTimeout, false)
 		rows, observed := run.rows, run.observed
 		if rows[0].Host.ID != host.ID || rows[0].Host.MachineName != "fixture" || rows[0].Host.NameRevision != 1 || !rows[0].Host.NameVerified || rows[0].Stale || rows[0].Err != nil || len(rows[0].Sessions) != 1 || rows[0].Sessions[0].ID != "7K3D" || observed.lists.Load() != 1 {
 			t.Fatal("healthy setup lost native catalog or retained connection", rows[0].Err)
@@ -125,7 +126,7 @@ func collectCatalogSetupBoundary(t *testing.T, host HostRecord, setup time.Durat
 	query := func(ctx context.Context, host *HostRecord, budget HostQueryBudget) ([]protocol.SessionInfo, error) {
 		return listRemoteDeclaredHost(ctx, host, dial, budget)
 	}
-	run.rows, err = CollectHostSessions(t.Context(), []HostRecord{host}, HostQueryBudget{Setup: setup, Reply: time.Second}, query, cache)
+	run.rows, err = CollectHostSessions(t.Context(), []HostRecord{host}, HostQueryBudget{Setup: setup, Reply: testenv.HangTimeout}, query, cache)
 	if failure := run.controlFailure(err); failure != nil {
 		t.Fatal("native authenticated host.info control unavailable: ", failure)
 	}

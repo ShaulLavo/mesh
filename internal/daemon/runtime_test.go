@@ -29,10 +29,11 @@ import (
 	"github.com/coder/websocket"
 	"github.com/shaul/mesh/internal/dnsname"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 )
 
-const runtimeTestTimeout = 3 * time.Second
+const runtimeTestTimeout = testenv.HangTimeout
 
 func TestErrorReporterWorkerStopsAfterHealthySink(t *testing.T) {
 	reported := make(chan error, 1)

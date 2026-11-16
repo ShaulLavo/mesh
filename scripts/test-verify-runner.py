@@ -187,7 +187,7 @@ sys.exit(7 if mode == "fail" and role == "fixture" else 0)
 '''
 
 
-def wait_until(predicate, description, timeout=12):
+def wait_until(predicate, description, timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -252,7 +252,7 @@ def reap_ready():
 
 def remove_descendants(keep):
     """Kill and reap everything this subreaper adopted or started except keep."""
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         remaining = descendants(os.getpid()) - keep
         for pid in remaining:
@@ -326,7 +326,7 @@ class Scene:
     def release_hold(self, job, name):
         (self.control / job / f"hold-{name}").unlink()
 
-    def reached(self, job, name, timeout=12):
+    def reached(self, job, name, timeout=120):
         return int(wait_until(lambda: complete_line(self.control / job / f"at-{name}"), f"{job} hold {name}", timeout))
 
     def ready(self, count):

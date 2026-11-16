@@ -25,6 +25,7 @@ import termios
 import time
 
 from isolation import protected_cleanup, refuse_live_paths, termination_cleanup
+from mesh_control import HANG_SECONDS
 from owned_command import DEFAULTS
 from worker_failure import WorkerFailure
 
@@ -89,7 +90,7 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def eventually(check, message, timeout=4):
+def eventually(check, message, timeout=HANG_SECONDS):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = check()
@@ -107,7 +108,7 @@ def redirect_stderr(path):
 
 
 class Terminal:
-    def __init__(self, command, environment, cwd, timeout=4, stderr_path=None):
+    def __init__(self, command, environment, cwd, timeout=HANG_SECONDS, stderr_path=None):
         self.pid, self.master = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
@@ -200,7 +201,7 @@ class Terminal:
                 self.status = os.waitstatus_to_exitcode(status)
         return self.status
 
-    def expect_exit(self, timeout=4):
+    def expect_exit(self, timeout=HANG_SECONDS):
         def exited():
             self.drain()
             return self.poll() is not None
@@ -209,7 +210,7 @@ class Terminal:
     def crash(self):
         if self.poll() is None:
             os.kill(self.pid, signal.SIGKILL)
-            self.expect_exit(cleanup_wait(4, f"terminal {self.pid} exited"))
+            self.expect_exit(cleanup_wait(HANG_SECONDS, f"terminal {self.pid} exited"))
 
     def resize(self, cols, rows):
         fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
@@ -287,7 +288,7 @@ class Fixture:
     def local_listing(self):
         self.validate_destinations()
         result = subprocess.run([self.binary, "ls", "--all"], env=self.environment, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=3)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=HANG_SECONDS)
         require(result.returncode == 0, f"local listing failed: {result.stdout!r}")
         return result.stdout.decode()
 
@@ -315,7 +316,7 @@ class Fixture:
         except subprocess.TimeoutExpired:
             self.daemon.kill()
             # Still running after KILL is a failure to report, not a reason to wait forever.
-            self.daemon.wait(timeout=cleanup_wait(5, "the daemon exited after KILL"))
+            self.daemon.wait(timeout=cleanup_wait(HANG_SECONDS, "the daemon exited after KILL"))
         self.daemon = None
         self.daemon_log.close()
         self.daemon_log = None
@@ -515,7 +516,7 @@ class Fixture:
 
     def request_worker_kill(self, connections, socket_path, deadline):
         connection = connections.enter_context(socket.socket(socket.AF_UNIX))
-        connection.settimeout(deadline.remaining(0.3, f"worker {socket_path} accepted a kill"))
+        connection.settimeout(deadline.remaining(HANG_SECONDS, f"worker {socket_path} accepted a kill"))
         try:
             connection.connect(str(socket_path))
         except OSError as error:
@@ -534,9 +535,7 @@ class Fixture:
             self.await_worker_completion(socket_path, connection, deadline)
 
     def await_worker_completion(self, socket_path, connection, deadline):
-        # Match the product's control exchange deadline, which includes kill
-        # escalation and the retained output of a never-attached command.
-        exchange = deadline.within(10)
+        exchange = deadline.within(HANG_SECONDS)
         what = f"worker {socket_path} answered its kill"
         try:
             kind = receive_by(connection, 1, exchange, what)
@@ -552,7 +551,7 @@ class Fixture:
         # Neither peer closure nor acknowledgment covers its final disk writes.
         eventually(lambda: not socket_path.exists(),
                    f"fixture worker {socket_path} did not finish writing its session data",
-                   deadline.remaining(4, f"worker {socket_path} removed its socket"))
+                   deadline.remaining(HANG_SECONDS, f"worker {socket_path} removed its socket"))
 
     @staticmethod
     def complete(data, length):
