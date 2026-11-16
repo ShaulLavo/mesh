@@ -1,8 +1,9 @@
 # Test hang guard follow-up
 
-Status: Approved. Local follow-up on PR 470 head `70f00b0f809cc8d7af60c69e0831de41e964f51b`.
-Publish as a new PR only after PR 470 merges. Production timing, retries,
-installer behavior, acceptance assertions, baselines, and release pins are unchanged.
+Status: Approved. Follow-up composed on merged PR 470, `6d032d9b75e2e0f66dc43ea5c88d6f7a9501ad5e`.
+Production timing, retries, installer behavior, acceptance assertions and baselines
+are unchanged. The five harness references advance to the composed source so CI
+executes these helper changes.
 
 ## Evidence
 
@@ -78,6 +79,10 @@ completion now shares its two-minute observation guard; explicit cancellation
 controls retain their injected stage bounds. A real six-second command covers
 the former back-output cutoff. The specialized clipboard campaign still has a
 containing-owner deadline and needs its own lifecycle audit before changing it.
+Composition preserves the zero-byte reset classification and helper receipt
+revalidation from PR 470. Its newer ordered-handoff controls also use two-minute
+process, barrier and join guards, with owned helper lifetimes longer than that
+guard. Synthetic expiration inputs and exact identity assertions are unchanged.
 The six-second control fails against the original helper with `TimeoutExpired`.
 It and the runner's real success and failure-aggregation controls pass three
 times on each of Python 3.12 and 3.14. Repository-configured Ruff and diff checks
