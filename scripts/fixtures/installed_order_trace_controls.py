@@ -113,6 +113,34 @@ class OrderFailureEvidenceTest(unittest.TestCase):
         self.assertEqual(event["mapping"]["mapped"]["inode"], prior["inode"])
         self.assertNotIn("helperInspectionFailure", host.diagnostics.reserved)
 
+    def test_receipt_changes_before_pid_read_require_resampling(self):
+        self.check_receipt_changes_before_pid_read(False)
+
+    def test_removed_stale_executable_receipt_requires_resampling(self):
+        self.check_receipt_changes_before_pid_read(True)
+
+    def check_receipt_changes_before_pid_read(self, remove_previous):
+        host, _previous, receipt = self.helper_handoff()
+        prior = host.helper_image
+        executable = host.case.state / "update/helper" / prior["sha256"] / "mesh"
+        old = {"digest": prior["sha256"], "executable": str(executable), "servicePath": receipt["servicePath"]}
+        receipt_path = host.case.state / "update/helper/installed.json"
+        receipt_path.write_text(json.dumps(old))
+        replacement = self.start_process(receipt["executable"])
+        def promote():
+            receipt_path.write_text(json.dumps(receipt))
+            if remove_previous:
+                executable.unlink(missing_ok=True)
+            return replacement.pid
+        host.case.units.managers["helper"].manager_pid.side_effect = promote
+        with installed_clock.handoff(self.deadline):
+            self.assertIsNone(host.sample_helper({}))
+            self.assertEqual(host.helper_image, prior)
+            image = host.sample_helper({})
+        self.assertEqual(image["pid"], replacement.pid)
+        self.assertEqual(image["sha256"], receipt["digest"])
+        self.assertNotEqual(image["inode"], prior["inode"])
+
     def test_owned_restarting_manager_is_incomplete_until_verified(self):
         host, previous, _receipt = self.helper_handoff()
         manager = host.case.units.managers["helper"]

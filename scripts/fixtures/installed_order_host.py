@@ -13,6 +13,10 @@ from fixtures import installed_continuity
 from fixtures.installed_order import ACCOUNT_LOG_FILES
 
 
+def helper_observation_changed(manager, pid, receipt_path, receipt):
+    return manager.manager_pid() != pid or json.loads(receipt_path.read_text()) != receipt
+
+
 class Origin(installed_origin.Origin):
     def __init__(self, root, diagnostics):
         super().__init__(root)
@@ -153,16 +157,16 @@ class Host:
             image = native_services.mapped_image(pid, receipt["executable"])
             result["helper"] = image
         except (FileNotFoundError, ProcessLookupError):
-            if getattr(self, "helper_image", None) is None or manager.manager_pid() == pid:
+            if getattr(self, "helper_image", None) is None or not helper_observation_changed(manager, pid, receipt_path, receipt):
                 raise
-            order_trace.event(self, "helper.process-changed", pid=pid)
+            order_trace.event(self, "helper.observation-changed", pid=pid)
             return None
         except installed_clock.ClockExpired:
             raise
         except RuntimeError as error:
             self.helper_sample = manager, pid, receipt, error
-            if getattr(self, "helper_image", None) is not None and manager.manager_pid() != pid:
-                order_trace.event(self, "helper.process-changed", pid=pid)
+            if getattr(self, "helper_image", None) is not None and helper_observation_changed(manager, pid, receipt_path, receipt):
+                order_trace.event(self, "helper.observation-changed", pid=pid)
                 return None
             if not self.retiring_helper(pid, receipt):
                 raise
@@ -171,7 +175,7 @@ class Host:
             return None
         if image["sha256"] != receipt["digest"]:
             raise RuntimeError("ordered native helper executes another image")
-        if manager.manager_pid() != pid or json.loads(receipt_path.read_text()) != receipt:
+        if helper_observation_changed(manager, pid, receipt_path, receipt):
             order_trace.event(self, "helper.observation-changed", pid=pid)
             return None
         self.helper_image = image
