@@ -1,14 +1,20 @@
 """Pin the complete producer artifact set before consuming native inputs."""
 import hashlib
 import json
+import os
 import re
 import subprocess
+import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
 
 KEYS = ("linux-amd64", "linux-arm64", "darwin-arm64")
+API_ATTEMPTS = 3
+API_SECONDS = 120
+TRANSIENT_HTTP = {500, 502, 503, 504}
 
 
 def verify_harness(expected, output):
@@ -23,8 +29,35 @@ def verify_harness(expected, output):
 
 
 def api(endpoint):
-    result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=True, timeout=30)
-    return json.loads(result.stdout)
+    deadline = time.monotonic() + API_SECONDS
+    for attempt in range(API_ATTEMPTS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"GitHub API GET {endpoint} exhausted its {API_SECONDS}-second hang cap")
+        result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=False, timeout=remaining)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+        detail = api_error_detail(result.stderr)
+        match = re.search(r"\bHTTP (\d{3})\b", detail)
+        status = int(match.group(1)) if match else None
+        if status not in TRANSIENT_HTTP or attempt == API_ATTEMPTS - 1:
+            raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt + 1} attempt(s), exit {result.returncode}: {detail}")
+        delay = 0.5 * 2 ** attempt
+        if deadline - time.monotonic() <= delay:
+            raise TimeoutError(f"GitHub API GET {endpoint} cannot retry within its {API_SECONDS}-second hang cap: {detail}")
+        print(f"GitHub API GET {endpoint} returned HTTP {status}; retry {attempt + 2}/{API_ATTEMPTS}", file=sys.stderr)
+        time.sleep(delay)
+
+
+def api_error_detail(data):
+    detail = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data or ""
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.environ.get(name)
+        if token:
+            detail = detail.replace(token, "[redacted]")
+    detail = re.sub(r"(?im)authorization:[^\r\n]*", "Authorization: [redacted]", detail)
+    detail = re.sub(r"[\x00-\x1f\x7f]", " ", detail).strip()
+    return detail[:4096] or "gh returned no error text"
 
 
 def pages(endpoint, field):
@@ -167,5 +200,4 @@ def main(arguments):
 
 
 if __name__ == "__main__":
-    import sys
     main(sys.argv[1:])

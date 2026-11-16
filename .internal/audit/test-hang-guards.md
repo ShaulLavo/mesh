@@ -73,6 +73,16 @@ process cleanup. Local builds are sufficient for these checks.
 
 ## Verification
 
+The hosted retry then failed before artifact intake while listing producer jobs
+through GitHub's API. Its captured error omitted `gh` stderr, so the original
+HTTP status is unknown. A contemporaneous read of the same endpoint returned
+HTTP 502. The helper now retries only HTTP 500, 502, 503 and 504, at most three
+times within one two-minute deadline. Permanent API errors, command timeouts and
+invalid success JSON still fail; final errors include the endpoint and bounded,
+redacted details. The actual-command 502 control fails the old helper and passes
+the fix. All 16 API and artifact controls passed three times on Python 3.12 and
+3.14. No extra hosted rerun was started.
+
 The review correction applies the shared guard to terminal back output, device
 identity and approval, name adoption, and the non-TTY entry check. Normal runner
 completion now shares its two-minute observation guard; explicit cancellation

@@ -19,6 +19,7 @@ import textwrap
 import unittest
 import threading
 import subprocess
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
@@ -1198,6 +1199,93 @@ class AccountIsolationTest(unittest.TestCase):
         command.assert_called_once_with(["/usr/sbin/userdel", "test-only"])
         stop.assert_not_called()
         self.assertTrue(record["absent"])
+
+
+class ArtifactAPIReadTest(unittest.TestCase):
+    endpoint = "repos/ShaulLavo/mesh/actions/runs/123/jobs?per_page=100&page=1"
+
+    def response(self, status=None):
+        return subprocess.CompletedProcess(["gh", "api", self.endpoint], 1 if status else 0,
+            b"" if status else b'{"jobs": []}', f"gh: upstream refused (HTTP {status})".encode() if status else b"")
+
+    def test_transient_reads_recover_and_preserve_endpoint(self):
+        for status in (500, 502, 503, 504):
+            with self.subTest(status=status), patch.object(installed_artifacts.subprocess, "run",
+                    side_effect=[self.response(status), self.response()]) as run, patch.object(installed_artifacts.time, "sleep") as sleep:
+                self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
+                self.assertEqual(run.call_count, 2)
+                self.assertTrue(all(call.args[0] == ["gh", "api", self.endpoint] for call in run.call_args_list))
+                sleep.assert_called_once_with(0.5)
+
+    def test_permanent_and_unclassified_failures_stop_with_details(self):
+        for status in (401, 403, 404, 429, 501, "unknown"):
+            with self.subTest(status=status), patch.object(installed_artifacts.subprocess, "run", return_value=self.response(status)) as run, \
+                    patch.object(installed_artifacts.time, "sleep") as sleep:
+                self.assertRaisesRegex(RuntimeError, "GitHub API GET .*jobs.*upstream refused", installed_artifacts.api, self.endpoint)
+                self.assertEqual(run.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_transient_attempts_are_bounded(self):
+        with patch.object(installed_artifacts.subprocess, "run", return_value=self.response(502)) as run, \
+                patch.object(installed_artifacts.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "after 3 attempt.*HTTP 502"):
+                installed_artifacts.api(self.endpoint)
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.5, 1.0])
+
+    def test_command_timeout_and_invalid_success_do_not_retry(self):
+        error = subprocess.TimeoutExpired(["gh", "api", self.endpoint], installed_artifacts.API_SECONDS)
+        with patch.object(installed_artifacts.subprocess, "run", side_effect=error) as run:
+            with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                installed_artifacts.api(self.endpoint)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(run.call_count, 1)
+        with patch.object(installed_artifacts.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"{", b"")) as run:
+            with self.assertRaises(json.JSONDecodeError):
+                installed_artifacts.api(self.endpoint)
+            self.assertEqual(run.call_count, 1)
+
+    def test_retry_cannot_extend_the_shared_hang_cap(self):
+        now, timeouts = [0.0], []
+        def run(_command, **options):
+            timeouts.append(options["timeout"])
+            now[0] += options["timeout"]
+            return self.response(503)
+        with patch.object(installed_artifacts.subprocess, "run", side_effect=run), \
+                patch.object(installed_artifacts.time, "monotonic", side_effect=lambda: now[0]), patch.object(installed_artifacts.time, "sleep") as sleep:
+            with self.assertRaisesRegex(TimeoutError, "cannot retry.*HTTP 503"):
+                installed_artifacts.api(self.endpoint)
+        self.assertEqual(timeouts, [installed_artifacts.API_SECONDS])
+        sleep.assert_not_called()
+
+    def test_error_details_are_bounded_and_redacted(self):
+        with patch.dict(os.environ, {"GH_TOKEN": "fixture-secret", "GITHUB_TOKEN": "second-secret"}):
+            detail = installed_artifacts.api_error_detail(b"Authorization: Basic encoded-secret\nfixture-secret second-secret\x1b" + b"x" * 5000)
+        for secret in ("encoded-secret", "fixture-secret", "second-secret", "\x1b", "\n"):
+            self.assertNotIn(secret, detail)
+        self.assertEqual(len(detail), 4096)
+        self.assertEqual(installed_artifacts.api_error_detail(b""), "gh returned no error text")
+
+    def test_actual_gh_command_recovers_from_502(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-api-read-") as temporary:
+            root = Path(temporary)
+            state = root / "calls"
+            state.write_text("0")
+            command = root / "gh"
+            command.write_text(f"#!{sys.executable}\n" + "import os, sys\nfrom pathlib import Path\n"
+                "path = Path(os.environ['MESH_API_TEST_STATE'])\ncount = int(path.read_text())\npath.write_text(str(count + 1))\n"
+                "if count == 0:\n    print('gh: upstream unavailable (HTTP 502)', file=sys.stderr)\n    sys.exit(1)\n"
+                "print('{\"jobs\": []}')\n")
+            command.chmod(0o700)
+            self.actual_api_read(root, state)
+        self.assertFalse(root.exists())
+
+    def actual_api_read(self, root, state):
+        environment = {"PATH": str(root) + os.pathsep + os.environ["PATH"], "MESH_API_TEST_STATE": str(state)}
+        with patch.dict(os.environ, environment), patch.object(installed_artifacts.time, "sleep") as sleep:
+            self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
+        self.assertEqual(state.read_text(), "2")
+        sleep.assert_called_once_with(0.5)
 
 
 class ArtifactPinTest(unittest.TestCase):
