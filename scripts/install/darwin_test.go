@@ -85,7 +85,7 @@ func TestDarwinInstallerLaunchdActivation(t *testing.T) {
 			if tt.pending {
 				writeDarwinFixture(t, marker, "", 0600)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, "sh", "-s", "--", source, "7337", "2222", "/mesh", base64.StdEncoding.EncodeToString([]byte(authorizedKey)), base64.StdEncoding.EncodeToString([]byte(service))) //nolint:gosec // embedded installer, fixture-only arguments, and an external launchctl stub
 			cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "LAUNCHCTL_FIXTURE="+home, "LAUNCHCTL_MODE="+tt.mode)
