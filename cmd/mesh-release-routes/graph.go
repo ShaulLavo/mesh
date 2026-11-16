@@ -147,11 +147,14 @@ func manifestHistory(history []publishedEvidence) []publishedEvidence {
 	return slices.DeleteFunc(slices.Clone(history), func(item publishedEvidence) bool { return item.Manifest.Version == "" })
 }
 
-func setSeedRanges(anchors []release.AnchorEntry, graph verifiedGraph) {
+func setAnchorRanges(anchors []release.AnchorEntry, graph verifiedGraph) {
 	minimum := uint64(0)
 	for index := range anchors {
 		if anchors[index].Metadata != "" {
-			minimum = anchors[index].AnchorsFrom
+			// The index advertises a conservative subset of the signed direct
+			// range so binary search remains valid across wider proof windows.
+			minimum = max(minimum, anchors[index].AnchorsFrom)
+			anchors[index].AnchorsFrom = minimum
 			continue
 		}
 		first := index

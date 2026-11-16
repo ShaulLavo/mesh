@@ -39,7 +39,7 @@ type AnchorEntry struct {
 	Version     string    `json:"version"`
 	Metadata    string    `json:"metadata,omitempty"`
 	Manifest    string    `json:"manifest,omitempty"`
-	AnchorsFrom uint64    `json:"anchorsFrom"`
+	AnchorsFrom uint64    `json:"anchorsFrom"` // conservative search bound within the proved direct range
 	PublishedAt time.Time `json:"publishedAt"`
 }
 
@@ -144,8 +144,11 @@ func (page AnchorPage) validate(publishedBy string) error {
 		if err := validateAnchorEntry(entry, page.Page*AnchorsPerPage+uint64(index), publishedBy); err != nil {
 			return err
 		}
-		if index > 0 && !anchorsIncrease(page.Entries[index-1], entry) {
-			return errors.New("release: anchor entries do not increase monotonically")
+		if index == 0 {
+			continue
+		}
+		if err := validateAnchorOrder(page.Entries[index-1], entry); err != nil {
+			return err
 		}
 	}
 	return page.validateBackrefs(publishedBy)
@@ -157,7 +160,7 @@ func validateAnchorEntry(entry AnchorEntry, ordinal uint64, publishedBy string) 
 	}
 	order, _ := CompareVersions(entry.Version, publishedBy)
 	if entry.Ordinal != ordinal || entry.AnchorsFrom > ordinal || order >= 0 {
-		return errors.New("release: anchor ordinal, direct range or publication order is invalid")
+		return fmt.Errorf("release: anchor %s has ordinal %d (want %d), anchorsFrom %d (must not exceed ordinal), publisher %s (must follow anchor)", entry.Version, entry.Ordinal, ordinal, entry.AnchorsFrom, publishedBy)
 	}
 	if !validDigest(entry.Metadata) && !validDigest(entry.Manifest) || entry.Metadata != "" && !validDigest(entry.Metadata) || entry.Manifest != "" && !validDigest(entry.Manifest) {
 		return errors.New("release: anchor lacks a valid metadata or seed manifest digest")
@@ -168,9 +171,18 @@ func validateAnchorEntry(entry AnchorEntry, ordinal uint64, publishedBy string) 
 	return nil
 }
 
-func anchorsIncrease(previous, next AnchorEntry) bool {
+func validateAnchorOrder(previous, next AnchorEntry) error {
 	order, _ := CompareVersions(previous.Version, next.Version)
-	return order < 0 && previous.AnchorsFrom <= next.AnchorsFrom && !next.PublishedAt.Before(previous.PublishedAt)
+	if order >= 0 {
+		return fmt.Errorf("release: anchors %s -> %s: versions must strictly increase", previous.Version, next.Version)
+	}
+	if previous.AnchorsFrom > next.AnchorsFrom {
+		return fmt.Errorf("release: anchors %s -> %s: anchorsFrom decreases from %d to %d", previous.Version, next.Version, previous.AnchorsFrom, next.AnchorsFrom)
+	}
+	if next.PublishedAt.Before(previous.PublishedAt) {
+		return fmt.Errorf("release: anchors %s -> %s: publishedAt decreases from %s to %s", previous.Version, next.Version, previous.PublishedAt.Format(time.RFC3339Nano), next.PublishedAt.Format(time.RFC3339Nano))
+	}
+	return nil
 }
 
 func (page AnchorPage) validateBackrefs(publishedBy string) error {
