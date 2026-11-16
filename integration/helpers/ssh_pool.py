@@ -172,7 +172,7 @@ def main():
     report = {}
     try:
         with bench.allocation_signals():
-            root = Path(tempfile.mkdtemp(prefix="ms-pool-", dir=os.environ.get("MESH_SHORT_TMP", "/work/tmp")))
+            root = Path(tempfile.mkdtemp(prefix="ms-pool-", dir=os.environ.get("MESH_SHORT_TMP") or tempfile.gettempdir()))
         fixture = bench.SSHFixture(sys.argv[1], root)
         try:
             exercise(fixture)
