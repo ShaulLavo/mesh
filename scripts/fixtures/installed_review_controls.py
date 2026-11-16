@@ -1,5 +1,6 @@
 """Pure review countermodels and real owned-process supervision controls."""
 import copy
+import hashlib
 import io
 from datetime import datetime, timedelta, timezone
 import json
@@ -531,7 +532,7 @@ class PublishedRouteReviewTest(unittest.TestCase):
     def test_receipt_matching_old_helper_is_not_authenticated_final_helper(self):
         record = self.record()
         case = SimpleNamespace(inspect_retained=lambda: None, control=lambda _: {"host": {"build": {"digest": "target-image"}}},
-            releases=SimpleNamespace(builds={"target": {"digest": "target-image"}}), mapped_helper=lambda: {"sha256": "old-helper-image"})
+            releases=SimpleNamespace(builds={"target": {"digest": "target-image"}}), mapped_helper=lambda **_: {"sha256": "old-helper-image"})
         with self.assertRaisesRegex(RuntimeError, "authenticated expected"):
             installed_publication.validate_published_route(case, record, {}, {}, "target", None, False, {"middle"})
 
@@ -551,13 +552,228 @@ class PublishedRouteReviewTest(unittest.TestCase):
             events.append("observe")
             current["hops"] = self.record()["hops"]
             seen.add("middle")
-        def validate(_case, current, _journal, _ledger, _target, _fault, _rollback, seen):
+        def validate(_case, current, _journal, _ledger, _target, _fault, _rollback, seen, **_kwargs):
             installed_publication.verify_observed_route(current, seen)
             events.append("validate")
         with patch.object(installed_publication, "observe_published_hop", side_effect=observe), patch.object(installed_publication, "validate_published_route", side_effect=validate):
             with patch.object(installed_publication.installed_chain, "read_ledger", return_value=ledger), patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
                 installed_publication.await_published_route(SimpleNamespace(), record, "first", "target", None, False)
         self.assertEqual(events, ["observe", "validate"])
+
+
+class PublishedHelperHandoffTest(unittest.TestCase):
+    def setUp(self):
+        if sys.platform != "linux":
+            self.skipTest("private executable controls use /proc")
+        temporary = tempfile.TemporaryDirectory(prefix="published-helper-")
+        self.root = Path(temporary.name)
+        self.addCleanup(lambda: self.assertFalse(self.root.exists()))
+        self.addCleanup(temporary.cleanup)
+        self.processes = []
+        self.addCleanup(self.stop_processes)
+        self.enterContext(patch.object(native_services, "command", side_effect=AssertionError("native units forbidden")))
+        self.case = object.__new__(installed_fresh.FreshCase)
+        self.case.state = self.root
+        self.manager = SimpleNamespace(manager_pid=Mock())
+        self.case.units = SimpleNamespace(managers={"helper": self.manager})
+        data = Path("/bin/sleep").read_bytes()
+        self.old, self.new = self.image(data), self.image(data + b"new-helper")
+        self.receipt = self.root / "update/helper/installed.json"
+        self.publish(self.old)
+        self.previous = self.start(self.old)
+        self.manager.manager_pid.return_value = self.previous.pid
+        self.prior = self.case.mapped_helper()
+
+    def image(self, data):
+        digest = hashlib.sha256(data).hexdigest()
+        path = self.root / "update/helper" / digest / "mesh"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(data)
+        path.chmod(0o700)
+        return {"executable": str(path), "digest": digest, "servicePath": "/private/helper.service"}
+
+    def publish(self, receipt):
+        self.receipt.write_text(json.dumps(receipt))
+
+    def start(self, receipt):
+        process = subprocess.Popen([receipt["executable"], "60"])
+        self.processes.append(process)
+        with installed_clock.handoff(time.monotonic_ns() + 5_000_000_000):
+            native_services.wait_for(lambda: self.executing(process, receipt), "private control did not exec")
+        return process
+
+    def executing(self, process, receipt):
+        try:
+            return native_services.mapped_image(process.pid, receipt["executable"])
+        except installed_clock.ClockExpired:
+            raise
+        except (OSError, RuntimeError):
+            return None
+
+    def stop_processes(self):
+        for process in self.processes:
+            process.terminate()
+            process.wait(timeout=5)
+            self.assertIsNotNone(process.returncode)
+
+    def await_helper(self):
+        return self.case.mapped_helper(expected=self.new["digest"], deadline=time.monotonic() + 1)
+
+    def test_receipt_first_waits_for_exact_replacement(self):
+        self.publish(self.new)
+        replacement = self.start(self.new)
+        def promote(_seconds):
+            self.manager.manager_pid.return_value = replacement.pid
+        with patch.object(installed_fresh.time, "sleep", side_effect=promote):
+            helper = self.await_helper()
+        self.assertEqual(helper, native_services.mapped_image(replacement.pid, self.new["executable"]))
+
+    def test_pid_first_waits_for_receipt(self):
+        replacement = self.start(self.new)
+        self.manager.manager_pid.return_value = replacement.pid
+        with patch.object(installed_fresh.time, "sleep", side_effect=lambda _: self.publish(self.new)):
+            self.assertEqual(self.await_helper()["pid"], replacement.pid)
+
+    def test_deleted_old_file_and_changed_receipt_are_resampled(self):
+        replacement = self.start(self.new)
+        def promote():
+            self.publish(self.new)
+            Path(self.old["executable"]).unlink(missing_ok=True)
+            return replacement.pid
+        self.manager.manager_pid.side_effect = promote
+        self.assertEqual(self.await_helper()["pid"], replacement.pid)
+
+    def test_stuck_predecessor_exhausts_original_deadline(self):
+        for receipt in (self.old, self.new):
+            self.publish(receipt)
+            with self.assertRaisesRegex(RuntimeError, "helper.*bound"):
+                self.case.mapped_helper(expected=self.new["digest"], deadline=time.monotonic() + 0.01)
+
+    def test_parent_deadline_is_not_replaced_by_route_cap(self):
+        deadline = time.monotonic_ns() + 5_000_000_000
+        with installed_clock.handoff(deadline), patch.object(installed_clock.time, "monotonic_ns", return_value=deadline + 1), self.assertRaises(installed_clock.ClockExpired):
+            self.await_helper()
+
+    def test_coherent_predecessor_and_zero_pid_wait_for_promotion(self):
+        replacement = self.start(self.new)
+        for pid in (self.previous.pid, 0):
+            self.publish(self.old)
+            self.manager.manager_pid.return_value = pid
+            def promote(_seconds):
+                self.publish(self.new)
+                self.manager.manager_pid.return_value = replacement.pid
+            with patch.object(installed_fresh.time, "sleep", side_effect=promote):
+                self.assertEqual(self.await_helper()["pid"], replacement.pid)
+            self.case.helper_verified = {"receipt": self.old, "image": self.prior}
+
+    def test_same_digest_different_inode_is_rejected(self):
+        copied = self.root / "other-copy"
+        copied.write_bytes(Path(self.old["executable"]).read_bytes())
+        copied.chmod(0o700)
+        self.manager.manager_pid.return_value = self.start({"executable": str(copied)}).pid
+        with self.assertRaisesRegex(RuntimeError, "another executable inode"):
+            self.await_helper()
+
+    def test_changed_manager_requires_a_new_coherent_sample(self):
+        replacement = self.start(self.new)
+        self.publish(self.new)
+        self.manager.manager_pid.side_effect = [replacement.pid, self.previous.pid, replacement.pid, replacement.pid]
+        self.assertEqual(self.await_helper()["pid"], replacement.pid)
+
+    def test_deleted_old_file_with_pid_first_still_waits_for_receipt(self):
+        replacement = self.start(self.new)
+        self.manager.manager_pid.return_value = replacement.pid
+        Path(self.old["executable"]).unlink()
+        with patch.object(installed_fresh.time, "sleep", side_effect=lambda _: self.publish(self.new)):
+            self.assertEqual(self.await_helper()["pid"], replacement.pid)
+
+    def test_unrelated_image_is_not_a_handoff(self):
+        unrelated = self.image(Path("/bin/sleep").read_bytes() + b"unrelated")
+        self.manager.manager_pid.return_value = self.start(unrelated).pid
+        self.publish(self.new)
+        with self.assertRaises(RuntimeError):
+            self.await_helper()
+
+    def test_unrelated_receipt_and_corrupt_digest_fail(self):
+        for receipt in (self.new | {"executable": self.old["executable"]}, self.new | {"digest": "f" * 64}):
+            self.publish(receipt)
+            with self.assertRaises(RuntimeError):
+                self.await_helper()
+
+    def test_target_path_with_wrong_bytes_fails(self):
+        with Path(self.new["executable"]).open("ab") as stream:
+            stream.write(b"corrupted")
+        self.publish(self.new)
+        self.manager.manager_pid.return_value = self.start(self.new).pid
+        with self.assertRaisesRegex(RuntimeError, "differs from its actual receipt"):
+            self.await_helper()
+
+    def test_clock_expiry_and_cancellation_propagate_unchanged(self):
+        for error in (installed_clock.ClockExpired("parent cap"), InterruptedError("cancelled")):
+            with patch.object(native_services, "mapped_image", side_effect=error), self.assertRaises(type(error)) as caught:
+                self.await_helper()
+            self.assertIs(caught.exception, error)
+        self.manager.manager_pid.side_effect = [self.previous.pid, 0]
+        error = InterruptedError("cancelled during manager transition")
+        with patch.object(native_services, "mapped_image", side_effect=error), self.assertRaises(InterruptedError) as caught:
+            self.await_helper()
+        self.assertIs(caught.exception, error)
+
+    def test_failure_retention_precedes_teardown_and_keeps_exact_bytes(self):
+        output = self.root / "output"
+        output.mkdir()
+        self.case.host = {"name": "private"}
+        journal = self.root / "update/installation.json"
+        data = b'{ "phase": "committed" }\n'
+        journal.write_bytes(data)
+        primary = RuntimeError("original mapping failure")
+        self.case.published_failed_update = {"authenticatedTarget": {"binary": self.new["digest"]}}
+        record = {}
+        installed_publication.retain_publication_failure(self.case, record, output, primary)
+        self.assertEqual((output / "private-failure-update-installation.json").read_bytes(), data)
+        self.assertEqual(record["failureState"]["managerPID"], self.previous.pid)
+        self.assertEqual(record["failureState"]["mappedHelper"], self.prior)
+        self.assertEqual(record["failureState"]["nativeMapping"]["sha256"], self.old["digest"])
+        self.assertEqual((output / "private-failure-helper-image").read_bytes(), Path(self.old["executable"]).read_bytes())
+        self.assertEqual(record["failedUpdate"], self.case.published_failed_update)
+        self.assertIsNone(self.previous.poll())
+        with patch.object(installed_publication, "close_fault_case", side_effect=RuntimeError("cleanup failure")):
+            with self.assertRaises(RuntimeError) as caught:
+                installed_publication.finish_fault_case(self.case, record, output, None, primary)
+        self.assertIs(caught.exception, primary)
+        self.assertIn("cleanup failure", str(primary.__notes__))
+
+    def test_retention_failure_does_not_replace_primary(self):
+        self.case.host = {"name": "private"}
+        primary = InterruptedError("original cancellation")
+        with patch.object(installed_adoption, "retain_failure_state_file", side_effect=OSError("cannot snapshot")):
+            record = {}
+            installed_publication.retain_publication_failure(self.case, record, self.root, primary)
+        self.assertEqual(len(record["failureState"]["files"]), 5)
+        self.assertIn("cannot snapshot", str(primary.__notes__))
+
+    def test_failure_retains_actual_unrelated_mapping_independently_of_receipt(self):
+        unrelated = self.image(Path("/bin/sleep").read_bytes() + b"unrelated-failure")
+        process = self.start(unrelated)
+        self.manager.manager_pid.return_value = process.pid
+        self.publish(self.new)
+        self.case.host = {"name": "private"}
+        primary, record = RuntimeError("unexpected image"), {}
+        installed_publication.retain_publication_failure(self.case, record, self.root, primary)
+        saved = record["failureState"]
+        self.assertEqual(saved["nativeMapping"]["sha256"], unrelated["digest"])
+        self.assertEqual(saved["nativeMapping"]["inode"], Path(unrelated["executable"]).stat().st_ino)
+        self.assertIn("another executable inode", saved["mappingError"])
+        self.assertNotIn("mappedHelper", saved)
+
+    def test_darwin_failure_mapping_is_bounded(self):
+        result = SimpleNamespace(stdout="x" * 70000, stderr="y" * 5000, returncode=1)
+        evidence = {}
+        with patch.object(installed_publication.sys, "platform", "darwin"), patch.object(native_services, "command", return_value=result):
+            installed_publication.retain_helper_mapping(1234, evidence, self.root, "private")
+        self.assertEqual(len(evidence["nativeMapping"]["stdout"]), 65536)
+        self.assertEqual(len(evidence["nativeMapping"]["stderr"]), 4096)
+        self.assertTrue(evidence["nativeMapping"]["truncated"])
 
 
 class InitializationBoundaryTest(unittest.TestCase):
