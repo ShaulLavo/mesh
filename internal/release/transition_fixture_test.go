@@ -27,7 +27,7 @@ func TestTransitionFixtureCandidateRestartSavedRecovery(t *testing.T) {
 		if assertion != "" {
 			t.Fatal("candidate restart saved-recovery assertion must be unique")
 		}
-		if index == 0 || !strings.HasPrefix(lines[index-1], `mesh "$candidate_binary" ls --daemon --all >`) {
+		if index == 0 || !strings.HasPrefix(lines[index-1], `mesh "$candidate_binary" ls --daemon --all --timeout=1m >`) {
 			t.Fatal("candidate restart saved-recovery producer must precede its assertion")
 		}
 		assertion = lines[index-1] + "\n" + line
@@ -39,7 +39,7 @@ func TestTransitionFixtureCandidateRestartSavedRecovery(t *testing.T) {
 	old := filepath.Join(root, "retained-cli")
 	candidate := filepath.Join(root, "candidate-cli")
 	// The restarted candidate inventories its saved recovery; the retained CLI must not run.
-	if err := os.WriteFile(candidate, []byte("#!/bin/sh\n[ \"$*\" = 'ls --daemon --all' ] || exit 2\n[ \"$MESH_FIXTURE_SAVED\" = present ] || exit 0\nprintf '0000\\n'\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
+	if err := os.WriteFile(candidate, []byte("#!/bin/sh\n[ \"$*\" = 'ls --daemon --all --timeout=1m' ] || exit 2\n[ \"$MESH_FIXTURE_SAVED\" = present ] || exit 0\nprintf '0000\\n'\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(old, []byte("#!/bin/sh\nexit 3\n"), 0o700); err != nil { //nolint:gosec // owner-only executable CLI fixture beneath t.TempDir
