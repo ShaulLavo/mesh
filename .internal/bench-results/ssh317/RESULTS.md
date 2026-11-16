@@ -1,6 +1,7 @@
 # SSH command reuse
 
-Status: Approved. Implementation and local verification are in progress for issue 317.
+Status: Approved. Implementation is ready for independent review for issue 317;
+the issue remains open until the PR merges.
 
 ## Baseline and bounded profile
 
@@ -56,6 +57,80 @@ The first unmatched after run showed little median improvement and worse tails.
 That result triggered the bounded profile, rather than a speed claim. Both
 results remain in `/work/reports/mesh-ssh317`.
 
+## Final source and controls
+
+The final Go implementation is `14b0ae6191250da264ce4e14cb1ecde4bb389930`.
+`after.json` contains the final normal, uninstrumented `mesh_integration` build
+and its baseline binary fingerprint. Load averages started at 40.87, 41.07, and
+31.68 on a 28-logical-CPU PC. These timings are noisy, not a quiet-machine result.
+
+| Mode | Warm p50 | Warm p95 | Four-way p50 | Echo first byte p50 |
+| --- | ---: | ---: | ---: | ---: |
+| Mesh before | 13.86 ms | 98.56 ms | 13.10 ms | 55.45 ms |
+| Mesh with helper | 10.60 ms | 141.09 ms | 13.29 ms | 10.71 ms |
+| OpenSSH fresh | 122.76 ms | 156.97 ms | 134.07 ms | 119.43 ms |
+| OpenSSH multiplexed | 6.19 ms | 17.26 ms | 6.70 ms | 5.02 ms |
+
+The balanced 40-pair comparison has median ratio 0.722 and median difference
+-3.70 ms. The high p95 values do not establish a tail-latency improvement.
+Both fresh and multiplexed SSH comparisons pass the existing generous promise
+policy. Mesh remains about 4.4 ms behind warm OpenSSH multiplexing at the median.
+The one cold call takes 219.4 ms with a helper launch and 181.8 ms before;
+one sample under this load does not establish a cold-start distribution.
+
+For the 142 paced calls, total measured CPU is 1.914 seconds with reuse and
+2.438 seconds before, including helper, CLI, daemon, and remote children. The
+helper contributes 0.100 CPU seconds, 35,588 KiB RSS, and nine descriptors.
+Earlier checkpoints measured about 37 MiB RSS. All 100 separate warm CLI calls
+observe the same one live server TCP inode and check their output and exit status.
+
+The unpaced four-way batch accepts 20 and denies 20 calls with reuse in 0.184
+seconds. The old CLI accepts 19 and denies 21 in 0.121 seconds. Pacing-inclusive
+wall times are 21.40 and 21.77 seconds. These results preserve the admission
+limitation and make no sustained-throughput claim.
+
+Cancelled setup is bounded by 16 active or abandoned requests per destination,
+eight live transports including those being closed, and 128 outstanding setup
+operations across all keys. Thirty-two accepted IPC requests bound pending
+headers and their received descriptors. Failed initial dials use a key-scoped,
+one-second cooldown. Execution is never retried.
+
+Barrier tests exercise the actual CLI command through Unix descriptor IPC.
+They prove it returns while confirmation is still withheld, sibling stdout and
+stderr remain usable, late channel opens cannot launch, and an already-sent exec
+returns uncertainty without replay. Withheld opens count toward the bound and
+are reclaimed when the last active sibling leaves. The tests join setup and
+transport goroutines and check counters return to zero.
+
+## Verification history
+
+- Focused changed tests pass three race-detector repeats. The final full changed
+  packages pass `go test -race -p 2 -timeout=15m ./internal/cli ./internal/sshd`.
+- The clean full suite passes `go test -race -p 2 -timeout=20m ./...` before the
+  final bounded setup correction; the changed packages are rerun afterward.
+- `go mod tidy -diff`, the lint gate, Linux build, local Darwin ARM64 cross-build,
+  and generated CLI reference pass. The gate reports zero new or stale findings.
+- The full integration run passes all cases except the old OpenSSH scratch-root
+  test. The corrected packaging integration then passes on final source.
+  Final pooled SSH integration passes, including real idle transport/helper/socket
+  cleanup. The existing interactive SSH integration passes twice on final source.
+- The original dirty-source run fails the two clean-source release fixture checks.
+  Those attempts remain failures. The clean run passes the release checkpoint.
+- The first full race run fails command-name parity and a fleet-sharing writer
+  admission deadline. Reserving the helper name fixes parity; fleet sharing passes
+  the bounded full-suite rerun without a test change. The first new IPC barrier
+  race run finds concurrent SSH stdin closure; giving the copier sole ownership
+  fixes it, and three race repeats pass afterward.
+- The benchmark attempt with the shared fixture's four-second startup wait fails
+  before sampling, with no listener. Cleanup joins all children and removes state.
+  The benchmark now uses its existing 120-second hang cap for fixture readiness;
+  the preserved failure is `final-boundary-startup-failure.json` in the report
+  directory. The subsequent final run passes and verifies cleanup.
+
+The real OpenSSH test selects an existing scratch root whose ancestors satisfy
+StrictModes. It still rejects a deliberately unsafe ancestor. Three runs with
+`MESH_SHORT_TMP=/tmp` pass using a trusted root; authorization is never bypassed.
+
 ## Reproduce
 
 Build a normal local integration binary from the desired recorded revision:
@@ -79,7 +154,11 @@ Temporary phase instrumentation is removed from normal source. Its small
 reproducer and phase JSONL remain in `/work/reports/mesh-ssh317` with the matched
 profile and uninstrumented JSON. Keep those results until review and merge, then
 the parent lane owns their archival or removal. Task binaries and source copies
-are disposable and are removed after their final consumers stop.
+are removed after their final consumers stop. The actual-host check finds no
+process running a task binary, removes the task scratch root, and verifies the
+original integration root is gone. `cleanup.json` in the report directory records
+the remaining small results and their parent-lane cleanup owner. Shared caches
+and pre-existing services remain intact.
 
 ## Separate admission follow-up
 

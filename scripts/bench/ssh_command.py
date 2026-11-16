@@ -217,7 +217,7 @@ class Descendants:
 
 
 def prepare_mesh(fixture):
-    fixture.start_ssh()
+    fixture.start_ssh(timeout=TIMEOUT)
     host = round_trip(str(fixture.local / "daemon.sock"), {"type": "host.info", "requestId": "benchmark"})["host"]
     approved = checked_run([fixture.binary, "device", "approve", "--allow-root", "--", host["id"]],
                            fixture.environment)
