@@ -1,0 +1,300 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/sshd"
+	"github.com/spf13/cobra"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
+)
+
+func sshHelperCommand() *cobra.Command {
+	return &cobra.Command{Use: "ssh-helper", Hidden: true, Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error { return runSSHHelper(cmd.Context()) }}
+}
+
+func runSSHHelper(ctx context.Context) error {
+	state, err := paths.StateDir()
+	if err != nil {
+		return fmt.Errorf("locate SSH owner state: %w", err)
+	}
+	lock, err := openSSHOwnerLock(state, "ssh-owner.lock")
+	if err != nil {
+		return err
+	}
+	defer lock.Close() //nolint:errcheck // dropping the descriptor releases ownership
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fmt.Errorf("SSH connection owner is already running: %w", err)
+	}
+	path := filepath.Join(state, "ssh-command.sock")
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove inactive SSH owner socket: %w", err)
+	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		return fmt.Errorf("listen for SSH commands: %w", err)
+	}
+	defer listener.Close() //nolint:errcheck // listener removes only its own socket
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("protect SSH command socket: %w", err)
+	}
+	ready := os.NewFile(3, "ssh-owner-ready")
+	if ready != nil {
+		_, _ = ready.Write([]byte{1})
+		_ = ready.Close()
+	}
+	return serveSSHHelper(ctx, listener, state)
+}
+
+func serveSSHHelper(ctx context.Context, listener *net.UnixListener, state string) error {
+	ctx, cancel := context.WithCancel(ctx)
+	pool := &sshCommandPool{ctx: ctx, entries: make(map[sshPoolKey]*sshPoolEntry), dial: dialMeshSSHWithKey}
+	var handlers sync.WaitGroup
+	defer func() { cancel(); handlers.Wait(); pool.connecting.Wait(); pool.expire(time.Now(), true) }()
+	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer stop()
+	slots := make(chan struct{}, 32)
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	for {
+		pool.expire(time.Now(), false)
+		if len(slots) == 0 && time.Since(time.Unix(0, last.Load())) >= sshPoolIdle {
+			return nil
+		}
+		_ = listener.SetDeadline(time.Now().Add(time.Second))
+		conn, err := listener.AcceptUnix()
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("accept local SSH command: %w", err)
+		}
+		last.Store(time.Now().UnixNano())
+		admitSSHHelper(ctx, conn, state, pool, slots, &handlers, &last)
+	}
+}
+
+func admitSSHHelper(ctx context.Context, conn *net.UnixConn, state string, pool *sshCommandPool, slots chan struct{}, handlers *sync.WaitGroup, last *atomic.Int64) {
+	if err := validateSSHPeer(conn); err != nil {
+		_ = conn.Close()
+		return
+	}
+	select {
+	case slots <- struct{}{}:
+		handlers.Go(func() { serveSSHHelperConn(ctx, conn, state, pool, slots, last) })
+	default:
+		_ = json.NewEncoder(conn).Encode(sshHelperResult{Code: 1, Error: "SSH connection owner has 32 active requests"})
+		_ = conn.Close()
+	}
+}
+
+func serveSSHHelperConn(ctx context.Context, conn *net.UnixConn, state string, pool *sshCommandPool, slots chan struct{}, last *atomic.Int64) {
+	defer func() { _ = conn.Close(); last.Store(time.Now().UnixNano()); <-slots }()
+	result := handleSSHHelper(ctx, conn, state, pool)
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = json.NewEncoder(conn).Encode(result)
+}
+
+func receiveSSHFiles(conn *net.UnixConn) ([]*os.File, error) {
+	control := make([]byte, unix.CmsgSpace(3*4))
+	_, count, flags, _, err := conn.ReadMsgUnix(make([]byte, 1), control)
+	if err != nil {
+		return nil, fmt.Errorf("receive SSH stream descriptors: %w", err)
+	}
+	messages, err := unix.ParseSocketControlMessage(control[:count])
+	if err != nil {
+		return nil, fmt.Errorf("parse SSH stream descriptors: %w", err)
+	}
+	var files []*os.File
+	for _, message := range messages {
+		rights, parseErr := unix.ParseUnixRights(&message)
+		if parseErr != nil {
+			closeSSHFiles(files)
+			return nil, fmt.Errorf("parse SSH stream rights: %w", parseErr)
+		}
+		files = appendSSHFiles(files, rights)
+	}
+	if len(files) != 3 || flags&unix.MSG_CTRUNC != 0 {
+		closeSSHFiles(files)
+		return nil, errors.New("SSH connection owner requires three private pipe descriptors")
+	}
+	if err := validateSSHFiles(files); err != nil {
+		closeSSHFiles(files)
+		return nil, err
+	}
+	return files, nil
+}
+
+func validateSSHFiles(files []*os.File) error {
+	for index, file := range files {
+		if err := validateSSHFile(file, index == 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSSHFile(file *os.File, input bool) error {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return fmt.Errorf("inspect SSH stream: %w", err)
+	}
+	var stat unix.Stat_t
+	var flags int
+	var inspectErr error
+	err = raw.Control(func(fd uintptr) {
+		inspectErr = unix.Fstat(int(fd), &stat)
+		if inspectErr == nil {
+			flags, inspectErr = unix.FcntlInt(fd, unix.F_GETFL, 0)
+		}
+	})
+	if err != nil || inspectErr != nil {
+		return errors.Join(err, inspectErr)
+	}
+	mode := unix.O_WRONLY
+	if input {
+		mode = unix.O_RDONLY
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFIFO || flags&unix.O_ACCMODE != mode {
+		return errors.New("SSH streams must be private pipes with stdin read-only and outputs write-only")
+	}
+	return nil
+}
+
+func openSSHOwnerLock(state, name string) (*os.File, error) {
+	directory, err := openClientConfigDirectory(state, false)
+	if err != nil {
+		return nil, err
+	}
+	if directory == nil {
+		return nil, os.ErrNotExist
+	}
+	defer directory.Close() //nolint:errcheck // lock has an independent descriptor
+	return openClientConfigFile(directory, name, unix.O_CREAT|unix.O_RDWR, 0600)
+}
+
+func appendSSHFiles(files []*os.File, rights []int) []*os.File {
+	for _, fd := range rights {
+		unix.CloseOnExec(fd)
+		// These descriptors are private pipes, never the caller's terminal or files.
+		_ = unix.SetNonblock(fd, true)
+		files = append(files, os.NewFile(uintptr(fd), "ssh-command-stream"))
+	}
+	return files
+}
+
+func closeSSHFiles(files []*os.File) {
+	for _, file := range files {
+		_ = file.Close()
+	}
+}
+
+func handleSSHHelper(parent context.Context, conn *net.UnixConn, state string, pool *sshCommandPool) sshHelperResult {
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	files, err := receiveSSHFiles(conn)
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	defer closeSSHFiles(files)
+	var request sshHelperRequest
+	decoder := json.NewDecoder(io.LimitReader(conn, 300<<10))
+	if err := decoder.Decode(&request); err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	run, err := sshd.ParseRunRequest(request.Run)
+	if err != nil || request.Port == 0 {
+		return sshHelperResult{Code: 1, Error: fmt.Sprintf("invalid SSH launch request: %v", err)}
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	signals := make(chan ssh.Signal, 4)
+	controlDone := make(chan struct{})
+	go func() { defer close(controlDone); readSSHSignals(decoder, signals, cancel) }()
+	defer func() { _ = conn.CloseRead(); <-controlDone }()
+	stop := context.AfterFunc(ctx, func() { closeSSHFiles(files) })
+	defer stop()
+	client, release, err := pool.acquire(ctx, request.Host, state, request.Port)
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	defer release()
+	return runSSHPipes(ctx, client, run, files, signals)
+}
+
+func readSSHSignals(decoder *json.Decoder, signals chan<- ssh.Signal, cancel context.CancelFunc) {
+	defer cancel()
+	for {
+		var value ssh.Signal
+		if decoder.Decode(&value) != nil {
+			return
+		}
+		select {
+		case signals <- value:
+		default:
+		}
+	}
+}
+
+func runSSHPipes(ctx context.Context, client *ssh.Client, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
+	channel, err := client.NewSession()
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: fmt.Sprintf("open SSH channel: %v", err)}
+	}
+	defer channel.Close() //nolint:errcheck // Wait supplies the result
+	if err := ctx.Err(); err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	stop := context.AfterFunc(ctx, func() { _ = channel.Close() })
+	defer stop()
+	input, err := channel.StdinPipe()
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	channel.Stdout, channel.Stderr = files[1], files[2]
+	payload, _ := json.Marshal(request)
+	if err := channel.Start("run " + string(payload)); err != nil {
+		return sshHelperResult{Code: 1, Error: fmt.Sprintf("start SSH command: %v", err)}
+	}
+	inputDone := make(chan struct{})
+	go func() { defer close(inputDone); _, _ = io.Copy(input, files[0]); _ = input.Close() }()
+	defer func() { _ = files[0].Close(); _ = input.Close(); <-inputDone }()
+	done := make(chan struct{})
+	relayDone := make(chan struct{})
+	go func() { defer close(relayDone); relaySSHPipeSignals(channel, signals, done) }()
+	err = channel.Wait()
+	close(done)
+	<-relayDone
+	var exit *ssh.ExitError
+	if errors.As(err, &exit) {
+		return sshHelperResult{Code: exit.ExitStatus()}
+	}
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: fmt.Sprintf("SSH connection ended: %v", err)}
+	}
+	return sshHelperResult{}
+}
+
+func relaySSHPipeSignals(channel *ssh.Session, signals <-chan ssh.Signal, done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case value := <-signals:
+			_ = channel.Signal(value)
+		}
+	}
+}

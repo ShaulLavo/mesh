@@ -10,6 +10,10 @@ import tempfile
 from mesh_control import round_trip
 from ssh_sessions import SSHFixture
 from terminal_window import Terminal, PROMPT, eventually, require
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts/bench"))
+import ssh_command as bench  # noqa: E402 - reuse the owned descendant teardown
 
 
 def alive(pid):
@@ -47,7 +51,8 @@ def exercise(fixture):
     # The destination account's configured shell is the fixture's interactive bash wrapper.
     require(b"no-pty-shell" in shell.stdout, f"default shell did not run: {shell}")
     require(fixture.daemon_listing() == before, "quick commands added catalog sessions")
-    require(set(fixture.local.rglob("*")) == before_paths, "quick commands wrote session/worker/recovery artifacts")
+    owner_paths = {fixture.local / name for name in ("ssh-command.sock", "ssh-owner.lock", "ssh-start.lock")}
+    require(set(fixture.local.rglob("*")) - owner_paths == before_paths, "quick commands wrote session/worker/recovery artifacts")
 
     for tty in (False, True):
         marker = fixture.root / ("pty-pids" if tty else "exec-pids")
@@ -146,6 +151,7 @@ def main():
     signal.alarm(25)
     with tempfile.TemporaryDirectory(prefix="ms-ssh-", dir=os.environ.get("MESH_SHORT_TMP", "/tmp")) as root:
         fixture = SSHFixture(sys.argv[1], root)
+        owner = bench.Descendants()
         try:
             exercise(fixture)
         except Exception:
@@ -157,7 +163,14 @@ def main():
             raise
         finally:
             signal.alarm(0)
-            fixture.close()
+            finish_fixture(fixture, owner)
+
+
+def finish_fixture(fixture, owner):
+    try:
+        fixture.close()
+    finally:
+        owner.close()
 
 
 if __name__ == "__main__":

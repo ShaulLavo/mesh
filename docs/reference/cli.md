@@ -1015,8 +1015,11 @@ USAGE
 
 FLAGS
 
+  --cwd        Remote working directory; relative paths start at the account home
+  --env        Remote KEY=VALUE override; repeatable, last value wins
   -h --help    Help for ssh
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  -T --no-pty  Use separate byte-preserving stdout and stderr without a terminal
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --ssh-port   Mesh SSH listener port (2222)
 ```

@@ -20,7 +20,7 @@ These six rules are in `CLAUDE.md` because they are the product:
 5. A rebooted host reports its sessions as `interrupted`. Mesh does not pretend to resurrect RAM.
 6. Each host is authoritative for its own sessions. There is no central database.
 
-`mesh ssh HOST` is the one exception to invariant 2. It owns an ordinary process for a single SSH connection and creates no saved session.
+`mesh ssh HOST` is the one exception to invariant 2. It owns an ordinary process for one SSH channel and creates no saved session. Pipe-mode CLI processes share an authenticated transport through a private local helper. Each command ends with its caller; the helper expires idle connections and exits when unused.
 
 ## The parts
 
