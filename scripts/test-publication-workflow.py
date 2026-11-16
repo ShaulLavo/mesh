@@ -25,6 +25,7 @@ from fixtures import installed_publication, release_worker_completion as complet
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = (ROOT / ".github/workflows/installed-catchup.yml").read_text()
 controls = importlib.import_module("test-publication-jobs")
+corpus = importlib.import_module("test-bundled-release")
 wiring = importlib.import_module("test-installed-workflow")
 depth = importlib.import_module("test-installed-catchup").maximum_depth
 
@@ -83,12 +84,18 @@ class PublicationWorkflowTests(unittest.TestCase):
         directory = self.root / "first-updater"
         shutil.copytree(self.directory, directory)
         (directory / "mesh-retention.json").write_text("[]")
-        result = subprocess.run(["python3", str(ROOT / "scripts/publication-jobs.py"), "inventory", str(directory),
+        scripts = corpus.legacy_corpus_source(self.root / "source") / "scripts"
+        result = subprocess.run(["python3", str(scripts / "publication-jobs.py"), "inventory", str(directory),
             "linux/amd64", self.harness], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(json.loads(result.stdout)["tasks"])
-        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
-            cli(["inventory", str(self.directory), "linux/amd64", "main"])
+        actual = json.loads(result.stdout)
+        self.assertTrue(actual["tasks"])
+        self.assertIsNone(actual["routeContract"]["first"])
+        self.assertEqual(actual["harness"], self.harness)
+        result = subprocess.run(["python3", str(scripts / "publication-jobs.py"), "inventory", str(directory),
+            "linux/amd64", "main"], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("harness must be an exact source SHA", result.stderr)
 
     def emit_archive(self, platform, row, number):
         source = self.root / platform.replace("/", "-")
