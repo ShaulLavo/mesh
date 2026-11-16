@@ -55,7 +55,7 @@ func publishOperation(operation string, data []byte, directory, destination stri
 	if err != nil {
 		return err
 	}
-	setSeedRanges(selection.Anchors, graph)
+	setAnchorRanges(selection.Anchors, graph)
 	if err := selectBaselines(&selection, history, input.Policy); err != nil {
 		return err
 	}
