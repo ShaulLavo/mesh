@@ -398,7 +398,12 @@ func awaitRecoveryFixtureReport(ctx context.Context, path, digest string) error 
 
 func newFailedRollbackRecoveryFixture(t *testing.T) *recoveryFixture {
 	t.Helper()
-	f := newRecoveryFixture(t)
+	return failedRollbackRecoveryFixtureFrom(t, newFixture(t))
+}
+
+func failedRollbackRecoveryFixtureFrom(t *testing.T, base *fixture) *recoveryFixture {
+	t.Helper()
+	f := recoveryFixtureFrom(t, base)
 	replacementClient := f.engine.cfg.Client
 	f.engine.cfg.Client = release.Client{BaseURL: f.server.URL, HTTPClient: f.server.Client()}
 	if _, err := f.engine.Retry(t.Context(), f.request.Expected.Operation, f.request.Expected.Generation); err != nil {
@@ -592,7 +597,13 @@ func (s *recoveryDeadlineStart) Start(ctx context.Context) error {
 }
 
 func TestHelperRecoveryRollbackDeadlineKeepsGenuineReceipt(t *testing.T) {
-	f := newFailedRollbackRecoveryFixture(t)
+	// Only the attempt deadline is under test. The candidate fails at start and
+	// every health wait, including the genuine restoration's, gets a generous
+	// hang cap, so each phase ends on its outcome rather than on a clock.
+	base := newFixture(t)
+	base.engine.cfg.HealthTimeout = 30 * time.Second
+	base.manager.refuseCandidate = true
+	f := failedRollbackRecoveryFixtureFrom(t, base)
 	attempt := newAttemptContext(t.Context())
 	service := &recoveryDeadlineStart{manager: f.manager, attempt: attempt}
 	f.engine.cfg.Service = service
