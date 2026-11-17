@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -543,9 +544,34 @@ func writeRecoveryFixture(path string, data []byte) error {
 	return nil
 }
 
+// attemptContext ends with context.DeadlineExceeded when expire is called, so a
+// test places an attempt deadline at an exact step instead of racing a clock
+// against process launches (a new executable's first launch on macOS can take
+// hundreds of milliseconds while it is assessed).
+type attemptContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newAttemptContext(parent context.Context) *attemptContext {
+	return &attemptContext{Context: parent, done: make(chan struct{})}
+}
+
+func (c *attemptContext) expire()               { c.once.Do(func() { close(c.done) }) }
+func (c *attemptContext) Done() <-chan struct{} { return c.done }
+func (c *attemptContext) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 type recoveryDeadlineStart struct {
 	manager *processService
-	attempt context.Context
+	attempt *attemptContext
 	started bool
 }
 
@@ -555,6 +581,8 @@ func (s *recoveryDeadlineStart) Start(ctx context.Context) error {
 		return err
 	}
 	s.started = true
+	// The attempt's deadline passes right after the genuine restoration starts.
+	s.attempt.expire()
 	select {
 	case <-s.attempt.Done():
 		return nil
@@ -565,11 +593,10 @@ func (s *recoveryDeadlineStart) Start(ctx context.Context) error {
 
 func TestHelperRecoveryRollbackDeadlineKeepsGenuineReceipt(t *testing.T) {
 	f := newFailedRollbackRecoveryFixture(t)
-	ctx, cancel := context.WithTimeout(t.Context(), f.engine.cfg.HealthTimeout)
-	defer cancel()
-	service := &recoveryDeadlineStart{manager: f.manager, attempt: ctx}
+	attempt := newAttemptContext(t.Context())
+	service := &recoveryDeadlineStart{manager: f.manager, attempt: attempt}
 	f.engine.cfg.Service = service
-	_, err := f.engine.RecoverHelper(ctx, f.request)
+	_, err := f.engine.RecoverHelper(attempt, f.request)
 	if !service.started || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "helper recovery cancelled") {
 		t.Fatalf("deadline after genuine restoration = %v; started=%t", err, service.started)
 	}
