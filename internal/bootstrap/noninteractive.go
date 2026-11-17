@@ -49,6 +49,16 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 	return stdout, stderr, nil
 }
 
+// SystemSSHPlatform reads the remote OS and architecture over the configured
+// system SSH alias, the same probe mesh add runs before choosing a release.
+func SystemSSHPlatform(ctx context.Context, alias string) (Platform, error) {
+	stdout, stderr, err := RunSystemSSH(ctx, alias, "uname -s; uname -m", nil)
+	if err != nil {
+		return Platform{}, remoteCommandError("detect remote platform", err, stdout, stderr)
+	}
+	return parsePlatform(stdout)
+}
+
 func systemKnownHostsPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "none" || strings.ContainsAny(value, "\r\n\x00") {

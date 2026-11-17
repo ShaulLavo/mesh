@@ -12,6 +12,7 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
+	"github.com/shaul/mesh/internal/updateinstall"
 )
 
 func TestAdoptFleetKeepsPCPolicyIndependentOfMac(t *testing.T) {
@@ -79,6 +80,32 @@ func TestAdoptStatusDoesNotCreateMissingStateOrIdentity(t *testing.T) {
 	}
 	if _, err := os.Stat(state); !os.IsNotExist(err) {
 		t.Fatal("read-only adoption status initialized state")
+	}
+}
+
+func TestAdoptAbandonWithoutAdoptionChangesNothing(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "uninitialized")
+	t.Setenv("MESH_STATE_DIR", state)
+	_, _, err := executeCommand(t, Dependencies{}, "update", "adopt", "abandon", "--json")
+	if err == nil || !strings.Contains(err.Error(), "abandon") {
+		t.Fatalf("abandon without an adoption = %v", err)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("abandon initialized state")
+	}
+}
+
+func TestAdoptAbandonReportsPolicyAndHelper(t *testing.T) {
+	record := update.AdoptionAbandonment{Schema: 1, Operation: strings.Repeat("a", 32), Version: "v0.1.329", Phase: update.AdoptionWaiting, Policy: update.HostPolicy{Schema: 1, Revision: 2, Mode: update.HostManual}, PolicyWithdrawn: true}
+	record.Helper = &updateinstall.HelperInstallation{Digest: strings.Repeat("b", 64)}
+	var output bytes.Buffer
+	if err := writeAdoptionAbandonment(&output, record, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{record.Operation + " abandoned", "was waiting", "manual at revision 2", record.Helper.Digest + " stays installed"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("abandon output %q lacks %q", output.String(), want)
+		}
 	}
 }
 

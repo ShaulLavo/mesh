@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,9 @@ func AdoptionRemoteCommand(operation Adoption, remote AdoptionRemote) (string, e
 	if operation.Version != operation.Request.Manifest.Version {
 		return "", errors.New("update: remote adoption release differs from pinned manifest")
 	}
+	if !completePlatform(remote.Host.Platform) {
+		return "", fmt.Errorf("update: adoption remote %s has no recorded platform", remote.Host.ID)
+	}
 	artifact, err := operation.Request.Manifest.Artifact(remote.Host.Platform)
 	if err != nil {
 		return "", hostError(err)
@@ -115,6 +119,77 @@ chmod 700 "$work/mesh"
 "$work/mesh" update adopt start --local --release ` + adoptionShellQuote(operation.Version) + ` --json
 `
 	return "sh -c " + adoptionShellQuote(script), nil
+}
+
+// RemoteAdoptionPlatform asks a fleet member for its platform over the same
+// system SSH alias the adoption deploy uses. It only runs uname.
+func RemoteAdoptionPlatform(ctx context.Context, alias string) (release.Platform, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	platform, err := bootstrap.SystemSSHPlatform(ctx, alias)
+	if err != nil {
+		return release.Platform{}, fmt.Errorf("update: system SSH platform for %s: %w", alias, err)
+	}
+	return release.Platform{OS: string(platform.OS), Arch: string(platform.Arch)}, nil
+}
+
+func completePlatform(platform release.Platform) bool {
+	return platform.OS != "" && platform.Arch != ""
+}
+
+// resolveAdoptionPlatforms fills in every remote platform the fleet manifest
+// left out, before anything is recorded, and checks the pinned release ships an
+// artifact for each one. Predecessor copies get the same platform so every
+// recorded copy of a host agrees.
+func resolveAdoptionPlatforms(ctx context.Context, start *AdoptionStart, manifest release.Manifest, detect func(context.Context, string) (release.Platform, error)) error {
+	remotes := slices.Clone(start.Remotes)
+	platforms := make(map[string]release.Platform, len(remotes))
+	for i := range remotes {
+		platform, err := resolveAdoptionPlatform(ctx, remotes[i], manifest, detect)
+		if err != nil {
+			return err
+		}
+		remotes[i].Host.Platform, platforms[remotes[i].Host.ID] = platform, platform
+	}
+	for i := range remotes {
+		remotes[i].Require = withAdoptionPlatforms(remotes[i].Require, platforms)
+	}
+	start.Remotes, start.Require = remotes, withAdoptionPlatforms(start.Require, platforms)
+	return nil
+}
+
+func resolveAdoptionPlatform(ctx context.Context, remote AdoptionRemote, manifest release.Manifest, detect func(context.Context, string) (release.Platform, error)) (release.Platform, error) {
+	platform := remote.Host.Platform
+	if !completePlatform(platform) {
+		if detect == nil {
+			return platform, fmt.Errorf("update: adoption remote %s has no platform and no SSH platform probe", remote.Host.ID)
+		}
+		detected, err := detect(ctx, remote.SSH)
+		if err != nil {
+			return platform, fmt.Errorf("update: detect platform of adoption remote %s: %w", remote.Host.ID, err)
+		}
+		platform = detected
+	}
+	if !completePlatform(platform) {
+		return platform, fmt.Errorf("update: adoption remote %s reported an incomplete platform", remote.Host.ID)
+	}
+	if _, err := manifest.Artifact(platform); err != nil {
+		return platform, fmt.Errorf("update: adoption remote %s: %w", remote.Host.ID, hostError(err))
+	}
+	return platform, nil
+}
+
+func withAdoptionPlatforms(hosts []Host, platforms map[string]release.Platform) []Host {
+	if len(hosts) == 0 {
+		return hosts
+	}
+	result := slices.Clone(hosts)
+	for i, host := range result {
+		if platform, ok := platforms[host.ID]; ok && !completePlatform(host.Platform) {
+			result[i].Platform = platform
+		}
+	}
+	return result
 }
 
 func adoptionShellQuote(value string) string {

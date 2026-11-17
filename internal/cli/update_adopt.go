@@ -48,8 +48,60 @@ func updateAdoptCommand(options *updateOptions) *cobra.Command {
 			return writeAdoptionStatus(cmd.Context(), cmd.OutOrStdout(), options.json)
 		},
 	}
-	command.AddCommand(begin, status)
+	abandon := &cobra.Command{Use: adoptionAbandonAction, Short: "Withdraw an adoption that has not reached any remote or activated this host", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runAdoptionAbandon(cmd.Context(), cmd.OutOrStdout(), options.json)
+		},
+	}
+	command.AddCommand(begin, status, abandon)
 	return command
+}
+
+func runAdoptionAbandon(ctx context.Context, output io.Writer, structured bool) error {
+	stateDir, err := paths.StateDirPath()
+	if err != nil {
+		return adoptionError(err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "updates", "host-adoption.json")); err != nil {
+		return fmt.Errorf("read adoption to abandon: %w", err)
+	}
+	store, err := update.OpenStore(stateDir)
+	if err != nil {
+		return adoptionError(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate abandon executable: %w", err)
+	}
+	restore := func(ctx context.Context, operation update.Adoption) (bool, error) {
+		return update.RestoreAdoptionHelper(ctx, operation, executable)
+	}
+	record, err := update.AbandonAdoption(ctx, store, restore, time.Now())
+	if err != nil {
+		return adoptionError(err)
+	}
+	return writeAdoptionAbandonment(output, record, structured)
+}
+
+func writeAdoptionAbandonment(output io.Writer, record update.AdoptionAbandonment, structured bool) error {
+	if structured {
+		if err := json.NewEncoder(output).Encode(record); err != nil {
+			return fmt.Errorf("write adoption abandonment: %w", err)
+		}
+		return nil
+	}
+	helper := "No adoption helper was installed."
+	switch {
+	case record.HelperRestored:
+		helper = "The update helper is back to its state before the adoption."
+	case record.Helper != nil:
+		helper = "Update helper " + record.Helper.Digest + " stays installed; the next adoption promotes it forward."
+	}
+	_, err := fmt.Fprintf(output, "Adoption %s abandoned (release %s, was %s).\nHost update policy is %s at revision %d.\n%s\n", SafeTerminalText(record.Operation), SafeTerminalText(record.Version), SafeTerminalText(string(record.Phase)), SafeTerminalText(string(record.Policy.Mode)), record.Policy.Revision, SafeTerminalText(helper))
+	if err != nil {
+		return fmt.Errorf("write adoption abandonment: %w", err)
+	}
+	return nil
 }
 
 func runAdoptionStart(cmd *cobra.Command, options adoptOptions, args []string, structured bool) error {
@@ -178,7 +230,7 @@ func adoptionRemotes(fleet update.Fleet, order map[string][]update.Host, aliases
 		for _, peer := range order[host.ID] {
 			policy.After = append(policy.After, peer.ID)
 		}
-		remotes = append(remotes, update.AdoptionRemote{Host: host, SSH: aliases[host.ID], Policy: policy, Require: order[host.ID], State: "pending"})
+		remotes = append(remotes, update.AdoptionRemote{Host: host, SSH: aliases[host.ID], Policy: policy, Require: order[host.ID], State: update.AdoptionRemotePending})
 	}
 	if len(aliases) != len(remotes) {
 		return nil, errors.New("--ssh aliases must name exactly the remote fleet members")
@@ -204,7 +256,7 @@ func localAdoptionSupervisor(ctx context.Context, stateDir string) (*update.Adop
 		_ = documents.Close()
 		return nil, adoptionError(err)
 	}
-	supervisor.Deploy = update.DeployAdoptionRemote
+	supervisor.Deploy, supervisor.RemotePlatform = update.DeployAdoptionRemote, update.RemoteAdoptionPlatform
 	return supervisor, nil
 }
 
@@ -271,7 +323,10 @@ func resumeAdoption(ctx context.Context, stateDir string) (bool, error) {
 	return true, adoptionError(supervisor.Resume(ctx))
 }
 
-const adoptionStatusAction = "status"
+const (
+	adoptionStatusAction  = "status"
+	adoptionAbandonAction = "abandon"
+)
 
 func adoptionError(err error) error {
 	if err == nil {
