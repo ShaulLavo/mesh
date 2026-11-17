@@ -230,11 +230,8 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	handshakeCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
-	stop := context.AfterFunc(handshakeCtx, func() {
-		transporttrace.Emit(ctx, transporttrace.HandshakeCanceled, handshakeCtx.Err())
-		closeObservedHandshake(ctx, ws)
-	})
-	defer stop()
+	watch := watchHandshake(ctx, handshakeCtx, ws)
+	defer func() { watch.finish(resultErr != nil) }()
 	deadline, _ := handshakeCtx.Deadline()
 	stage = "authentication-set-deadline"
 	if err := secure.SetDeadline(deadline); err != nil {
@@ -244,6 +241,9 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	transporttrace.Emit(ctx, transporttrace.HandshakeBegin, nil)
 	stage = "tls-handshake"
 	err = secure.HandshakeContext(handshakeCtx)
+	if err != nil {
+		watch.finish(true)
+	}
 	transporttrace.Emit(ctx, transporttrace.HandshakeDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
@@ -257,6 +257,9 @@ func authenticate(ctx context.Context, ws *websocket.Conn, auth *Authentication,
 	}
 	stage = "peer-acceptance"
 	err = confirmAuthentication(ctx, secure, auth, server, peer)
+	if err != nil {
+		watch.finish(true)
+	}
 	transporttrace.Emit(ctx, transporttrace.AcceptanceDone, err)
 	if err != nil {
 		closeObservedHandshake(ctx, ws)
@@ -312,6 +315,50 @@ func logAuthenticationFailure(server bool, stage string, err error) {
 		classification = "link-failed"
 	}
 	closelog.Printf("transport: server=%t stage=%s classification=%s error=%q", server, stage, classification, err)
+}
+
+// handshakeWatch closes the link when the handshake context ends, so a read
+// blocked inside authentication returns. Authentication waits for that close
+// before it reports a result or returns, so the canceled and close events
+// always precede the failure they caused instead of racing the request's end.
+type handshakeWatch struct {
+	ctx, handshakeCtx context.Context
+	ws                *websocket.Conn
+	stopFunc          func() bool
+	fired             chan struct{}
+	done              bool
+}
+
+func watchHandshake(ctx, handshakeCtx context.Context, ws *websocket.Conn) *handshakeWatch {
+	w := &handshakeWatch{ctx: ctx, handshakeCtx: handshakeCtx, ws: ws, fired: make(chan struct{})}
+	w.stopFunc = context.AfterFunc(handshakeCtx, func() {
+		defer close(w.fired)
+		w.cancel()
+	})
+	return w
+}
+
+func (w *handshakeWatch) cancel() {
+	transporttrace.Emit(w.ctx, transporttrace.HandshakeCanceled, w.handshakeCtx.Err())
+	closeObservedHandshake(w.ctx, w.ws)
+}
+
+// finish disarms the watch, waiting for a close that already started. A failed
+// authentication may have seen the context end before the watch's callback was
+// scheduled; it runs the cancellation inline then, so the cancellation is
+// recorded exactly once either way.
+func (w *handshakeWatch) finish(failed bool) {
+	if w.done {
+		return
+	}
+	w.done = true
+	if !w.stopFunc() {
+		<-w.fired
+		return
+	}
+	if failed && w.handshakeCtx.Err() != nil {
+		w.cancel()
+	}
 }
 
 func closeObservedHandshake(ctx context.Context, ws *websocket.Conn) {
