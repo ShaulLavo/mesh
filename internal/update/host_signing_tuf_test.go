@@ -19,7 +19,7 @@ func fixtureTrustProvenance(t *testing.T, fixture *signingFixture) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expiry := time.Now().Add(time.Hour)
+	expiry := time.Now().Add(preparedMaterialLifetime)
 	bootstrap := metadata.Root(expiry)
 	for _, role := range []string{metadata.ROOT, metadata.TIMESTAMP, metadata.SNAPSHOT, metadata.TARGETS} {
 		if err := bootstrap.Signed.AddKey(key, role); err != nil {
