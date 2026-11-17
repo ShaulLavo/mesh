@@ -97,7 +97,7 @@ func writeAdoptionAbandonment(output io.Writer, record update.AdoptionAbandonmen
 	case record.Helper != nil:
 		helper = "Update helper " + record.Helper.Digest + " stays installed; the next adoption promotes it forward."
 	}
-	_, err := fmt.Fprintf(output, "Adoption %s abandoned (release %s, was %s).\nHost update policy is %s at revision %d.\n%s\n", SafeTerminalText(record.Operation), SafeTerminalText(record.Version), SafeTerminalText(string(record.Phase)), SafeTerminalText(string(record.Policy.Mode)), record.Policy.Revision, SafeTerminalText(helper))
+	_, err := fmt.Fprintf(output, "Adoption %s abandoned (release %s, was %s).\nHost update policy is %s at revision %d.\n%s\nStart a new adoption with `mesh update adopt start`; it turns automatic updates back on.\n", SafeTerminalText(record.Operation), SafeTerminalText(record.Version), SafeTerminalText(string(record.Phase)), SafeTerminalText(string(record.Policy.Mode)), record.Policy.Revision, SafeTerminalText(helper))
 	if err != nil {
 		return fmt.Errorf("write adoption abandonment: %w", err)
 	}

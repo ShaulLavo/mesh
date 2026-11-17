@@ -20,6 +20,7 @@ type adoptionRemoteFixture struct {
 	aliases   []string
 	platform  release.Platform
 	probeErr  error
+	calls     int
 	deploys   []AdoptionRemote
 	deployErr error
 }
@@ -37,7 +38,13 @@ func newAdoptionRemoteFixture(t *testing.T) *adoptionRemoteFixture {
 		f.aliases = append(f.aliases, alias)
 		return f.platform, f.probeErr
 	}
-	f.supervisor.Deploy = func(_ context.Context, operation Adoption, remote AdoptionRemote) error {
+	f.supervisor.Deploy = func(ctx context.Context, operation Adoption, remote AdoptionRemote) error {
+		f.calls++
+		// Production SSH starts here, so the durable record must already say a
+		// deploy began; otherwise a crash would leave the remote "pending".
+		if _, stored, err := f.base.store.AdoptionStatus(ctx); err != nil || stored.Remotes[0].State != AdoptionRemoteDeploying {
+			f.base.t.Errorf("deploy started before %q was recorded: %v", AdoptionRemoteDeploying, err)
+		}
 		if _, err := AdoptionRemoteCommand(operation, remote); err != nil {
 			return err
 		}
@@ -75,25 +82,28 @@ func TestAdoptionFillsMissingRemotePlatformOverSSH(t *testing.T) {
 	}
 }
 
-func TestAdoptionKeepsAKnownRemotePlatformWithoutProbing(t *testing.T) {
+func TestAdoptionProbesARemoteWhosePlatformIsKnown(t *testing.T) {
 	f := newAdoptionRemoteFixture(t)
-	f.start.Remotes[0].Host.Platform = release.Platform{OS: "linux", Arch: "arm64"}
+	f.start.Remotes[0].Host.Platform = f.platform
 	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
 		t.Fatal(err)
 	}
-	if _, operation := f.state(t); len(f.aliases) != 0 || operation.Remotes[0].Host.Platform.Arch != "arm64" || operation.Remotes[0].Host.Platform.OS != "linux" {
-		t.Fatalf("known platform was probed or changed: %v %+v", f.aliases, operation.Remotes[0].Host)
+	if _, operation := f.state(t); !reflect.DeepEqual(f.aliases, []string{"shaul-mac"}) || operation.Remotes[0].Host.Platform != f.platform {
+		t.Fatalf("known platform was not checked over SSH or changed: %v %+v", f.aliases, operation.Remotes[0].Host)
 	}
 }
 
 func TestAdoptionRejectsUnknownRemotePlatformBeforeRecording(t *testing.T) {
 	cases := map[string]func(*adoptionRemoteFixture){
 		"probe fails": func(f *adoptionRemoteFixture) { f.probeErr = errors.New("ssh: connect timed out") },
+		"deploy cache missing": func(f *adoptionRemoteFixture) {
+			f.probeErr = errors.New("existing daemon update cache /Users/shaul/Library/Caches/mesh/updates is unavailable")
+		},
 		"no probe":    func(f *adoptionRemoteFixture) { f.supervisor.RemotePlatform = nil },
 		"partial":     func(f *adoptionRemoteFixture) { f.platform = release.Platform{OS: "linux"} },
 		"no artifact": func(f *adoptionRemoteFixture) { f.platform = release.Platform{OS: "darwin", Arch: "amd64"} },
-		"fleet record": func(f *adoptionRemoteFixture) {
-			f.start.Remotes[0].Host.Platform = release.Platform{OS: "freebsd", Arch: "amd64"}
+		"fleet differs": func(f *adoptionRemoteFixture) {
+			f.start.Remotes[0].Host.Platform = release.Platform{OS: "linux", Arch: "arm64"}
 		},
 	}
 	for name, change := range cases {
@@ -160,8 +170,8 @@ func TestAbandonStuckAdoptionFromRolloutStop(t *testing.T) {
 	if err := f.supervisor.Resume(t.Context()); err == nil || !strings.Contains(err.Error(), "no recorded platform") {
 		t.Fatalf("stuck retry = %v", err)
 	}
-	if len(f.deploys) != 0 {
-		t.Fatalf("empty platform reached deploy: %+v", f.deploys)
+	if f.calls != 0 {
+		t.Fatalf("empty platform reached the deploy hook %d times", f.calls)
 	}
 	_, retried := f.state(t)
 	restore := func(context.Context, Adoption) (bool, error) {
@@ -248,6 +258,31 @@ func TestAbandonRefusesTouchedAdoption(t *testing.T) {
 				t.Fatalf("refused abandon changed the policy: %+v %v", again, err)
 			}
 		})
+	}
+}
+
+// A helper killed during SSH leaves exactly the record that existed while the
+// deploy ran. That record must already refuse abandon.
+func TestAdoptionCrashDuringDeployLeavesRemoteTouched(t *testing.T) {
+	f := newAdoptionRemoteFixture(t)
+	if err := f.supervisor.Start(t.Context(), f.start); err != nil {
+		t.Fatal(err)
+	}
+	var during error
+	f.supervisor.Deploy = func(ctx context.Context, _ Adoption, _ AdoptionRemote) error {
+		envelope, stored, err := f.base.store.AdoptionStatus(ctx)
+		if err != nil {
+			return err
+		}
+		during = checkAdoptionAbandonable(envelope, stored)
+		return errors.New("helper killed during SSH")
+	}
+	f.base.now = f.base.now.Add(time.Minute)
+	if err := f.supervisor.Resume(t.Context()); err == nil {
+		t.Fatal("killed deploy reported success")
+	}
+	if during == nil {
+		t.Fatal("the record written before SSH still allowed abandon")
 	}
 }
 

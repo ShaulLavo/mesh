@@ -50,6 +50,11 @@ func AbandonAdoption(ctx context.Context, store *Store, restoreHelper func(conte
 	if err := checkAdoptionAbandonable(envelope, operation); err != nil {
 		return AdoptionAbandonment{}, err
 	}
+	// The restore runs before finishAbandon re-checks the record. Every writer
+	// that can change a recorded or waiting adoption runs under the pass lock
+	// taken above (beginAdoption cannot replace one), so the record cannot change
+	// in between. If it somehow did, abandon fails and running it again finishes,
+	// because a restored helper has no checkpoint left.
 	restored := false
 	if operation.Unjournaled {
 		if restoreHelper == nil {

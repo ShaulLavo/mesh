@@ -102,7 +102,7 @@ func TestAdoptAbandonReportsPolicyAndHelper(t *testing.T) {
 	if err := writeAdoptionAbandonment(&output, record, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{record.Operation + " abandoned", "was waiting", "manual at revision 2", record.Helper.Digest + " stays installed"} {
+	for _, want := range []string{record.Operation + " abandoned", "was waiting", "manual at revision 2", record.Helper.Digest + " stays installed", "mesh update adopt start"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("abandon output %q lacks %q", output.String(), want)
 		}
