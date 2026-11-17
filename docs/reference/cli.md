@@ -2011,6 +2011,7 @@ Usage:
   mesh update adopt [command]
 
 Available Commands:
+  abandon     Withdraw an adoption that has not reached any remote or activated this host
   start       Start one durable adoption from a verified release executable
   status      Read this host's durable adoption progress
 
@@ -2025,6 +2026,25 @@ Global Flags:
       --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 
 Use "mesh update adopt [command] --help" for more information about a command.
+```
+
+## mesh update adopt abandon
+
+```text
+Withdraw an adoption that has not reached any remote or activated this host
+
+Usage:
+  mesh update adopt abandon [flags]
+
+Flags:
+  -h, --help   help for abandon
+
+Global Flags:
+      --coordinator string   adopted host holding the operation; defaults to this machine
+      --details              show release identifiers, selected machines, and update checks
+      --json                 write structured results
+      --leave-key string     key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy              mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh update adopt start

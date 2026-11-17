@@ -562,7 +562,7 @@ class PublishedExecutionTests(unittest.TestCase):
         build = source if rollback else target
         case = SimpleNamespace(binary=self.root / "original", environment={}, expected_workers=2, ready=lambda: True,
             control=mock.Mock(side_effect=[{"host": {"build": value}} for value in (source, source, build, build)]),
-            units=mock.Mock(), mapped_helper=lambda: {"sha256": build["digest"]}, inspect_retained=mock.Mock(),
+            units=mock.Mock(), mapped_helper=lambda **_: {"sha256": build["digest"]}, inspect_retained=mock.Mock(),
             cohort=mock.Mock(), route_observer=mock.Mock(),
             origin=SimpleNamespace(head=mock.Mock(), asset=lambda path: self.root / Path(path).parent.name / Path(path).name),
             releases=SimpleNamespace(directory=self.root, native="linux/amd64", builds={
@@ -598,7 +598,7 @@ class PublishedExecutionTests(unittest.TestCase):
 
     def test_direct_success_keeps_final_helper_and_preserved_count_checks(self):
         with self.assertRaisesRegex(RuntimeError, "authenticated expected"):
-            self.run_update(False, lambda case, _fault, _ledger: setattr(case, "mapped_helper", lambda: {"sha256": "wrong"}))
+            self.run_update(False, lambda case, _fault, _ledger: setattr(case, "mapped_helper", lambda **_: {"sha256": "wrong"}))
         with self.assertRaisesRegex(RuntimeError, "preserved-worker commit"):
             self.run_update(False, lambda _case, _fault, ledger: ledger["entries"][0].update(workersPreserved=1))
 

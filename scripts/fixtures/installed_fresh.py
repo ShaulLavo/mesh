@@ -110,14 +110,84 @@ class FreshCase(installed_adoption.AdoptionCase):
         if summary.get("mode") != "automatic" or summary.get("revision") != 0 or summary.get("installation") != "managed":
             raise RuntimeError("actual managed daemon did not report its revision-zero automatic default")
 
-    def mapped_helper(self):
-        receipt = json.loads((self.state / "update/helper/installed.json").read_text())
+    def mapped_helper(self, *, expected=None, deadline=None):
+        if expected is None:
+            return self.sample_helper()
+        # Host commitment precedes the helper's asynchronous native restart.
+        # Keep the route's absolute cap; a verified predecessor is not readiness.
+        while time.monotonic() < deadline:
+            installed_clock.timeout()
+            image = self.sample_helper(expected)
+            if image is not None:
+                return image
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        installed_clock.timeout()
+        raise RuntimeError("published helper did not reach its authenticated image within the existing chain bound")
+
+    def sample_helper(self, expected=None):
+        path = self.state / "update/helper/installed.json"
+        receipt = json.loads(path.read_bytes())
+        prior = getattr(self, "helper_verified", None)
+        if expected is not None:
+            self.require_helper_receipt(receipt, expected, prior)
         manager = self.units.managers["helper"]
         pid = manager.manager_pid()
-        image = installed_native.native_services.mapped_image(pid, receipt["executable"])
-        if image["sha256"] != receipt["digest"] or manager.manager_pid() != pid:
+        self.helper_sample = {"pid": pid, "receipt": receipt, "expected": expected}
+        if expected is not None and pid == 0:
+            return None
+        try:
+            image = installed_native.native_services.mapped_image(pid, receipt["executable"])
+        except (installed_clock.ClockExpired, InterruptedError):
+            raise
+        except (OSError, RuntimeError) as error:
+            self.helper_sample["mappingError"] = str(error)
+            self.helper_sample["mapping"] = getattr(error, "mapped_image", None)
+            if expected is None:
+                raise
+            if self.helper_changed(manager, pid, path, receipt):
+                return None
+            if self.known_helper_handoff(pid, receipt, expected, prior):
+                return None
+            raise
+        self.helper_sample["image"] = image
+        if image["sha256"] != receipt["digest"]:
             raise RuntimeError("fresh native helper image/PID differs from its actual receipt")
+        if self.helper_changed(manager, pid, path, receipt):
+            if expected is not None:
+                return None
+            raise RuntimeError("fresh native helper image/PID differs from its actual receipt")
+        if expected is not None and image["sha256"] != expected:
+            if prior is None or image != prior["image"]:
+                raise RuntimeError("published predecessor differs from its verified native identity")
+            return None
+        self.helper_verified = {"receipt": receipt, "image": image}
         return image
+
+    def require_helper_receipt(self, receipt, expected, prior):
+        canonical = str(self.state / "update/helper" / expected / "mesh")
+        if prior is None:
+            raise RuntimeError("published helper wait lacks its verified predecessor")
+        target = prior["receipt"] | {"digest": expected, "executable": canonical}
+        if receipt not in (prior["receipt"], target):
+            raise RuntimeError("published helper receipt differs from its authenticated target or verified predecessor")
+
+    def helper_changed(self, manager, pid, path, receipt):
+        return manager.manager_pid() != pid or json.loads(path.read_bytes()) != receipt
+
+    def known_helper_handoff(self, pid, receipt, expected, prior):
+        # Receipt-first and PID-first publication both occur at this boundary.
+        other = prior["receipt"] if receipt["digest"] == expected else receipt | {
+            "digest": expected, "executable": str(self.state / "update/helper" / expected / "mesh")}
+        try:
+            image = installed_native.native_services.mapped_image(pid, other["executable"])
+        except (installed_clock.ClockExpired, InterruptedError):
+            raise
+        except (OSError, RuntimeError):
+            return False
+        self.helper_sample["handoffImage"] = image
+        if other == prior["receipt"]:
+            return image == prior["image"]
+        return image["sha256"] == expected
 
 
 def run(root, output, native, releases, origin):
