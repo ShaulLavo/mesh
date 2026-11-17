@@ -16,7 +16,7 @@ func commitTx(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("transaction context ended: %w", ctx.Err())
 	}
 	if err != nil {
-		return fmt.Errorf("%w", err)
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

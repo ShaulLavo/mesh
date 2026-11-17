@@ -112,12 +112,13 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 		<-ctx.Done()
 		return ctx.Err()
 	}}
+	lowerServiceCatalogCacheLoadCap(t, 50*time.Millisecond)
 	started := time.Now()
-	if _, _, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, 15*time.Millisecond,
-		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, blocking); err == nil {
-		t.Fatal("blocked cache load succeeded")
+	if _, _, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, time.Minute,
+		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, blocking); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked cache load = %v, want its hang cap", err)
 	}
-	if elapsed := time.Since(started); elapsed > catalogCacheReadTimeout+5*time.Second {
+	if elapsed := time.Since(started); elapsed > 30*time.Second {
 		t.Fatalf("blocked cache load hung for %s", elapsed)
 	}
 
@@ -152,6 +153,49 @@ func TestCollectServiceCatalogDiscoveryTimeoutDoesNotBoundCacheLoad(t *testing.T
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, slow)
 	if err != nil || len(rows) != 0 || len(diagnostics) != 0 {
 		t.Fatalf("rows = %#v, diagnostics = %#v, error %v", rows, diagnostics, err)
+	}
+}
+
+// lowerServiceCatalogCacheLoadCap is only for tests that are not parallel.
+func lowerServiceCatalogCacheLoadCap(t *testing.T, limit time.Duration) {
+	t.Helper()
+	previous := serviceCatalogCacheLoadCap
+	serviceCatalogCacheLoadCap = limit
+	t.Cleanup(func() { serviceCatalogCacheLoadCap = previous })
+}
+
+// The agent's hard deadline covers the cache read and discovery together, yet
+// reaching it still returns the cached rows rather than an error.
+func TestCollectServiceCatalogByKeepsCacheReadAndDiscoveryInsideOneDeadline(t *testing.T) {
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
+	blocked := &serviceCatalogTestCache{load: func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	if _, _, err := collectServiceCatalogBy(context.Background(), []HostRecord{host}, time.Now().Add(50*time.Millisecond),
+		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, blocked); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cache read outlived the hard deadline: %v", err)
+	}
+	cache := &serviceCatalogTestCache{rows: map[string][]storage.CachedService{
+		host.ID: {{HostID: hostID(host), Service: meshserve.Service{Name: "blog", Kind: meshserve.Proxy, Target: "3000"}, ObservedAt: time.Now().UTC()}},
+	}, load: func(context.Context) error {
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}}
+	deadline := time.Now().Add(100 * time.Millisecond)
+	discovery := make(chan time.Time, 1)
+	rows, diagnostics, err := collectServiceCatalogBy(context.Background(), []HostRecord{host}, deadline,
+		func(ctx context.Context, _ HostRecord) (remoteServiceSnapshot, error) {
+			queryDeadline, _ := ctx.Deadline()
+			discovery <- queryDeadline
+			<-ctx.Done()
+			return remoteServiceSnapshot{}, ctx.Err()
+		}, cache)
+	if err != nil || len(rows) != 1 || !rows[0].Stale || !errors.Is(diagnostics[host.ID], context.DeadlineExceeded) {
+		t.Fatalf("rows = %#v, diagnostics = %#v, error %v", rows, diagnostics, err)
+	}
+	if queryDeadline := <-discovery; !queryDeadline.Equal(deadline) {
+		t.Fatalf("discovery deadline %s, want the hard deadline %s", queryDeadline, deadline)
 	}
 }
 
