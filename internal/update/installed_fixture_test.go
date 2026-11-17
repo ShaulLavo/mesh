@@ -285,7 +285,7 @@ func TestInstalledEmptyLedgerBoundary(t *testing.T) {
 func installedSeedJournal(t *testing.T, signer *signingFixture, proxy *adoptionNativeProxy, seed installedSeed) {
 	t.Helper()
 	pool := x509.NewCertPool()
-	pool.AddCert(signer.issuer)
+	pool.AddCert(proxy.tlsRoot)
 	address, err := url.Parse(proxy.server.URL)
 	if err != nil {
 		t.Fatal(err)

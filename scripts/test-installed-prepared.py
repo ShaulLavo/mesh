@@ -214,6 +214,28 @@ class PreparedTest(unittest.TestCase):
         self.assertIs(releases.clock, clock)
         self.assertEqual(releases.server_kind, "prepared-origin")
 
+    def test_exited_prepared_server_reports_its_own_log(self):
+        # On PR 479 an expired serving leaf stopped the prepared origin, and the
+        # report became FileNotFoundError for the exporter's signer.log.
+        clock = SimpleNamespace(deadline_ns=42000100)
+        consumer_root = self.base / "consumer"
+        consumer_root.mkdir()
+        with patch.object(prepared.installed_clock, "current", return_value=clock):
+            releases = prepared.PreparedReleases(consumer_root, "linux/amd64", self.output)
+        self.addCleanup(lambda: releases.signer_log.close() if releases.signer_log else None)
+        failure = "prepared HTTPS serving leaf is invalid or expired"
+
+        def exited(*_arguments, **keywords):
+            keywords["stdout"].write(failure.encode())
+            keywords["stdout"].flush()
+            return SimpleNamespace(poll=lambda: 1)
+
+        with patch.object(installed_releases.time, "monotonic_ns", return_value=100), \
+                patch.object(installed_releases.subprocess, "Popen", side_effect=exited), \
+                patch.object(installed_releases.native_services, "wait_for", side_effect=lambda predicate, _message: predicate()), \
+                self.assertRaisesRegex(RuntimeError, "exited: " + failure):
+            releases.start_prepared_server()
+
     def test_selected_routing_runs_whole_existing_groups_and_original_readers(self):
         chosen = selection("chain-final", readers=(0,))
         with patch.object(installed_waypoint, "verify_readers") as readers, patch.object(prepared.installed_chain, "run_groups") as groups:
