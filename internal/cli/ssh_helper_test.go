@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -157,7 +157,7 @@ func TestSSHHelperChecksPeerAndStateOwnership(t *testing.T) {
 	}
 }
 
-func TestSSHHelperPendingHeaderLimitIncludesAcceptedSockets(t *testing.T) {
+func TestSSHHelperFullSlotsSendTheCommandDirect(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	pool := &sshCommandPool{ctx: ctx, entries: make(map[sshPoolKey]*sshPoolEntry)}
@@ -172,11 +172,19 @@ func TestSSHHelperPendingHeaderLimitIncludesAcceptedSockets(t *testing.T) {
 		admitSSHHelper(ctx, receiver, "unused", pool, slots, &handlers, &last)
 	}
 	sender, receiver := sshUnixPair(t)
+	pipes, err := newSSHCommandPipes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSSHFiles(pipes.files)
+	if err := pipes.send(sender, sshHelperRequest{Port: 22, Run: []byte(`{"args":["true"]}`)}); err != nil {
+		t.Fatal(err)
+	}
 	admitSSHHelper(ctx, receiver, "unused", pool, slots, &handlers, &last)
 	_ = sender.SetReadDeadline(time.Now().Add(time.Minute))
-	var result sshHelperResult
-	if err := json.NewDecoder(sender).Decode(&result); err != nil || result.Code != 1 {
-		t.Fatalf("pending admission: %+v, %v", result, err)
+	status := make([]byte, 1)
+	if _, err := io.ReadFull(sender, status); err != nil || status[0] != sshOwnerFallback {
+		t.Fatalf("full owner status=%q, %v", status, err)
 	}
 	for _, conn := range pending {
 		_ = conn.Close()

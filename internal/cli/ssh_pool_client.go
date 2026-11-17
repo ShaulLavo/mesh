@@ -37,11 +37,15 @@ func dialSSHOwner(ctx context.Context, state string) (*net.UnixConn, error) {
 	if conn, err := connectSSHOwner(path); err == nil {
 		return conn, nil
 	}
-	if err := startSSHOwner(ctx); err != nil {
+	if err := startSSHOwnerProcess(ctx); err != nil {
 		return nil, err
 	}
 	return connectSSHOwner(path)
 }
+
+// startSSHOwnerProcess is replaced in tests, which cannot run the helper as a
+// separate executable.
+var startSSHOwnerProcess = startSSHOwner
 
 func connectSSHOwner(path string) (*net.UnixConn, error) {
 	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Name: path, Net: "unix"})
@@ -119,7 +123,21 @@ func (p *sshCommandPipes) send(conn *net.UnixConn, request sshHelperRequest) err
 	return nil
 }
 
-func (a *application) runPooledSSH(ctx context.Context, host HostRecord, state string, port uint16, request sshd.RunRequest) error {
+type sshPoolOutcome int
+
+const (
+	// sshPoolFinished: the helper accepted the command, or it failed for good.
+	sshPoolFinished sshPoolOutcome = iota
+	// sshPoolInterrupted: the helper went away before accepting; nothing ran.
+	sshPoolInterrupted
+	// sshPoolUnavailable: no helper, or a full one; nothing ran.
+	sshPoolUnavailable
+)
+
+// runPipeSSH prefers the shared connection owner. A helper that ends before
+// accepting, typically one idling out, gets exactly one more try. A full or
+// unreachable helper never blocks a command: it runs on its own connection.
+func (a *application) runPipeSSH(ctx context.Context, host HostRecord, state string, port uint16, request sshd.RunRequest) error {
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode SSH launch: %w", err)
@@ -127,25 +145,125 @@ func (a *application) runPooledSSH(ctx context.Context, host HostRecord, state s
 	if _, err := sshd.ParseRunRequest(payload); err != nil {
 		return fmt.Errorf("validate SSH launch: %w", err)
 	}
+	for range 2 {
+		outcome, err := a.tryPooledSSH(ctx, host, state, port, payload)
+		if outcome == sshPoolFinished {
+			return err
+		}
+		if outcome == sshPoolUnavailable {
+			break
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("SSH command canceled: %w", err)
+	}
+	return a.runDirectPipeSSH(ctx, host, state, port, request)
+}
+
+func (a *application) tryPooledSSH(ctx context.Context, host HostRecord, state string, port uint16, payload []byte) (sshPoolOutcome, error) {
 	conn, err := dialSSHOwner(ctx, state)
 	if err != nil {
-		return fmt.Errorf("connect local SSH owner: %w", err)
+		return sshPoolUnavailable, fmt.Errorf("connect local SSH owner: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck // result owns exit status
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	pipes, err := newSSHCommandPipes()
 	if err != nil {
-		return err
+		return sshPoolFinished, err
 	}
 	defer closeSSHFiles(pipes.files)
 	if err := pipes.send(conn, sshHelperRequest{Host: host, Port: port, Run: payload}); err != nil {
-		return err
+		return sshPoolInterrupted, err
 	}
-	return a.relayPooledSSH(ctx, conn, pipes)
+	status := make([]byte, 1)
+	_, err = io.ReadFull(conn, status)
+	if ctx.Err() != nil {
+		return sshPoolFinished, fmt.Errorf("SSH command canceled: %w", ctx.Err())
+	}
+	if err != nil {
+		return sshPoolInterrupted, fmt.Errorf("SSH connection owner ended before accepting: %w", err)
+	}
+	switch status[0] {
+	case sshOwnerAccepted:
+		return sshPoolFinished, a.relayPooledSSH(ctx, conn, pipes)
+	case sshOwnerFallback:
+		return sshPoolUnavailable, nil
+	default:
+		return sshPoolFinished, fmt.Errorf("SSH connection owner sent unknown status %q", status[0])
+	}
 }
 
-func (a *application) relayPooledSSH(parent context.Context, conn *net.UnixConn, pipes *sshCommandPipes) error {
+// runDirectPipeSSH runs one pipe-mode command on its own connection, with the
+// same relay the shared owner uses, as when no owner can take it.
+func (a *application) runDirectPipeSSH(ctx context.Context, host HostRecord, state string, port uint16, request sshd.RunRequest) error {
+	client, err := dialMeshSSH(ctx, host, state, port)
+	if err != nil {
+		return err
+	}
+	// A private pool only accounts for this command's setup operations.
+	pool := &sshCommandPool{}
+	defer func() { _ = client.Close(); pool.setups.Wait() }()
+	pipes, err := newSSHCommandPipes()
+	if err != nil {
+		return err
+	}
+	defer closeSSHFiles(pipes.files)
+	runCtx, cancel := context.WithCancel(ctx)
+	signals := make(chan ssh.Signal, 4)
+	results := make(chan sshHelperResult, 1)
+	var running sync.WaitGroup
+	defer func() { cancel(); running.Wait() }()
+	running.Go(func() {
+		lease := &sshCommandLease{Client: client, pool: pool, entry: &sshPoolEntry{}}
+		results <- runDirectSSHCommand(runCtx, lease, request, pipes.remote, signals)
+	})
+	return a.relaySSHPipes(ctx, pipes, sshPipeOwner{
+		result: func() (sshHelperResult, error) { return <-results, nil },
+		signal: func(value ssh.Signal) {
+			select {
+			case signals <- value:
+			default:
+			}
+		},
+		abort: cancel,
+	})
+}
+
+func runDirectSSHCommand(ctx context.Context, lease *sshCommandLease, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
+	// Closing our ends gives the local relays end of output.
+	defer closeSSHFiles(files)
+	channel, err := openSSHPipeChannel(ctx, lease)
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	return runSSHPipes(ctx, lease, channel, request, files, signals)
+}
+
+// sshPipeOwner is whoever runs the SSH side of a pipe-mode command: the shared
+// helper over its socket, or this process on a direct connection.
+type sshPipeOwner struct {
+	result func() (sshHelperResult, error)
+	signal func(ssh.Signal)
+	abort  func()
+}
+
+func (a *application) relayPooledSSH(ctx context.Context, conn *net.UnixConn, pipes *sshCommandPipes) error {
+	encoder := json.NewEncoder(conn)
+	return a.relaySSHPipes(ctx, pipes, sshPipeOwner{
+		result: func() (sshHelperResult, error) {
+			var result sshHelperResult
+			if err := json.NewDecoder(io.LimitReader(conn, 64<<10)).Decode(&result); err != nil {
+				return result, fmt.Errorf("read SSH command result: %w", err)
+			}
+			return result, nil
+		},
+		signal: func(value ssh.Signal) { _ = encoder.Encode(value) },
+		abort:  func() { _ = conn.Close() },
+	})
+}
+
+func (a *application) relaySSHPipes(parent context.Context, pipes *sshCommandPipes, owner sshPipeOwner) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	input, err := localAttachInput(a.dependencies.Stdin, term.IsTerminal(a.dependencies.Stdin.Fd()))
@@ -164,16 +282,15 @@ func (a *application) relayPooledSSH(parent context.Context, conn *net.UnixConn,
 	}
 	defer closeError()
 	var streams sync.WaitGroup
-	streams.Go(func() { relaySSHOutput(conn, output, pipes.output) })
-	streams.Go(func() { relaySSHOutput(conn, stderr, pipes.stderr) })
+	streams.Go(func() { relaySSHOutput(owner.abort, output, pipes.output) })
+	streams.Go(func() { relaySSHOutput(owner.abort, stderr, pipes.stderr) })
 	inputDone := make(chan struct{})
 	go func() { defer close(inputDone); _, _ = io.Copy(pipes.input, input.reader); _ = pipes.input.Close() }()
 	defer func() { input.cancel(); _ = pipes.input.Close(); <-inputDone }()
 	signalsDone := make(chan struct{})
-	go func() { defer close(signalsDone); sendSSHSignals(ctx, conn) }()
+	go func() { defer close(signalsDone); sendSSHSignals(ctx, owner.signal) }()
 	defer func() { cancel(); <-signalsDone }()
-	var result sshHelperResult
-	err = json.NewDecoder(io.LimitReader(conn, 64<<10)).Decode(&result)
+	result, err := owner.result()
 	if err != nil {
 		cancel()
 		closeSSHFiles(pipes.files)
@@ -182,9 +299,9 @@ func (a *application) relayPooledSSH(parent context.Context, conn *net.UnixConn,
 	return pooledSSHResult(result, err)
 }
 
-func relaySSHOutput(conn *net.UnixConn, output io.Writer, input *os.File) {
+func relaySSHOutput(abort func(), output io.Writer, input *os.File) {
 	if _, err := io.Copy(output, input); err != nil {
-		_ = conn.Close()
+		abort()
 		_ = input.Close()
 	}
 }
@@ -202,17 +319,16 @@ func pooledSSHResult(result sshHelperResult, err error) error {
 	return nil
 }
 
-func sendSSHSignals(ctx context.Context, conn *net.UnixConn) {
+func sendSSHSignals(ctx context.Context, send func(ssh.Signal)) {
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(signals)
-	encoder := json.NewEncoder(conn)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case value := <-signals:
-			_ = encoder.Encode(ssh.Signal(map[os.Signal]string{syscall.SIGINT: "INT", syscall.SIGTERM: "TERM", syscall.SIGHUP: "HUP"}[value]))
+			send(map[os.Signal]ssh.Signal{syscall.SIGINT: ssh.SIGINT, syscall.SIGTERM: ssh.SIGTERM, syscall.SIGHUP: ssh.SIGHUP}[value])
 		}
 	}
 }

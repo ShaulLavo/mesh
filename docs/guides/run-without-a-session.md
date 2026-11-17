@@ -44,14 +44,22 @@ a private local helper for your state directory when needed. Commands use
 independent SSH channels. Cancelling one command closes its channel and remote
 process group; sibling commands keep running. A failed command is never replayed.
 Future commands reconnect after a transport fails.
-Connection setup failures have a one-second cooldown. Mesh makes one setup
-attempt for an invocation and never retries an uncertain command.
+Connection setup failures have a one-second cooldown. Mesh never retries a
+command whose launch may have reached the host.
 
 The helper closes connections after one minute without commands using them and
-exits after one minute without active or pending requests. It adds no service or
-daemon installation. It keeps at most eight destinations, sixteen commands per
-destination, and thirty-two active or pending local requests. Excess requests
-fail with a diagnostic. The host's existing admission limit also applies.
+exits after one minute without running commands. It adds no service or daemon
+installation. It keeps at most eight destinations, sixteen commands per
+destination, and thirty-two running commands. A ninth destination replaces the
+least recently used idle connection. A command beyond any other limit, or one
+that cannot reach the helper, runs on its own direct connection instead, as
+interactive shells do. The host's existing admission limit also applies.
+
+The helper confirms each request before it starts the command. If the helper
+goes away before confirming, for example while it is idling out, the command
+tries the helper once more and then connects directly. Nothing has run at that
+point. A channel that fails to open because its shared connection has died is
+opened once more on a fresh connection; no command was sent on the dead one.
 
 Pending channel setup, including cancelled waits for a late SSH reply, counts
 against those limits. An additional bound of 128 setup operations covers all

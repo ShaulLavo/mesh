@@ -28,6 +28,10 @@ type sshPoolKey struct {
 	Credential string
 }
 
+// errSSHPoolFull means the shared owner has no room for a command. Nothing was
+// sent to the destination, so the caller runs it on its own connection instead.
+var errSSHPoolFull = errors.New("shared SSH capacity is in use")
+
 type sshPoolEntry struct {
 	ready     chan struct{}
 	client    *ssh.Client
@@ -37,6 +41,9 @@ type sshPoolEntry struct {
 	abandoned int
 	idle      time.Time
 	dead      bool
+	// evicted entries stopped counting as live when they were closed, so their
+	// later disconnect must not count them out a second time.
+	evicted bool
 }
 
 type sshCommandPool struct {
@@ -54,6 +61,15 @@ type sshCommandPool struct {
 type sshCommandLease struct {
 	*ssh.Client
 	pool  *sshCommandPool
+	key   sshPoolKey
+	entry *sshPoolEntry
+}
+
+// sshPoolTicket is a reserved place for one command whose transport may still
+// be connecting.
+type sshPoolTicket struct {
+	pool  *sshCommandPool
+	key   sshPoolKey
 	entry *sshPoolEntry
 }
 
@@ -68,49 +84,109 @@ func sshCommandKey(host HostRecord, state string, port uint16) (sshPoolKey, ed25
 }
 
 func (p *sshCommandPool) acquire(ctx context.Context, host HostRecord, state string, port uint16) (*sshCommandLease, func(), error) {
-	key, private, err := sshCommandKey(host, state, port)
+	ticket, err := p.admit(host, state, port) //nolint:contextcheck // The dial belongs to the pool, independently of this caller.
 	if err != nil {
 		return nil, nil, err
+	}
+	return ticket.wait(ctx)
+}
+
+// admit reserves room for one command without waiting for its transport.
+func (p *sshCommandPool) admit(host HostRecord, state string, port uint16) (*sshPoolTicket, error) {
+	key, private, err := sshCommandKey(host, state, port)
+	if err != nil {
+		return nil, err
 	}
 	entry, fresh, err := p.reserve(key)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	release := func() { p.release(key, entry) }
 	if fresh {
 		p.connecting.Go(func() { p.connect(key, entry, host, private, port) }) //nolint:contextcheck // The dial belongs to the pool, independently of its first waiter.
 	}
+	return &sshPoolTicket{pool: p, key: key, entry: entry}, nil
+}
+
+func (t *sshPoolTicket) wait(ctx context.Context) (*sshCommandLease, func(), error) {
+	release := func() { t.pool.release(t.key, t.entry) }
 	select {
 	case <-ctx.Done():
 		release()
 		return nil, nil, fmt.Errorf("wait for shared SSH transport: %w", ctx.Err())
-	case <-entry.ready:
+	case <-t.entry.ready:
 	}
-	if entry.err != nil {
+	if t.entry.err != nil {
 		release()
-		return nil, nil, entry.err
+		return nil, nil, t.entry.err
 	}
-	return &sshCommandLease{Client: entry.client, pool: p, entry: entry}, release, nil
+	return &sshCommandLease{Client: t.entry.client, pool: t.pool, key: t.key, entry: t.entry}, release, nil
 }
 
 func (p *sshCommandPool) reserve(key sshPoolKey) (*sshPoolEntry, bool, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	entry, fresh, evicted, err := p.reserveLocked(key)
+	p.mu.Unlock()
+	if evicted != nil {
+		_ = evicted.Close()
+	}
+	return entry, fresh, err
+}
+
+// Called under mu. Returns an evicted idle transport for the caller to close.
+func (p *sshCommandPool) reserveLocked(key sshPoolKey) (*sshPoolEntry, bool, *ssh.Client, error) {
 	p.pruneFailed(time.Now())
 	if entry := p.entries[key]; entry != nil && !entry.dead {
 		if entry.users+entry.abandoned >= sshPoolChannels {
-			return nil, false, errors.New("SSH host has 16 active commands; try again after one finishes")
+			return nil, false, nil, fmt.Errorf("%w: SSH host has %d active commands", errSSHPoolFull, sshPoolChannels)
 		}
 		entry.users++
-		return entry, false, nil
+		return entry, false, nil, nil
+	}
+	var evicted *ssh.Client
+	if len(p.entries) >= sshPoolHosts || p.live >= sshPoolHosts {
+		evicted = p.evictIdleLocked()
 	}
 	if len(p.entries) >= sshPoolHosts || p.live >= sshPoolHosts {
-		return nil, false, errors.New("SSH connection owner has 8 destinations in use; wait for an idle connection to expire")
+		return nil, false, evicted, fmt.Errorf("%w: SSH connection owner has %d busy destinations", errSSHPoolFull, sshPoolHosts)
 	}
 	entry := &sshPoolEntry{ready: make(chan struct{}), users: 1}
 	p.entries[key] = entry
 	p.live++
-	return entry, true, nil
+	return entry, true, evicted, nil
+}
+
+// Called under mu. Retires the least recently used transport that no command
+// is using; nothing runs on it, so closing it cannot affect a command.
+func (p *sshCommandPool) evictIdleLocked() *ssh.Client {
+	var oldestKey sshPoolKey
+	var oldest *sshPoolEntry
+	for key, entry := range p.entries {
+		if entry.users != 0 || entry.abandoned != 0 || entry.client == nil || entry.dead {
+			continue
+		}
+		if oldest == nil || entry.idle.Before(oldest.idle) {
+			oldestKey, oldest = key, entry
+		}
+	}
+	if oldest == nil {
+		return nil
+	}
+	oldest.dead, oldest.evicted = true, true
+	p.live--
+	delete(p.entries, oldestKey)
+	return oldest.client
+}
+
+// forget retires a transport that failed to open a channel, so no command
+// waits on it again. Closing it runs discard, which settles the live count.
+func (p *sshCommandPool) forget(key sshPoolKey, entry *sshPoolEntry) {
+	p.mu.Lock()
+	entry.dead = true
+	if p.entries[key] == entry {
+		delete(p.entries, key)
+	}
+	p.mu.Unlock()
+	_ = entry.client.Close()
 }
 
 // Called under mu. A failed dial has no command whose execution could be replayed.
@@ -177,7 +253,9 @@ func (p *sshCommandPool) discard(key sshPoolKey, entry *sshPoolEntry) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	entry.dead = true
-	p.live--
+	if !entry.evicted {
+		p.live--
+	}
 	if p.entries[key] == entry {
 		delete(p.entries, key)
 	}
@@ -243,7 +321,7 @@ func (p *sshCommandPool) beginSetup() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.pendingSetups >= sshPoolSetups {
-		return errors.New("SSH connection owner has 128 pending setup operations")
+		return fmt.Errorf("%w: SSH connection owner has %d pending setup operations", errSSHPoolFull, sshPoolSetups)
 	}
 	p.pendingSetups++
 	return nil
@@ -283,4 +361,7 @@ type sshHelperRequest struct {
 type sshHelperResult struct {
 	Code  int    `json:"code"`
 	Error string `json:"error,omitempty"`
+	// fallback asks the client to run the command on its own connection.
+	// It is decided before acceptance and never sent as a result.
+	fallback bool
 }

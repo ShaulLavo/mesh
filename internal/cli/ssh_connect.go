@@ -62,7 +62,7 @@ func (a *application) executeSSH(ctx context.Context, target string, port uint16
 		return fmt.Errorf("locate SSH device identity: %w", err)
 	}
 	if noPTY || !term.IsTerminal(a.dependencies.Stdin.Fd()) {
-		return a.runPooledSSH(ctx, host, stateDir, port, request)
+		return a.runPipeSSH(ctx, host, stateDir, port, request)
 	}
 	client, err := dialMeshSSH(ctx, host, stateDir, port)
 	if err != nil {

@@ -266,17 +266,31 @@ func fillAbandonedOpenBudget(t *testing.T, peer *setupPeer, pool *sshCommandPool
 
 func boundaryOwner(t *testing.T, pool *sshCommandPool, host HostRecord, state string) func() {
 	t.Helper()
+	writeBoundaryHosts(t, state, host)
+	return boundaryOwnerListener(t, pool, state)
+}
+
+func writeBoundaryHosts(t *testing.T, state string, hosts ...HostRecord) {
+	t.Helper()
 	config := t.TempDir()
 	t.Setenv("MESH_CONFIG_DIR", config)
 	t.Setenv("MESH_STATE_DIR", state)
-	host.ID, host.Addresses = host.MeshIdentity, []string{"127.0.0.1"}
-	data, err := json.Marshal(map[string]any{"version": 1, "hosts": []HostRecord{host}})
+	records := make([]HostRecord, 0, len(hosts))
+	for _, host := range hosts {
+		host.ID, host.Addresses = host.MeshIdentity, []string{"127.0.0.1"}
+		records = append(records, host)
+	}
+	data, err := json.Marshal(map[string]any{"version": 1, "hosts": records})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(config, "hosts.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func boundaryOwnerListener(t *testing.T, pool *sshCommandPool, state string) func() {
+	t.Helper()
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(state, "ssh-command.sock"), Net: "unix"})
 	if err != nil {
 		t.Fatal(err)

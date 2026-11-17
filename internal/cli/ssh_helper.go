@@ -25,18 +25,35 @@ func sshHelperCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error { return runSSHHelper(cmd.Context()) }}
 }
 
+// The status byte a helper sends once it has read a request. Before it, no
+// command can have started, so a client may safely try again or connect
+// directly; after sshOwnerAccepted the helper owns the outcome.
+const (
+	sshOwnerAccepted byte = 'A'
+	sshOwnerFallback byte = 'F'
+)
+
+// sshOwnerLockWait stays inside the client's ten-second startup budget.
+const sshOwnerLockWait = 8 * time.Second
+
 func runSSHHelper(ctx context.Context) error {
 	state, err := paths.StateDir()
 	if err != nil {
 		return fmt.Errorf("locate SSH owner state: %w", err)
 	}
+	return ownSSHHelper(ctx, state, signalSSHOwnerReady, nil)
+}
+
+// ownSSHHelper serves commands for state once it holds the owner lock. busy,
+// when set, runs once if another owner still holds the lock.
+func ownSSHHelper(ctx context.Context, state string, ready, busy func()) error {
 	lock, err := openSSHOwnerLock(state, "ssh-owner.lock")
 	if err != nil {
 		return err
 	}
 	defer lock.Close() //nolint:errcheck // dropping the descriptor releases ownership
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		return fmt.Errorf("SSH connection owner is already running: %w", err)
+	if err := waitSSHOwnerLock(ctx, lock, busy); err != nil {
+		return err
 	}
 	path := filepath.Join(state, "ssh-command.sock")
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -50,12 +67,51 @@ func runSSHHelper(ctx context.Context) error {
 	if err := os.Chmod(path, 0600); err != nil {
 		return fmt.Errorf("protect SSH command socket: %w", err)
 	}
-	ready := os.NewFile(3, "ssh-owner-ready")
-	if ready != nil {
-		_, _ = ready.Write([]byte{1})
-		_ = ready.Close()
-	}
+	ready()
 	return serveSSHHelper(ctx, listener, state)
+}
+
+// An owner that is idling out holds its lock until its connections close.
+// A new owner started in that gap waits for it instead of failing.
+func waitSSHOwnerLock(ctx context.Context, lock *os.File, busy func()) error {
+	deadline := time.Now().Add(sshOwnerLockWait)
+	for {
+		err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if !errors.Is(err, unix.EWOULDBLOCK) {
+			return wrapSSHOwnerLock(err)
+		}
+		if busy != nil {
+			busy()
+			busy = nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("SSH connection owner is already running: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for SSH connection owner lock: %w", ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func wrapSSHOwnerLock(err error) error {
+	if err != nil {
+		return fmt.Errorf("lock SSH connection owner: %w", err)
+	}
+	return nil
+}
+
+// The starting client passes a pipe as descriptor 3. Anything else there, such
+// as a file opened by a hand-run helper, is left alone.
+func signalSSHOwnerReady() {
+	var stat unix.Stat_t
+	if unix.Fstat(3, &stat) != nil || stat.Mode&unix.S_IFMT != unix.S_IFIFO {
+		return
+	}
+	ready := os.NewFile(3, "ssh-owner-ready")
+	_, _ = ready.Write([]byte{1})
+	_ = ready.Close()
 }
 
 func serveSSHHelper(ctx context.Context, listener *net.UnixListener, state string) error {
@@ -103,15 +159,43 @@ func admitSSHHelper(ctx context.Context, conn *net.UnixConn, state string, pool 
 	case slots <- struct{}{}:
 		handlers.Go(func() { serveSSHHelperConn(ctx, conn, state, pool, slots, last) })
 	default:
-		_ = json.NewEncoder(conn).Encode(sshHelperResult{Code: 1, Error: "SSH connection owner has 32 active requests"})
-		_ = conn.Close()
+		// Every slot holds a running command; this one runs on its own connection.
+		handlers.Go(func() { refuseSSHHelper(conn) })
 	}
+}
+
+// refuseSSHHelper reads the request before answering. Closing a socket with
+// unread data resets it, and the client would lose the fallback answer.
+func refuseSSHHelper(conn *net.UnixConn) {
+	defer conn.Close() //nolint:errcheck // refusal is best effort
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	files, err := receiveSSHFiles(conn)
+	closeSSHFiles(files)
+	var request sshHelperRequest
+	if err == nil {
+		_ = json.NewDecoder(io.LimitReader(conn, 300<<10)).Decode(&request)
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, _ = conn.Write([]byte{sshOwnerFallback})
 }
 
 func serveSSHHelperConn(ctx context.Context, conn *net.UnixConn, state string, pool *sshCommandPool, slots chan struct{}, last *atomic.Int64) {
 	defer func() { _ = conn.Close(); last.Store(time.Now().UnixNano()); <-slots }()
-	result := handleSSHHelper(ctx, conn, state, pool)
+	accepted := false
+	accept := func() {
+		if !accepted {
+			accepted = true
+			_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_, _ = conn.Write([]byte{sshOwnerAccepted})
+		}
+	}
+	result := handleSSHHelper(ctx, conn, state, pool, accept)
 	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if result.fallback {
+		_, _ = conn.Write([]byte{sshOwnerFallback})
+		return
+	}
+	accept()
 	_ = json.NewEncoder(conn).Encode(result)
 }
 
@@ -223,7 +307,7 @@ func closeSSHFiles(files []*os.File) {
 	}
 }
 
-func handleSSHHelper(parent context.Context, conn *net.UnixConn, state string, pool *sshCommandPool) sshHelperResult {
+func handleSSHHelper(parent context.Context, conn *net.UnixConn, state string, pool *sshCommandPool, accept func()) sshHelperResult {
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	files, err := receiveSSHFiles(conn)
 	if err != nil {
@@ -239,6 +323,14 @@ func handleSSHHelper(parent context.Context, conn *net.UnixConn, state string, p
 	if err != nil || request.Port == 0 {
 		return sshHelperResult{Code: 1, Error: fmt.Sprintf("invalid SSH launch request: %v", err)}
 	}
+	ticket, err := pool.admit(request.Host, state, request.Port) //nolint:contextcheck // The dial belongs to the pool, independently of this command.
+	if errors.Is(err, errSSHPoolFull) {
+		return sshHelperResult{fallback: true}
+	}
+	accept()
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
 	_ = conn.SetReadDeadline(time.Time{})
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -248,12 +340,48 @@ func handleSSHHelper(parent context.Context, conn *net.UnixConn, state string, p
 	defer func() { _ = conn.CloseRead(); <-controlDone }()
 	stop := context.AfterFunc(ctx, func() { closeSSHFiles(files) })
 	defer stop()
-	client, release, err := pool.acquire(ctx, request.Host, state, request.Port)
+	lease, release, err := ticket.wait(ctx)
 	if err != nil {
 		return sshHelperResult{Code: 1, Error: err.Error()}
 	}
-	defer release()
-	return runSSHPipes(ctx, client, run, files, signals)
+	channel, err := openSSHPipeChannel(ctx, lease)
+	if sshTransportLost(ctx, err) {
+		lease, release, channel, err = reopenSSHPipeChannel(ctx, pool, lease, release, request, state)
+	}
+	if release != nil {
+		defer release()
+	}
+	if err != nil {
+		return sshHelperResult{Code: 1, Error: err.Error()}
+	}
+	return runSSHPipes(ctx, lease, channel, run, files, signals)
+}
+
+func openSSHPipeChannel(ctx context.Context, lease *sshCommandLease) (*ssh.Session, error) {
+	channel, err := lease.setup(ctx, lease.NewSession)
+	if err != nil {
+		return nil, fmt.Errorf("open SSH channel: %w", err)
+	}
+	return channel, nil
+}
+
+// sshTransportLost reports a channel open that failed because the shared
+// transport is gone, rather than a refusal from the destination. No exec was
+// sent, so one retry on a fresh transport cannot run the command twice.
+func sshTransportLost(ctx context.Context, err error) bool {
+	var refused *ssh.OpenChannelError
+	return err != nil && ctx.Err() == nil && !errors.As(err, &refused) && !errors.Is(err, errSSHPoolFull)
+}
+
+func reopenSSHPipeChannel(ctx context.Context, pool *sshCommandPool, lease *sshCommandLease, release func(), request sshHelperRequest, state string) (*sshCommandLease, func(), *ssh.Session, error) {
+	pool.forget(lease.key, lease.entry)
+	release()
+	fresh, release, err := pool.acquire(ctx, request.Host, state, request.Port)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	channel, err := openSSHPipeChannel(ctx, fresh)
+	return fresh, release, channel, err
 }
 
 func readSSHSignals(decoder *json.Decoder, signals chan<- ssh.Signal, cancel context.CancelFunc) {
@@ -270,11 +398,7 @@ func readSSHSignals(decoder *json.Decoder, signals chan<- ssh.Signal, cancel con
 	}
 }
 
-func runSSHPipes(ctx context.Context, client *sshCommandLease, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
-	channel, err := client.setup(ctx, client.NewSession)
-	if err != nil {
-		return sshHelperResult{Code: 1, Error: fmt.Sprintf("open SSH channel: %v", err)}
-	}
+func runSSHPipes(ctx context.Context, client *sshCommandLease, channel *ssh.Session, request sshd.RunRequest, files []*os.File, signals <-chan ssh.Signal) sshHelperResult {
 	defer channel.Close() //nolint:errcheck // Wait supplies the result
 	if err := ctx.Err(); err != nil {
 		return sshHelperResult{Code: 1, Error: err.Error()}
