@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/identity"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
@@ -130,11 +131,10 @@ func invocationSettings(stateDir string, observed Observation, invocation proces
 	if state != stateDir {
 		return updateinstall.Settings{}, "", errors.New("daemon environment selects another state directory")
 	}
-	cacheDefault := filepath.Join(home, ".cache")
-	if runtime.GOOS == "darwin" {
-		cacheDefault = filepath.Join(home, "Library", "Caches")
+	cache, err := paths.UpdateCacheDir(runtime.GOOS, func(name string) string { return env[name] })
+	if err != nil {
+		return updateinstall.Settings{}, "", fmt.Errorf("daemon environment: %w", err)
 	}
-	cache := environmentDefault(env, "MESH_UPDATE_CACHE_DIR", filepath.Join(environmentDefault(env, "XDG_CACHE_HOME", cacheDefault), "mesh", "updates"))
 	config := environmentDefault(env, "MESH_CONFIG_DIR", filepath.Join(environmentDefault(env, "XDG_CONFIG_HOME", filepath.Join(home, ".config")), "mesh"))
 	if !filepath.IsAbs(cache) || !filepath.IsAbs(config) {
 		return updateinstall.Settings{}, "", errors.New("daemon cache and configuration paths must be absolute")

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
@@ -282,8 +283,7 @@ if [ -n "${MESH_UPDATE_REQUIRED_MOUNT:-}" ]; then
   mounted=$(df -P "$MESH_UPDATE_REQUIRED_MOUNT" | awk 'END {print $NF}')
   [ "$mounted" = "$MESH_UPDATE_REQUIRED_MOUNT" ] || { printf '%s\n' 'Mesh bootstrap: required data mount missing' >&2; exit 1; }
 fi
-cache=${MESH_UPDATE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/mesh/updates}
-mkdir -p "$cache"
+` + paths.UpdateCacheShell + `mkdir -p "$cache"
 temporary=$(mktemp -d "$cache/bootstrap-$operation.XXXXXX")
 trap 'rm -rf "$temporary"' EXIT
 archive=mesh_$platform.tar.gz
