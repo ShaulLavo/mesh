@@ -28,6 +28,11 @@ import (
 	metadata "github.com/theupdateframework/go-tuf/v2/metadata"
 )
 
+// preparedMaterialLifetime matches the 7-day retention of the prepared release
+// artifact in installed-catchup.yml: consumer jobs and their reruns must be able
+// to serve and verify it until the artifact itself is gone.
+const preparedMaterialLifetime = 7 * 24 * time.Hour
+
 type adoptionNativeProxy struct {
 	server      *httptest.Server
 	mu          sync.Mutex
@@ -35,6 +40,7 @@ type adoptionNativeProxy struct {
 	filesOnDisk map[string]adoptionNativeFile
 	connections map[net.Conn]*http.Server
 	certificate tls.Certificate
+	tlsRoot     *x509.Certificate
 }
 
 type adoptionNativeFile struct {
@@ -46,17 +52,8 @@ type adoptionNativeFile struct {
 func newAdoptionNativeProxy(t *testing.T, signer *signingFixture, root string) *adoptionNativeProxy {
 	t.Helper()
 	proxy := &adoptionNativeProxy{files: make(map[string][]byte), connections: make(map[net.Conn]*http.Server)}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(700), Subject: pkix.Name{CommonName: "Mesh fixture origin"}, DNSNames: []string{"github.com", "tuf-repo-cdn.sigstore.dev"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-	der, err := x509.CreateCertificate(rand.Reader, leaf, signer.issuer, &key.PublicKey, signer.issuerKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxy.certificate = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
-	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: signer.issuer.Raw})
+	proxy.tlsRoot, proxy.certificate = fixtureOriginCertificates(t)
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: proxy.tlsRoot.Raw})
 	directory, err := os.OpenRoot(root)
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +74,38 @@ func newAdoptionNativeProxy(t *testing.T, signer *signingFixture, root string) *
 		proxy.server.Close()
 	})
 	return proxy
+}
+
+// fixtureOriginCertificates issues the HTTPS serving leaf from its own root.
+// The Sigstore test issuer from sigstore-go is valid for only a few hours, and
+// a prepared origin must stay servable for preparedMaterialLifetime.
+func fixtureOriginCertificates(t *testing.T) (*x509.Certificate, tls.Certificate) {
+	t.Helper()
+	notBefore, notAfter := time.Now().Add(-time.Minute), time.Now().Add(preparedMaterialLifetime)
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(699), Subject: pkix.Name{CommonName: "Mesh fixture origin root"}, NotBefore: notBefore, NotAfter: notAfter,
+		IsCA: true, BasicConstraintsValid: true, MaxPathLenZero: true, KeyUsage: x509.KeyUsageCertSign}
+	rootDER, err := x509.CreateCertificate(rand.Reader, template, template, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(700), Subject: pkix.Name{CommonName: "Mesh fixture origin"}, DNSNames: []string{"github.com", "tuf-repo-cdn.sigstore.dev"}, NotBefore: notBefore, NotAfter: notAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
 func (p *adoptionNativeProxy) put(name string, value []byte) {
@@ -104,7 +133,7 @@ func (p *adoptionNativeProxy) installTUF(t *testing.T, fixture *signingFixture) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	timestamp := metadata.Timestamp(time.Now().Add(time.Hour))
+	timestamp := metadata.Timestamp(time.Now().Add(preparedMaterialLifetime))
 	timestamp.Signed.Meta["snapshot.json"] = metadata.MetaFile(1)
 	p.put("tuf/timestamp.json", signFixtureTUF(t, timestamp, signer))
 	p.put("tuf/1.snapshot.json", provenance.Witness.Snapshot)
