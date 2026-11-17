@@ -113,7 +113,11 @@ def malformed_control(fixture):
     with socket.socket(socket.AF_UNIX) as connection:
         connection.connect(str(fixture.local / "ssh-command.sock"))
         connection.sendall(b"x")
-        result = json.loads(connection.recv(4096))
+        with connection.makefile("rb") as reply:
+            data = reply.read()
+        # The owner answers for a malformed request itself; the client must not retry it.
+        require(data[:1] == b"A", f"malformed request status: {data[:1]!r}")
+        result = json.loads(data[1:])
         require(result["code"] != 0, "missing descriptors were accepted")
 
 
