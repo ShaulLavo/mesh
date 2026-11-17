@@ -115,8 +115,15 @@ func serveSSHHelperConn(ctx context.Context, conn *net.UnixConn, state string, p
 	_ = json.NewEncoder(conn).Encode(result)
 }
 
+// sshControlBufferSize covers the largest control message a sender can pass.
+// Darwin installs every received descriptor before it truncates the control
+// copy, so a buffer sized for exactly three would leak any extra descriptors
+// into this process with no way to close them. Darwin rejects control data
+// over MCLBYTES (2048) at send time; Linux closes what does not fit.
+const sshControlBufferSize = 2048
+
 func receiveSSHFiles(conn *net.UnixConn) ([]*os.File, error) {
-	control := make([]byte, unix.CmsgSpace(3*4))
+	control := make([]byte, sshControlBufferSize)
 	_, count, flags, _, err := conn.ReadMsgUnix(make([]byte, 1), control)
 	if err != nil {
 		return nil, fmt.Errorf("receive SSH stream descriptors: %w", err)
@@ -125,14 +132,21 @@ func receiveSSHFiles(conn *net.UnixConn) ([]*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse SSH stream descriptors: %w", err)
 	}
+	// Collect rights from every message before rejecting anything, so a bad
+	// message never strands descriptors that arrived in a later one.
 	var files []*os.File
+	var parseErr error
 	for _, message := range messages {
-		rights, parseErr := unix.ParseUnixRights(&message)
-		if parseErr != nil {
-			closeSSHFiles(files)
-			return nil, fmt.Errorf("parse SSH stream rights: %w", parseErr)
+		rights, err := unix.ParseUnixRights(&message)
+		if err != nil {
+			parseErr = err
+			continue
 		}
 		files = appendSSHFiles(files, rights)
+	}
+	if parseErr != nil {
+		closeSSHFiles(files)
+		return nil, fmt.Errorf("parse SSH stream rights: %w", parseErr)
 	}
 	if len(files) != 3 || flags&unix.MSG_CTRUNC != 0 {
 		closeSSHFiles(files)

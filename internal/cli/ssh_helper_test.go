@@ -37,8 +37,30 @@ func sshUnixPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 }
 
 func TestSSHHelperDescriptorAdmissionAndCleanup(t *testing.T) {
-	for _, count := range []int{0, 1, 2, 3, 4, 32} {
+	for _, count := range []int{0, 1, 2, 3, 4, 32, 200} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) { assertSSHDescriptorCount(t, count) })
+	}
+}
+
+func TestSSHHelperClosesRightsSplitAcrossControlMessages(t *testing.T) {
+	sender, receiver := sshUnixPair(t)
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()  //nolint:errcheck // fixture pipe
+	defer write.Close() //nolint:errcheck // fixture pipe
+	fd := int(read.Fd())
+	control := append(unix.UnixRights(fd, fd), unix.UnixRights(fd, fd)...)
+	if _, _, err := sender.WriteMsgUnix([]byte{1}, control, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiveSSHFiles(receiver); err == nil {
+		t.Fatal("accepted four descriptors split across two control messages")
+	}
+	_ = read.Close()
+	if _, err := unix.Write(int(write.Fd()), []byte{1}); !errors.Is(err, unix.EPIPE) {
+		t.Fatalf("split descriptors leaked: %v", err)
 	}
 }
 
