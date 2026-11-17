@@ -102,12 +102,16 @@ func CollectServiceCatalog(ctx context.Context, hosts []HostRecord, timeout time
 		return nil, nil, fmt.Errorf("cli: host count %d exceeds %d", len(hosts), maximumConfiguredHosts)
 	}
 
-	operationCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cached, err := cache.LoadAllServices(operationCtx, hosts)
+	// The caller's timeout bounds remote discovery. The local cache read has its
+	// own bound, so a short --timeout cannot fail it on a slow disk.
+	loadCtx, loadCancel := context.WithTimeout(ctx, catalogCacheReadTimeout)
+	cached, err := cache.LoadAllServices(loadCtx, hosts)
+	loadCancel()
 	if err != nil {
 		return nil, nil, fmt.Errorf("load cached services: %w", err)
 	}
+	operationCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	observedHosts := make(map[string]HostRecord, len(hosts))
 	rowsByHost := make(map[string][]ServiceCatalogRow, len(hosts))
 	rowCount := 0

@@ -117,8 +117,8 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, blocking); err == nil {
 		t.Fatal("blocked cache load succeeded")
 	}
-	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
-		t.Fatalf("bounded cache load took %s", elapsed)
+	if elapsed := time.Since(started); elapsed > catalogCacheReadTimeout+5*time.Second {
+		t.Fatalf("blocked cache load hung for %s", elapsed)
 	}
 
 	cache := &serviceCatalogTestCache{save: func(context.Context) error { return errors.New("disk busy") }}
@@ -132,6 +132,26 @@ func TestCollectServiceCatalogBoundsCacheLoadAndTreatsSaveFailureAsWarning(t *te
 	var warning catalogCacheWarning
 	if !errors.As(diagnostics[host.ID], &warning) || len(unavailableServiceAliases(diagnostics)) != 0 {
 		t.Fatalf("cache diagnostic = %#v", diagnostics)
+	}
+}
+
+// A short discovery timeout bounds remote queries only: a local cache read
+// slower than it, but within the cache read bound, still succeeds.
+func TestCollectServiceCatalogDiscoveryTimeoutDoesNotBoundCacheLoad(t *testing.T) {
+	host := HostRecord{MachineName: "pc", ID: "pc-id"}
+	timeout := 10 * time.Millisecond
+	slow := &serviceCatalogTestCache{load: func(ctx context.Context) error {
+		select {
+		case <-time.After(5 * timeout):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	rows, diagnostics, err := CollectServiceCatalog(context.Background(), []HostRecord{host}, timeout,
+		func(context.Context, HostRecord) (remoteServiceSnapshot, error) { return remoteServiceSnapshot{}, nil }, slow)
+	if err != nil || len(rows) != 0 || len(diagnostics) != 0 {
+		t.Fatalf("rows = %#v, diagnostics = %#v, error %v", rows, diagnostics, err)
 	}
 }
 
