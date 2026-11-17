@@ -104,3 +104,51 @@ func TestDeviceApprovalWaitsForABrieflyHeldPolicyLock(t *testing.T) {
 		})
 	}
 }
+
+func TestGrantPolicyRejectsSpecialFilesWithoutBlocking(t *testing.T) {
+	for _, name := range []string{"authorized_keys", "device-grants.lock"} {
+		for _, kind := range []string{"fifo", "symlink"} {
+			t.Run(name+"/"+kind, func(t *testing.T) { checkSpecialGrantPolicyFile(t, name, kind) })
+		}
+	}
+}
+
+// A FIFO or symlink in place of a policy file must be refused, not opened in a
+// way that blocks: with the writer budget at several seconds a blocking open
+// would stall approval, so the hang cap sits above that budget.
+func checkSpecialGrantPolicyFile(t *testing.T, name, kind string) {
+	t.Helper()
+	state := t.TempDir()
+	actor, _, err := LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, name)
+	if kind == "fifo" {
+		err = syscall.Mkfifo(path, 0o600)
+	} else {
+		target := filepath.Join(state, "target")
+		err = os.WriteFile(target, nil, 0o600)
+		if err == nil {
+			err = os.Symlink(target, path)
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name == "authorized_keys" {
+		if _, err := ReadAuthorizedKeys(path); err == nil {
+			t.Fatal("reader accepted a special policy file")
+		}
+	}
+	finished := make(chan error, 1)
+	go func() { finished <- ApproveDevice(t.Context(), state, actor.ID) }()
+	select {
+	case err := <-finished:
+		if err == nil {
+			t.Fatal("writer accepted a special policy file")
+		}
+	case <-time.After(access.ClassWriterBudget + 10*time.Second):
+		t.Fatal("writer blocked on a special policy file")
+	}
+}
