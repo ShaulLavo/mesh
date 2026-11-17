@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,9 @@ func AdoptionRemoteCommand(operation Adoption, remote AdoptionRemote) (string, e
 	if operation.Version != operation.Request.Manifest.Version {
 		return "", errors.New("update: remote adoption release differs from pinned manifest")
 	}
+	if !completePlatform(remote.Host.Platform) {
+		return "", fmt.Errorf("update: adoption remote %s has no recorded platform", remote.Host.ID)
+	}
 	artifact, err := operation.Request.Manifest.Artifact(remote.Host.Platform)
 	if err != nil {
 		return "", hostError(err)
@@ -88,9 +92,7 @@ func AdoptionRemoteCommand(operation Adoption, remote AdoptionRemote) (string, e
 	address := release.OfficialBaseURL + "/download/" + operation.Version + "/" + artifact.Archive
 	script := `set -eu
 umask 077
-cache=${MESH_UPDATE_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/mesh/updates}
-test -d "$cache" || { printf '%s\n' 'existing daemon update cache is unavailable' >&2; exit 1; }
-root="$cache/adoption"
+` + adoptionCacheScript + `root="$cache/adoption"
 mkdir -p "$root"
 work=$(mktemp -d "$root/side.XXXXXXXX")
 cleanup() { rm -f "$work/archive" "$work/mesh"; rmdir "$work"; }
@@ -115,6 +117,101 @@ chmod 700 "$work/mesh"
 "$work/mesh" update adopt start --local --release ` + adoptionShellQuote(operation.Version) + ` --json
 `
 	return "sh -c " + adoptionShellQuote(script), nil
+}
+
+// adoptionCacheScript selects the daemon's update cache with the same rule as
+// updatebootstrap.invocationSettings: MESH_UPDATE_CACHE_DIR, then
+// XDG_CACHE_HOME, then ~/Library/Caches on macOS or ~/.cache elsewhere.
+const adoptionCacheScript = `case "$(uname -s)" in
+  Darwin) cache_home=$HOME/Library/Caches ;;
+  *) cache_home=$HOME/.cache ;;
+esac
+cache=${MESH_UPDATE_CACHE_DIR:-${XDG_CACHE_HOME:-$cache_home}/mesh/updates}
+test -d "$cache" || { printf 'existing daemon update cache %s is unavailable\n' "$cache" >&2; exit 1; }
+`
+
+// adoptionProbeScript prints the platform, then checks everything the deploy
+// script needs before SSH can change anything, so a remote that would fail
+// after SSH every time is refused before the adoption is recorded.
+const adoptionProbeScript = `set -eu
+uname -s
+uname -m
+` + adoptionCacheScript + `for tool in curl tar mktemp; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'adoption deploy needs %s on this host\n' "$tool" >&2; exit 1; }
+done
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || { printf '%s\n' 'adoption deploy needs sha256sum or shasum on this host' >&2; exit 1; }
+`
+
+// RemoteAdoptionPlatform asks a fleet member for its platform, and checks the
+// deploy's preconditions, over the same system SSH alias the deploy uses. It
+// changes nothing on the remote.
+func RemoteAdoptionPlatform(ctx context.Context, alias string) (release.Platform, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	platform, err := bootstrap.SystemSSHPlatform(ctx, alias, "sh -c "+adoptionShellQuote(adoptionProbeScript))
+	if err != nil {
+		return release.Platform{}, fmt.Errorf("update: system SSH platform for %s: %w", alias, err)
+	}
+	return release.Platform{OS: string(platform.OS), Arch: string(platform.Arch)}, nil
+}
+
+func completePlatform(platform release.Platform) bool {
+	return platform.OS != "" && platform.Arch != ""
+}
+
+// resolveAdoptionPlatforms probes every remote before anything is recorded. The
+// probe fills in a platform the fleet manifest left out, refuses one that
+// differs from the host, and checks the deploy's preconditions; the pinned
+// release must ship an artifact for each platform. Predecessor copies get the
+// same platform so every recorded copy of a host agrees.
+func resolveAdoptionPlatforms(ctx context.Context, start *AdoptionStart, manifest release.Manifest, detect func(context.Context, string) (release.Platform, error)) error {
+	remotes := slices.Clone(start.Remotes)
+	platforms := make(map[string]release.Platform, len(remotes))
+	for i := range remotes {
+		platform, err := resolveAdoptionPlatform(ctx, remotes[i], manifest, detect)
+		if err != nil {
+			return err
+		}
+		remotes[i].Host.Platform, platforms[remotes[i].Host.ID] = platform, platform
+	}
+	for i := range remotes {
+		remotes[i].Require = withAdoptionPlatforms(remotes[i].Require, platforms)
+	}
+	start.Remotes, start.Require = remotes, withAdoptionPlatforms(start.Require, platforms)
+	return nil
+}
+
+func resolveAdoptionPlatform(ctx context.Context, remote AdoptionRemote, manifest release.Manifest, detect func(context.Context, string) (release.Platform, error)) (release.Platform, error) {
+	if detect == nil {
+		return release.Platform{}, fmt.Errorf("update: adoption remote %s has no SSH platform probe", remote.Host.ID)
+	}
+	platform, err := detect(ctx, remote.SSH)
+	if err != nil {
+		return platform, fmt.Errorf("update: probe adoption remote %s over SSH %s: %w", remote.Host.ID, remote.SSH, err)
+	}
+	if !completePlatform(platform) {
+		return platform, fmt.Errorf("update: adoption remote %s reported an incomplete platform", remote.Host.ID)
+	}
+	if completePlatform(remote.Host.Platform) && remote.Host.Platform != platform {
+		return platform, fmt.Errorf("update: fleet records adoption remote %s as %s but the host reports %s", remote.Host.ID, remote.Host.Platform, platform)
+	}
+	if _, err := manifest.Artifact(platform); err != nil {
+		return platform, fmt.Errorf("update: adoption remote %s: %w", remote.Host.ID, hostError(err))
+	}
+	return platform, nil
+}
+
+func withAdoptionPlatforms(hosts []Host, platforms map[string]release.Platform) []Host {
+	if len(hosts) == 0 {
+		return hosts
+	}
+	result := slices.Clone(hosts)
+	for i, host := range result {
+		if platform, ok := platforms[host.ID]; ok && !completePlatform(host.Platform) {
+			result[i].Platform = platform
+		}
+	}
+	return result
 }
 
 func adoptionShellQuote(value string) string {

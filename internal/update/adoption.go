@@ -66,6 +66,15 @@ type AdoptionNotice struct {
 	DeliveredAt time.Time     `json:"deliveredAt,omitempty"`
 }
 
+// Remote deploy states. "deploying" is written before SSH starts, so only
+// "pending" proves no deploy ever began.
+const (
+	AdoptionRemotePending   = "pending"
+	AdoptionRemoteDeploying = "deploying"
+	AdoptionRemoteStarted   = "started"
+	AdoptionRemoteBlocked   = "blocked"
+)
+
 type AdoptionRemote struct {
 	Host        Host       `json:"host"`
 	SSH         string     `json:"ssh"`

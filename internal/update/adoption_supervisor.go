@@ -44,6 +44,7 @@ type AdoptionSupervisor struct {
 	Engine           func(Adoption) (*updateinstall.Engine, error)
 	Evidence         func(context.Context, Host) (HostAdoption, error)
 	Deploy           func(context.Context, Adoption, AdoptionRemote) error
+	RemotePlatform   func(context.Context, string) (release.Platform, error)
 	Now              func() time.Time
 }
 
@@ -152,6 +153,9 @@ func (u *AdoptionSupervisor) Start(ctx context.Context, start AdoptionStart) err
 		return errors.New("update: requested adoption metadata pin differs from the signed release")
 	}
 	if err := pinned.verifySide(ctx, u.Side, u.Build); err != nil {
+		return err
+	}
+	if err := resolveAdoptionPlatforms(ctx, &start, pinned.Manifest, u.RemotePlatform); err != nil {
 		return err
 	}
 	operation, revision, err := u.prepare(ctx, start, pinned)
@@ -409,7 +413,7 @@ func runAdoptionNotice(ctx context.Context, argv []string) error {
 
 func (u *AdoptionSupervisor) deployRemotes(ctx context.Context, operation Adoption) (bool, error) {
 	for index, remote := range operation.Remotes {
-		if remote.State == "started" || u.now().Before(remote.NextAttempt) {
+		if remote.State == AdoptionRemoteStarted || u.now().Before(remote.NextAttempt) {
 			continue
 		}
 		return true, u.deployRemote(ctx, operation, index)
@@ -421,13 +425,35 @@ func (u *AdoptionSupervisor) deployRemote(ctx context.Context, operation Adoptio
 	if u.Deploy == nil {
 		return u.hold(ctx, operation, errors.New("update: configured system SSH deployment unavailable"))
 	}
-	err := u.Deploy(ctx, operation, operation.Remotes[index])
-	next := operation
-	next.Remotes = append([]AdoptionRemote(nil), operation.Remotes...)
-	remote := &next.Remotes[index]
-	remote.State, remote.Problem = "started", ""
-	if err != nil {
-		remote.State, remote.Problem, remote.NextAttempt = "blocked", boundedProblem(err.Error()), u.now().Add(time.Minute)
+	if !completePlatform(operation.Remotes[index].Host.Platform) {
+		// Records written before platforms were resolved can carry an empty one.
+		// No command exists for it, so this never reaches SSH and the remote
+		// stays untouched for AbandonAdoption.
+		return u.blockRemote(ctx, operation, index, fmt.Errorf("update: adoption remote %s has no recorded platform", operation.Remotes[index].Host.ID))
 	}
-	return errors.Join(err, u.Store.saveAdoption(ctx, operation, next))
+	// Record the attempt before SSH starts. A crash or failure during the deploy
+	// then never leaves this remote looking untouched to AbandonAdoption.
+	attempt := operation
+	if operation.Remotes[index].State != AdoptionRemoteDeploying {
+		attempt.Remotes = slices.Clone(operation.Remotes)
+		attempt.Remotes[index].State = AdoptionRemoteDeploying
+		if err := u.Store.saveAdoption(ctx, operation, attempt); err != nil {
+			return err
+		}
+	}
+	if err := u.Deploy(ctx, attempt, attempt.Remotes[index]); err != nil {
+		return u.blockRemote(ctx, attempt, index, err)
+	}
+	next := attempt
+	next.Remotes = slices.Clone(attempt.Remotes)
+	next.Remotes[index].State, next.Remotes[index].Problem = AdoptionRemoteStarted, ""
+	return u.Store.saveAdoption(ctx, attempt, next)
+}
+
+func (u *AdoptionSupervisor) blockRemote(ctx context.Context, operation Adoption, index int, cause error) error {
+	next := operation
+	next.Remotes = slices.Clone(operation.Remotes)
+	remote := &next.Remotes[index]
+	remote.State, remote.Problem, remote.NextAttempt = AdoptionRemoteBlocked, boundedProblem(cause.Error()), u.now().Add(time.Minute)
+	return errors.Join(cause, u.Store.saveAdoption(ctx, operation, next))
 }
