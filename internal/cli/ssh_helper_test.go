@@ -52,7 +52,11 @@ func TestSSHHelperClosesRightsSplitAcrossControlMessages(t *testing.T) {
 	defer write.Close() //nolint:errcheck // fixture pipe
 	fd := int(read.Fd())
 	control := append(unix.UnixRights(fd, fd), unix.UnixRights(fd, fd)...)
-	if _, _, err := sender.WriteMsgUnix([]byte{1}, control, nil); err != nil {
+	_, _, err = sender.WriteMsgUnix([]byte{1}, control, nil)
+	if errors.Is(err, unix.EINVAL) {
+		t.Skip("this kernel refuses more than one rights message per send")
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := receiveSSHFiles(receiver); err == nil {
