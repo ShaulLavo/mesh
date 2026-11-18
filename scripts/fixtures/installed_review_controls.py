@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from fixtures import installed_clock, installed_account_run, installed_accounts, installed_order, installed_order_host, installed_native, installed_publication, installed_releases, native_services, installed_fresh, installed_adoption
+from fixtures import installed_continuity
 
 
 class Clock:
@@ -559,6 +560,91 @@ class PublishedRouteReviewTest(unittest.TestCase):
             with patch.object(installed_publication.installed_chain, "read_ledger", return_value=ledger), patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
                 installed_publication.await_published_route(SimpleNamespace(), record, "first", "target", None, False)
         self.assertEqual(events, ["observe", "validate"])
+
+
+class PublishedViaHeadTest(unittest.TestCase):
+    """First published updater -> published via head (an earlier real release) -> draft.
+
+    The via head's build is not produced locally, so releases.builds only learns
+    it from the authenticated route. Release C hit KeyError: 'v0.1.332' when its
+    strict inspection ran first."""
+    VIA = "v0.1.332"
+
+    def setUp(self):
+        self.via = {"version": self.VIA, "binary": "via-image", "metadata": "via-metadata", "manifest": "via-manifest"}
+        self.running = {"version": self.VIA, "digest": "via-image", "commit": "via-commit", "modified": False,
+                        "platform": {"os": "linux", "arch": "amd64"}}
+        self.builds = {"v0.1.331": {"version": "v0.1.331", "digest": "first-image", "path": "first"},
+                       "v0.1.333": {"version": "v0.1.333", "digest": "draft-image", "path": "draft"}}
+        self.case = SimpleNamespace(releases=SimpleNamespace(builds=self.builds), expected_workers=1,
+            state=Path("unused-state"), binary=Path("unused-binary"),
+            control=Mock(return_value={"host": {"build": self.running}}),
+            mapped_helper=Mock(return_value={"sha256": "via-image"}),
+            route_observer=SimpleNamespace(snapshot=Mock(return_value={})),
+            cohort=SimpleNamespace(verify=Mock(return_value=["original-worker"])), wait_attachment_resume=Mock(), io=Mock())
+        self.case.inspect_retained = lambda: installed_continuity.current_daemon_image(
+            self.case, self.case.control("host.info")["host"]["build"])
+        self.enterContext(patch.object(installed_native, "peer_pid", return_value=201))
+        self.enterContext(patch.object(installed_native.native_services, "mapped_image",
+                                       return_value={"pid": 201, "sha256": "via-image"}))
+        self.events = []
+        self.authenticate = self.enterContext(patch.object(installed_publication, "authenticate_hop",
+            side_effect=lambda _case, build, expected: self.events.append(("authenticated", build["version"], expected["version"]))))
+
+    def record(self):
+        return {"expectedHops": [], "hops": [], "routeKind": "direct", "authenticatedTarget": self.via,
+                "routePlans": [{"target": self.via, "next": self.via, "currentDigest": "first-image"}]}
+
+    def ledger(self):
+        return {"state": {}, "entries": [{"version": self.VIA, "metadata": "via-metadata", "workersPreserved": 1}]}
+
+    def validate(self, record):
+        journal = {"phase": "committed", "request": {"manifest": {"version": self.VIA}}}
+        installed_publication.validate_published_route(self.case, record, journal, self.ledger(), self.VIA, None, False, set())
+
+    def test_via_head_is_authenticated_and_registered_before_strict_inspection(self):
+        record = self.record()
+        self.validate(record)
+        self.assertEqual(self.events, [("authenticated", self.VIA, self.VIA)])
+        self.assertEqual(self.builds[self.VIA], self.running)
+        self.assertEqual(record["final"]["build"], self.running)
+
+    def test_early_return_observation_of_the_running_head_leaves_validation_to_register_it(self):
+        record = self.record()
+        self.case.ready = Mock(return_value=True)
+        installed_publication.observe_published_hop(self.case, record, "v0.1.331", self.VIA, set())
+        self.assertNotIn(self.VIA, self.builds)
+        self.validate(record)
+        self.assertEqual(self.builds[self.VIA]["digest"], "via-image")
+
+    def test_intermediate_with_a_stale_helper_receipt_is_not_registered(self):
+        record = self.record() | {"expectedHops": [{"version": "v0.1.332-middle", "binary": "middle-image"}], "routeKind": "multihop"}
+        middle = self.running | {"version": "v0.1.332-middle", "digest": "middle-image"}
+        self.case.ready = Mock(return_value=True)
+        self.case.control.return_value = {"host": {"build": middle}}
+        with tempfile.TemporaryDirectory(prefix="published-via-") as temporary:
+            self.case.state = Path(temporary)
+            receipt = self.case.state / "update/helper/installed.json"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text(json.dumps({"digest": "first-image", "executable": "helper"}))
+            installed_publication.observe_published_hop(self.case, record, "v0.1.331", "v0.1.333", set())
+        self.assertNotIn("v0.1.332-middle", self.builds)
+        self.assertEqual(record["hops"], [])
+
+    def test_unauthenticated_via_head_is_never_registered_or_inspected(self):
+        self.authenticate.side_effect = RuntimeError("observed intermediate bytes differ from the authenticated route plan")
+        self.case.inspect_retained = Mock()
+        with self.assertRaisesRegex(RuntimeError, "authenticated route plan"):
+            self.validate(self.record())
+        self.assertNotIn(self.VIA, self.builds)
+        self.case.inspect_retained.assert_not_called()
+
+    def test_rollback_to_an_unverified_daemon_fails_with_a_named_error(self):
+        fault = SimpleNamespace(bound=True, released=True, error=None)
+        journal = {"phase": "rolled_back", "request": {"current": {"digest": "via-image"}, "manifest": {"version": "v0.1.333"}}}
+        with self.assertRaisesRegex(RuntimeError, "not a previously verified release"):
+            installed_publication.validate_published_route(self.case, self.record(), journal, self.ledger(), "v0.1.333", fault, True, set())
+        self.authenticate.assert_not_called()
 
 
 class PublishedHelperHandoffTest(unittest.TestCase):

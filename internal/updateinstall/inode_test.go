@@ -4,17 +4,23 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestOriginalInodeSurvivesRollbackRetryAndCommit(t *testing.T) {
 	f := newFixture(t)
+	// This test is about inode identity, not health timing. The candidate fails
+	// at start, so the rollback ends on that outcome, and every health wait
+	// gets a generous hang cap: a new executable's first launch can take
+	// hundreds of milliseconds while macOS assesses it.
+	f.engine.cfg.HealthTimeout = 30 * time.Second
 	original, err := os.Stat(f.engine.cfg.Executable)
 	if err != nil {
 		t.Fatal(err)
 	}
 	status := f.stage()
 	assertOriginalInode(t, original, status.Previous)
-	f.manager.failCandidate = true
+	f.manager.refuseCandidate = true
 	if _, err = f.engine.Grant(context.Background(), f.request.ID, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +36,7 @@ func TestOriginalInodeSurvivesRollbackRetryAndCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertOriginalInode(t, original, status.Previous)
-	f.manager.failCandidate = false
+	f.manager.refuseCandidate = false
 	if _, err = f.engine.Grant(context.Background(), f.request.ID, 1); err != nil {
 		t.Fatal(err)
 	}

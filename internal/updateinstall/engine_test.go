@@ -40,8 +40,11 @@ type processService struct {
 	executable, stateDir, healthPath string
 	process                          *exec.Cmd
 	failCandidate, failRollback      bool
-	stops, starts                    int
-	worker                           Worker
+	// refuseCandidate fails the candidate's start instead of its health, so a
+	// rollback test ends on that outcome rather than on the health deadline.
+	refuseCandidate bool
+	stops, starts   int
+	worker          Worker
 }
 
 func (s *processService) Stop(ctx context.Context) error {
@@ -72,6 +75,15 @@ func (s *processService) Start(ctx context.Context) error {
 		return nil
 	}
 	s.starts++
+	if s.refuseCandidate {
+		installed, err := os.ReadFile(s.executable)
+		if err != nil {
+			return fmt.Errorf("read installed fixture executable: %w", err)
+		}
+		if bytes.Contains(installed, []byte(`"version":"v0.2.0"`)) {
+			return errors.New("service manager refused the candidate")
+		}
+	}
 	s.process = exec.Command(s.executable, "daemon", s.healthPath) //nolint:gosec // isolated executable fixture under the test directory
 	if err := s.process.Start(); err != nil {
 		s.process = nil
