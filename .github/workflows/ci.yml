@@ -221,7 +221,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Verify full daemon suite under long and symlinked scratch
         shell: bash
         run: |
@@ -264,7 +264,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Require the actual native platform
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
@@ -342,7 +342,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Require the actual native platform
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
