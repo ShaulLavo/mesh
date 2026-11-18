@@ -673,14 +673,27 @@ class PublishedViaHeadTest(unittest.TestCase):
                 self.assertEqual(record["final"]["build"], self.running)
                 self.assertEqual(self.builds[self.VIA], self.running)
 
-    def await_route_reading(self, ledgers):
+    def test_any_other_host_info_failure_during_observation_still_fails(self):
+        self.case.ready = Mock(return_value=True)
+        self.case.control = Mock(side_effect=RuntimeError("daemon closed an incomplete response"))
+        with self.assertRaisesRegex(RuntimeError, "incomplete response"):
+            installed_publication.observe_published_hop(self.case, self.record(), "v0.1.331", "v0.1.333", set())
+
+    def await_route_reading(self, ledgers, deadline=None):
         journal = {"phase": "committed", "request": {"manifest": {"version": self.VIA}}}
         record = self.record()
         self.case.ready = Mock(return_value=False)
         with patch.object(installed_publication.installed_chain, "read_ledger", side_effect=ledgers), \
                 patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
-            installed_publication.await_published_route(self.case, record, "v0.1.331", self.VIA, None, False)
+            installed_publication.await_published_route(self.case, record, "v0.1.331", self.VIA, None, False, deadline=deadline)
         return record
+
+    def test_an_authority_lock_that_stays_held_exhausts_the_route_cap(self):
+        def busy():
+            while True:
+                yield publication_origin.AuthorityBusy("publication product ledger failed: acquire authority lock: context deadline exceeded")
+        with self.assertRaisesRegex(RuntimeError, "within the existing chain bound"):
+            self.await_route_reading(busy(), deadline=time.monotonic() + 0.3)
 
     def test_a_ledger_read_that_meets_the_held_authority_lock_is_read_again(self):
         busy = publication_origin.AuthorityBusy("publication product ledger failed: acquire authority lock: context deadline exceeded")
