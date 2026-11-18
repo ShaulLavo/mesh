@@ -21,8 +21,9 @@ import (
 	"time"
 )
 
-// Only the HTTPS serving leaf key crosses the job boundary. Issuer, Sigstore,
-// transparency log and TUF signing keys never leave the preparation process.
+// Only the HTTPS serving leaf key crosses the job boundary. Origin root, issuer,
+// Sigstore, transparency log and TUF signing keys never leave the preparation
+// process.
 type preparedOrigin struct {
 	Certificate []byte            `json:"certificate"`
 	ServingKey  []byte            `json:"servingKey"`
@@ -155,11 +156,12 @@ func TestPreparedOriginRoundTrip(t *testing.T) {
 		t.Fatal("prepared origin did not preserve exactly its TUF asset set")
 	}
 	leaf, err := x509.ParseCertificate(consumer.certificate.Certificate[0])
-	if err != nil || leaf.IsCA || bytes.Equal(leaf.RawSubjectPublicKeyInfo, fixture.issuer.RawSubjectPublicKeyInfo) {
+	if err != nil || leaf.IsCA || bytes.Equal(leaf.RawSubjectPublicKeyInfo, fixture.issuer.RawSubjectPublicKeyInfo) ||
+		bytes.Equal(leaf.RawSubjectPublicKeyInfo, producer.tlsRoot.RawSubjectPublicKeyInfo) {
 		t.Fatalf("exported material is not the distinct HTTPS serving leaf: %v", err)
 	}
 	pool := x509.NewCertPool()
-	pool.AddCert(fixture.issuer)
+	pool.AddCert(producer.tlsRoot)
 	address, err := url.Parse(consumer.server.URL)
 	if err != nil {
 		t.Fatal(err)
