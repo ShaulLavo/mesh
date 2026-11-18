@@ -27,6 +27,7 @@ MAC_FIFO_MINUTES = 45
 MAC_JOBS = {"ci.yml": ("socket-portability", "auth-cutover", "machine-naming"),
             "helper-recovery.yml": ("native-recovery",), "update-proofs.yml": ("prepare", "prove")}
 HOSTED_ONLY = ("installed-catchup.yml", "installed-prepared.yml", "release.yml")
+MAC_GO_CACHE = "${{ runner.environment == 'github-hosted' }}"
 
 
 def dependencies(source):
@@ -161,6 +162,12 @@ def check_mutations(ci, recovery):
 def check_mac_job(source, name):
     job = JOB(source, name)
     assert re.findall(r"^    runs-on: (.+)$", job, re.M) == [MAC_ROUTE], f"{name} must use the guarded Mac route"
+    # The persistent Mac keeps Go and its module cache; restoring setup-go's
+    # cache there re-downloads about 1 GB, fails over the existing files, and
+    # its saves push the repository past GitHub's cache limit.
+    caches = re.findall(r"uses: actions/setup-go@.*\n(?:        .*\n)*?          cache: (.+)\n", job)
+    assert caches == [MAC_GO_CACHE] * len(re.findall(r"uses: actions/setup-go@", job)), \
+        f"{name} must cache setup-go only on GitHub-hosted runners"
     timeouts = re.findall(r"^    timeout-minutes: (.+)$", job, re.M)
     if not timeouts:
         return
@@ -188,6 +195,7 @@ def reject_mac_routing(workflows):
         ("ci.yml", lambda text: text.replace(" || " + route, "", 1)),
         ("ci.yml", lambda text: text.replace("\"mesh-mac\"", "\"other\"", 1)),
         ("ci.yml", lambda text: text.replace("&& 55 || 10", "&& 10 || 10", 1)),
+        ("helper-recovery.yml", lambda text: text.replace("cache: " + MAC_GO_CACHE, "cache: true", 1)),
         ("update-proofs.yml", lambda text: text.replace("    runs-on: " + MAC_ROUTE, "    runs-on: ${{ matrix.runner }}", 1)),
         ("release.yml", lambda text: text.replace("    runs-on: ${{ matrix.runner }}", "    runs-on: " + MAC_ROUTE, 1)),
     )
