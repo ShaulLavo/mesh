@@ -478,7 +478,10 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
     deadline, seen = deadline if deadline is not None else time.monotonic() + installed_clock.timeout(), set()
     while time.monotonic() < deadline:
         observe_published_hop(case, record, first, target, seen)
-        ledger = installed_chain.read_ledger(case)
+        ledger = read_route_ledger(case)
+        if ledger is None:
+            time.sleep(0.05)
+            continue
         journal = installed_chain.read_journal(case)
         terminal = journal.get("request", {}).get("manifest", {}).get("version") == target and journal.get("phase") == ("rolled_back" if rollback else "committed")
         if terminal and not ledger["state"].get("owned"):
@@ -486,6 +489,15 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
             return
         time.sleep(0.05)
     raise RuntimeError("original published updater did not finish its real retained route within the existing chain bound")
+
+
+def read_route_ledger(case):
+    try:
+        return installed_chain.read_ledger(case)
+    except publication_origin.AuthorityBusy:
+        # The updater holds its authority lock across a hop's commit, and the
+        # product reader's bounded wait can expire. Read again next tick.
+        return None
 
 
 def observe_published_hop(case, record, first, target, seen):

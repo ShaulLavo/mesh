@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from fixtures import installed_clock, installed_account_run, installed_accounts, installed_order, installed_order_host, installed_native, installed_publication, installed_releases, native_services, installed_fresh, installed_adoption
-from fixtures import installed_continuity
+from fixtures import installed_continuity, publication_origin
 
 
 class Clock:
@@ -673,6 +673,24 @@ class PublishedViaHeadTest(unittest.TestCase):
                 self.assertEqual(record["final"]["build"], self.running)
                 self.assertEqual(self.builds[self.VIA], self.running)
 
+    def await_route_reading(self, ledgers):
+        journal = {"phase": "committed", "request": {"manifest": {"version": self.VIA}}}
+        record = self.record()
+        self.case.ready = Mock(return_value=False)
+        with patch.object(installed_publication.installed_chain, "read_ledger", side_effect=ledgers), \
+                patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
+            installed_publication.await_published_route(self.case, record, "v0.1.331", self.VIA, None, False)
+        return record
+
+    def test_a_ledger_read_that_meets_the_held_authority_lock_is_read_again(self):
+        busy = publication_origin.AuthorityBusy("publication product ledger failed: acquire authority lock: context deadline exceeded")
+        record = self.await_route_reading([busy, self.ledger()])
+        self.assertEqual(record["final"]["build"], self.running)
+
+    def test_any_other_ledger_read_failure_still_fails_the_route(self):
+        with self.assertRaisesRegex(RuntimeError, "ledger failed: corrupt"):
+            self.await_route_reading([RuntimeError("publication product ledger failed: corrupt"), self.ledger()])
+
     def test_a_daemon_swap_during_final_validation_still_fails(self):
         for error in self.swaps():
             self.case.control = Mock(side_effect=error)
@@ -693,6 +711,34 @@ class PublishedViaHeadTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not a previously verified release"):
             installed_publication.validate_published_route(self.case, self.record(), journal, self.ledger(), "v0.1.333", fault, True, set())
         self.authenticate.assert_not_called()
+
+
+class ProductReaderAuthorityTest(unittest.TestCase):
+    """The product reader's held-lock expiry is told apart from every other failure."""
+
+    def read(self, output):
+        temporary = tempfile.TemporaryDirectory(prefix="product-reader-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        inspector = root / "inspector"
+        inspector.write_text("#!/bin/sh\nprintf '%s\\n' " + json.dumps(output) + "\nexit 1\n")
+        inspector.chmod(0o700)
+        origin = object.__new__(publication_origin.Origin)
+        origin.inspector, origin.environment = inspector, dict
+        (root / "state").mkdir()
+        origin.ledger(root / "state", root / "chain-ledger.json")
+
+    def test_held_authority_lock_is_reported_as_busy(self):
+        busy = "read bounded installed ledger: update: acquire authority lock: context deadline exceeded"
+        with self.assertRaises(publication_origin.AuthorityBusy):
+            self.read(busy)
+
+    def test_other_reader_failures_are_not_busy(self):
+        for output in ("read bounded installed ledger: update: lock authority: permission denied",
+                       "update: open authority lock: no such file or directory", "--- FAIL: TestInstalledHostRead"):
+            with self.subTest(output), self.assertRaises(RuntimeError) as caught:
+                self.read(output)
+            self.assertNotIsInstance(caught.exception, publication_origin.AuthorityBusy)
 
 
 class PublishedHelperHandoffTest(unittest.TestCase):
