@@ -15,6 +15,10 @@ from types import SimpleNamespace
 
 from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion, release_tool, release_documents
 
+# A daemon being replaced closes its control socket before, during or after
+# reading a request.
+DAEMON_SWAP = (installed_native.controls.EmptyResponse, BrokenPipeError, ConnectionResetError)
+
 
 def require_main():
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.environ.get("GITHUB_REF") != "refs/heads/main":
@@ -487,7 +491,12 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
 def observe_published_hop(case, record, first, target, seen):
     if not case.ready():
         return
-    build = case.control("host.info")["host"]["build"]
+    try:
+        build = case.control("host.info")["host"]["build"]
+    except DAEMON_SWAP:
+        # The hop can replace the daemon between ready() and this read. The
+        # next tick observes again; validation and the route cap stay strict.
+        return
     if build["version"] in (first, target) or build["version"] in seen:
         return
     expected = next_expected_hop(record, build["version"])
