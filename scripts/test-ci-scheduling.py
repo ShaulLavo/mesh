@@ -17,6 +17,16 @@ READY = "${{ !inputs.client_interrupt && (github.event_name != 'pull_request' ||
 ALWAYS_READY = "${{ always() && !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 REQUIRED = {"changes", "app-pill", "test", "socket-portability", "auth-cutover", "machine-naming",
             "helper-recovery", "gates", "vulnerability", "packaging"}
+# Only trusted events reach the owner's Mac runner: main pushes, manual runs and
+# pull requests from branches of this repository. Fork pull requests stay hosted.
+TRUSTED = ("matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || "
+           "github.event.pull_request.head.repo.full_name == github.repository)")
+MAC_ROUTE = "${{ " + TRUSTED + " && fromJSON('[\"self-hosted\",\"macOS\",\"ARM64\",\"mesh-mac\"]') || matrix.runner }}"
+# The Mac runner's start hook waits up to this long in the Mac FIFO.
+MAC_FIFO_MINUTES = 45
+MAC_JOBS = {"ci.yml": ("socket-portability", "auth-cutover", "machine-naming"),
+            "helper-recovery.yml": ("native-recovery",), "update-proofs.yml": ("prepare", "prove")}
+HOSTED_ONLY = ("installed-catchup.yml", "installed-prepared.yml", "release.yml")
 
 
 def dependencies(source):
@@ -148,13 +158,59 @@ def check_mutations(ci, recovery):
         reject_mutation(ci, recovery, mutated)
 
 
+def check_mac_job(source, name):
+    job = JOB(source, name)
+    assert re.findall(r"^    runs-on: (.+)$", job, re.M) == [MAC_ROUTE], f"{name} must use the guarded Mac route"
+    timeouts = re.findall(r"^    timeout-minutes: (.+)$", job, re.M)
+    if not timeouts:
+        return
+    match = re.fullmatch(r"\$\{\{ " + re.escape(TRUSTED) + r" && (\d+) \|\| (\d+) \}\}", timeouts[0])
+    assert match, f"{name} must bound the Mac and hosted legs separately"
+    mac, hosted = (int(value) for value in match.groups())
+    assert mac == hosted + MAC_FIFO_MINUTES, f"{name} Mac hang cap must add the FIFO wait to the hosted bound"
+
+
+def check_mac_routing(workflows):
+    for name, jobs in MAC_JOBS.items():
+        for job in jobs:
+            check_mac_job(workflows[name], job)
+    for name, source in workflows.items():
+        # Signature verification's --deny-self-hosted-runners is not a route.
+        routes = [line for line in source.splitlines() if "runs-on:" in line and "self-hosted" in line]
+        assert all(line == "    runs-on: " + MAC_ROUTE for line in routes), f"{name} has an unguarded self-hosted route"
+        expected = 0 if name in HOSTED_ONLY else len(MAC_JOBS.get(name, ()))
+        assert len(routes) == expected, f"{name} must route exactly its reviewed Darwin legs to the Mac"
+
+
+def reject_mac_routing(workflows):
+    route = "github.event.pull_request.head.repo.full_name == github.repository"
+    mutations = (
+        ("ci.yml", lambda text: text.replace(" || " + route, "", 1)),
+        ("ci.yml", lambda text: text.replace("\"mesh-mac\"", "\"other\"", 1)),
+        ("ci.yml", lambda text: text.replace("&& 55 || 10", "&& 10 || 10", 1)),
+        ("update-proofs.yml", lambda text: text.replace("    runs-on: " + MAC_ROUTE, "    runs-on: ${{ matrix.runner }}", 1)),
+        ("release.yml", lambda text: text.replace("    runs-on: ${{ matrix.runner }}", "    runs-on: " + MAC_ROUTE, 1)),
+    )
+    for name, mutate in mutations:
+        mutated = dict(workflows, **{name: mutate(workflows[name])})
+        assert mutated[name] != workflows[name], f"Mac routing mutation did not apply to {name}"
+        try:
+            check_mac_routing(mutated)
+        except AssertionError:
+            continue
+        raise AssertionError(f"Mac routing accepted a mutation of {name}")
+
+
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     recovery = (ROOT / ".github/workflows/helper-recovery.yml").read_text()
     check_schedule(ci, recovery)
     check_mutations(ci, recovery)
     CONTRACT["check_mutations"](ci, recovery)
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal and mutation controls")
+    workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
+    check_mac_routing(workflows)
+    reject_mac_routing(workflows)
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing and mutation controls")
 
 
 if __name__ == "__main__":

@@ -207,8 +207,11 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Native socket and daemon fixtures (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    # Trusted Darwin legs (main pushes, manual runs, same-repository PRs) run on
+    # the owner's Mac runner; fork PRs stay hosted. The Mac job first waits in
+    # the Mac FIFO for up to 45 minutes, so its hang cap carries that wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 55 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -241,8 +244,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Device auth cutover (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -318,8 +322,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Destination naming (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
     strategy:
       fail-fast: false
       matrix:
