@@ -524,12 +524,11 @@ def validate_published_route(case, record, journal, ledger, target, fault, rollb
     helper = case.mapped_helper(expected=expected_helper, deadline=deadline)
     if helper["sha256"] != expected_helper:
         raise RuntimeError("final published helper differs from the authenticated expected release image")
-    case.inspect_retained()
     build = case.control("host.info")["host"]["build"]
     if build["digest"] != expected or rollback and (not fault.bound or not fault.released or fault.error):
         raise RuntimeError("real published route did not restore or activate its exact native image")
-    if not rollback:
-        authenticate_hop(case, build, record["authenticatedTarget"])
+    register_running_build(case, record, build, rollback)
+    case.inspect_retained()
     if rollback:
         verify_published_failure(case, journal, ledger, target)
         record["activationFault"] = {"bound": fault.bound, "released": fault.released, "error": fault.error}
@@ -540,6 +539,19 @@ def validate_published_route(case, record, journal, ledger, target, fault, rollb
             raise RuntimeError("real published updater lacks its exact pinned preserved-worker commit")
     record["final"] = {"build": build, "ledger": ledger, "journal": journal, "route": case.route_observer.snapshot(),
                        "workers": case.cohort.verify(release_worker_completion.final_label(record)), "helper": helper}
+
+
+def register_running_build(case, record, build, rollback):
+    # inspect_retained checks the running daemon against releases.builds. A
+    # published via head (an earlier real release) is known only through its
+    # authenticated route plan, so it is registered here, after authentication
+    # and before inspection. A restored daemon must already be a verified build.
+    if rollback:
+        known = case.releases.builds.get(build["version"])
+        if known is None or known["digest"] != build["digest"]:
+            raise RuntimeError("restored published daemon is not a previously verified release")
+        return
+    authenticate_hop(case, build, record["authenticatedTarget"])
     case.releases.builds[build["version"]] = case.releases.builds.get(build["version"], {}) | build
 
 

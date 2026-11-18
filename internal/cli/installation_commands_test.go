@@ -58,7 +58,9 @@ func checkCommandCopyJSON(t *testing.T, render func(*bytes.Buffer) error, path s
 	if err := render(&out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), `"commands":[{"path":"`+path+`"`) {
+	// Discovery also searches fixed system locations, so a machine with its
+	// own installed Mesh adds copies before or after the fixture.
+	if !strings.Contains(out.String(), `"commands":[{"path":"`) || !strings.Contains(out.String(), `{"path":"`+path+`"`) {
 		t.Fatalf("structured output lost command copies: %s", &out)
 	}
 }
@@ -129,7 +131,16 @@ func TestSavedClientOnlyUpdateFindsSeparateCommands(t *testing.T) {
 		Request:  updateinstall.Request{TargetID: "local", Manifest: release.Manifest{Version: "v0.1.255"}},
 	}
 	run := runFromInstallation(status)
-	if len(run.Targets) != 1 || len(run.Targets[0].Commands) != 1 || run.Targets[0].Commands[0].Path != path {
+	// Discovery also searches fixed system locations such as /opt/homebrew/bin,
+	// so a machine with its own installed Mesh reports that copy too.
+	if len(run.Targets) != 1 {
+		t.Fatalf("saved client-only update targets = %+v", run.Targets)
+	}
+	found := false
+	for _, command := range run.Targets[0].Commands {
+		found = found || command.Path == path
+	}
+	if !found {
 		t.Fatalf("saved client-only update lost separate commands: %+v", run.Targets)
 	}
 	checkCommandCopyJSON(t, func(out *bytes.Buffer) error { return printUpdateRunMode(out, run, true, false) }, path)
