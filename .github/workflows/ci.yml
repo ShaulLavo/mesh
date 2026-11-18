@@ -129,7 +129,13 @@ jobs:
       - name: Install confirmation browser engines
         timeout-minutes: 5
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          # The runner's regional mirror (Azure or AWS, varying by image) can
+          # stall for hours; send apt to the main archive whatever host it is.
+          for file in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$file" ] || continue
+            sudo sed -i -E 's#https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$file"
+          done
+          grep -rhoE 'https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | sort -u | sed 's/^/apt archive host: /'
           pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:
