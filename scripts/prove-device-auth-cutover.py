@@ -494,9 +494,11 @@ sys.exit(data["status"])
             terminal.close()
         self.stop("mesh-update-helper.service")
         self.stop("mesh.service")
+        # Session workers hold SIGTERM so a daemon restart cannot end sessions, and
+        # the interactive shell ignores it; only SIGKILL ends the retained session.
         for pid in self.workers:
             try:
-                os.kill(pid, signal.SIGTERM)
+                os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
         for log in self.logs:
