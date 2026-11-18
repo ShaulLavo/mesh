@@ -71,7 +71,7 @@ func testAdoptionNativeInitial(t *testing.T, helper bool) {
 
 func (f *adoptionNativeFixture) fixtureClient() release.Client {
 	pool := x509.NewCertPool()
-	pool.AddCert(f.signer.issuer)
+	pool.AddCert(f.proxy.tlsRoot)
 	proxy, err := url.Parse(f.proxy.server.URL)
 	if err != nil {
 		f.t.Fatal(err)
