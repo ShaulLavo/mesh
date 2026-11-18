@@ -763,7 +763,7 @@ class WiringTests(unittest.TestCase):
         downloads = self.prove.split("      - name: Download native proof inputs", 1)[1]
         self.assertEqual(downloads.count("timeout-minutes: 2\n"), 2)
         self.assertEqual(self.prove.count("name: Retry native proof inputs once"), 1)
-        self.assertIn("timeout-minutes: 15\n", self.prove)
+        self.assertIn("&& 60 || 15 }}\n", self.prove)
         self.assertIn('status = process.wait(timeout=600)', Path(runner.__file__).read_text())
         self.assertIn('--shard "$SHARD" --shards "$count" --manifest', self.prove)
         reader = self.workflow.split("\n  reader:\n", 1)[1]

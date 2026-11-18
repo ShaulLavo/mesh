@@ -132,7 +132,8 @@ class Releases:
 
     def signer_ready(self):
         if self.signer.poll() is not None:
-            raise RuntimeError("installed signature exporter exited: " + (self.root / "signer.log").read_text()[-8192:])
+            # The prepared origin logs to its own file; read whichever log this server owns.
+            raise RuntimeError("installed signature exporter exited: " + Path(self.signer_log.name).read_text(errors="replace")[-8192:])
         return (self.root / "control.sock").exists()
 
     def check_running(self):
