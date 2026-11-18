@@ -493,9 +493,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@b40b0318cd9dd5487e54229d9d32803139ad1794
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@8db348499192df31e1ed28d505058f9c97ed9deb
     with:
-      harness_source: b40b0318cd9dd5487e54229d9d32803139ad1794
+      harness_source: 8db348499192df31e1ed28d505058f9c97ed9deb
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
