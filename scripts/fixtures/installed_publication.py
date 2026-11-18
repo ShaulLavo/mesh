@@ -546,13 +546,19 @@ def register_running_build(case, record, build, rollback):
     # published via head (an earlier real release) is known only through its
     # authenticated route plan, so it is registered here, after authentication
     # and before inspection. A restored daemon must already be a verified build.
+    # A version recorded independently keeps that record: the daemon's own
+    # report must match it rather than replace it.
+    known = case.releases.builds.get(build["version"])
     if rollback:
-        known = case.releases.builds.get(build["version"])
         if known is None or known["digest"] != build["digest"]:
             raise RuntimeError("restored published daemon is not a previously verified release")
         return
     authenticate_hop(case, build, record["authenticatedTarget"])
-    case.releases.builds[build["version"]] = case.releases.builds.get(build["version"], {}) | build
+    if known is None:
+        case.releases.builds[build["version"]] = build
+        return
+    if known["digest"] != build["digest"]:
+        raise RuntimeError("published daemon differs from its independently recorded release")
 
 
 def read_route_plan(case, target):
