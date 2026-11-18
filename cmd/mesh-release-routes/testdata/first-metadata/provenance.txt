@@ -1,0 +1,11 @@
+Selected public release data from run 43847199424, update-policy artifact
+14218920439, policy.zip SHA-256:
+bed47c9e427f4c849461d8dd31696562d12bcd905ddac27144eea8fab1441a04
+
+boundary.json contains input.json's version, publishedAt, epoch and policy,
+plus selection.json's anchors. mesh-update.json and page.json preserve exact
+documents/v0.1.329 bytes, including the page referenced by that metadata.
+
+The test derives seed edges from the captured ranges. The original artifact
+was also replayed against its actual manifests and receipts, separately from
+this small deterministic regression fixture.

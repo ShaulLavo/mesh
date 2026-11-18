@@ -12,9 +12,8 @@ import zipfile
 from pathlib import Path
 
 KEYS = ("linux-amd64", "linux-arm64", "darwin-arm64")
-API_ATTEMPTS = 3
-API_SECONDS = 120
-TRANSIENT_HTTP = {500, 502, 503, 504}
+# Hang cap for one API read, shared by every attempt and retry pause.
+API_SECONDS = 300
 
 
 def verify_harness(expected, output):
@@ -28,9 +27,17 @@ def verify_harness(expected, output):
         "imageBudgetBytes": release_worker_groups.MAX_IMAGES, "independentStates": True}}) + "\n")
 
 
+# GitHub answers 502 on every 100-job page of a large CI run (90 jobs, run
+# 43912968125) while 30-job pages of the same run succeed.
+PAGE_SIZE = 30
+SERVER_ERROR_RETRIES = (2, 5, 10)
+SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
+
+
 def api(endpoint):
     deadline = time.monotonic() + API_SECONDS
-    for attempt in range(API_ATTEMPTS):
+    attempts = len(SERVER_ERROR_RETRIES) + 1
+    for attempt, delay in enumerate(SERVER_ERROR_RETRIES + (None,), 1):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"GitHub API GET {endpoint} exhausted its {API_SECONDS}-second hang cap")
@@ -38,14 +45,11 @@ def api(endpoint):
         if result.returncode == 0:
             return json.loads(result.stdout)
         detail = api_error_detail(result.stderr)
-        match = re.search(r"\bHTTP (\d{3})\b", detail)
-        status = int(match.group(1)) if match else None
-        if status not in TRANSIENT_HTTP or attempt == API_ATTEMPTS - 1:
-            raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt + 1} attempt(s), exit {result.returncode}: {detail}")
-        delay = 0.5 * 2 ** attempt
+        if delay is None or not SERVER_ERROR.search(result.stderr or b""):
+            raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt} attempt(s), exit {result.returncode}: {detail}")
         if deadline - time.monotonic() <= delay:
             raise TimeoutError(f"GitHub API GET {endpoint} cannot retry within its {API_SECONDS}-second hang cap: {detail}")
-        print(f"GitHub API GET {endpoint} returned HTTP {status}; retry {attempt + 2}/{API_ATTEMPTS}", file=sys.stderr)
+        print(f"GitHub API GET {endpoint} failed with a server error; retry {attempt + 1}/{attempts}", file=sys.stderr)
         time.sleep(delay)
 
 
@@ -63,9 +67,9 @@ def api_error_detail(data):
 def pages(endpoint, field):
     result, page = [], 1
     while True:
-        batch = api(f"{endpoint}?per_page=100&page={page}")[field]
+        batch = api(f"{endpoint}?per_page={PAGE_SIZE}&page={page}")[field]
         result.extend(batch)
-        if len(batch) < 100:
+        if len(batch) < PAGE_SIZE:
             return result
         page += 1
 

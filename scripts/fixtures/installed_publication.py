@@ -1,5 +1,6 @@
 """Native consumers of actual main-only draft bytes and their real signature."""
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -338,6 +340,7 @@ def published_route(root, output, first, target, releases, origin, registry, pro
     record = {"passed": False, "firstPublishedUpdater": first, "realDraft": target, "testTrustRoot": False,
               "rollback": rollback, "via": via, "routeContract": releases.verification["routeContract"], "updates": []}
     origin.head(releases.directory, first)
+    failure = None
     try:
         record["initial"] = case.prepare()
         case.seed()
@@ -362,9 +365,14 @@ def published_route(root, output, first, target, releases, origin, registry, pro
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        failure = error
+        try:
+            retain_publication_failure(case, record, output, error)
+        except BaseException as retention_error:
+            error.add_note("publication failure retention failed: " + str(retention_error)[:512])
         raise
     finally:
-        finish_fault_case(case, record, output, fault)
+        finish_fault_case(case, record, output, fault, failure)
     return case.root
 
 
@@ -380,11 +388,70 @@ def run_published_update(case, target, fault, rollback, deadline):
         fault.start()
     case.units.stop("daemon")
     case.units.start("daemon")
-    await_published_route(case, record, source["version"], target, fault, rollback, deadline=deadline)
+    try:
+        await_published_route(case, record, source["version"], target, fault, rollback, deadline=deadline)
+    except BaseException:
+        case.published_failed_update = record
+        raise
     return record
 
 
-def finish_fault_case(case, record, output, fault):
+def retain_publication_failure(case, record, output, primary):
+    evidence = record["failureState"] = {"lastHelperSample": getattr(case, "helper_sample", None),
+        "verifiedHelper": getattr(case, "helper_verified", None), "files": {}}
+    record["failedUpdate"] = getattr(case, "published_failed_update", None)
+    for relative in ("update/installation.json", "updates/host-update.json", "update/helper/installed.json",
+                     "update/helper/promotion.json", "update/helper/activation-pending"):
+        destination = output / (case.host["name"] + "-failure-" + relative.replace("/", "-"))
+        try:
+            evidence["files"][relative] = installed_adoption.retain_failure_state_file(case.state / relative, destination)
+        except BaseException as error:
+            evidence["files"][relative] = {"retentionError": str(error)[:512]}
+            primary.add_note("publication failure retention: " + str(error)[:512])
+    try:
+        pid = case.units.managers["helper"].manager_pid()
+        evidence["managerPID"] = pid
+        retain_helper_mapping(pid, evidence, output, case.host["name"])
+        receipt = json.loads((case.state / "update/helper/installed.json").read_bytes())
+        evidence["mappedHelper"] = installed_native.native_services.mapped_image(pid, receipt["executable"])
+    except BaseException as error:
+        evidence["mappingError"] = str(error)[:512]
+        evidence["mapping"] = getattr(error, "mapped_image", None)
+        primary.add_note("publication failure helper observation: " + str(error)[:512])
+
+
+def retain_helper_mapping(pid, evidence, output, name):
+    if sys.platform == "darwin":
+        result = installed_native.native_services.command(["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "txt", "-F", "finD"], check=False)
+        evidence["nativeMapping"] = {"stdout": result.stdout[:65536], "stderr": result.stderr[:4096], "returncode": result.returncode,
+            "truncated": len(result.stdout) > 65536 or len(result.stderr) > 4096}
+        return
+    path = Path(f"/proc/{pid}/exe")
+    with path.open("rb") as stream:
+        status = os.fstat(stream.fileno())
+        if status.st_size > 128 << 20:
+            raise RuntimeError("failing helper image exceeds the 128 MiB observation bound")
+        evidence["nativeMapping"] = {"path": os.readlink(path), "device": status.st_dev, "inode": status.st_ino,
+            "bytes": status.st_size, "sha256": hashlib.file_digest(stream, "sha256").hexdigest()}
+        if status.st_size > 1 << 20:
+            return
+        stream.seek(0)
+        destination = output / (name + "-failure-helper-image")
+        destination.write_bytes(stream.read((1 << 20) + 1))
+        evidence["nativeMapping"]["retainedImage"] = destination.name
+
+
+def finish_fault_case(case, record, output, fault, primary=None):
+    try:
+        close_fault_case(case, record, output, fault)
+    except BaseException as error:
+        if primary is None:
+            raise
+        primary.add_note("publication cleanup failed: " + str(error))
+        raise primary from error
+
+
+def close_fault_case(case, record, output, fault):
     try:
         fault.close()
     except BaseException as error:
@@ -411,7 +478,7 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
         journal = installed_chain.read_journal(case)
         terminal = journal.get("request", {}).get("manifest", {}).get("version") == target and journal.get("phase") == ("rolled_back" if rollback else "committed")
         if terminal and not ledger["state"].get("owned"):
-            validate_published_route(case, record, journal, ledger, target, fault, rollback, seen)
+            validate_published_route(case, record, journal, ledger, target, fault, rollback, seen, deadline=deadline)
             return
         time.sleep(0.05)
     raise RuntimeError("original published updater did not finish its real retained route within the existing chain bound")
@@ -439,6 +506,9 @@ def observe_published_hop(case, record, first, target, seen):
         case.inspect_retained()
         if image["sha256"] != expected["binary"]:
             raise RuntimeError("published intermediate helper differs from its authenticated release")
+        if case.units.managers["helper"].manager_pid() != pid or json.loads((case.state / "update/helper/installed.json").read_bytes()) != receipt:
+            return
+        case.helper_verified = {"receipt": receipt, "image": image}
         record["hops"].append({"expected": expected, "build": build, "helper": image,
                                "workers": case.cohort.verify(release_worker_completion.hop_label(record, build["version"]))})
         seen.add(build["version"])
@@ -447,19 +517,18 @@ def observe_published_hop(case, record, first, target, seen):
         os.kill(pid, signal.SIGCONT)
 
 
-def validate_published_route(case, record, journal, ledger, target, fault, rollback, seen):
+def validate_published_route(case, record, journal, ledger, target, fault, rollback, seen, *, deadline=None):
     verify_observed_route(record, seen)
-    case.inspect_retained()
-    build = case.control("host.info")["host"]["build"]
     expected = journal["request"]["current"]["digest"] if rollback else record["authenticatedTarget"]["binary"]
-    if build["digest"] != expected or rollback and (not fault.bound or not fault.released or fault.error):
-        raise RuntimeError("real published route did not restore or activate its exact native image")
-    helper = case.mapped_helper()
     expected_helper = expected if rollback else record["authenticatedTarget"]["binary"]
+    helper = case.mapped_helper(expected=expected_helper, deadline=deadline)
     if helper["sha256"] != expected_helper:
         raise RuntimeError("final published helper differs from the authenticated expected release image")
-    if not rollback:
-        authenticate_hop(case, build, record["authenticatedTarget"])
+    build = case.control("host.info")["host"]["build"]
+    if build["digest"] != expected or rollback and (not fault.bound or not fault.released or fault.error):
+        raise RuntimeError("real published route did not restore or activate its exact native image")
+    register_running_build(case, record, build, rollback)
+    case.inspect_retained()
     if rollback:
         verify_published_failure(case, journal, ledger, target)
         record["activationFault"] = {"bound": fault.bound, "released": fault.released, "error": fault.error}
@@ -470,6 +539,19 @@ def validate_published_route(case, record, journal, ledger, target, fault, rollb
             raise RuntimeError("real published updater lacks its exact pinned preserved-worker commit")
     record["final"] = {"build": build, "ledger": ledger, "journal": journal, "route": case.route_observer.snapshot(),
                        "workers": case.cohort.verify(release_worker_completion.final_label(record)), "helper": helper}
+
+
+def register_running_build(case, record, build, rollback):
+    # inspect_retained checks the running daemon against releases.builds. A
+    # published via head (an earlier real release) is known only through its
+    # authenticated route plan, so it is registered here, after authentication
+    # and before inspection. A restored daemon must already be a verified build.
+    if rollback:
+        known = case.releases.builds.get(build["version"])
+        if known is None or known["digest"] != build["digest"]:
+            raise RuntimeError("restored published daemon is not a previously verified release")
+        return
+    authenticate_hop(case, build, record["authenticatedTarget"])
     case.releases.builds[build["version"]] = case.releases.builds.get(build["version"], {}) | build
 
 

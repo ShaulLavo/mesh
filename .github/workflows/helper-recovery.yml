@@ -13,8 +13,11 @@ defaults:
 jobs:
   native-recovery:
     name: Native helper recovery (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # Trusted Darwin legs (the caller's main pushes, manual runs and
+    # same-repository PRs) run on the owner's Mac runner; fork PRs stay hosted.
+    # The Mac job first waits in the Mac FIFO for up to 45 minutes.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 65 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +33,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Require actual native execution
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}

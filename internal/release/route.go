@@ -552,8 +552,11 @@ func candidateMetadata(ctx context.Context, target UpdateMetadata, pending *Rout
 	if err != nil {
 		return nil, AssetRef{}, err
 	}
-	if !metadata.Position.Anchor || metadata.Position.Ordinal != entry.Ordinal || metadata.Direct.AnchorsFrom != entry.AnchorsFrom || !metadata.PublishedAt.Equal(entry.PublishedAt) {
+	if !metadata.Position.Anchor || metadata.Position.Ordinal != entry.Ordinal || !metadata.PublishedAt.Equal(entry.PublishedAt) {
 		return nil, AssetRef{}, errors.New("release: anchor metadata differs from index entry")
+	}
+	if entry.AnchorsFrom < metadata.Direct.AnchorsFrom || entry.AnchorsFrom > entry.Ordinal {
+		return nil, AssetRef{}, errors.New("release: anchor index range exceeds its signed direct range")
 	}
 	return &metadata, AssetRef{Tag: metadata.Version, Name: ManifestAssetName, SHA256: metadata.Manifest}, nil
 }

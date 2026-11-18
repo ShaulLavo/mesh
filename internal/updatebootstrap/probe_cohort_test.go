@@ -168,11 +168,21 @@ func TestLegacyVersionProbeHonorsParentCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("MESH_PROBE_VERSION_PID", pidPath)
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	started := time.Now()
-	if version := legacyVersionFlag(ctx, path); version != "" || time.Since(started) > time.Second {
-		t.Fatalf("canceled version probe = %q after %s", version, time.Since(started))
+	// Cancel the parent once the fixture runs, however long its first launch
+	// takes (macOS can spend hundreds of milliseconds assessing a new file).
+	cancelled := make(chan time.Time, 1)
+	go func() {
+		defer cancel()
+		waitForNonEmptyFile(pidPath, 30*time.Second)
+		cancelled <- time.Now()
+	}()
+	version := legacyVersionFlag(ctx, path)
+	returned := time.Now()
+	at := <-cancelled
+	if version != "" || returned.Before(at) || returned.Sub(at) > time.Second {
+		t.Fatalf("canceled version probe = %q, returned %s after parent cancellation", version, returned.Sub(at))
 	}
 	data, err := os.ReadFile(pidPath) //nolint:gosec // fixed fixture output under this test's directory
 	if err != nil {
@@ -184,6 +194,17 @@ func TestLegacyVersionProbeHonorsParentCancellation(t *testing.T) {
 	}
 	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
 		t.Fatalf("version probe did not reap its process: %v", err)
+	}
+}
+
+// waitForNonEmptyFile returns once path has content or the hang cap passes.
+func waitForNonEmptyFile(path string, limit time.Duration) {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(path); err == nil && len(data) > 0 { //nolint:gosec // fixed fixture output under the test's directory
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

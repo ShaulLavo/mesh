@@ -133,7 +133,9 @@ jobs:
             key: darwin-arm64
             archive: mesh_darwin_arm64.tar.gz
             runner: macos-15
-    runs-on: ${{ matrix.runner }}
+    # Trusted Darwin legs (the caller's main pushes, manual runs and
+    # same-repository PRs) run on the owner's Mac runner; fork PRs stay hosted.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -141,7 +143,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-policy
@@ -271,8 +273,9 @@ jobs:
           - platform: darwin/arm64
             key: darwin-arm64
             runner: macos-15
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 105 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -291,10 +294,12 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
           python3 scripts/fixtures/noindex_paths.py "$RUNNER_TEMP/mesh-native.noindex"
+      # The native inputs are about 1.4 GB. These caps only catch a stuck
+      # transfer: the owner's Mac downloads at about 6 MB/s, about 4 minutes.
       - name: Restore this exact producer's native proof inputs
         id: native-cache
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 15
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/mesh-native.noindex
@@ -308,7 +313,7 @@ jobs:
         id: native-download
         if: steps.native-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        timeout-minutes: 2
+        timeout-minutes: 15
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-native-${{ matrix.key }}
@@ -320,7 +325,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/mesh-native.noindex"
       - name: Retry native proof inputs once
         if: steps.native-download.outcome == 'failure'
-        timeout-minutes: 2
+        timeout-minutes: 15
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-native-${{ matrix.key }}

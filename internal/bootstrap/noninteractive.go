@@ -49,6 +49,18 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 	return stdout, stderr, nil
 }
 
+// SystemSSHPlatform runs command over the configured system SSH alias and reads
+// the remote OS and architecture from its output, with the same parser mesh add
+// uses. command prints exactly `uname -s` and `uname -m` on stdout; any further
+// checks report on stderr and refuse with a nonzero exit.
+func SystemSSHPlatform(ctx context.Context, alias, command string) (Platform, error) {
+	stdout, stderr, err := RunSystemSSH(ctx, alias, command, nil)
+	if err != nil {
+		return Platform{}, remoteCommandError("detect remote platform", err, stdout, stderr)
+	}
+	return parsePlatform(stdout)
+}
+
 func systemKnownHostsPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "none" || strings.ContainsAny(value, "\r\n\x00") {

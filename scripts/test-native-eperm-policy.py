@@ -761,9 +761,10 @@ class WiringTests(unittest.TestCase):
 
     def test_download_one_retry_budgets_and_original_reader_coverage_stay(self):
         downloads = self.prove.split("      - name: Download native proof inputs", 1)[1]
-        self.assertEqual(downloads.count("timeout-minutes: 2\n"), 2)
+        # About 1.4 GB at the owner's Mac's 6 MB/s: hang caps, not speed limits.
+        self.assertEqual(downloads.count("timeout-minutes: 15\n"), 2)
         self.assertEqual(self.prove.count("name: Retry native proof inputs once"), 1)
-        self.assertIn("timeout-minutes: 15\n", self.prove)
+        self.assertIn("&& 105 || 60 }}\n", self.prove)
         self.assertIn('status = process.wait(timeout=600)', Path(runner.__file__).read_text())
         self.assertIn('--shard "$SHARD" --shards "$count" --manifest', self.prove)
         reader = self.workflow.split("\n  reader:\n", 1)[1]
@@ -783,7 +784,7 @@ class WiringTests(unittest.TestCase):
             self.assertNotIn("restore-keys:", step)
         self.assertIn("actions/cache/save@", save)
         self.assertIn("actions/cache/restore@", restore)
-        self.assertIn("timeout-minutes: 2", restore)
+        self.assertIn("timeout-minutes: 15", restore)
         fallback = self.prove.split("      - name: Remove incomplete cached inputs", 1)[1].split("      - name: Remove incomplete native", 1)[0]
         self.assertEqual(fallback.count("if: steps.native-cache.outputs.cache-hit != 'true'"), 2)
         self.assertLess(fallback.index('rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"'), fallback.index("id: native-download"))

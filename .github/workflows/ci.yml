@@ -129,7 +129,13 @@ jobs:
       - name: Install confirmation browser engines
         timeout-minutes: 5
         run: |
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          # The runner's regional mirror (Azure or AWS, varying by image) can
+          # stall for hours; send apt to the main archive whatever host it is.
+          for file in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+            [ -f "$file" ] || continue
+            sudo sed -i -E 's#https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$file"
+          done
+          grep -rhoE 'https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | sort -u | sed 's/^/apt archive host: /'
           pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:
@@ -201,8 +207,11 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Native socket and daemon fixtures (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    # Trusted Darwin legs (main pushes, manual runs, same-repository PRs) run on
+    # the owner's Mac runner; fork PRs stay hosted. The Mac job first waits in
+    # the Mac FIFO for up to 45 minutes, so its hang cap carries that wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 55 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -212,7 +221,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Verify full daemon suite under long and symlinked scratch
         shell: bash
         run: |
@@ -235,8 +244,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Device auth cutover (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -254,7 +264,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Require the actual native platform
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
@@ -312,8 +322,9 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Destination naming (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
     strategy:
       fail-fast: false
       matrix:
@@ -331,7 +342,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ runner.environment == 'github-hosted' }}
       - name: Require the actual native platform
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
@@ -482,9 +493,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@b0649483f9b33bb34c5deaded3f0055360c13f53
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@b40b0318cd9dd5487e54229d9d32803139ad1794
     with:
-      harness_source: b0649483f9b33bb34c5deaded3f0055360c13f53
+      harness_source: b40b0318cd9dd5487e54229d9d32803139ad1794
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}

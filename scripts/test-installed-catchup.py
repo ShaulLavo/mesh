@@ -1215,10 +1215,10 @@ class ArtifactAPIReadTest(unittest.TestCase):
                 self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
                 self.assertEqual(run.call_count, 2)
                 self.assertTrue(all(call.args[0] == ["gh", "api", self.endpoint] for call in run.call_args_list))
-                sleep.assert_called_once_with(0.5)
+                sleep.assert_called_once_with(installed_artifacts.SERVER_ERROR_RETRIES[0])
 
     def test_permanent_and_unclassified_failures_stop_with_details(self):
-        for status in (401, 403, 404, 429, 501, "unknown"):
+        for status in (401, 403, 404, 429, "unknown"):
             with self.subTest(status=status), patch.object(installed_artifacts.subprocess, "run", return_value=self.response(status)) as run, \
                     patch.object(installed_artifacts.time, "sleep") as sleep:
                 self.assertRaisesRegex(RuntimeError, "GitHub API GET .*jobs.*upstream refused", installed_artifacts.api, self.endpoint)
@@ -1228,10 +1228,10 @@ class ArtifactAPIReadTest(unittest.TestCase):
     def test_transient_attempts_are_bounded(self):
         with patch.object(installed_artifacts.subprocess, "run", return_value=self.response(502)) as run, \
                 patch.object(installed_artifacts.time, "sleep") as sleep:
-            with self.assertRaisesRegex(RuntimeError, "after 3 attempt.*HTTP 502"):
+            with self.assertRaisesRegex(RuntimeError, "after 4 attempt.*HTTP 502"):
                 installed_artifacts.api(self.endpoint)
-        self.assertEqual(run.call_count, 3)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.5, 1.0])
+        self.assertEqual(run.call_count, 4)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], list(installed_artifacts.SERVER_ERROR_RETRIES))
 
     def test_command_timeout_and_invalid_success_do_not_retry(self):
         error = subprocess.TimeoutExpired(["gh", "api", self.endpoint], installed_artifacts.API_SECONDS)
@@ -1285,7 +1285,7 @@ class ArtifactAPIReadTest(unittest.TestCase):
         with patch.dict(os.environ, environment), patch.object(installed_artifacts.time, "sleep") as sleep:
             self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
         self.assertEqual(state.read_text(), "2")
-        sleep.assert_called_once_with(0.5)
+        sleep.assert_called_once_with(installed_artifacts.SERVER_ERROR_RETRIES[0])
 
 
 class ArtifactPinTest(unittest.TestCase):
@@ -1320,6 +1320,44 @@ class ArtifactPinTest(unittest.TestCase):
         with patch.object(installed_artifacts, "api", side_effect=values):
             with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+
+    def gh_result(self, code, stdout=b"", stderr=b""):
+        return subprocess.CompletedProcess(["gh", "api"], code, stdout, stderr)
+
+    def test_pages_use_small_pages_until_a_partial_page(self):
+        size = installed_artifacts.PAGE_SIZE
+        batches = [{"jobs": list(range(size))}, {"jobs": list(range(size))}, {"jobs": [0]}]
+        with patch.object(installed_artifacts, "api", side_effect=batches) as api:
+            result = installed_artifacts.pages("repos/o/r/actions/runs/7/jobs", "jobs")
+        self.assertEqual(len(result), 2 * size + 1)
+        self.assertEqual([call.args[0] for call in api.call_args_list],
+                         [f"repos/o/r/actions/runs/7/jobs?per_page={size}&page={page}" for page in (1, 2, 3)])
+
+    def test_api_retries_server_errors_then_returns(self):
+        outcomes = [self.gh_result(1, stderr=b"gh: HTTP 502: Server Error (https://api.github.com/x)"),
+                    self.gh_result(1, stderr=b"HTTP 503: Service Unavailable"),
+                    self.gh_result(0, stdout=b'{"jobs": []}')]
+        with patch.object(installed_artifacts.subprocess, "run", side_effect=outcomes) as run, \
+                patch.object(installed_artifacts.time, "sleep") as sleep:
+            self.assertEqual(installed_artifacts.api("repos/o/r/actions/runs/7/jobs"), {"jobs": []})
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], list(installed_artifacts.SERVER_ERROR_RETRIES[:2]))
+
+    def test_api_does_not_retry_client_errors(self):
+        with patch.object(installed_artifacts.subprocess, "run", return_value=self.gh_result(1, stderr=b"HTTP 404: Not Found")) as run, \
+                patch.object(installed_artifacts.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
+                installed_artifacts.api("repos/o/r/actions/runs/7/jobs")
+        run.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_api_gives_up_after_bounded_server_error_retries(self):
+        failure = self.gh_result(1, stderr=b"HTTP 502: Server Error")
+        with patch.object(installed_artifacts.subprocess, "run", return_value=failure) as run, \
+                patch.object(installed_artifacts.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
+                installed_artifacts.api("repos/o/r/actions/runs/7/jobs")
+        self.assertEqual(run.call_count, len(installed_artifacts.SERVER_ERROR_RETRIES) + 1)
 
     def test_missing_archive_digest_is_rejected_during_intake(self):
         values = self.inputs()

@@ -74,6 +74,43 @@ func PrepareAdoptionHelper(ctx context.Context, cfg HelperConfig, source release
 	return runAdoptionHelperPreparation(ctx, cfg, approval, record)
 }
 
+// AbandonAdoptionHelper undoes one unconfirmed initial adoption's helper
+// preparation: the prior helper comes back, or the helper the adoption
+// installed is removed. Without a checkpoint there is nothing to undo, and a
+// checkpoint owned by another operation is never touched.
+func AbandonAdoptionHelper(ctx context.Context, cfg HelperConfig, operation, pin string) (bool, error) {
+	if !validAdoptionHelperID(operation) || !helperDigestPattern.MatchString(pin) || cfg.Probe == nil || cfg.State == nil {
+		return false, errors.New("abandoning an initial adoption helper requires its exact operation and a mapped-process probe")
+	}
+	if cfg.ServiceDir == "" {
+		var err error
+		cfg.ServiceDir, err = serviceDirectory(cfg.Kind)
+		if err != nil {
+			return false, err
+		}
+	}
+	lock, err := lockInstallation(ctx, cfg.StateDir)
+	if err != nil {
+		return false, err
+	}
+	defer unlock(lock)
+	data, err := readMetadata(ctx, cfg.StateDir, filepath.Join("update", "helper", "adoption-preparation.json"), true)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var record adoptionHelperPreparation
+	if err := readJSON(data, &record); err != nil {
+		return false, err
+	}
+	if record.Schema != 1 || record.Operation != operation || record.Pin != pin {
+		return false, errors.New("another adoption owns initial helper preparation")
+	}
+	return true, restoreInitialAdoptionHelper(ctx, cfg, record)
+}
+
 func validAdoptionHelperID(value string) bool {
 	if len(value) != 32 {
 		return false
