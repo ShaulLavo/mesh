@@ -148,6 +148,8 @@ class FreshCase(installed_adoption.AdoptionCase):
                 return None
             if self.known_helper_handoff(pid, receipt, expected, prior):
                 return None
+            if self.verified_predecessor_running(pid, error, prior):
+                return None
             raise
         self.helper_sample["image"] = image
         if image["sha256"] != receipt["digest"]:
@@ -173,6 +175,17 @@ class FreshCase(installed_adoption.AdoptionCase):
 
     def helper_changed(self, manager, pid, path, receipt):
         return manager.manager_pid() != pid or json.loads(path.read_bytes()) != receipt
+
+    def verified_predecessor_running(self, pid, error, prior):
+        # After the receipt names the target, the verified predecessor keeps
+        # running from its old inode until the service restarts it, even when
+        # its file is already removed or replaced. Only that exact process and
+        # inode may wait; any other mapping is still rejected.
+        mapping = getattr(error, "mapped_image", None)
+        if prior is None or mapping is None:
+            return False
+        image, mapped = prior["image"], mapping["mapped"]
+        return pid == image["pid"] and (mapped["device"], mapped["inode"]) == (image["device"], image["inode"])
 
     def known_helper_handoff(self, pid, receipt, expected, prior):
         # Receipt-first and PID-first publication both occur at this boundary.

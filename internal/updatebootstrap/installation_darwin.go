@@ -59,20 +59,32 @@ func inspectDaemonService(ctx context.Context, pid int, settings *updateinstall.
 	if err != nil || len(entries) > 512 {
 		return ServiceSnapshot{}, errors.Join(errors.New("cannot enumerate bounded same-account launch agents"), err)
 	}
+	var skipped []error
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".plist") {
 			continue
 		}
 		spec, matched, err := daemonLaunchAgent(ctx, pid, filepath.Join(directory, entry.Name()))
-		if err != nil {
+		if err != nil && (ctx.Err() != nil || strings.HasPrefix(entry.Name(), meshLaunchAgentPrefix)) {
 			return ServiceSnapshot{}, err
+		}
+		if err != nil {
+			// Other applications' agents need not carry a Label: Google Keystone
+			// leaves empty <dict/> stubs. They cannot own the daemon.
+			skipped = append(skipped, fmt.Errorf("skipped %s: %w", entry.Name(), err))
+			continue
 		}
 		if matched {
 			return snapshotLaunchAgent(ctx, settings, invocation, spec)
 		}
 	}
-	return ServiceSnapshot{}, errors.New("no same-account launch agent owns the connected daemon PID")
+	missing := errors.New("no same-account launch agent owns the connected daemon PID")
+	return ServiceSnapshot{}, errors.Join(append([]error{missing}, skipped...)...)
 }
+
+// meshLaunchAgentPrefix names Mesh's own launch agent files, whose unreadable
+// Label is a real installation fault rather than another application's stub.
+const meshLaunchAgentPrefix = "dev.shaulavo.mesh"
 
 func daemonLaunchAgent(ctx context.Context, pid int, path string) (updateinstall.ServiceSpec, bool, error) {
 	command := exec.CommandContext(ctx, "plutil", "-extract", "Label", "raw", "-o", "-")

@@ -75,7 +75,7 @@ func (s *Store) ReserveAppNames(ctx context.Context, hostnames []string, ownerID
 			return err
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: commit app names: %w", err)
 	}
 	return nil
@@ -114,7 +114,7 @@ func (s *Store) ReserveAppNamesAndState(ctx context.Context, hostnames []string,
 	if _, err := tx.ExecContext(ctx, saveAppStateSQL, key, data); err != nil {
 		return fmt.Errorf("storage: save allocated app state: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: commit allocated app: %w", err)
 	}
 	return nil
