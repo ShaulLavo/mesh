@@ -116,7 +116,8 @@ class PublicationWorkflowTests(unittest.TestCase):
             for path in output.rglob("*.json"):
                 package.write(path, "publication-proof/" + str(path.relative_to(output)))
         return {"id": number + 1, "name": row["artifact"], "size_in_bytes": archive.stat().st_size,
-                "digest": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(), "expired": False}, archive
+                "digest": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(), "expired": False,
+                "workflow_run": {"id": 42}, "created_at": "2026-11-19T10:00:00Z"}, archive
 
     def test_same_run_pinned_child_archives_feed_real_cli_aggregate_for_all_platforms(self):
         outputs = self.root / "complete"
@@ -194,17 +195,32 @@ class PublicationWorkflowTests(unittest.TestCase):
 
     def test_missing_duplicate_expired_and_extra_children_fail_before_transfer(self):
         rows = workflow.rows(self.directory, "linux/amd64", self.harness)
-        artifacts = [{"id": number + 1, "name": row["artifact"], "size_in_bytes": 10,
-                      "digest": "sha256:" + "a" * 64, "expired": False} for number, row in enumerate(rows)]
+        artifacts = [{"id": number + 1, "name": row["artifact"], "size_in_bytes": 10, "digest": "sha256:" + "a" * 64,
+                      "expired": False, "workflow_run": {"id": 42}, "created_at": "2026-11-19T10:00:00Z"}
+                     for number, row in enumerate(rows)]
         expired = copy.deepcopy(artifacts)
         expired[0]["expired"] = True
         extra = artifacts + [artifacts[0] | {"name": artifacts[0]["name"] + "extra"}]
-        for selected in (artifacts[:-1], artifacts + [artifacts[0]], expired, extra):
+        tied = artifacts + [artifacts[0] | {"id": 99}]
+        other_run = artifacts[:-1] + [artifacts[-1] | {"workflow_run": {"id": 43}}]
+        for selected in (artifacts[:-1], tied, expired, extra, other_run):
             with patch.object(workflow.installed_artifacts, "pages", return_value=selected), \
                     patch.object(workflow, "fetch_child") as transfer, self.assertRaisesRegex(ValueError, "exact complete same-run"):
                 workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "rejected")
             transfer.assert_not_called()
         self.assertFalse((self.root / "rejected").exists())
+
+    def test_a_failed_jobs_rerun_transfers_each_childs_newest_upload(self):
+        rows = workflow.rows(self.directory, "linux/amd64", self.harness)
+        artifacts = [{"id": number + 1, "name": row["artifact"], "size_in_bytes": 10, "digest": "sha256:" + "a" * 64,
+                      "expired": False, "workflow_run": {"id": 42}, "created_at": "2026-11-19T10:00:00Z"}
+                     for number, row in enumerate(rows)]
+        rerun = artifacts[0] | {"id": 99, "created_at": "2026-11-19T11:00:00Z"}
+        with patch.object(workflow.installed_artifacts, "pages", return_value=artifacts + [rerun]), \
+                patch.object(workflow, "fetch_child") as transfer:
+            workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "rerun")
+        transferred = {call.args[1]["id"] for call in transfer.call_args_list}
+        self.assertEqual(transferred, {99} | {item["id"] for item in artifacts[1:]})
 
     def test_archive_size_digest_and_storage_failures_propagate_and_remove_transfer_scratch(self):
         row = workflow.rows(self.directory, "linux/amd64", self.harness)[0]

@@ -1210,8 +1210,26 @@ class ArtifactPinTest(unittest.TestCase):
         jobs = [{"name": "Native proofs / prepare (" + key.replace("-", "/") + ", runner)",
                  "status": "completed", "conclusion": "success"} for key in installed_artifacts.KEYS]
         return [{"head_sha": "b" * 40}, {"jobs": jobs}, {"artifacts": [
-            {"id": index, "name": "update-native-" + key, "expired": False, "size_in_bytes": 1234, "digest": "sha256:" + "b" * 64}
+            {"id": index, "name": "update-native-" + key, "expired": False, "size_in_bytes": 1234, "digest": "sha256:" + "b" * 64,
+             "workflow_run": {"id": 123}, "created_at": "2026-11-19T10:00:00Z"}
             for index, key in enumerate(installed_artifacts.KEYS, 1)]}]
+
+    def test_a_rerun_upload_of_one_platform_replaces_the_older_one(self):
+        values = self.inputs()
+        rerun = values[2]["artifacts"][0] | {"id": 99, "created_at": "2026-11-19T11:00:00Z"}
+        values[2]["artifacts"].append(rerun)
+        with patch.object(installed_artifacts, "api", side_effect=values):
+            result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+        self.assertEqual(result["artifacts"][installed_artifacts.KEYS[0]]["id"], 99)
+
+    def test_tied_or_foreign_uploads_fail_the_native_set(self):
+        for change in (lambda items: items.append(items[0] | {"id": 99}),
+                       lambda items: items[0].update(workflow_run={"id": 124}),
+                       lambda items: items[0].update(workflow_run=None)):
+            values = self.inputs()
+            change(values[2]["artifacts"])
+            with self.subTest(change), patch.object(installed_artifacts, "api", side_effect=values), self.assertRaises(RuntimeError):
+                installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 
     def test_complete_three_platform_set_is_pinned(self):
         with patch.object(installed_artifacts, "api", side_effect=self.inputs()):

@@ -157,9 +157,31 @@ class DownloadTests(unittest.TestCase):
         return {"id": identifier, "name": self.NAME, "expired": False, "created_at": created,
                 "size_in_bytes": self.archive.stat().st_size, "digest": self.digest, "workflow_run": {"id": run}} | changes
 
-    def download(self, assets):
+    def download(self, assets, *artifact):
         with patch.object(release_tool.installed_artifacts, "pages", return_value=assets):
-            release_tool.download("ShaulLavo/mesh", self.RUN, SOURCE, "source", "linux-amd64", self.root / "tool")
+            release_tool.download("ShaulLavo/mesh", self.RUN, SOURCE, "source", "linux-amd64", self.root / "tool", *artifact)
+
+    def test_the_producer_reported_artifact_is_taken_even_when_not_newest(self):
+        rebuilt = [self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:11:58Z")]
+        self.download(rebuilt, "7")
+        self.assertEqual([item for item, _ in self.fetched], [7])
+
+    def test_a_reported_artifact_must_be_this_live_same_run_tool(self):
+        cases = {"unknown": ([self.artifact(7, "2026-11-19T11:05:32Z")], "8"),
+                 "another name": ([self.artifact(7, "2026-11-19T11:05:32Z", name="release-tool-source-linux-arm64")], "7"),
+                 "expired": ([self.artifact(7, "2026-11-19T11:05:32Z", expired=True)], "7"),
+                 "another run": ([self.artifact(7, "2026-11-19T11:05:32Z", run=43)], "7"),
+                 "not an ID": ([self.artifact(7, "2026-11-19T11:05:32Z")], "")}
+        for name, (assets, artifact) in cases.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.download(assets, artifact)
+        self.assertEqual(self.fetched, [])
+
+    def test_an_artifact_without_its_workflow_run_is_a_clear_error(self):
+        for artifact in ((), ("7",)):
+            with self.subTest(artifact), self.assertRaisesRegex(ValueError, "does not name its workflow run"):
+                self.download([self.artifact(7, "2026-11-19T11:05:32Z", workflow_run=None)], *artifact)
+        self.assertEqual(self.fetched, [])
 
     def test_a_single_live_artifact_is_downloaded(self):
         self.download([self.artifact(7, "2026-11-19T11:05:32Z")])

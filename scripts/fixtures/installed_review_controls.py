@@ -792,6 +792,57 @@ class FreshSummaryLockTest(unittest.TestCase):
                 self.case.require_automatic_zero(host)
 
 
+class AdoptionWaitEvidenceTest(unittest.TestCase):
+    """A stalled bootstrap adoption fails with its own message and keeps what explains it."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="adoption-wait-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.case = object.__new__(installed_adoption.AdoptionCase)
+        self.case.root, self.case.state, self.case.scenario = self.root, self.root / "state", "chain"
+        self.helper = SimpleNamespace(describe=Mock(return_value="state = running\npid = 31266\n"))
+        self.case.units = SimpleNamespace(managers={"helper": self.helper})
+        self.write("updates/host-adoption.json", {"details": {"phase": "waiting"}})
+        self.write("update/helper/installed.json", {"digest": "helper-image"})
+
+    def write(self, name, value):
+        path = self.case.state / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+
+    def await_stalled(self):
+        cap = installed_adoption.ADOPTION_EVIDENCE_SECONDS + 0.2
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=cap), \
+                self.assertRaisesRegex(RuntimeError, r"adopting v0\.1\.9001 before the installed fixture cap; last phase waiting"):
+            self.case.await_result("v0.1.9001")
+
+    def test_a_stalled_adoption_keeps_its_status_journals_receipt_and_helper_service(self):
+        self.await_stalled()
+        evidence = json.loads((self.root / "adoption-wait-failure.json").read_text())
+        self.assertEqual(evidence["lastStatus"], {"details": {"phase": "waiting"}})
+        self.assertEqual(evidence["updates/host-adoption.json"], {"details": {"phase": "waiting"}})
+        self.assertEqual(evidence["update/helper/installed.json"], {"digest": "helper-image"})
+        self.assertIsNone(evidence["update/installation.json"])
+        self.assertEqual((self.root / "helper-service.txt").read_text(), "state = running\npid = 31266\n")
+        output = self.root / "output"
+        output.mkdir()
+        installed_native.retain_logs(self.root, output, "mac-chain")
+        self.assertTrue((output / "mac-chain-adoption-wait-failure.json").is_file())
+        self.assertTrue((output / "mac-chain-helper-service.txt").is_file())
+
+    def test_an_unreadable_helper_service_still_keeps_the_message_and_status(self):
+        self.helper.describe.side_effect = RuntimeError("launchctl unavailable")
+        self.await_stalled()
+        self.assertIn("launchctl unavailable", (self.root / "helper-service.txt").read_text())
+        self.assertTrue((self.root / "adoption-wait-failure.json").is_file())
+
+    def test_a_finished_adoption_returns_without_evidence(self):
+        self.write("updates/host-adoption.json", {"details": {"phase": "adopted"}})
+        self.assertEqual(self.case.await_result("v0.1.9001"), {"details": {"phase": "adopted"}})
+        self.assertFalse((self.root / "adoption-wait-failure.json").exists())
+
+
 class PublishedHelperHandoffTest(unittest.TestCase):
     def setUp(self):
         if sys.platform != "linux":
