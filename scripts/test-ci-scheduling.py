@@ -241,6 +241,10 @@ def check_mac_turn(ci):
 
 
 class FakeGitHub:
+    """One answer per poll: False is idle, True a queued main run, a string that
+    run's status, an exception an API failure. Like GitHub between job phases,
+    a status-filtered list misses the active run."""
+
     def __init__(self, answers):
         self.answers = list(answers)
         self.endpoints = []
@@ -250,7 +254,10 @@ class FakeGitHub:
         answer = self.answers[0] if len(self.answers) == 1 else self.answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
-        return {"workflow_runs": [{"id": 7, "status": "queued"}] if answer else []}
+        runs = [{"id": 3, "status": "completed"}]
+        if answer and "status=" not in endpoint:
+            runs.insert(0, {"id": 7, "status": "queued" if answer is True else answer})
+        return {"workflow_runs": runs}
 
 
 def run_wait(wait, environment, answers, minutes=180):
@@ -268,26 +275,33 @@ def run_wait(wait, environment, answers, minutes=180):
 def check_wait_script(source):
     wait = {"__name__": "wait_for_main_ci"}
     exec(compile(source, str(WAIT_SCRIPT), "exec"), wait)  # noqa: S102 - the repository's own script under test
-    ACTIVE = wait["ACTIVE"]
+    run = wait["wait"]
     pr = {"EVENT": "pull_request", "DRAFT": "false", "HEAD_REPOSITORY": "ShaulLavo/mesh", "REPOSITORY": "ShaulLavo/mesh"}
     for environment in (dict(pr, EVENT="push"), dict(pr, EVENT="workflow_dispatch"),
                         dict(pr, HEAD_REPOSITORY="someone/mesh"), dict(pr, DRAFT="true")):
-        status, endpoints, sleeps, _ = run_wait(wait["wait"], environment, [True])
+        status, endpoints, sleeps, _ = run_wait(run, environment, [True])
         assert (status, endpoints, sleeps) == (0, [], []), environment
-    status, endpoints, sleeps, _ = run_wait(wait["wait"], pr, [False])
-    assert status == 0 and sleeps == [] and len(endpoints) == len(ACTIVE)
-    assert set(ACTIVE) >= {"queued", "in_progress", "waiting", "requested", "pending"}
-    for endpoint, active in zip(endpoints, ACTIVE):
-        assert endpoint == f"repos/ShaulLavo/mesh/actions/workflows/ci.yml/runs?branch=main&status={active}&per_page=20", endpoint
-    # Busy for two polls of every status, then idle: the PR waits, then runs.
-    busy = [True] * len(ACTIVE) * 2 + [False]
-    status, _, sleeps, out = run_wait(wait["wait"], pr, busy)
-    assert status == 0 and len(sleeps) == 2 and "waiting for main CI: 7 (queued)" in out
-    # An unreadable API counts as busy, never as idle.
-    status, _, sleeps, _ = run_wait(wait["wait"], pr, [RuntimeError("HTTP 502")] + [False] * len(ACTIVE))
-    assert status == 0 and len(sleeps) == 1
+    # Idle main must hold for two polls a minute apart, read unfiltered.
+    status, endpoints, sleeps, out = run_wait(run, pr, [False])
+    assert (status, sleeps) == (0, [60]) and "3 (completed)" not in out
+    assert endpoints == ["repos/ShaulLavo/mesh/actions/workflows/ci.yml/runs?branch=main&per_page=30"] * 2, endpoints
+    # Busy for two polls, then idle: the PR waits, then runs.
+    status, _, sleeps, out = run_wait(run, pr, [True, True, False])
+    assert status == 0 and len(sleeps) == 3 and "waiting for main CI: 7 (queued)" in out
+    # A run a status-filtered list would miss still holds the PR.
+    for active in ("in_progress", "queued", "waiting", "requested", "pending", "action_required"):
+        status, _, sleeps, out = run_wait(run, pr, [active, False])
+        assert status == 0 and len(sleeps) == 2 and f"7 ({active})" in out, active
+    # One idle poll between busy ones is not enough.
+    status, _, sleeps, _ = run_wait(run, pr, [False, True, False])
+    assert status == 0 and len(sleeps) == 3
+    # An unreadable API counts as busy, never as idle, and resets the idle count.
+    status, _, sleeps, _ = run_wait(run, pr, [RuntimeError("HTTP 502"), False])
+    assert status == 0 and len(sleeps) == 2
+    status, _, sleeps, _ = run_wait(run, pr, [False, RuntimeError("HTTP 502"), False])
+    assert status == 0 and len(sleeps) == 3
     # Past the hang cap a PR proceeds with a warning.
-    status, _, sleeps, out = run_wait(wait["wait"], pr, [True], minutes=3)
+    status, _, sleeps, out = run_wait(run, pr, [True], minutes=3)
     assert status == 0 and len(sleeps) == 3 and "::warning::" in out
 
 
@@ -300,8 +314,11 @@ def reject_mac_turn(ci, script):
         (ci.replace("    name: Wait for main CI before Mac legs\n", "    name: Wait for main CI before Mac legs\n    continue-on-error: true\n", 1), script),
         (ci, script.replace('return environment.get("HEAD_REPOSITORY") == environment.get("REPOSITORY")', "return False", 1)),
         (ci, script.replace("branch=main&", "branch=topic&", 1)),
-        (ci, script.replace('runs = [f"unknown ({error})"]', "runs = []", 1)),
-        (ci, script.replace('ACTIVE = ("queued", "in_progress", ', 'ACTIVE = (', 1)),
+        (ci, script.replace('return [f"unknown ({error})"]', "return []", 1)),
+        (ci, script.replace("IDLE_POLLS = 2", "IDLE_POLLS = 1", 1)),
+        (ci, script.replace("idle = 0 if runs else idle + 1", "idle = idle if runs else idle + 1", 1)),
+        (ci, script.replace("runs?branch=main&per_page=", "runs?branch=main&status=in_progress&per_page=", 1)),
+        (ci, script.replace('if run["status"] != "completed"', 'if run["status"] == "in_progress"', 1)),
     )
     for mutated, mutated_script in mutations:
         assert (mutated, mutated_script) != (ci, script), "Mac turn mutation did not apply"

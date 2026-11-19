@@ -6,6 +6,10 @@ of pull request runs can keep a main publish run waiting for hours. Main CI
 runs, manual runs, fork pull requests and drafts pass at once. A same-repository
 pull request waits here, on a hosted runner, until main is idle. After the
 deadline it proceeds with a warning: this is a hang cap, not a gate.
+
+GitHub's status-filtered run lists can miss an active run between its job
+phases, so the wait reads the newest main runs unfiltered, counts every run
+that is not completed, and needs main to look idle on two polls in a row.
 """
 
 import json
@@ -14,9 +18,10 @@ import subprocess
 import sys
 import time
 
-ACTIVE = ("queued", "in_progress", "waiting", "requested", "pending")
 POLL_SECONDS = 60
 DEADLINE_MINUTES = 180
+IDLE_POLLS = 2
+RECENT_RUNS = 30
 
 
 def must_wait(environment):
@@ -35,11 +40,15 @@ def gh_api(endpoint):
 
 
 def active_main_runs(repository, api):
-    runs = []
-    for status in ACTIVE:
-        page = api(f"repos/{repository}/actions/workflows/ci.yml/runs?branch=main&status={status}&per_page=20")
-        runs.extend(f"{run['id']} ({run['status']})" for run in page.get("workflow_runs", []))
-    return runs
+    page = api(f"repos/{repository}/actions/workflows/ci.yml/runs?branch=main&per_page={RECENT_RUNS}")
+    return [f"{run['id']} ({run['status']})" for run in page["workflow_runs"] if run["status"] != "completed"]
+
+
+def poll(repository, api):
+    try:
+        return active_main_runs(repository, api)
+    except (RuntimeError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+        return [f"unknown ({error})"]
 
 
 def wait(environment, api=gh_api, sleep=time.sleep, clock=time.monotonic, out=sys.stdout):
@@ -48,18 +57,18 @@ def wait(environment, api=gh_api, sleep=time.sleep, clock=time.monotonic, out=sy
         return 0
     repository = environment["REPOSITORY"]
     deadline = clock() + int(environment.get("DEADLINE_MINUTES", DEADLINE_MINUTES)) * 60
+    idle = 0
     while True:
-        try:
-            runs = active_main_runs(repository, api)
-        except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
-            runs = [f"unknown ({error})"]
-        if not runs:
+        runs = poll(repository, api)
+        idle = 0 if runs else idle + 1
+        if idle >= IDLE_POLLS:
             print("Mac turn: no main CI run is queued or running", file=out)
             return 0
         if clock() >= deadline:
             print(f"::warning::Mac turn: main CI still active after the hang cap; proceeding: {', '.join(runs)}", file=out)
             return 0
-        print(f"Mac turn: waiting for main CI: {', '.join(runs)}", file=out, flush=True)
+        if runs:
+            print(f"Mac turn: waiting for main CI: {', '.join(runs)}", file=out, flush=True)
         sleep(POLL_SECONDS)
 
 
