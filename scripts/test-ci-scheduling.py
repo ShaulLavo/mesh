@@ -6,8 +6,25 @@ import os
 from pathlib import Path
 import re
 import runpy
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+APT_ACTION = "        uses: ./.github/actions/apt-packages\n"
+# Stand-ins for sudo and apt-get. apt-get logs each call and behaves like an
+# archive: update writes lists, an online install writes a .deb, and an
+# offline (--no-download) install succeeds only when the .deb is cached.
+FAKE_SUDO = '#!/bin/sh\nexec "$@"\n'
+FAKE_APT = """#!/bin/sh
+printf '%s\\n' "$*" >> "$APT_LOG"
+lists=$(printf '%s\\n' "$@" | sed -n 's/^Dir::State::Lists=//p')
+archives=$(printf '%s\\n' "$@" | sed -n 's/^Dir::Cache::Archives=//p')
+case " $* " in
+  *" update "*) touch "$lists/archive_Packages"; exit 0 ;;
+  *" --no-download "*) [ -f "$archives/zsh.deb" ] && [ -z "$APT_OFFLINE_SHORT" ]; exit $? ;;
+  *) touch "$archives/zsh.deb" ;;
+esac
+"""
 CONTRACT = runpy.run_path(str(ROOT / "scripts/test-helper-recovery-gate.py"))
 JOB = CONTRACT["job"]
 STEP = CONTRACT["step"]
@@ -114,7 +131,7 @@ def check_schedule(ci, recovery):
     assert "      - name: Require a tidy module graph\n" in race
     assert "          go mod tidy\n          git diff --exit-code -- go.mod go.sum\n" in race
     assert "          python3 scripts/test-private-boundary.py\n          scripts/check-private-hosting-boundary.sh\n" in race
-    assert "      - run: sudo apt-get update && sudo apt-get install -y zsh\n" in integration
+    assert "      - name: Install zsh\n" + APT_ACTION + "        with:\n          packages: zsh\n" in integration
     assert re.findall(r"^          (MESH_INTEGRATION_\w+): (.+)$", integration, re.M) == [
         ("MESH_INTEGRATION_TIMEOUT", "60s")]
     check_test_gate(ci)
@@ -157,6 +174,89 @@ def check_mutations(ci, recovery):
     )
     for mutated in mutations:
         reject_mutation(ci, recovery, mutated)
+
+
+def check_apt_workflows(workflows, action):
+    """Every hosted apt install goes through the cached action, which tries
+    the cache offline before it ever contacts the archive."""
+    for name, source in workflows.items():
+        assert not re.search(r"apt-get|apt install|--with-deps|install-deps(?! --dry-run)", source), \
+            f"{name} installs from the live Ubuntu archive; use ./.github/actions/apt-packages"
+    pill = JOB(workflows["ci.yml"], "app-pill")
+    assert "playwright install-deps --dry-run chromium webkit\n" in pill
+    assert '[ "${arguments[*]:0:3}" != "install -s --no-install-recommends" ]' in pill
+    assert ("      - name: Install confirmation browser system packages\n        timeout-minutes: 5\n" + APT_ACTION
+            + "        with:\n          packages: ${{ steps.browser-packages.outputs.packages }}\n"
+            "          options: --no-install-recommends\n") in pill
+    assert "        run: pnpm --dir web/app-pill exec playwright install chromium webkit\n" in pill
+    assert pill.index("install-deps --dry-run") < pill.index(APT_ACTION) < pill.index("playwright install chromium")
+    diagnostic = JOB(workflows["ci.yml"], "client-interrupt-diagnostic")
+    assert APT_ACTION + "        with:\n          packages: strace\n" in diagnostic
+    order = [action.index(text) for text in (
+        "uses: actions/cache/restore@", "install.sh", "uses: actions/cache/save@")]
+    assert order == sorted(order), "the cache must be restored before and saved after the install"
+    assert "      if: steps.restore.outputs.cache-hit != 'true' && steps.install.outputs.source == 'network'\n" in action
+    assert re.search(r"key: \$\{\{ steps\.identity\.outputs\.key \}\}", action)
+    assert 'key=$prefix${ImageVersion:-unknown}' in action and "${ImageOS:-unknown}" in action
+
+
+def run_apt_install(cache, bin_dir, log, **env):
+    environment = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", APT_LOG=str(log),
+                       GITHUB_OUTPUT=str(log.with_suffix(".out")), **env)
+    log.write_text("")
+    log.with_suffix(".out").write_text("")
+    subprocess.run([str(ROOT / ".github/actions/apt-packages/install.sh"), str(cache), "zsh"],
+                   env=environment, check=True, stdout=subprocess.DEVNULL)
+    return log.read_text().splitlines(), log.with_suffix(".out").read_text()
+
+
+def check_apt_install(script):
+    with tempfile.TemporaryDirectory(prefix="mesh-apt-") as scratch:
+        root = Path(scratch)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        for name, body in (("sudo", FAKE_SUDO), ("apt-get", FAKE_APT)):
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod(0o755)
+        cache, log = root / "cache", root / "apt.log"
+        calls, output = run_apt_install(cache, bin_dir, log)
+        assert [call.split()[0] for call in calls] == ["update", "install"], calls
+        assert "--no-download" not in calls[1] and "APT::Keep-Downloaded-Packages=true" in calls[1]
+        assert output == "source=network\n", output
+        assert (cache / "lists/archive_Packages").exists() and (cache / "archives/zsh.deb").exists()
+        # A warm cache installs with apt's downloads disabled and never
+        # refreshes the lists: the archive is not contacted at all.
+        calls, output = run_apt_install(cache, bin_dir, log)
+        assert len(calls) == 1 and calls[0].startswith("install -y --no-download "), calls
+        assert "Acquire::http::Proxy=http://127.0.0.1:9" in calls[0] and calls[0].endswith(" zsh"), calls
+        assert f"Dir::Cache::Archives={cache}/archives" in calls[0], calls
+        assert output == "source=cache\n", output
+        # A cache that does not cover the request falls back to the archive.
+        calls, output = run_apt_install(cache, bin_dir, log, APT_OFFLINE_SHORT="1")
+        assert [call.split()[0] for call in calls] == ["install", "update", "install"], calls
+        assert output == "source=network\n", output
+    assert "--no-download" in script
+
+
+def reject_apt_mutations(workflows, action):
+    ci = workflows["ci.yml"]
+    mutations = (
+        ("ci.yml", ci.replace("      - name: Install zsh\n" + APT_ACTION + "        with:\n          packages: zsh\n",
+                              "      - run: sudo apt-get update && sudo apt-get install -y zsh\n", 1)),
+        ("ci.yml", ci.replace("exec playwright install chromium webkit", "exec playwright install --with-deps chromium webkit", 1)),
+        ("ci.yml", ci.replace("          options: --no-install-recommends\n", "", 1)),
+        ("action", action.replace("steps.install.outputs.source == 'network'", "always()", 1)),
+    )
+    for target, mutated in mutations:
+        assert mutated != (action if target == "action" else ci), f"apt mutation did not apply to {target}"
+        try:
+            if target == "action":
+                check_apt_workflows(workflows, mutated)
+            else:
+                check_apt_workflows(dict(workflows, **{target: mutated}), action)
+        except AssertionError:
+            continue
+        raise AssertionError(f"live-archive apt install accepted in {target}")
 
 
 def check_mac_job(source, name):
@@ -218,7 +318,11 @@ def main():
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing and mutation controls")
+    action = (ROOT / ".github/actions/apt-packages/action.yml").read_text()
+    check_apt_workflows(workflows, action)
+    reject_apt_mutations(workflows, action)
+    check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing, offline apt cache and mutation controls")
 
 
 if __name__ == "__main__":
