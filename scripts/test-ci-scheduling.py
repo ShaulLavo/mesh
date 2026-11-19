@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute the ordinary test verdicts and reject scheduling regressions."""
 
+import io
 import itertools
 import os
 from pathlib import Path
@@ -143,7 +144,7 @@ def check_mutations(ci, recovery):
                    "[[ $RACE == success && $INTEGRATION == success ]] || true", 1),
         ci.replace("$TEST == success && ", "", 1),
         CONTRACT["without_gate_dependency"](ci, "test"),
-        ci.replace("timeout-minutes: 20", "timeout-minutes: 21", 1),
+        ci.replace("timeout-minutes: 20\n", "timeout-minutes: 21\n", 1),
         ci.replace("          cache: true", "          cache: false"),
         ci.replace("go test -race ./...", "go test -race ./internal/cli", 1),
         ci.replace("        run: ./scripts/verify.sh", "        run: ./scripts/verify.sh\n      - run: ./scripts/verify.sh", 1),
@@ -209,8 +210,115 @@ def reject_mac_routing(workflows):
         raise AssertionError(f"Mac routing accepted a mutation of {name}")
 
 
+MAC_TURN_ENV = {"GH_TOKEN": "${{ github.token }}", "EVENT": "${{ github.event_name }}",
+                "DRAFT": "${{ github.event.pull_request.draft }}",
+                "HEAD_REPOSITORY": "${{ github.event.pull_request.head.repo.full_name }}",
+                "REPOSITORY": "${{ github.repository }}"}
+WAIT_SCRIPT = ROOT / "scripts/wait-for-main-ci.py"
+
+
+def mac_users(ci):
+    # Jobs with a Mac leg of their own, and callers of workflows that have one.
+    callers = [name for name, workflow in re.findall(r"^  ([\w-]+):\n(?:    .*\n|\n)*?    uses: \./\.github/workflows/([\w-]+\.yml)$", ci, re.M)
+               if workflow in MAC_JOBS]
+    return set(MAC_JOBS["ci.yml"]) | set(callers)
+
+
+def check_mac_turn(ci):
+    turn = JOB(ci, "mac-turn")
+    assert re.findall(r"^    if: (.+)$", turn, re.M) == ["${{ !inputs.client_interrupt }}"]
+    assert re.findall(r"^    runs-on: (.+)$", turn, re.M) == ["ubuntu-24.04"], "the Mac turn must wait on a hosted runner"
+    assert not re.search(r"^    needs:|continue-on-error:", turn, re.M), "the Mac turn must start at once and block"
+    assert re.findall(r"^    timeout-minutes: (\d+)$", turn, re.M) == ["200"], "the hang cap must exceed the script deadline"
+    assert "      actions: read\n" in turn
+    assert "        run: python3 -B scripts/wait-for-main-ci.py\n" in turn
+    assert dict(re.findall(r"^          (\w+): (\$\{\{ .+ \}\})$", turn, re.M)) == MAC_TURN_ENV
+    users = mac_users(ci)
+    assert users == {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery", "update-proofs"}, users
+    for name in users:
+        needs = re.findall(r"^    needs: (.+)$", JOB(ci, name), re.M)
+        assert needs == ["[changes, mac-turn]"], f"{name} must wait for its Mac turn"
+
+
+class FakeGitHub:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.endpoints = []
+
+    def __call__(self, endpoint):
+        self.endpoints.append(endpoint)
+        answer = self.answers[0] if len(self.answers) == 1 else self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return {"workflow_runs": [{"id": 7, "status": "queued"}] if answer else []}
+
+
+def run_wait(wait, environment, answers, minutes=180):
+    github, clock, sleeps = FakeGitHub(answers), [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    out = io.StringIO()
+    status = wait(dict(environment, DEADLINE_MINUTES=str(minutes)), api=github, sleep=sleep, clock=lambda: clock[0], out=out)
+    return status, github.endpoints, sleeps, out.getvalue()
+
+
+def check_wait_script(source):
+    wait = {"__name__": "wait_for_main_ci"}
+    exec(compile(source, str(WAIT_SCRIPT), "exec"), wait)  # noqa: S102 - the repository's own script under test
+    ACTIVE = wait["ACTIVE"]
+    pr = {"EVENT": "pull_request", "DRAFT": "false", "HEAD_REPOSITORY": "ShaulLavo/mesh", "REPOSITORY": "ShaulLavo/mesh"}
+    for environment in (dict(pr, EVENT="push"), dict(pr, EVENT="workflow_dispatch"),
+                        dict(pr, HEAD_REPOSITORY="someone/mesh"), dict(pr, DRAFT="true")):
+        status, endpoints, sleeps, _ = run_wait(wait["wait"], environment, [True])
+        assert (status, endpoints, sleeps) == (0, [], []), environment
+    status, endpoints, sleeps, _ = run_wait(wait["wait"], pr, [False])
+    assert status == 0 and sleeps == [] and len(endpoints) == len(ACTIVE)
+    assert set(ACTIVE) >= {"queued", "in_progress", "waiting", "requested", "pending"}
+    for endpoint, active in zip(endpoints, ACTIVE):
+        assert endpoint == f"repos/ShaulLavo/mesh/actions/workflows/ci.yml/runs?branch=main&status={active}&per_page=20", endpoint
+    # Busy for two polls of every status, then idle: the PR waits, then runs.
+    busy = [True] * len(ACTIVE) * 2 + [False]
+    status, _, sleeps, out = run_wait(wait["wait"], pr, busy)
+    assert status == 0 and len(sleeps) == 2 and "waiting for main CI: 7 (queued)" in out
+    # An unreadable API counts as busy, never as idle.
+    status, _, sleeps, _ = run_wait(wait["wait"], pr, [RuntimeError("HTTP 502")] + [False] * len(ACTIVE))
+    assert status == 0 and len(sleeps) == 1
+    # Past the hang cap a PR proceeds with a warning.
+    status, _, sleeps, out = run_wait(wait["wait"], pr, [True], minutes=3)
+    assert status == 0 and len(sleeps) == 3 and "::warning::" in out
+
+
+def reject_mac_turn(ci, script):
+    mutations = (
+        (ci.replace("  socket-portability:\n    needs: [changes, mac-turn]", "  socket-portability:\n    needs: changes", 1), script),
+        (ci.replace("    name: Required native update proofs\n    needs: [changes, mac-turn]",
+                    "    name: Required native update proofs\n    needs: changes", 1), script),
+        (ci.replace("    timeout-minutes: 200\n", "    timeout-minutes: 20\n", 1), script),
+        (ci.replace("    name: Wait for main CI before Mac legs\n", "    name: Wait for main CI before Mac legs\n    continue-on-error: true\n", 1), script),
+        (ci, script.replace('return environment.get("HEAD_REPOSITORY") == environment.get("REPOSITORY")', "return False", 1)),
+        (ci, script.replace("branch=main&", "branch=topic&", 1)),
+        (ci, script.replace('runs = [f"unknown ({error})"]', "runs = []", 1)),
+        (ci, script.replace('ACTIVE = ("queued", "in_progress", ', 'ACTIVE = (', 1)),
+    )
+    for mutated, mutated_script in mutations:
+        assert (mutated, mutated_script) != (ci, script), "Mac turn mutation did not apply"
+        try:
+            check_mac_turn(mutated)
+            check_wait_script(mutated_script)
+        except AssertionError:
+            continue
+        raise AssertionError("an unsafe Mac turn was accepted")
+
+
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    script = WAIT_SCRIPT.read_text()
+    check_mac_turn(ci)
+    check_wait_script(script)
+    reject_mac_turn(ci, script)
     recovery = (ROOT / ".github/workflows/helper-recovery.yml").read_text()
     check_schedule(ci, recovery)
     check_mutations(ci, recovery)
@@ -218,7 +326,7 @@ def main():
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing and mutation controls")
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing, PR Mac legs behind main CI and mutation controls")
 
 
 if __name__ == "__main__":
