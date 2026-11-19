@@ -837,6 +837,21 @@ class AdoptionWaitEvidenceTest(unittest.TestCase):
         self.assertIn("launchctl unavailable", (self.root / "helper-service.txt").read_text())
         self.assertTrue((self.root / "adoption-wait-failure.json").is_file())
 
+    def test_failing_evidence_writes_keep_the_stall_as_the_failure(self):
+        cap = installed_adoption.ADOPTION_EVIDENCE_SECONDS + 0.2
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=cap), \
+                patch.object(Path, "write_text", side_effect=OSError("No space left on device")), \
+                self.assertRaisesRegex(RuntimeError, r"last phase waiting; its evidence was not written: No space left"):
+            self.case.await_result("v0.1.9001")
+
+    def test_status_is_read_even_with_less_than_the_evidence_margin_left(self):
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=1.0), \
+                self.assertRaisesRegex(RuntimeError, "last phase waiting"):
+            self.case.await_result("v0.1.9001")
+        self.write("updates/host-adoption.json", {"details": {"phase": "adopted"}})
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=0.0):
+            self.assertEqual(self.case.await_result("v0.1.9001"), {"details": {"phase": "adopted"}})
+
     def test_a_finished_adoption_returns_without_evidence(self):
         self.write("updates/host-adoption.json", {"details": {"phase": "adopted"}})
         self.assertEqual(self.case.await_result("v0.1.9001"), {"details": {"phase": "adopted"}})
