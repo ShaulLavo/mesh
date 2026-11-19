@@ -198,6 +198,11 @@ def check_apt_workflows(workflows, action):
     assert "      if: steps.restore.outputs.cache-hit != 'true' && steps.install.outputs.source == 'network'\n" in action
     assert re.search(r"key: \$\{\{ steps\.identity\.outputs\.key \}\}", action)
     assert 'key=$prefix${ImageVersion:-unknown}' in action and "${ImageOS:-unknown}" in action
+    # A new runner image falls back to the newest cache for the same request.
+    prefix = re.search(r'^        prefix="(.+)"$', action, re.M)
+    assert prefix and "ImageVersion" not in prefix.group(1) and "$request" in prefix.group(1), \
+        "the restore prefix must name the request but not the runner image version"
+    assert "        restore-keys: ${{ steps.identity.outputs.prefix }}\n" in action
 
 
 def run_apt_install(cache, bin_dir, log, **env):
@@ -224,14 +229,17 @@ def check_apt_install(script):
         assert "--no-download" not in calls[1] and "APT::Keep-Downloaded-Packages=true" in calls[1]
         assert output == "source=network\n", output
         assert (cache / "lists/archive_Packages").exists() and (cache / "archives/zsh.deb").exists()
-        # A warm cache installs with apt's downloads disabled and never
-        # refreshes the lists: the archive is not contacted at all.
+        # A warm cache, whether saved on this runner image or restored through
+        # restore-keys from an older one, installs with apt's downloads
+        # disabled and never refreshes the lists: no archive contact at all.
         calls, output = run_apt_install(cache, bin_dir, log)
         assert len(calls) == 1 and calls[0].startswith("install -y --no-download "), calls
         assert "Acquire::http::Proxy=http://127.0.0.1:9" in calls[0] and calls[0].endswith(" zsh"), calls
         assert f"Dir::Cache::Archives={cache}/archives" in calls[0], calls
         assert output == "source=cache\n", output
-        # A cache that does not cover the request falls back to the archive.
+        # An older image's cache that no longer covers the request (its .deb
+        # versions are gone from the lists) falls back to the archive and
+        # reports network, which saves a fresh cache under the exact key.
         calls, output = run_apt_install(cache, bin_dir, log, APT_OFFLINE_SHORT="1")
         assert [call.split()[0] for call in calls] == ["install", "update", "install"], calls
         assert output == "source=network\n", output
@@ -246,6 +254,8 @@ def reject_apt_mutations(workflows, action):
         ("ci.yml", ci.replace("exec playwright install chromium webkit", "exec playwright install --with-deps chromium webkit", 1)),
         ("ci.yml", ci.replace("          options: --no-install-recommends\n", "", 1)),
         ("action", action.replace("steps.install.outputs.source == 'network'", "always()", 1)),
+        ("action", action.replace("        restore-keys: ${{ steps.identity.outputs.prefix }}\n", "", 1)),
+        ("action", action.replace('-$request-"', '-$request-${ImageVersion:-unknown}-"', 1)),
     )
     for target, mutated in mutations:
         assert mutated != (action if target == "action" else ci), f"apt mutation did not apply to {target}"
