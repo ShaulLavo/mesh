@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-PIN = "512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7"
+PIN = "de505f5b83d7f53a08c5663d1cdf431b96af75b4"
 WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()

@@ -446,9 +446,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@de505f5b83d7f53a08c5663d1cdf431b96af75b4
     with:
-      harness_source: 512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
+      harness_source: de505f5b83d7f53a08c5663d1cdf431b96af75b4
       publication_only: true
       release_version: ${{ needs.reserve.outputs.version }}
       release_source: ${{ needs.reserve.outputs.source }}
