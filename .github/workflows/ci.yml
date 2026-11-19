@@ -304,6 +304,13 @@ jobs:
           output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
           go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
           grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
+      - name: Verify launch agent inspection skips other applications' stubs
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          output="$RUNNER_TEMP/darwin-launch-agent-test.log"
+          go test -count=1 -run '^TestInspectDaemonService' -v ./internal/updatebootstrap | tee "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceSkipsLaunchAgentsWithoutLabel' "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceFailsOnMeshAgentWithoutLabel' "$output"
       - name: Exercise old local cutover and authenticated fleet recovery
         env:
           AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
@@ -493,9 +500,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@b40b0318cd9dd5487e54229d9d32803139ad1794
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
     with:
-      harness_source: b40b0318cd9dd5487e54229d9d32803139ad1794
+      harness_source: 512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
