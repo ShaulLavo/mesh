@@ -99,10 +99,13 @@ def fetch(repository, run, directory, platform, harness, destination):
         raise ValueError("publication children require the current positive run ID")
     expected = rows(directory, platform, harness)
     prefix = "publication-task-" + platform.replace("/", "-") + "-"
-    artifacts = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
-    selected = [item for item in artifacts if item["name"].startswith(prefix)]
-    if (len(selected) != len(expected) or {item["name"] for item in selected} != {row["artifact"] for row in expected}
-            or any(item["expired"] for item in selected)):
+    listed = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
+    try:
+        artifacts = installed_artifacts.current_artifacts(listed, run)
+    except RuntimeError as error:
+        raise ValueError("publication children require the exact complete same-run artifact set") from error
+    selected = [item for name, item in artifacts.items() if name.startswith(prefix)]
+    if len(selected) != len(expected) or {item["name"] for item in selected} != {row["artifact"] for row in expected}:
         raise ValueError("publication children require the exact complete same-run artifact set")
     pinned = {item["name"]: artifact_pin(item) for item in selected}
     destination.mkdir(exist_ok=False)
