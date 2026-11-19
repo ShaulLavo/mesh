@@ -172,13 +172,17 @@ jobs:
           fi
           echo "packages=${arguments[*]:3}" >> "$GITHUB_OUTPUT"
       - name: Install confirmation browser system packages
-        timeout-minutes: 5
+        # A hang cap, not a speed limit: on a cold cache the main archive can
+        # serve the 126 MB of browser dependencies at under 500 kB/s, which
+        # alone takes 4 to 5 minutes.
+        timeout-minutes: 25
         uses: ./.github/actions/apt-packages
         with:
           packages: ${{ steps.browser-packages.outputs.packages }}
           options: --no-install-recommends
       - name: Install confirmation browser engines
-        timeout-minutes: 5
+        # A hang cap, not a speed limit.
+        timeout-minutes: 25
         run: pnpm --dir web/app-pill exec playwright install chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:

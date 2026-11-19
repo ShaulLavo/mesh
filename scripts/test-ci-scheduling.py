@@ -186,7 +186,7 @@ def check_apt_workflows(workflows, action):
     pill = JOB(workflows["ci.yml"], "app-pill")
     assert "playwright install-deps --dry-run chromium webkit\n" in pill
     assert '[ "${arguments[*]:0:3}" != "install -s --no-install-recommends" ]' in pill
-    assert ("      - name: Install confirmation browser system packages\n        timeout-minutes: 5\n" + APT_ACTION
+    assert ("        timeout-minutes: 25\n" + APT_ACTION
             + "        with:\n          packages: ${{ steps.browser-packages.outputs.packages }}\n"
             "          options: --no-install-recommends\n") in pill
     assert "        run: pnpm --dir web/app-pill exec playwright install chromium webkit\n" in pill
