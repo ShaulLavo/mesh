@@ -19,6 +19,9 @@ from unittest.mock import patch
 
 from fixtures import published_releases as published
 
+# Production retry schedule, captured before any test shortens it.
+PRODUCTION_BACKOFF, PRODUCTION_BUDGET = published.DOWNLOAD_BACKOFF, published.DOWNLOAD_BUDGET
+
 
 class PublishedInputsTest(unittest.TestCase):
     def setUp(self):
@@ -551,6 +554,35 @@ published.download_worker(*sys.argv[1:])
         with self.assertRaisesRegex(RuntimeError, r"v0\.1\.151/mesh_linux_amd64\.tar\.gz from 127\.0\.0\.1 after 1 attempt: .*HTTP Error 404"):
             self.download([404, 200])
         self.assertEqual(len(self.server.requests), 1)
+
+    def production_schedule(self):
+        """The real backoff and budget, with each wait recorded instead of slept."""
+        patch.object(published, "DOWNLOAD_BACKOFF", PRODUCTION_BACKOFF).start()
+        patch.object(published, "DOWNLOAD_BUDGET", PRODUCTION_BUDGET).start()
+        self.waits = []
+        patch.object(published.time, "sleep", side_effect=self.waits.append).start()
+
+    def test_a_server_error_burst_through_every_backoff_recovers(self):
+        self.production_schedule()
+        self.assertEqual(self.download([500, 502, 503, 504, 500, 200]), b"verified fixture bytes")
+        self.assertEqual(len(self.server.requests), 6)
+        self.assertEqual(self.waits, list(PRODUCTION_BACKOFF))
+
+    def test_the_schedule_rides_out_a_burst_of_well_over_a_minute_within_its_cap(self):
+        self.assertGreaterEqual(sum(PRODUCTION_BACKOFF), 90)
+        self.assertGreaterEqual(PRODUCTION_BUDGET, sum(PRODUCTION_BACKOFF) + (len(PRODUCTION_BACKOFF) + 1) * published.ATTEMPT_LIMIT)
+
+    def test_a_server_error_burst_longer_than_every_backoff_still_fails(self):
+        self.production_schedule()
+        with self.assertRaisesRegex(RuntimeError, r"after 6 attempts: .*HTTP Error 500"):
+            self.download([500])
+        self.assertEqual(self.waits, list(PRODUCTION_BACKOFF))
+
+    def test_a_missing_asset_fails_at_once_on_the_production_schedule(self):
+        self.production_schedule()
+        with self.assertRaisesRegex(RuntimeError, r"after 1 attempt: .*HTTP Error 404"):
+            self.download([404, 200])
+        self.assertEqual((len(self.server.requests), self.waits), (1, []))
 
 
 if __name__ == "__main__":
