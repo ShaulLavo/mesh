@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CODE_FILTER = "${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 DRAFT_FILTER = "github.event_name == 'pull_request' && github.event.pull_request.draft"
 FILTERED = {"app-pill", "socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
+MAC_TURN = {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery", "update-proofs"}
 PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
@@ -45,7 +46,9 @@ def check_recovery(ci, recovery):
     assert not re.search(r"^    continue-on-error:", caller, re.M)
     for name in FILTERED:
         filtered = job(ci, name)
-        assert re.search(r"^    needs: changes$", filtered, re.M)
+        # Jobs with a Mac leg also wait for their Mac turn behind main CI.
+        needs = "\\[changes, mac-turn\\]" if name in MAC_TURN else "changes"
+        assert re.search(rf"^    needs: {needs}$", filtered, re.M), f"{name} has the wrong dependencies"
         assert re.findall(r"^    if: (.+)$", filtered, re.M) == [CODE_FILTER]
     assert re.search(r"^  workflow_call:\s*$", recovery, re.M)
     assert re.search(r"^defaults:\n  run:\n    shell: bash$", recovery, re.M)
