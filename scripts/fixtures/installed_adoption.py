@@ -182,18 +182,23 @@ class AdoptionCase(installed_native.Installation):
         # Stop short of the installed fixture cap so the failure keeps its own
         # message and evidence instead of being replaced by the clock expiry.
         deadline = time.monotonic() + max(0.0, installed_clock.timeout() - ADOPTION_EVIDENCE_SECONDS)
-        last = {}
-        while time.monotonic() < deadline:
+        while True:
+            # Read at least once, even with little of the cap left.
             last = self.adoption_status()
             phase = last.get("details", {}).get("phase")
             if self.scenario == "helper" and last.get("details", {}).get("problem"):
                 return last
             if phase in ("adopted", "rolled-back", "attention"):
                 return last
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.05)
-        message = (f"real helper did not finish adopting {version} before the installed fixture cap; last phase "
-                   + str(last.get("details", {}).get("phase")))
-        self.retain_adoption_wait(version, last)
+        message = f"real helper did not finish adopting {version} before the installed fixture cap; last phase {phase}"
+        try:
+            self.retain_adoption_wait(version, last)
+        except (OSError, ValueError, TypeError) as error:
+            # The stall stays the reported failure; missing evidence is only noted.
+            message += "; its evidence was not written: " + str(error)
         raise RuntimeError(message)
 
     def retain_adoption_wait(self, version, last):
