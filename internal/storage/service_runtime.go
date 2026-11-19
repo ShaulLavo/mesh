@@ -115,7 +115,7 @@ func (s *Store) CompareServiceRuntime(ctx context.Context, before, next *Service
 	if err := compareServiceRuntime(ctx, q, before, next); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: commit runtime: %w", err)
 	}
 	return nil

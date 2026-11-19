@@ -304,6 +304,13 @@ jobs:
           output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
           go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
           grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
+      - name: Verify launch agent inspection skips other applications' stubs
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          output="$RUNNER_TEMP/darwin-launch-agent-test.log"
+          go test -count=1 -run '^TestInspectDaemonService' -v ./internal/updatebootstrap | tee "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceSkipsLaunchAgentsWithoutLabel' "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceFailsOnMeshAgentWithoutLabel' "$output"
       - name: Exercise old local cutover and authenticated fleet recovery
         env:
           AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
