@@ -17,7 +17,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from fixtures import installed_clock, installed_account_run, installed_accounts, installed_order, installed_order_host, installed_native, installed_publication, installed_releases, native_services, installed_fresh, installed_adoption
-from fixtures import installed_continuity
+from fixtures import installed_continuity, publication_origin
 
 
 class Clock:
@@ -631,6 +631,85 @@ class PublishedViaHeadTest(unittest.TestCase):
         self.assertNotIn("v0.1.332-middle", self.builds)
         self.assertEqual(record["hops"], [])
 
+    def swaps(self):
+        return (installed_native.controls.EmptyResponse("daemon closed before response header"),
+                BrokenPipeError(32, "Broken pipe"), ConnectionResetError(104, "Connection reset by peer"))
+
+    def swap_once(self, error):
+        """host.info fails once with a daemon swap error, then answers."""
+        answers = iter([error])
+        def control(_operation):
+            failure = next(answers, None)
+            if failure is not None:
+                raise failure
+            return {"host": {"build": self.running}}
+        return control
+
+    def test_a_daemon_swap_at_host_info_is_observed_again(self):
+        for error in self.swaps():
+            with self.subTest(type(error).__name__):
+                record, seen = self.record(), set()
+                self.case.ready = Mock(return_value=True)
+                self.case.control = Mock(side_effect=error)
+                installed_publication.observe_published_hop(self.case, record, "v0.1.331", "v0.1.333", seen)
+                self.assertEqual((record["hops"], seen), ([], set()))
+                self.authenticate.assert_not_called()
+
+    def await_swapped_route(self, error):
+        journal = {"phase": "committed", "request": {"manifest": {"version": self.VIA}}}
+        record = self.record()
+        self.builds.pop(self.VIA, None)
+        self.case.ready = Mock(return_value=True)
+        self.case.control = Mock(side_effect=self.swap_once(error))
+        with patch.object(installed_publication.installed_chain, "read_ledger", return_value=self.ledger()), \
+                patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
+            installed_publication.await_published_route(self.case, record, "v0.1.331", self.VIA, None, False)
+        return record
+
+    def test_a_route_whose_first_observation_meets_a_swap_still_validates_strictly(self):
+        for error in self.swaps():
+            with self.subTest(type(error).__name__):
+                record = self.await_swapped_route(error)
+                self.assertEqual(record["final"]["build"], self.running)
+                self.assertEqual(self.builds[self.VIA], self.running)
+
+    def test_any_other_host_info_failure_during_observation_still_fails(self):
+        self.case.ready = Mock(return_value=True)
+        self.case.control = Mock(side_effect=RuntimeError("daemon closed an incomplete response"))
+        with self.assertRaisesRegex(RuntimeError, "incomplete response"):
+            installed_publication.observe_published_hop(self.case, self.record(), "v0.1.331", "v0.1.333", set())
+
+    def await_route_reading(self, ledgers, deadline=None):
+        journal = {"phase": "committed", "request": {"manifest": {"version": self.VIA}}}
+        record = self.record()
+        self.case.ready = Mock(return_value=False)
+        with patch.object(installed_publication.installed_chain, "read_ledger", side_effect=ledgers), \
+                patch.object(installed_publication.installed_chain, "read_journal", return_value=journal):
+            installed_publication.await_published_route(self.case, record, "v0.1.331", self.VIA, None, False, deadline=deadline)
+        return record
+
+    def test_an_authority_lock_that_stays_held_exhausts_the_route_cap(self):
+        def busy():
+            while True:
+                yield publication_origin.AuthorityBusy("publication product ledger failed: acquire authority lock: context deadline exceeded")
+        with self.assertRaisesRegex(RuntimeError, "within the existing chain bound"):
+            self.await_route_reading(busy(), deadline=time.monotonic() + 0.3)
+
+    def test_a_ledger_read_that_meets_the_held_authority_lock_is_read_again(self):
+        busy = publication_origin.AuthorityBusy("publication product ledger failed: acquire authority lock: context deadline exceeded")
+        record = self.await_route_reading([busy, self.ledger()])
+        self.assertEqual(record["final"]["build"], self.running)
+
+    def test_any_other_ledger_read_failure_still_fails_the_route(self):
+        with self.assertRaisesRegex(RuntimeError, "ledger failed: corrupt"):
+            self.await_route_reading([RuntimeError("publication product ledger failed: corrupt"), self.ledger()])
+
+    def test_a_daemon_swap_during_final_validation_still_fails(self):
+        for error in self.swaps():
+            self.case.control = Mock(side_effect=error)
+            with self.subTest(type(error).__name__), self.assertRaises(type(error)):
+                self.validate(self.record())
+
     def test_unauthenticated_via_head_is_never_registered_or_inspected(self):
         self.authenticate.side_effect = RuntimeError("observed intermediate bytes differ from the authenticated route plan")
         self.case.inspect_retained = Mock()
@@ -645,6 +724,34 @@ class PublishedViaHeadTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not a previously verified release"):
             installed_publication.validate_published_route(self.case, self.record(), journal, self.ledger(), "v0.1.333", fault, True, set())
         self.authenticate.assert_not_called()
+
+
+class ProductReaderAuthorityTest(unittest.TestCase):
+    """The product reader's held-lock expiry is told apart from every other failure."""
+
+    def read(self, output):
+        temporary = tempfile.TemporaryDirectory(prefix="product-reader-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        inspector = root / "inspector"
+        inspector.write_text("#!/bin/sh\nprintf '%s\\n' " + json.dumps(output) + "\nexit 1\n")
+        inspector.chmod(0o700)
+        origin = object.__new__(publication_origin.Origin)
+        origin.inspector, origin.environment = inspector, dict
+        (root / "state").mkdir()
+        origin.ledger(root / "state", root / "chain-ledger.json")
+
+    def test_held_authority_lock_is_reported_as_busy(self):
+        busy = "read bounded installed ledger: update: acquire authority lock: context deadline exceeded"
+        with self.assertRaises(publication_origin.AuthorityBusy):
+            self.read(busy)
+
+    def test_other_reader_failures_are_not_busy(self):
+        for output in ("read bounded installed ledger: update: lock authority: permission denied",
+                       "update: open authority lock: no such file or directory", "--- FAIL: TestInstalledHostRead"):
+            with self.subTest(output), self.assertRaises(RuntimeError) as caught:
+                self.read(output)
+            self.assertNotIsInstance(caught.exception, publication_origin.AuthorityBusy)
 
 
 class PublishedHelperHandoffTest(unittest.TestCase):
@@ -751,6 +858,51 @@ class PublishedHelperHandoffTest(unittest.TestCase):
             with patch.object(installed_fresh.time, "sleep", side_effect=promote):
                 self.assertEqual(self.await_helper()["pid"], replacement.pid)
             self.case.helper_verified = {"receipt": self.old, "image": self.prior}
+
+    def test_verified_predecessor_running_from_its_removed_file_waits_for_restart(self):
+        # Receipt already names the target, the service still reports the
+        # verified predecessor, and the predecessor's file is gone.
+        self.publish(self.new)
+        Path(self.old["executable"]).unlink()
+        replacement = self.start(self.new)
+        def promote(_seconds):
+            self.manager.manager_pid.return_value = replacement.pid
+        with patch.object(installed_fresh.time, "sleep", side_effect=promote):
+            helper = self.await_helper()
+        self.assertEqual(helper, native_services.mapped_image(replacement.pid, self.new["executable"]))
+
+    def test_verified_predecessor_that_never_restarts_exhausts_the_deadline(self):
+        self.publish(self.new)
+        Path(self.old["executable"]).unlink()
+        with self.assertRaisesRegex(RuntimeError, "helper.*bound"):
+            self.case.mapped_helper(expected=self.new["digest"], deadline=time.monotonic() + 0.2)
+
+    def test_another_process_from_a_removed_file_is_not_the_predecessor(self):
+        stray_image = self.image(Path("/bin/sleep").read_bytes() + b"stray")
+        stray = self.start(stray_image)
+        Path(stray_image["executable"]).unlink()
+        self.publish(self.new)
+        self.manager.manager_pid.return_value = stray.pid
+        with self.assertRaisesRegex(RuntimeError, "another executable inode"):
+            self.await_helper()
+
+    def test_another_process_mapping_the_predecessor_inode_is_rejected(self):
+        # The predecessor's exact device and inode, but not its process.
+        other = self.start(self.old)
+        self.assertNotEqual(other.pid, self.prior["pid"])
+        self.publish(self.new)
+        self.manager.manager_pid.return_value = other.pid
+        with self.assertRaisesRegex(RuntimeError, "another executable inode"):
+            self.await_helper()
+
+    def test_predecessor_pid_mapping_another_inode_is_rejected(self):
+        error = RuntimeError("native service mapped another executable inode")
+        error.mapped_image = {"expected": {}, "mapped": {"executable": "other", "device": self.prior["device"],
+                                                          "inode": self.prior["inode"] + 1}}
+        self.publish(self.new)
+        with patch.object(native_services, "mapped_image", side_effect=error), \
+                self.assertRaisesRegex(RuntimeError, "another executable inode"):
+            self.await_helper()
 
     def test_same_digest_different_inode_is_rejected(self):
         copied = self.root / "other-copy"
