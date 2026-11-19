@@ -886,6 +886,15 @@ class PublishedHelperHandoffTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "another executable inode"):
             self.await_helper()
 
+    def test_another_process_mapping_the_predecessor_inode_is_rejected(self):
+        # The predecessor's exact device and inode, but not its process.
+        other = self.start(self.old)
+        self.assertNotEqual(other.pid, self.prior["pid"])
+        self.publish(self.new)
+        self.manager.manager_pid.return_value = other.pid
+        with self.assertRaisesRegex(RuntimeError, "another executable inode"):
+            self.await_helper()
+
     def test_predecessor_pid_mapping_another_inode_is_rejected(self):
         error = RuntimeError("native service mapped another executable inode")
         error.mapped_image = {"expected": {}, "mapped": {"executable": "other", "device": self.prior["device"],
