@@ -104,6 +104,33 @@ jobs:
               - '.github/workflows/*'
               - '.github/actions/installed-go/**'
 
+  mac-turn:
+    # One mesh-mac runner serves every trusted Darwin leg, and GitHub gives it
+    # whichever queued job it picks. A same-repository PR's Mac legs wait here,
+    # on a hosted runner, until no main CI run (the publish path) is queued or
+    # running. Main, manual, fork and draft runs pass at once.
+    if: ${{ !inputs.client_interrupt }}
+    name: Wait for main CI before Mac legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/wait-for-main-ci.py
+          sparse-checkout-cone-mode: false
+      - name: Wait until no main CI run is queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 -B scripts/wait-for-main-ci.py
+
   app-pill:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -204,7 +231,7 @@ jobs:
           [[ $RACE == success && $INTEGRATION == success ]]
 
   socket-portability:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Native socket and daemon fixtures (${{ matrix.runner }})
     # Trusted Darwin legs (main pushes, manual runs, same-repository PRs) run on
@@ -241,7 +268,7 @@ jobs:
           retention-days: 7
 
   auth-cutover:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Device auth cutover (${{ matrix.platform }})
     # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
@@ -326,7 +353,7 @@ jobs:
           retention-days: 7
 
   machine-naming:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Destination naming (${{ matrix.platform }})
     # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
@@ -480,14 +507,14 @@ jobs:
         run: ./scripts/check-packaging.sh dist
 
   helper-recovery:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Required native helper recovery
     uses: ./.github/workflows/helper-recovery.yml
 
   update-proofs:
     name: Required native update proofs
-    needs: changes
+    needs: [changes, mac-turn]
     if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
     uses: ./.github/workflows/update-proofs.yml
     with:
