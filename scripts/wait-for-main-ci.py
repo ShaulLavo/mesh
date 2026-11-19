@@ -4,8 +4,9 @@
 GitHub hands the one mesh-mac runner's next job to any queued job, so a stream
 of pull request runs can keep a main publish run waiting for hours. Main CI
 runs, manual runs, fork pull requests and drafts pass at once. A same-repository
-pull request waits here, on a hosted runner, until main is idle. After the
-deadline it proceeds with a warning: this is a hang cap, not a gate.
+pull request waits here, on a hosted runner, until main is idle. If main is
+still active at the deadline the job fails, so the PR's Mac legs skip and the
+PR is rerun once main is idle; proceeding would put it on the Mac against main.
 
 GitHub's status-filtered run lists can miss an active run between its job
 phases, so the wait reads the newest main runs unfiltered, counts every run
@@ -65,8 +66,10 @@ def wait(environment, api=gh_api, sleep=time.sleep, clock=time.monotonic, out=sy
             print("Mac turn: no main CI run is queued or running", file=out)
             return 0
         if clock() >= deadline:
-            print(f"::warning::Mac turn: main CI still active after the hang cap; proceeding: {', '.join(runs)}", file=out)
-            return 0
+            minutes = int(environment.get("DEADLINE_MINUTES", DEADLINE_MINUTES))
+            print(f"::error::Mac turn: main CI still active after {minutes} minutes; rerun this job when main is idle: "
+                  f"{', '.join(runs)}", file=out)
+            return 1
         if runs:
             print(f"Mac turn: waiting for main CI: {', '.join(runs)}", file=out, flush=True)
         sleep(POLL_SECONDS)

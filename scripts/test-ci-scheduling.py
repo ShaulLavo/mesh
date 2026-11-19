@@ -300,9 +300,13 @@ def check_wait_script(source):
     assert status == 0 and len(sleeps) == 2
     status, _, sleeps, _ = run_wait(run, pr, [False, RuntimeError("HTTP 502"), False])
     assert status == 0 and len(sleeps) == 3
-    # Past the hang cap a PR proceeds with a warning.
+    # Past the hang cap the job fails, so the PR's Mac legs skip, never run.
     status, _, sleeps, out = run_wait(run, pr, [True], minutes=3)
-    assert status == 0 and len(sleeps) == 3 and "::warning::" in out
+    assert status != 0 and len(sleeps) == 3, (status, sleeps)
+    assert "::error::Mac turn: main CI still active after 3 minutes; rerun this job when main is idle" in out, out
+    assert "no main CI run is queued or running" not in out
+    status, _, _, out = run_wait(run, pr, [RuntimeError("HTTP 502")], minutes=3)
+    assert status != 0 and "::error::" in out
 
 
 def reject_mac_turn(ci, script):
@@ -316,6 +320,7 @@ def reject_mac_turn(ci, script):
         (ci, script.replace("branch=main&", "branch=topic&", 1)),
         (ci, script.replace('return [f"unknown ({error})"]', "return []", 1)),
         (ci, script.replace("IDLE_POLLS = 2", "IDLE_POLLS = 1", 1)),
+        (ci, script.replace("            return 1\n", "            return 0\n", 1)),
         (ci, script.replace("idle = 0 if runs else idle + 1", "idle = idle if runs else idle + 1", 1)),
         (ci, script.replace("runs?branch=main&per_page=", "runs?branch=main&status=in_progress&per_page=", 1)),
         (ci, script.replace('if run["status"] != "completed"', 'if run["status"] == "in_progress"', 1)),
