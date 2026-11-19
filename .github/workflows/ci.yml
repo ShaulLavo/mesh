@@ -127,7 +127,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Install confirmation browser engines
-        timeout-minutes: 5
+        # A hang cap, not a speed limit: the main archive can serve the 126 MB of
+        # browser dependencies at under 500 kB/s, which alone takes 4 to 5 minutes.
+        timeout-minutes: 20
         run: |
           # The runner's regional mirror (Azure or AWS, varying by image) can
           # stall for hours; send apt to the main archive whatever host it is.
