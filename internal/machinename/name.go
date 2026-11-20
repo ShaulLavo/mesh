@@ -14,7 +14,7 @@ var reservedNames = map[string]struct{}{
 	"add": {}, "app": {}, "attach": {}, "back": {}, "completion": {}, "daemon": {}, "gc": {}, "help": {}, "hibernate": {},
 	"kill": {}, "rm": {}, "remove": {}, "rename": {}, "mv": {}, "list": {}, "local": {}, "logs": {}, "ls": {}, "man": {},
 	"recover": {}, "recovery-command": {}, "shell-init": {}, "shell-update": {}, "agent": {}, "agent-hook": {}, "agent-resume": {}, "private-names": {}, "serve": {}, "session-worker": {}, "sig": {}, "signal": {}, "unserve": {}, "wake": {},
-	"device": {}, "update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {}, "update-reader": {},
+	"device": {}, "update": {}, "version": {}, "update-helper": {}, "update-notice-check": {}, "update-bootstrap": {}, "update-reader": {}, "ssh-helper": {},
 	"update-bootstrap-status": {}, "dashboard": {}, "ssh": {}, "fleet": {}, "cp": {},
 }
 
