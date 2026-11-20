@@ -49,7 +49,7 @@ func newUpdateController(ctx context.Context, stateDir, id string, key ed25519.P
 	if err != nil {
 		return nil, hostControllerError(err)
 	}
-	instanceID, err := update.NewAutomaticCommandID()
+	instanceID, err := update.NewCommandID()
 	if err != nil {
 		return nil, fmt.Errorf("allocate daemon policy instance: %w", err)
 	}

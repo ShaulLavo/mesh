@@ -15,9 +15,9 @@ import (
 	"github.com/shaul/mesh/internal/transport"
 )
 
-func mustAutomaticID(t *testing.T) string {
+func mustRandomID(t *testing.T) string {
 	t.Helper()
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestAuthorityPreservesLegacyRelaysAndBindsConfigurationActions(t *testing.T
 	client := Client{ID: actorID, Key: actorKey}
 	host := Host{ID: serverID, Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
 	for _, action := range []string{"info", "configuration.status", "configuration.observe"} {
-		request := Message{Actor: actorID, Target: serverID, Action: "challenge", Nonce: mustAutomaticID(t)}
+		request := Message{Actor: actorID, Target: serverID, Action: "challenge", Nonce: mustRandomID(t)}
 		challenge, err := client.exchange(conn, host, request)
 		if err != nil {
 			t.Fatal(err)

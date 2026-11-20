@@ -754,7 +754,7 @@ func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPo
 	if exists && journal.Request.Generation == math.MaxUint64 {
 		return u.attention(ctx, state, "generation", errors.New("installation generation exhausted"))
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return err
 	}

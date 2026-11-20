@@ -94,7 +94,7 @@ func (s *Store) writeAuthority(name string, value any) error {
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return err
 	}

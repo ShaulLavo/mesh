@@ -189,7 +189,7 @@ func newRun(coordinator string, fleet Fleet, manifest release.Manifest) (Run, er
 	if err != nil {
 		return Run{}, err
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return Run{}, err
 	}

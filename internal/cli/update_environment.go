@@ -11,14 +11,14 @@ import (
 	"github.com/shaul/mesh/internal/update"
 )
 
-func existingAutomaticEnvironment(ctx context.Context, coordinator string) (updateEnvironment, error) {
+func existingUpdateEnvironment(ctx context.Context, coordinator string) (updateEnvironment, error) {
 	stateDir, err := paths.StateDirPath()
 	if err != nil {
-		return updateEnvironment{}, fmt.Errorf("automatic state directory: %w", err)
+		return updateEnvironment{}, fmt.Errorf("update state directory: %w", err)
 	}
 	host, key, err := identity.LoadPrivate(stateDir)
 	if err != nil {
-		return updateEnvironment{}, fmt.Errorf("automatic updates require an existing local identity: %w", err)
+		return updateEnvironment{}, fmt.Errorf("update commands require an existing local identity: %w", err)
 	}
 	environment := updateEnvironment{stateDir: stateDir, client: update.Client{ID: host.ID, Key: key}, local: update.LocalHost(stateDir, host.ID)}
 	if declared, err := localNameRecord(ctx, stateDir); err == nil {
@@ -38,15 +38,15 @@ func existingAutomaticEnvironment(ctx context.Context, coordinator string) (upda
 	}
 	environment.coordinator = adoptedUpdateHost(remote)
 	if err := environment.coordinator.Validate(); err != nil {
-		return environment, fmt.Errorf("automatic coordinator: %w", err)
+		return environment, fmt.Errorf("update coordinator: %w", err)
 	}
 	return environment, nil
 }
-func writeAutomaticJSON(out io.Writer, value any) error {
+func writeUpdateJSON(out io.Writer, value any) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
-		return fmt.Errorf("write automatic status: %w", err)
+		return fmt.Errorf("write update JSON: %w", err)
 	}
 	return nil
 }

@@ -19,6 +19,12 @@ const maximumCacheBytes = 2 << 20
 
 var errLocked = errors.New("update notice refresh is already running")
 
+// errUnreadableCache marks a safe, private cache file whose content cannot be
+// decoded: truncated, oversized, or written by another build. Callers may treat
+// it as absent; the next successful write replaces it. Ownership, permission
+// and file-type failures are not marked and still fail closed.
+var errUnreadableCache = errors.New("update notice cache is unreadable")
+
 func (s *Store) lock(ctx context.Context, name string, wait bool) (func(), error) {
 	if s.directory == "" {
 		return nil, errors.New("update notice cache directory is required")
@@ -98,26 +104,30 @@ func readJSON(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > maximumCacheBytes {
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("invalid update notice cache %s", path)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maximumCacheBytes+1))
 	if err != nil {
 		return err
 	}
+	return decodeCache(data, target)
+}
+
+func decodeCache(data []byte, target any) error {
 	if len(data) > maximumCacheBytes {
-		return errors.New("update notice cache exceeds size limit")
+		return fmt.Errorf("%w: exceeds size limit", errUnreadableCache)
 	}
 	if err := hostprofile.CheckJSON(json.NewDecoder(bytes.NewReader(data)), 0, 32); err != nil {
-		return fmt.Errorf("check update cache JSON: %w", err)
+		return fmt.Errorf("%w: check JSON: %w", errUnreadableCache, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("decode update cache: %w", err)
+		return fmt.Errorf("%w: decode: %w", errUnreadableCache, err)
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return errors.New("trailing update notice data")
+		return fmt.Errorf("%w: trailing data", errUnreadableCache)
 	}
 	return nil
 }

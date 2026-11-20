@@ -53,7 +53,7 @@ type VerifiedActor struct {
 
 func (a VerifiedActor) ID() string { return a.id }
 
-func newAutomaticID() (string, error) {
+func newRandomID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("update: allocate authority identity: %w", err)
@@ -61,6 +61,6 @@ func newAutomaticID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
-func NewAutomaticCommandID() (string, error) { return newAutomaticID() }
+func NewCommandID() (string, error) { return newRandomID() }
 
-func DecodeAutomatic(data json.RawMessage, value any) error { return decodeAuthority(data, value) }
+func DecodeStrict(data json.RawMessage, value any) error { return decodeAuthority(data, value) }

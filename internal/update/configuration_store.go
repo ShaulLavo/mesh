@@ -113,7 +113,7 @@ func (c *Coordinator) PreviewConfiguration(ctx context.Context, actor VerifiedAc
 	if err != nil {
 		return ConfigurationProposal{}, err
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return ConfigurationProposal{}, err
 	}
@@ -501,7 +501,7 @@ func newConfigurationDispatch(change *ConfigurationChange, index int) (*configur
 		return nil, nil
 	}
 	if !observe && !target.Issued {
-		id, err := newAutomaticID()
+		id, err := newRandomID()
 		if err != nil {
 			return nil, err
 		}
@@ -779,7 +779,7 @@ func (s *Store) publishConfigurationHistory(change ConfigurationChange) error {
 	if len(data) > maximumMessage {
 		return errors.New("configuration history exceeds size limit")
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return err
 	}

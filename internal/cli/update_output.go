@@ -360,7 +360,7 @@ func printStatusRows(out io.Writer, rows []DashboardUpdateRow, mask *privacy.Mas
 
 func printUpdateDetails(out io.Writer, value any, mask *privacy.Mask) error {
 	if mask == nil {
-		return writeAutomaticJSON(out, value)
+		return writeUpdateJSON(out, value)
 	}
 	if _, err := fmt.Fprintln(out, "Status details hidden in privacy mode. Use --privacy=false --details to inspect, or --json for the complete operational record."); err != nil {
 		return fmt.Errorf("print private status details: %w", err)
@@ -370,7 +370,7 @@ func printUpdateDetails(out io.Writer, value any, mask *privacy.Mask) error {
 
 func printUpdateStatusPresentation(out io.Writer, value any, source DashboardUpdateSource, structured, details bool, mask *privacy.Mask) error {
 	if structured {
-		return writeAutomaticJSON(out, value)
+		return writeUpdateJSON(out, value)
 	}
 	if details {
 		return printUpdateDetails(out, value, mask)

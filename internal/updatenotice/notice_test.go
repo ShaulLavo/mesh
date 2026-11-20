@@ -2,7 +2,6 @@ package updatenotice
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -215,26 +214,50 @@ func TestInvalidManifestNeverBecomesNotice(t *testing.T) {
 	}
 }
 
-func TestSuccessfulCheckPersistsCompleteManifest(t *testing.T) {
+func TestUnreadableCacheIsRebuilt(t *testing.T) {
+	cases := map[string]string{
+		"unknown field": `{"checked":{"digest":"old"},"version":"v0.1.5","nextAttempt":"2099-01-01T00:00:00Z"}`,
+		"truncated":     `{"version":"v0.1.5","nextAt`,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			store, _ := testStore(t)
+			if err := os.MkdirAll(store.directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(store.directory, "notice.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if cached, err := store.Cached(); err != nil || cached.Version != "" {
+				t.Fatalf("unreadable cache offered a notice or failed: %+v %v", cached, err)
+			}
+			got, err := store.Refresh(context.Background(), false)
+			if err != nil || got.Version != "v0.2.0" {
+				t.Fatalf("refresh did not rebuild the cache: %+v %v", got, err)
+			}
+			var state cacheState
+			if err := readJSON(path, &state); err != nil || state.Version != "v0.2.0" {
+				t.Fatalf("rebuilt cache is not current: %+v %v", state, err)
+			}
+		})
+	}
+}
+
+func TestUnsafeCacheStillFailsClosed(t *testing.T) {
 	store, _ := testStore(t)
-	if _, err := store.Refresh(context.Background(), false); err != nil {
+	if err := os.MkdirAll(store.directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(store.directory, "notice.json"))
-	if err != nil {
+	path := filepath.Join(store.directory, "notice.json")
+	if err := os.WriteFile(path, []byte(`{"version":"v0.2.0"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var state struct {
-		Checked *struct {
-			Manifest release.Manifest `json:"manifest"`
-			Digest   string           `json:"digest"`
-		} `json:"checked"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
+	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // the fixture must expose unsafe cache permissions to verify rejection
 		t.Fatal(err)
 	}
-	if state.Checked == nil || state.Checked.Digest != testManifest("v0.2.0").Digest() || state.Checked.Manifest.Digest() != state.Checked.Digest {
-		t.Fatal("successful cache lost the complete checked manifest")
+	if _, err := store.Cached(); err == nil {
+		t.Fatal("cache with unsafe permissions was read")
 	}
 }
 

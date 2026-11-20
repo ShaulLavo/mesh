@@ -35,17 +35,7 @@ type dismissal struct {
 	Until time.Time `json:"until,omitempty"`
 }
 
-// CheckedRelease is the last successfully checked manifest. Nothing reads it
-// since the coordinator policy was removed; it stays because notice.json files
-// already on machines contain it and the cache decoder rejects unknown fields.
-type CheckedRelease struct {
-	Manifest  release.Manifest `json:"manifest"`
-	Digest    string           `json:"digest"`
-	CheckedAt time.Time        `json:"checkedAt"`
-}
-
 type cacheState struct {
-	Checked     *CheckedRelease      `json:"checked,omitempty"`
 	Version     string               `json:"version,omitempty"`
 	CheckedAt   time.Time            `json:"checkedAt,omitempty"`
 	AttemptedAt time.Time            `json:"attemptedAt,omitempty"`
@@ -155,7 +145,6 @@ func (s *Store) Record(ctx context.Context, manifest release.Manifest) error {
 	return s.change(ctx, func(current *cacheState) {
 		current.Version = manifest.Version
 		current.CheckedAt = s.now()
-		current.Checked = &CheckedRelease{manifest, manifest.Digest(), current.CheckedAt}
 		current.NextAttempt = current.CheckedAt.Add(checkInterval + s.jitter())
 	})
 }
@@ -214,6 +203,11 @@ func (s *Store) read() (cacheState, error) {
 		return state, errors.New("update notice cache directory is required")
 	}
 	err := readJSON(filepath.Join(s.directory, "notice.json"), &state)
+	// A cache this build cannot decode is only lost throttle and dismissal
+	// state. Treat it as absent so the next check or dismissal rewrites it.
+	if errors.Is(err, errUnreadableCache) {
+		return cacheState{}, nil
+	}
 	return state, err
 }
 

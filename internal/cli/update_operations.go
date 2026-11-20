@@ -58,7 +58,7 @@ func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []strin
 	}
 	open := openUpdateEnvironment
 	if action == "status" {
-		open = existingAutomaticEnvironment
+		open = existingUpdateEnvironment
 	}
 	environment, err := open(cmd.Context(), resolved.coordinator)
 	if err != nil {
@@ -191,9 +191,9 @@ func printListedUpdateOperations(ctx context.Context, environment updateEnvironm
 	updates := readUpdatePresentation(ctx, environment)
 	if structured {
 		if len(updates.Sources) == 0 && updates.Problem == "" {
-			return writeAutomaticJSON(output.out, runs)
+			return writeUpdateJSON(output.out, runs)
 		}
-		return writeAutomaticJSON(output.out, struct {
+		return writeUpdateJSON(output.out, struct {
 			Runs    []update.Run     `json:"runs"`
 			Updates DashboardUpdates `json:"updates"`
 		}{runs, updates})

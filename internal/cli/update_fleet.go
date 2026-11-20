@@ -63,7 +63,7 @@ func (a *application) runUpdateFleet(cmd *cobra.Command, options *updateOptions)
 	if options.coordinator != "" {
 		return errors.New("fleet status reads each machine directly; omit --coordinator")
 	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (a *application) runUpdateFleet(cmd *cobra.Command, options *updateOptions)
 	}
 	status := readFleetUpdates(cmd.Context(), fleet.Members, environment.local.ID, a.dependencies.DialPassive, a.dependencies.Now())
 	if options.json {
-		err = writeAutomaticJSON(cmd.OutOrStdout(), status)
+		err = writeUpdateJSON(cmd.OutOrStdout(), status)
 	} else {
 		err = printFleetUpdates(cmd.OutOrStdout(), status, options.details, a.privacy)
 	}
