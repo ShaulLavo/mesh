@@ -40,7 +40,9 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/client-interrupt-diagnostic/source-sha.txt"
           python3 -B scripts/diagnose-client-interrupt.py --check-host > "$RUNNER_TEMP/client-interrupt-diagnostic/host-baseline.json"
       - name: Install the external observer on this disposable runner
-        run: sudo apt-get update && sudo apt-get install -y strace
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: strace
       - uses: ./.github/actions/installed-go
       - name: Prepare the private PC fixture and observe one pc-interrupt
         env:
@@ -153,19 +155,35 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install confirmation browser engines
-        # A hang cap, not a speed limit: the main archive can serve the 126 MB of
-        # browser dependencies at under 500 kB/s, which alone takes 4 to 5 minutes.
-        timeout-minutes: 25
+      # Installing browsers together with their system packages always
+      # refreshes apt from the live archive. Record the exact package list
+      # Playwright would install, install it through the cached-apt action
+      # (offline on a warm cache), then fetch only the browsers.
+      - name: Resolve confirmation browser system packages
+        id: browser-packages
+        env:
+          APT_RECORD: ${{ runner.temp }}/playwright-apt-arguments
         run: |
-          # The runner's regional mirror (Azure or AWS, varying by image) can
-          # stall for hours; send apt to the main archive whatever host it is.
-          for file in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-            [ -f "$file" ] || continue
-            sudo sed -i -E 's#https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$file"
-          done
-          grep -rhoE 'https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | sort -u | sed 's/^/apt archive host: /'
-          pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
+          PATH="$GITHUB_WORKSPACE/.github/actions/apt-packages/record:$PATH" pnpm --dir web/app-pill exec playwright install-deps --dry-run chromium webkit
+          mapfile -t arguments < "$APT_RECORD"
+          if [ "${arguments[*]:0:3}" != "install -s --no-install-recommends" ] || [ "${#arguments[@]}" -lt 4 ]; then
+            echo "::error::Playwright changed its package simulation call: ${arguments[*]}"
+            exit 1
+          fi
+          echo "packages=${arguments[*]:3}" >> "$GITHUB_OUTPUT"
+      - name: Install confirmation browser system packages
+        # A hang cap, not a speed limit: on a cold cache the main archive can
+        # serve the 126 MB of browser dependencies at under 500 kB/s, which
+        # alone takes 4 to 5 minutes.
+        timeout-minutes: 25
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: ${{ steps.browser-packages.outputs.packages }}
+          options: --no-install-recommends
+      - name: Install confirmation browser engines
+        # A hang cap, not a speed limit.
+        timeout-minutes: 25
+        run: pnpm --dir web/app-pill exec playwright install chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:
           MESH_CONFIRM_BROWSER_DIR: ${{ runner.temp }}/mesh-confirm
@@ -205,7 +223,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install zsh
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: zsh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod

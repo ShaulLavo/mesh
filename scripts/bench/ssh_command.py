@@ -43,7 +43,8 @@ TIMEOUT = 120  # Hang cap, never a latency target.
 def distribution(values):
     ordered = sorted(values)
     return {"min": ordered[0], "median": statistics.median(ordered),
-            "p90": ordered[math.ceil(len(ordered) * 0.9) - 1], "max": ordered[-1]}
+            "p90": ordered[math.ceil(len(ordered) * 0.9) - 1],
+            "p95": ordered[math.ceil(len(ordered) * 0.95) - 1], "max": ordered[-1]}
 
 
 def summarize(pairs):
@@ -216,7 +217,7 @@ class Descendants:
 
 
 def prepare_mesh(fixture):
-    fixture.start_ssh()
+    fixture.start_ssh(timeout=TIMEOUT)
     host = round_trip(str(fixture.local / "daemon.sock"), {"type": "host.info", "requestId": "benchmark"})["host"]
     approved = checked_run([fixture.binary, "device", "approve", "--allow-root", "--", host["id"]],
                            fixture.environment)
@@ -243,9 +244,12 @@ def environment_record(args):
             "sshd": (sshd_version.stdout + sshd_version.stderr).decode().strip(),
             "scratch_filesystem": subprocess.check_output(["df", "-T", str(args.scratch_parent)], text=True),
             "transport": "ordinary mesh ssh command mode vs OpenSSH ssh to owned OpenSSH sshd",
-            "connection_policy": "fresh process, TCP connection and public-key authentication per sample; no PTY or multiplexing",
+            "connection_policy": "see agent.cases for each actual argv, connection and pacing policy" if args.agent_commands else "fresh process, TCP connection and public-key authentication per sample; no PTY or multiplexing",
             "host_verification": "Mesh pinned identity; OpenSSH pinned known_hosts; same Ed25519 key",
-            "command": COMMAND, "stdin_bytes": len(PAYLOAD), "seed": args.seed,
+            "command": ["/bin/true"] if args.agent_commands else COMMAND,
+            "stdin_bytes": 0 if args.agent_commands else len(PAYLOAD), "seed": args.seed,
+            "binary_version": checked_run([str(args.binary), "version"], os.environ).stdout.decode().strip(),
+            "baseline_binary": fingerprint(args.baseline_binary) if args.baseline_binary else None,
             "threshold": {"ratio_strictly_over": RATIO, "delta_seconds_strictly_over": DELTA_SECONDS,
                           "minimum_exceeding_fraction": MIN_FRACTION, "sign_p_strictly_below": SIGN_P}}
 
@@ -254,6 +258,8 @@ def exercise(args, report, root):
     from contextlib import ExitStack
 
     fixture = SSHFixture(args.binary, root)
+    if args.phase_output:
+        fixture.environment["MESH_SSH_PHASES"] = str(args.phase_output.resolve())
     # The parent owns descendant cleanup before this function starts either daemon.
     with ExitStack() as stack:
         stack.callback(fixture.stop_daemon)
@@ -262,6 +268,10 @@ def exercise(args, report, root):
         commands = {"mesh": mesh, "ssh": ssh + [shlex.join(COMMAND)]}
         report["endpoints"] = {"mesh_port": fixture.port, "openssh_port": port}
         report["argv"] = commands
+        if args.agent_commands:
+            import ssh_agents
+            ssh_agents.exercise(fixture, ssh, args, report, stack)
+            return
         before = fixture.daemon_listing()
         report["warmups"], report["pairs"] = [], []
         collect(commands, fixture.environment, 4, args.seed, report["warmups"])
@@ -320,6 +330,9 @@ def arguments(argv=None):
     parser.add_argument("--sshd", default=shutil.which("sshd"), help="existing OpenSSH server executable")
     parser.add_argument("--pairs", type=int, default=40)
     parser.add_argument("--seed", type=int, default=435)
+    parser.add_argument("--agent-commands", action="store_true", help="also compare warm multiplexing, first byte and concurrent short commands")
+    parser.add_argument("--baseline-binary", type=Path, help="compare a second actual Mesh CLI against the same listener")
+    parser.add_argument("--phase-output", type=Path, help="phase JSONL destination for a temporarily instrumented build")
     args = parser.parse_args(argv)
     if args.pairs < 20:
         parser.error("--pairs must be at least 20")
