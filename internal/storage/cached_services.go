@@ -69,7 +69,7 @@ func (s *Store) ReplaceCachedServices(ctx context.Context, host Host, services [
 	if total > MaximumCachedServices {
 		return fmt.Errorf("storage: cached service count %d exceeds %d", total, MaximumCachedServices)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: commit cached services for host %s: %w", host.ID, err)
 	}
 	return nil
@@ -207,7 +207,7 @@ func (s *Store) InvalidateCachedServices(ctx context.Context, hosts []string) er
 			return fmt.Errorf("invalidate cached services: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("commit cached-service invalidation: %w", err)
 	}
 	return nil

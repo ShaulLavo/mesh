@@ -50,7 +50,7 @@ func (s *Store) ApplyHostChanges(ctx context.Context, hostID HostID, changes Hos
 	if err := applySessionChanges(ctx, queries, hostID, params, retired); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: commit: %w", hostID, err)
 	}
 	return nil

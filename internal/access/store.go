@@ -269,7 +269,7 @@ func (s *Store) Revoke(ctx context.Context, expected uint64, subject Subject) (C
 }
 func (s *Store) change(ctx context.Context, expected uint64, subject Subject, replacement func(context.Context, *PolicyView) (*Entry, error)) (Change, error) {
 	var result Change
-	err := WithClassWriter(ctx, s.stateDir, 1500*time.Millisecond, func(wait context.Context) error {
+	err := WithClassWriter(ctx, s.stateDir, ClassWriterBudget, func(wait context.Context) error {
 		dir, err := scopeDirectory(s.stateDir, true)
 		if err != nil {
 			return err

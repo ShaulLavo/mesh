@@ -44,7 +44,9 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 	defer func() { _ = remote.Close() }()
 	stdout, stderr, err := remote.Run(ctx, command, stdin, remoteOutputLimits{Stdout: 64 << 10, Stderr: 16 << 10})
 	if err != nil {
-		return stdout, stderr, fmt.Errorf("run system SSH command: %w", err)
+		// The remote's own diagnostic is the only record of why a step failed;
+		// an exit status alone cannot be acted on.
+		return stdout, stderr, remoteCommandError("run system SSH command", err, stdout, stderr)
 	}
 	return stdout, stderr, nil
 }
@@ -54,9 +56,9 @@ func RunSystemSSH(ctx context.Context, alias, command string, stdin io.Reader) (
 // uses. command prints exactly `uname -s` and `uname -m` on stdout; any further
 // checks report on stderr and refuse with a nonzero exit.
 func SystemSSHPlatform(ctx context.Context, alias, command string) (Platform, error) {
-	stdout, stderr, err := RunSystemSSH(ctx, alias, command, nil)
+	stdout, _, err := RunSystemSSH(ctx, alias, command, nil)
 	if err != nil {
-		return Platform{}, remoteCommandError("detect remote platform", err, stdout, stderr)
+		return Platform{}, fmt.Errorf("detect remote platform: %w", err)
 	}
 	return parsePlatform(stdout)
 }
