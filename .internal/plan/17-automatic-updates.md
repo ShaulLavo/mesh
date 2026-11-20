@@ -1032,6 +1032,9 @@ Unit 13 removes the policy after the fleet runs on the host updater. `mesh
 update` fleet operations, administrator trust and configuration delivery are
 untouched.
 
+Done 2026-11-20: unit 13 removed the policy, the consent file and its idle
+check, and recorded the decision in `docs/adr/011-each-host-updates-itself.md`.
+
 ## Adopting the existing fleet
 
 v0.1.249, v0.1.255 and v0.1.257 contain no code that installs a release
@@ -1440,6 +1443,8 @@ installation-joining and cancellation tests: `coordinator.go:224`, `:266`,
 `:389` and `:394` use those functions for manual fleet operations. Add
 `docs/adr/009-each-host-updates-itself.md`. Mark plan 14's binary steps closed
 and turn `/work/reports/mesh-auto-update/PLAN.md` into a pointer to this file.
+Done 2026-11-20. ADR 009 was already taken, so the record is
+`docs/adr/011-each-host-updates-itself.md`.
 
 ## Rollout
 

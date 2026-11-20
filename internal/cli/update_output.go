@@ -323,16 +323,6 @@ func printUpdateStarted(output updateOutput, run update.Run) {
 	_, _ = fmt.Fprintf(output.diagnostic, "Update %s saved. Closing this terminal does not cancel it.\n", output.privacy.Value("update", run.ID))
 }
 
-func printAutomaticStatusOutput(out io.Writer, status update.AutomaticStatus, structured, details bool, mask *privacy.Mask) error {
-	if structured {
-		return writeAutomaticJSON(out, status)
-	}
-	if details {
-		return printUpdateDetails(out, status, mask)
-	}
-	return printStatusRows(out, automaticStatusRows(status), mask)
-}
-
 func printConfigurationStatusOutput(out io.Writer, status update.ConfigurationStatus, structured, details bool, mask *privacy.Mask) error {
 	observation := DashboardStatusObservation{State: DashboardStatusObserved, At: time.Now()}
 	source := DashboardUpdateSource{Configuration: &DashboardStatus[update.ConfigurationStatus]{Observation: observation, Value: &status}}

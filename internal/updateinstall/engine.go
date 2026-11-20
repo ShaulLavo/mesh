@@ -2,8 +2,6 @@ package updateinstall
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -121,14 +119,6 @@ func validateRequest(request Request) error {
 	if !operationPattern.MatchString(request.ID) || request.TargetID == "" || request.Generation == 0 {
 		return errors.New("invalid update operation, target identity, or generation")
 	}
-	if err := validateAutomaticReference(request.Automatic); err != nil {
-		return err
-	}
-	if request.Automatic != nil {
-		if err := automaticStableRequest(request); err != nil {
-			return err
-		}
-	}
 	if err := request.Manifest.Validate(); err != nil {
 		return err
 	}
@@ -155,7 +145,7 @@ func validateRequest(request Request) error {
 
 func sameRequest(status Status, request Request) bool {
 	return status.Request.ID == request.ID && status.Request.TargetID == request.TargetID && status.Request.Generation == request.Generation &&
-		status.Request.Manifest.Digest() == request.Manifest.Digest() && sameAutomaticReference(status.Request.Automatic, request.Automatic)
+		status.Request.Manifest.Digest() == request.Manifest.Digest()
 }
 
 func finished(phase Phase) bool {
@@ -359,60 +349,14 @@ func (e *Engine) authorize(ctx context.Context, request Request, kind Acceptance
 		ctx = context.WithValue(ctx, hostAcceptanceKey{}, true)
 	}
 	if e.cfg.AuthorizeAcceptance == nil {
-		if request.Automatic != nil || e.hostOrigin {
-			return errors.New("automatic installation requires recipient acceptance authority")
+		if e.hostOrigin {
+			return errors.New("automatic installation requires host acceptance authority")
 		}
 		return commit()
 	}
 	return e.cfg.AuthorizeAcceptance(ctx, request, kind, commit)
 }
-func sameAutomaticReference(a, b *AutomaticReference) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-func validateAutomaticReference(ref *AutomaticReference) error {
-	if ref == nil {
-		return nil
-	}
-	policy, err := hex.DecodeString(ref.PolicyID)
-	if err != nil || len(policy) != 16 || hex.EncodeToString(policy) != ref.PolicyID {
-		return errors.New("invalid automatic policy identity")
-	}
-	digest, err := hex.DecodeString(ref.Membership)
-	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != ref.Membership {
-		return errors.New("invalid automatic membership digest")
-	}
-	key, err := base64.RawURLEncoding.DecodeString(ref.CoordinatorID)
-	if err != nil || len(key) != 32 || base64.RawURLEncoding.EncodeToString(key) != ref.CoordinatorID || ref.Epoch == 0 || ref.ConsentRevision == 0 {
-		return errors.New("invalid automatic coordinator or consent reference")
-	}
-	return nil
-}
-
-// RequireAutomaticHelper checks an existing installation, without enrolling a service.
-func (e *Engine) RequireAutomaticHelper(ctx context.Context) error {
-	var installed HelperInstallation
-	if err := readHelperInstallation(ctx, e.cfg.StateDir, &installed); err != nil {
-		return fmt.Errorf("automatic updates require the existing update helper: %w", err)
-	}
-	if installed.Executable == "" || installed.ServicePath == "" {
-		return errors.New("automatic update helper receipt is incomplete")
-	}
-	return verifyFile(installed.Executable, installed.Digest)
-}
 
 func (e *Engine) settleAccepted(ctx context.Context, request Request, status Status) error {
 	return e.authorize(ctx, request, AcceptanceStage, func() error { return e.settleGate(status) })
-}
-
-func automaticStableRequest(request Request) error {
-	if request.Current.Modified {
-		return errors.New("automatic updates cannot install from a modified build")
-	}
-	if _, err := release.CompareVersions(request.Current.Version, request.Current.Version); err != nil {
-		return fmt.Errorf("automatic updates require a stable source build: %w", err)
-	}
-	return nil
 }

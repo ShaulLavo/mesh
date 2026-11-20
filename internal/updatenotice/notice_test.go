@@ -238,7 +238,7 @@ func TestSuccessfulCheckPersistsCompleteManifest(t *testing.T) {
 	}
 }
 
-func TestCheckedReleasePublicationSettlesPhysicalParents(t *testing.T) {
+func TestRecordPublicationSettlesPhysicalParents(t *testing.T) {
 	root := t.TempDir()
 	realDirectory := filepath.Join(root, "real")
 	if err := os.Mkdir(realDirectory, 0700); err != nil {
@@ -252,13 +252,13 @@ func TestCheckedReleasePublicationSettlesPhysicalParents(t *testing.T) {
 	if err := store.Record(context.Background(), testManifest("v0.2.0")); err != nil {
 		t.Fatalf("physical parent publication failed through an existing alias: %v", err)
 	}
-	checked, err := store.CheckedRelease(context.Background())
-	if err != nil || checked == nil {
-		t.Fatalf("settled full observation unavailable: %+v %v", checked, err)
+	notice, err := store.Cached()
+	if err != nil || notice.CheckedAt.IsZero() {
+		t.Fatalf("settled observation unavailable: %+v %v", notice, err)
 	}
 }
 
-func TestCheckedReleaseCannotUseUnsettledPublication(t *testing.T) {
+func TestRecordReportsUnsettledPublication(t *testing.T) {
 	store, _ := testStore(t)
 	original := syncNoticeDirectory
 	t.Cleanup(func() { syncNoticeDirectory = original })
@@ -271,13 +271,5 @@ func TestCheckedReleaseCannotUseUnsettledPublication(t *testing.T) {
 	}
 	if err := store.Record(context.Background(), testManifest("v0.2.0")); !errors.Is(err, injected) {
 		t.Fatalf("record did not inject barrier: %v", err)
-	}
-	if checked, err := store.CheckedRelease(context.Background()); !errors.Is(err, injected) || checked != nil {
-		t.Fatalf("unconfirmed cache offered admission: %+v %v", checked, err)
-	}
-	syncNoticeDirectory = original
-	checked, err := store.CheckedRelease(context.Background())
-	if err != nil || checked == nil || checked.Digest != testManifest("v0.2.0").Digest() {
-		t.Fatalf("cache settlement lost observation: %+v %v", checked, err)
 	}
 }

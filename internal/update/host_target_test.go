@@ -135,7 +135,7 @@ func testHostTargetFence(t *testing.T, kind string) {
 			t.Fatal(err)
 		}
 	}
-	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	if _, err := engine.Stage(t.Context(), state.Owned.Installation); err == nil {
 		t.Fatal("local intent fell through to ordinary manual authority")
 	}
@@ -255,7 +255,7 @@ func testTargetRecovery(t *testing.T, accepted bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+		engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 		if _, err := engine.Stage(t.Context(), state.Owned.Installation); err != nil {
 			t.Fatal(err)
 		}

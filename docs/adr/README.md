@@ -12,3 +12,6 @@ One file per decision that has a real "why". The format is in each file. Do not 
 | [006](006-tailnet-only-hosting.md) | Hosting stays inside the tailnet |
 | [007](007-innermost-detach-key.md) | `ctrl+]` detaches the innermost session |
 | [008](008-kept-routes-in-the-route-state-machine.md) | Kept routes live in the route state machine |
+| [009](009-conservative-anchor-search-ranges.md) | Anchor pages advertise conservative search ranges |
+| [010](010-shared-command-ssh.md) | Command SSH transports are shared through a private helper |
+| [011](011-each-host-updates-itself.md) | Each host updates itself |
