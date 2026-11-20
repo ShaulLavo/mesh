@@ -1214,18 +1214,31 @@ class ArtifactPinTest(unittest.TestCase):
              "workflow_run": {"id": 123}, "created_at": "2026-11-19T10:00:00Z"}
             for index, key in enumerate(installed_artifacts.KEYS, 1)]}]
 
+    def serve(self, values):
+        """Answers the run, its jobs and each name listing; the whole run's artifacts are never listed."""
+        meta, jobs, store = values[0], values[1], values[2]["artifacts"]
+        def api(endpoint):
+            if "/jobs?" in endpoint:
+                return jobs
+            if "/artifacts?name=" in endpoint:
+                name = endpoint.split("?name=", 1)[1].split("&", 1)[0]
+                return {"artifacts": [item for item in store if item["name"] == name]}
+            self.assertNotIn("/artifacts", endpoint, "verify_set must list each native name, not the whole run")
+            return meta
+        return api
+
     def test_a_rerun_upload_of_one_platform_replaces_the_older_one(self):
         values = self.inputs()
         rerun = values[2]["artifacts"][0] | {"id": 99, "created_at": "2026-11-19T11:00:00Z"}
         values[2]["artifacts"].append(rerun)
-        with patch.object(installed_artifacts, "api", side_effect=values):
+        with patch.object(installed_artifacts, "api", side_effect=self.serve(values)):
             result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         self.assertEqual(result["artifacts"][installed_artifacts.KEYS[0]]["id"], 99)
 
     def test_an_upload_repeated_by_a_shifting_listing_counts_once(self):
         values = self.inputs()
         values[2]["artifacts"].append(dict(values[2]["artifacts"][0]))
-        with patch.object(installed_artifacts, "api", side_effect=values):
+        with patch.object(installed_artifacts, "api", side_effect=self.serve(values)):
             result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         self.assertEqual(result["artifacts"][installed_artifacts.KEYS[0]]["id"], values[2]["artifacts"][0]["id"])
 
@@ -1244,11 +1257,11 @@ class ArtifactPinTest(unittest.TestCase):
                        lambda items: items[0].update(workflow_run=None)):
             values = self.inputs()
             change(values[2]["artifacts"])
-            with self.subTest(change), patch.object(installed_artifacts, "api", side_effect=values), self.assertRaises(RuntimeError):
+            with self.subTest(change), patch.object(installed_artifacts, "api", side_effect=self.serve(values)), self.assertRaises(RuntimeError):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 
     def test_complete_three_platform_set_is_pinned(self):
-        with patch.object(installed_artifacts, "api", side_effect=self.inputs()):
+        with patch.object(installed_artifacts, "api", side_effect=self.serve(self.inputs())):
             result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         self.assertEqual(set(result["artifacts"]), set(installed_artifacts.KEYS))
         self.assertEqual(result["run"], 123)
@@ -1258,12 +1271,12 @@ class ArtifactPinTest(unittest.TestCase):
     def test_pending_preparation_and_missing_or_expired_platform_fail(self):
         values = self.inputs()
         values[1]["jobs"][0].update(status="in_progress", conclusion=None)
-        with patch.object(installed_artifacts, "api", side_effect=values):
+        with patch.object(installed_artifacts, "api", side_effect=self.serve(values)):
             with self.assertRaisesRegex(RuntimeError, "not completed"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         values = self.inputs()
         values[2]["artifacts"][-1]["expired"] = True
-        with patch.object(installed_artifacts, "api", side_effect=values):
+        with patch.object(installed_artifacts, "api", side_effect=self.serve(values)):
             with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 

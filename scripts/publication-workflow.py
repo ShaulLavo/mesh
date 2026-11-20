@@ -99,19 +99,27 @@ def fetch(repository, run, directory, platform, harness, destination):
         raise ValueError("publication children require the current positive run ID")
     expected = rows(directory, platform, harness)
     prefix = "publication-task-" + platform.replace("/", "-") + "-"
+    # The whole-run listing only proves the exact set of child names; each child's
+    # current upload comes from its own name listing, which a shifting page cannot skip.
     listed = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
-    try:
-        artifacts = installed_artifacts.current_artifacts(listed, run)
-    except RuntimeError as error:
-        raise ValueError("publication children require the exact complete same-run artifact set") from error
-    selected = [item for name, item in artifacts.items() if name.startswith(prefix)]
-    if len(selected) != len(expected) or {item["name"] for item in selected} != {row["artifact"] for row in expected}:
+    names = {item["name"] for item in listed if item["name"].startswith(prefix) and not item["expired"]}
+    if names != {row["artifact"] for row in expected}:
         raise ValueError("publication children require the exact complete same-run artifact set")
-    pinned = {item["name"]: artifact_pin(item) for item in selected}
+    pinned = {name: artifact_pin(current_child(repository, run, name)) for name in sorted(names)}
     destination.mkdir(exist_ok=False)
     (destination / "artifact-pins.json").write_text(json.dumps({"run": run, "artifacts": pinned}, sort_keys=True) + "\n")
     for row in expected:
         fetch_child(repository, pinned[row["artifact"]], destination / row["artifact"])
+
+
+def current_child(repository, run, name):
+    try:
+        item = installed_artifacts.current_artifacts(installed_artifacts.named_artifacts(repository, run, name), run).get(name)
+    except RuntimeError as error:
+        raise ValueError("publication children require the exact complete same-run artifact set") from error
+    if item is None:
+        raise ValueError("publication children require the exact complete same-run artifact set")
+    return item
 
 
 def fetch_child(repository, artifact, destination):

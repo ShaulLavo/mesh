@@ -185,7 +185,10 @@ class PublicationWorkflowTests(unittest.TestCase):
         with patch.object(workflow.installed_artifacts, "pages", return_value=artifacts) as pages, \
                 patch.object(workflow.installed_storage, "archive_url", side_effect=lambda _repo, ident: locations[ident]):
             workflow.fetch("ShaulLavo/mesh", 42, self.directory, platform, self.harness, destination)
-        pages.assert_called_once_with("repos/ShaulLavo/mesh/actions/runs/42/artifacts", "artifacts")
+        names = sorted(item["name"] for item in artifacts)
+        self.assertEqual([call.args for call in pages.call_args_list],
+                         [("repos/ShaulLavo/mesh/actions/runs/42/artifacts", "artifacts")]
+                         + [(f"repos/ShaulLavo/mesh/actions/runs/42/artifacts?name={name}", "artifacts") for name in names])
         output = outputs / platform.replace("/", "-")
         cli(["aggregate", str(self.directory), platform, self.harness, "--inputs", str(destination), "--output", str(output)])
         receipt = next(destination.rglob("publication-task.json"))
@@ -221,6 +224,16 @@ class PublicationWorkflowTests(unittest.TestCase):
             workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "rerun")
         transferred = {call.args[1]["id"] for call in transfer.call_args_list}
         self.assertEqual(transferred, {99} | {item["id"] for item in artifacts[1:]})
+        # The whole-run page skipped the rerun's newer upload; the child's own name listing has it.
+        def listing(endpoint, _field):
+            if "?name=" not in endpoint:
+                return artifacts
+            name = endpoint.split("?name=", 1)[1]
+            return [item for item in artifacts + [rerun] if item["name"] == name]
+        with patch.object(workflow.installed_artifacts, "pages", side_effect=listing), \
+                patch.object(workflow, "fetch_child") as transfer:
+            workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "skipped")
+        self.assertIn(99, {call.args[1]["id"] for call in transfer.call_args_list})
         # A paged listing that shifts while jobs upload or delete can repeat a child.
         with patch.object(workflow.installed_artifacts, "pages", return_value=artifacts + [dict(artifacts[1])]), \
                 patch.object(workflow, "fetch_child") as transfer:
