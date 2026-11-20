@@ -1242,6 +1242,21 @@ equivalent read of its approved keys, and reports every missing grant as the
 exact blocker. Add a unit test with a fleet in which one predecessor does not
 approve its successor, and check that the start writes no adoption record.
 
+**Open gap: a host with predecessors needs a saved fleet it may not have.**
+`HostOrder.refresh` (`internal/update/host_order.go`) reads the daemon's
+`fleet.json` whenever the host policy has `After`. Adoption gives the Mac
+`After: [Pi, VPS]`, but only the PC had a `fleet.json`; the Pi and the VPS do
+not need one because they have no predecessors. In the same rollout the Mac
+adopted the pin at 01:49 UTC on 2026-11-20 and its host updater then stayed in
+`waiting` with `open state snapshot: open ~/.config/mesh/fleet.json: no such
+file or directory`, so it never discovered the next release. Nothing in the
+product writes `fleet.json`. To fix: the remote adoption input already carries
+the exact predecessor hosts (`require`); store them with the host policy and
+read predecessors from there, or have the start write the operation's fleet
+to each remote that has predecessors. The start's preflight should refuse an
+order it cannot satisfy. Add a test where a successor host has no saved fleet
+and check that it still reads its predecessors after adoption.
+
 ## Implementation units
 
 Each unit is one pull request with its own independent review. Hours are agent
