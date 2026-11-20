@@ -1224,6 +1224,24 @@ blocker.
 4. **A notice command.** `t3 thread send` exists on the PC. The managing
    thread's identifier is supplied at start.
 
+**Open gap: the start does not check need 3.** As of v0.1.343, `adopt start`
+probes each remote's platform and deploy tools over system SSH, but it never
+checks that every host can read the evidence of each host it requires. The
+real rollout (operation `d1ccc7ed…`, started on v0.1.335 on 2026-11-18) hit
+this: the VPS approved only the PC and the Pi, so after the Pi and the VPS
+committed v0.1.343 the Mac's adoption waited with `update evidence refused:
+... tls: bad certificate`, and the VPS logged `device key is not approved`.
+The operation had already been recorded and the Pi and the VPS had adopted,
+so nothing could be fixed inside the product. On 2026-11-20 the Mac was
+approved on the VPS with `mesh device approve-checked` there. To fix: before
+recording anything, the start checks over system SSH, for each host and each
+host in its `require` list, that the predecessor's daemon approves the
+requiring host's device key. The check uses the same read-only
+`mesh device approve-checked ID --check` on the predecessor, or an
+equivalent read of its approved keys, and reports every missing grant as the
+exact blocker. Add a unit test with a fleet in which one predecessor does not
+approve its successor, and check that the start writes no adoption record.
+
 ## Implementation units
 
 Each unit is one pull request with its own independent review. Hours are agent
