@@ -99,11 +99,11 @@ def verify_set(repository, run, source, prefix):
         raise RuntimeError("native artifact inputs require an exact run, source SHA and artifact prefix")
     metadata = api(f"repos/{repository}/actions/runs/{run}")
     verify_preparation(pages(f"repos/{repository}/actions/runs/{run}/jobs", "jobs"))
-    artifacts = current_artifacts(pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts"), run)
     result = {}
     for key in KEYS:
         expected = prefix + "-" + key
-        item = artifacts.get(expected)
+        # By name: a paged listing of the whole run can skip a rerun's newer upload.
+        item = current_artifacts(named_artifacts(repository, run, expected), run).get(expected)
         if item is None:
             raise RuntimeError("complete native artifact set requires exactly one live " + expected)
         result[key] = {"id": item["id"], "name": expected, "size": item["size_in_bytes"], "digest": item.get("digest")}

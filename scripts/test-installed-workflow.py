@@ -257,6 +257,14 @@ class WorkflowControls(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "space"):
                 workflow.fetch("owner/repo", 42, "prepared", self.root / "bundle", control)
         self.assertEqual(json.loads((control / "prepared-pin.json").read_bytes())["artifacts"]["prepared"]["id"], 13)
+        # Only the name listing is trusted: a whole-run page here has skipped the rerun's upload.
+        def listing(endpoint, _field):
+            return [artifact, rerun] if endpoint.endswith("/artifacts?name=prepared") else [artifact]
+        with patch.object(workflow.installed_artifacts, "pages", side_effect=listing), \
+                patch.object(workflow.installed_storage, "preflight", side_effect=RuntimeError("space")):
+            with self.assertRaisesRegex(RuntimeError, "space"):
+                workflow.fetch("owner/repo", 42, "prepared", self.root / "bundle", control)
+        self.assertEqual(json.loads((control / "prepared-pin.json").read_bytes())["artifacts"]["prepared"]["id"], 13)
 
     def test_missing_or_negative_ownership_retains_all_payloads(self):
         control, proof = self.root / "cohort-control", self.root / "cohort-proof"
