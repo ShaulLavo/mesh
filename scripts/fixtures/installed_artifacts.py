@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -42,8 +43,9 @@ def api(endpoint):
 
 def pages(endpoint, field):
     result, page = [], 1
+    separator = "&" if "?" in endpoint else "?"
     while True:
-        batch = api(f"{endpoint}?per_page={PAGE_SIZE}&page={page}")[field]
+        batch = api(f"{endpoint}{separator}per_page={PAGE_SIZE}&page={page}")[field]
         result.extend(batch)
         if len(batch) < PAGE_SIZE:
             return result
@@ -58,13 +60,20 @@ def verify_preparation(jobs):
             raise RuntimeError("native artifact preparation has not completed successfully for " + platform)
 
 
+def named_artifacts(repository, run, name):
+    """This run's uploads of one artifact name, listed by name so no paging is involved."""
+    return pages(f"repos/{repository}/actions/runs/{run}/artifacts?name={urllib.parse.quote(name, safe='')}", "artifacts")
+
+
 def current_artifacts(artifacts, run):
     """The newest live upload of each artifact name in this run.
 
     A failed-jobs rerun uploads a name again and the artifact list carries no
     attempt number, so the newest upload is the current attempt's. Every live
-    upload must name this run, and two equally new uploads of one name fail."""
-    live = [item for item in artifacts if not item["expired"]]
+    upload must name this run, and two equally new uploads of one name fail.
+    A paged listing taken while jobs upload or delete artifacts can repeat an
+    upload across pages, so each ID counts once."""
+    live = list({item["id"]: item for item in artifacts if not item["expired"]}.values())
     if any(artifact_run(item) != run for item in live):
         raise RuntimeError("live artifacts belong to another run")
     current = {}

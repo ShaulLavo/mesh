@@ -1222,6 +1222,22 @@ class ArtifactPinTest(unittest.TestCase):
             result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
         self.assertEqual(result["artifacts"][installed_artifacts.KEYS[0]]["id"], 99)
 
+    def test_an_upload_repeated_by_a_shifting_listing_counts_once(self):
+        values = self.inputs()
+        values[2]["artifacts"].append(dict(values[2]["artifacts"][0]))
+        with patch.object(installed_artifacts, "api", side_effect=values):
+            result = installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
+        self.assertEqual(result["artifacts"][installed_artifacts.KEYS[0]]["id"], values[2]["artifacts"][0]["id"])
+
+    def test_named_listing_queries_one_name_and_keeps_paging(self):
+        full = [{"id": number} for number in range(installed_artifacts.PAGE_SIZE)]
+        with patch.object(installed_artifacts, "api", side_effect=[{"artifacts": full}, {"artifacts": [{"id": 99}]}]) as api:
+            listed = installed_artifacts.named_artifacts("ShaulLavo/mesh", 123, "installed prepared/x")
+        self.assertEqual(len(listed), installed_artifacts.PAGE_SIZE + 1)
+        self.assertEqual([call.args[0] for call in api.call_args_list],
+                         [f"repos/ShaulLavo/mesh/actions/runs/123/artifacts?name=installed%20prepared%2Fx&per_page={installed_artifacts.PAGE_SIZE}&page={page}"
+                          for page in (1, 2)])
+
     def test_tied_or_foreign_uploads_fail_the_native_set(self):
         for change in (lambda items: items.append(items[0] | {"id": 99}),
                        lambda items: items[0].update(workflow_run={"id": 124}),

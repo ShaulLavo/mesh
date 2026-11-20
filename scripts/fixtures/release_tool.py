@@ -148,8 +148,11 @@ def download(repository, run, source, role, key, destination, artifact=None):
     metadata = installed_artifacts.api(f"repos/{repository}/actions/runs/{run}")
     if role == "source" and metadata["head_sha"] != source:
         raise ValueError("SOURCE tool artifact run has another source")
-    assets = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
     name = f"release-tool-{role}-{key}"
+    # Listed by name, and each ID once: a paged listing of the whole run can
+    # repeat or skip uploads while other jobs upload or delete artifacts.
+    listed = installed_artifacts.named_artifacts(repository, run, name)
+    assets = list({item["id"]: item for item in listed}.values())
     item = current_artifact(assets, name, int(run)) if artifact is None else named_artifact(assets, name, int(run), artifact)
     pin = {"id": item["id"], "size": item["size_in_bytes"], "digest": item.get("digest")}
     installed_artifacts.require_archive_pin(pin)

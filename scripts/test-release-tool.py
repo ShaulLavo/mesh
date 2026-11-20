@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import sys
 import tempfile
@@ -160,6 +161,22 @@ class DownloadTests(unittest.TestCase):
     def download(self, assets, *artifact):
         with patch.object(release_tool.installed_artifacts, "pages", return_value=assets):
             release_tool.download("ShaulLavo/mesh", self.RUN, SOURCE, "source", "linux-amd64", self.root / "tool", *artifact)
+
+    def test_an_upload_repeated_by_a_shifting_listing_counts_once(self):
+        listed = self.artifact(7, "2026-11-19T11:05:32Z")
+        for artifact in ((), ("7",)):
+            with self.subTest(artifact):
+                self.fetched.clear()
+                shutil.rmtree(self.root / "tool", ignore_errors=True)
+                self.download([listed, dict(listed)], *artifact)
+                self.assertEqual([item for item, _ in self.fetched], [7])
+
+    def test_the_tool_is_listed_by_its_name(self):
+        with patch.object(release_tool.installed_artifacts, "api", side_effect=[{"head_sha": SOURCE},
+                                                                               {"artifacts": [self.artifact(7, "2026-11-19T11:05:32Z")]}]) as api:
+            release_tool.download("ShaulLavo/mesh", self.RUN, SOURCE, "source", "linux-amd64", self.root / "tool")
+        self.assertEqual(api.call_args_list[1].args[0],
+                         f"repos/ShaulLavo/mesh/actions/runs/{self.RUN}/artifacts?name=release-tool-source-linux-amd64&per_page=30&page=1")
 
     def test_the_producer_reported_artifact_is_taken_even_when_not_newest(self):
         rebuilt = [self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:11:58Z")]
