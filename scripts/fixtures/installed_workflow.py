@@ -43,7 +43,7 @@ def selection(bundle, profile):
 
 def fetch(repository, run, name, destination, output):
     output.mkdir(parents=True, exist_ok=True)
-    artifacts = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
+    artifacts = installed_artifacts.named_artifacts(repository, run, name)
     try:
         item = installed_artifacts.current_artifacts(artifacts, int(run)).get(name)
     except RuntimeError as error:

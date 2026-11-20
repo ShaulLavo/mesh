@@ -221,6 +221,11 @@ class PublicationWorkflowTests(unittest.TestCase):
             workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "rerun")
         transferred = {call.args[1]["id"] for call in transfer.call_args_list}
         self.assertEqual(transferred, {99} | {item["id"] for item in artifacts[1:]})
+        # A paged listing that shifts while jobs upload or delete can repeat a child.
+        with patch.object(workflow.installed_artifacts, "pages", return_value=artifacts + [dict(artifacts[1])]), \
+                patch.object(workflow, "fetch_child") as transfer:
+            workflow.fetch("repo", 42, self.directory, "linux/amd64", self.harness, self.root / "repeated")
+        self.assertEqual(sorted(call.args[1]["id"] for call in transfer.call_args_list), sorted(item["id"] for item in artifacts))
 
     def test_archive_size_digest_and_storage_failures_propagate_and_remove_transfer_scratch(self):
         row = workflow.rows(self.directory, "linux/amd64", self.harness)[0]
