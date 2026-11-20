@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -24,14 +25,21 @@ import (
 type RunRequest struct {
 	Args     []string `json:"args,omitempty"`
 	Terminfo []byte   `json:"terminfo,omitempty"`
+	Cwd      string   `json:"cwd,omitempty"`
+	Env      []string `json:"env,omitempty"`
 }
 
 func parseRun(raw string) (RunRequest, error) {
+	return ParseRunRequest([]byte(strings.TrimPrefix(raw, "run ")))
+}
+
+// ParseRunRequest validates the structured launch at the local and remote boundaries.
+func ParseRunRequest(raw []byte) (RunRequest, error) {
 	var request RunRequest
 	if len(raw) > 256<<10 {
 		return request, errors.New("SSH command exceeds 256 KiB")
 	}
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(raw, "run ")), &request); err != nil {
+	if err := json.Unmarshal(raw, &request); err != nil {
 		return request, fmt.Errorf("decode SSH command: %w", err)
 	}
 	for _, arg := range request.Args {
@@ -44,6 +52,15 @@ func parseRun(raw string) (RunRequest, error) {
 	}
 	if len(request.Terminfo) > terminfo.MaximumBytes {
 		return request, errors.New("SSH terminal definition is too large")
+	}
+	if strings.ContainsRune(request.Cwd, 0) {
+		return request, errors.New("SSH working directory contains a NUL byte")
+	}
+	for _, value := range request.Env {
+		name, _, ok := strings.Cut(value, "=")
+		if !ok || name == "" || strings.ContainsRune(value, 0) {
+			return request, errors.New("SSH environment requires nonempty KEY=VALUE entries without NUL bytes")
+		}
 	}
 	return request, nil
 }
@@ -68,6 +85,9 @@ func runProcess(channel charmssh.Session, state *windowState, request RunRequest
 	}
 	defer input.Close()  //nolint:errcheck // process result owns the exit status
 	defer writer.Close() //nolint:errcheck // release relay on every exit
+	if err := ctx.Err(); err != nil {
+		return 1, fmt.Errorf("SSH launch canceled: %w", err)
+	}
 	var master *os.File
 	if state != nil {
 		size := state.size()
@@ -177,7 +197,20 @@ func prepareProcess(ctx context.Context, state *windowState, request RunRequest)
 		return nil, fmt.Errorf("find SSH account home: %w", err)
 	}
 	command.Dir = home
-	command.Env = os.Environ()
+	if request.Cwd != "" {
+		command.Dir = request.Cwd
+		if !filepath.IsAbs(command.Dir) {
+			command.Dir = filepath.Join(home, command.Dir)
+		}
+	}
+	directory, err := os.Stat(command.Dir) //nolint:gosec // An approved caller explicitly selects its remote working directory.
+	if err != nil {
+		return nil, fmt.Errorf("SSH working directory %q is unavailable: %w", command.Dir, err)
+	}
+	if !directory.IsDir() {
+		return nil, fmt.Errorf("SSH working directory %q is not a directory", command.Dir)
+	}
+	command.Env = append(os.Environ(), request.Env...)
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if state != nil {
 		command.Env = append(command.Env, "TERM="+state.term)
