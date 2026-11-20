@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stand-in for apt-get that records its arguments, one per line, in
+# $APT_RECORD and succeeds. Lets `playwright install-deps --dry-run` report
+# the exact package list it would install without touching apt.
+printf '%s\n' "$@" > "$APT_RECORD"
