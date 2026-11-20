@@ -1,0 +1,63 @@
+name: Cached apt packages
+description: >-
+  Install Ubuntu packages from a cache of apt lists and .deb files without
+  touching the network, and use the archive only when the cache is cold or
+  does not cover the request.
+inputs:
+  packages:
+    description: Whitespace-separated package names, passed to apt-get install as given
+    required: true
+  options:
+    description: Extra apt-get install options, such as --no-install-recommends
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Resolve apt cache identity
+      id: identity
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+      run: |
+        set -euo pipefail
+        # Word-split on purpose: the hash covers the normalized request.
+        request=$(printf '%s\n' $OPTIONS -- $PACKAGES | sha256sum | cut -c1-16)
+        prefix="apt-v1-${ImageOS:-unknown}-${RUNNER_ARCH}-$request-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "key=$prefix${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TEMP/apt-packages" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      id: restore
+      with:
+        path: ${{ steps.identity.outputs.dir }}
+        key: ${{ steps.identity.outputs.key }}
+        # Another runner image with the same request is still worth an
+        # offline try; install.sh falls back to the archive if it falls short.
+        restore-keys: ${{ steps.identity.outputs.prefix }}
+    - name: Use the main archive on any runner mirror
+      shell: bash
+      run: |
+        # The runner's regional mirror (Azure or AWS, varying by image) can
+        # stall for hours; send apt to the main archive whatever host it is.
+        # This also keeps cached list names stable across runner images.
+        for file in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+          [ -f "$file" ] || continue
+          sudo sed -i -E 's#https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$file"
+        done
+        grep -rhoE 'https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | sort -u | sed 's/^/apt archive host: /'
+    - name: Install packages
+      id: install
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        OPTIONS: ${{ inputs.options }}
+      run: |
+        # Word-split on purpose: both inputs are lists.
+        "$GITHUB_ACTION_PATH/install.sh" "${{ steps.identity.outputs.dir }}" $OPTIONS $PACKAGES
+    - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      if: steps.restore.outputs.cache-hit != 'true' && steps.install.outputs.source == 'network'
+      with:
+        path: ${{ steps.identity.outputs.dir }}
+        key: ${{ steps.identity.outputs.key }}

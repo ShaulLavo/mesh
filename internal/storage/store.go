@@ -310,7 +310,7 @@ func (s *Store) ReconcileHost(ctx context.Context, host Host, observed []Observe
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("storage: reconcile host %s: commit: %w", hostID, err)
 	}
 	return nil
@@ -494,7 +494,7 @@ func ensureAdvisoryVersionTable(ctx context.Context, db *sql.DB) error {
 	if err := store.Insert(ctx, tx, database.InsertRequest{Version: 0}); err != nil {
 		return fmt.Errorf("record initial migration version: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitTx(ctx, tx); err != nil {
 		return fmt.Errorf("commit migration history setup: %w", err)
 	}
 	return nil

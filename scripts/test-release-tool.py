@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from fixtures import release_documents, release_tool
 
@@ -123,6 +124,79 @@ class ReleaseToolTests(unittest.TestCase):
 
     def test_artifact_modes_are_explicit(self):
         self.assertEqual(stat.S_IMODE(self.tool.stat().st_mode), 0o755)
+
+
+class DownloadTests(unittest.TestCase):
+    """download() against a faked run artifact list, with real extraction and verification."""
+    RUN = 42
+    NAME = "release-tool-source-linux-amd64"
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="release-tool-download-")
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        tool = fake_tool(self.root / "built")
+        self.enterContext(patch.dict(os.environ, {"TOOL_CALLS": str(self.root / "calls"), "TOOL_SOURCE": SOURCE,
+            "TOOL_TARGET": json.dumps(release_tool.native_target())}))
+        release_tool.record(tool.parent, SOURCE, self.RUN, "source", release_tool.native_target())
+        self.archive = self.root / "tool.zip"
+        with zipfile.ZipFile(self.archive, "w") as package:
+            for name in ("mesh-release-sign", "release-tool.json"):
+                package.write(tool.parent / name, name)
+        self.digest = "sha256:" + hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        self.fetched = []
+        self.enterContext(patch.object(release_tool.installed_artifacts, "api", return_value={"head_sha": SOURCE}))
+        self.enterContext(patch.object(release_tool.installed_storage, "archive_url", side_effect=lambda _repository, item: item))
+        self.enterContext(patch.object(release_tool.installed_artifacts, "fetch_archive", side_effect=self.fetch))
+
+    def fetch(self, item, archive, pin):
+        self.fetched.append((item, pin))
+        archive.write_bytes(self.archive.read_bytes())
+
+    def artifact(self, identifier, created, run=RUN, **changes):
+        return {"id": identifier, "name": self.NAME, "expired": False, "created_at": created,
+                "size_in_bytes": self.archive.stat().st_size, "digest": self.digest, "workflow_run": {"id": run}} | changes
+
+    def download(self, assets):
+        with patch.object(release_tool.installed_artifacts, "pages", return_value=assets):
+            release_tool.download("ShaulLavo/mesh", self.RUN, SOURCE, "source", "linux-amd64", self.root / "tool")
+
+    def test_a_single_live_artifact_is_downloaded(self):
+        self.download([self.artifact(7, "2026-11-19T11:05:32Z")])
+        self.assertEqual([item for item, _ in self.fetched], [7])
+
+    def test_a_failed_jobs_rerun_takes_the_current_attempts_artifact(self):
+        rebuilt = [self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:11:58Z")]
+        self.download(rebuilt)
+        self.assertEqual(self.fetched, [(9, {"id": 9, "size": self.archive.stat().st_size, "digest": self.digest})])
+        self.assertEqual(json.loads((self.root / "tool/artifact-pin.json").read_text())["id"], 9)
+
+    def test_an_expired_newer_upload_is_not_current(self):
+        self.download([self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:11:58Z", expired=True)])
+        self.assertEqual([item for item, _ in self.fetched], [7])
+
+    def test_an_artifact_from_another_run_is_rejected(self):
+        for assets in ([self.artifact(7, "2026-11-19T11:05:32Z", run=43)],
+                       [self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:11:58Z", run=43)]):
+            with self.subTest(len(assets)), self.assertRaisesRegex(ValueError, "same-run artifact"):
+                self.download(assets)
+        self.assertEqual(self.fetched, [])
+
+    def test_no_artifact_or_two_equally_new_uploads_are_rejected(self):
+        for assets in ([], [self.artifact(7, "2026-11-19T11:05:32Z"), self.artifact(9, "2026-11-19T11:05:32Z")]):
+            with self.subTest(len(assets)), self.assertRaisesRegex(ValueError, "same-run artifact"):
+                self.download(assets)
+        self.assertEqual(self.fetched, [])
+
+    def test_the_current_artifact_is_still_verified_against_its_run_source_and_digests(self):
+        api = release_tool.installed_artifacts.api
+        api.return_value = {"head_sha": "b" * 40}
+        with self.assertRaisesRegex(ValueError, "another source"):
+            self.download([self.artifact(9, "2026-11-19T11:11:58Z")])
+        api.return_value = {"head_sha": SOURCE}
+        with self.assertRaisesRegex(RuntimeError, "pinned archive SHA-256"):
+            self.download([self.artifact(9, "2026-11-19T11:11:58Z", digest="sha256:short")])
+        self.assertEqual(self.fetched, [])
 
 
 if __name__ == "__main__":

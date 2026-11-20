@@ -137,13 +137,17 @@ func meshSSHHostKeyCallback(expected string) (ssh.HostKeyCallback, error) {
 	return ssh.FixedHostKey(public), nil
 }
 func dialMeshSSH(ctx context.Context, host HostRecord, stateDir string, port uint16) (*ssh.Client, error) {
-	callback, err := meshSSHHostKeyCallback(host.MeshIdentity)
-	if err != nil {
-		return nil, err
-	}
 	_, key, err := identity.LoadPrivate(stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("load Mesh SSH identity: %w", err)
+	}
+	return dialMeshSSHWithKey(ctx, host, key, port)
+}
+
+func dialMeshSSHWithKey(ctx context.Context, host HostRecord, key ed25519.PrivateKey, port uint16) (*ssh.Client, error) {
+	callback, err := meshSSHHostKeyCallback(host.MeshIdentity)
+	if err != nil {
+		return nil, err
 	}
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
