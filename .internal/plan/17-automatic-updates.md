@@ -1257,6 +1257,17 @@ to each remote that has predecessors. The start's preflight should refuse an
 order it cannot satisfy. Add a test where a successor host has no saved fleet
 and check that it still reads its predecessors after adoption.
 
+**Open gap: the notice cannot say what actually happened.** The notice argv is
+fixed when the operation starts, so its text can only name what the operator
+knew then. In the same rollout the operator wrote the pin, v0.1.335, into the
+message, and the notice delivered on 2026-11-20 at 03:19 UTC said the Pi, the
+VPS and the Mac had adopted v0.1.335 while all three were on v0.1.343. To fix:
+when the helper runs the notice, pass the facts it checked through the
+environment, for example `MESH_ADOPTION_PIN_VERSION`, the predecessors'
+committed versions, and the activation time after the lead, and document them
+for `--notice`. Notice commands that wrap `t3 thread send` can then include
+them. Add a test that the notice process receives these values.
+
 ## Implementation units
 
 Each unit is one pull request with its own independent review. Hours are agent
