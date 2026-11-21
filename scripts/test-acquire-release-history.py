@@ -60,15 +60,49 @@ class HistoryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest changed"):
                 HISTORY.cache_asset(self.asset, self.cache, 100)
 
-    def test_release_and_asset_api_pages_are_both_exhausted(self):
-        result = mock.Mock(stdout=json.dumps([[{"id": 1}], [{"id": 2}]]).encode())
-        with mock.patch.object(HISTORY.subprocess, "run", return_value=result) as command:
-            self.assertEqual(HISTORY.api("endpoint"), [{"id": 1}, {"id": 2}])
-            self.assertIn("--paginate", command.call_args.args[0])
-            self.assertIn("--slurp", command.call_args.args[0])
+    def page(self, items):
+        return mock.Mock(stdout=json.dumps(items).encode())
+
+    def server_error(self, status):
+        return HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], stderr=f"gh: HTTP {status}: Server Error".encode())
+
+    def test_api_reads_pages_until_a_partial_page(self):
+        pages = [self.page([{"id": 1}, {"id": 2}]), self.page([{"id": 3}, {"id": 4}]), self.page([{"id": 5}])]
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=pages) as command:
+            self.assertEqual(HISTORY.api("endpoint", 2), [{"id": number} for number in range(1, 6)])
+        self.assertEqual([call.args[0] for call in command.call_args_list],
+                         [["gh", "api", f"endpoint?per_page=2&page={page}"] for page in (1, 2, 3)])
+
+    def test_api_retries_server_errors_on_the_failed_page_only(self):
+        outcomes = [self.page([{"id": 1}]), self.server_error(502), self.server_error(503), self.page([])]
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=outcomes) as command, \
+                mock.patch.object(HISTORY.time, "sleep") as sleep:
+            self.assertEqual(HISTORY.api("endpoint", 1), [{"id": 1}])
+        self.assertEqual([call.args[0][2] for call in command.call_args_list],
+                         ["endpoint?per_page=1&page=1"] + ["endpoint?per_page=1&page=2"] * 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], list(HISTORY.SERVER_ERROR_RETRIES[:2]))
+
+    def test_api_gives_up_after_bounded_server_error_retries(self):
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=self.server_error(502)) as command, \
+                mock.patch.object(HISTORY.time, "sleep"):
+            with self.assertRaises(HISTORY.subprocess.CalledProcessError) as caught:
+                HISTORY.api("endpoint", 30)
+        self.assertEqual(command.call_count, len(HISTORY.SERVER_ERROR_RETRIES) + 1)
+        self.assertIn("HTTP 502", caught.exception.__notes__[1])
+
+    def test_api_does_not_retry_client_errors_or_timeouts(self):
+        client = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], stderr=b"gh: HTTP 404: Not Found")
+        timeout = HISTORY.subprocess.TimeoutExpired(["gh", "api"], 120)
+        for error in (client, timeout):
+            with mock.patch.object(HISTORY.subprocess, "run", side_effect=error) as command, \
+                    mock.patch.object(HISTORY.time, "sleep") as sleep:
+                with self.assertRaises(type(error)):
+                    HISTORY.api("endpoint", 30)
+            command.assert_called_once()
+            sleep.assert_not_called()
 
     def test_api_failure_keeps_original_exception_and_captured_streams(self):
-        failure = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], output=b"partial page", stderr=b"HTTP 503")
+        failure = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], output=b"partial page", stderr=b"HTTP 404")
         timeout = HISTORY.subprocess.TimeoutExpired(["gh", "api"], 120, output=b"partial timeout", stderr=b"connection pending")
         for error in (failure, timeout):
             with mock.patch.object(HISTORY.subprocess, "run", side_effect=error):
@@ -76,7 +110,7 @@ class HistoryTests(unittest.TestCase):
 
     def assert_api_failure(self, error):
         with self.assertRaises(type(error)) as caught:
-            HISTORY.api("endpoint")
+            HISTORY.api("endpoint", 30)
         self.assertIs(caught.exception, error)
         self.assertIn(error.stdout.decode(), error.__notes__[0])
         self.assertIn(error.stderr.decode(), error.__notes__[1])
@@ -85,7 +119,7 @@ class HistoryTests(unittest.TestCase):
         error = HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], output=b"x" * 40000, stderr=b"\xff")
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=error):
             with self.assertRaises(HISTORY.subprocess.CalledProcessError):
-                HISTORY.api("endpoint")
+                HISTORY.api("endpoint", 30)
         self.assertTrue(error.__notes__[0].endswith(" [truncated]"))
         self.assertLess(len(error.__notes__[0]), 33000)
         self.assertIn("\ufffd", error.__notes__[1])
@@ -98,7 +132,7 @@ class HistoryTests(unittest.TestCase):
             release, _ = HISTORY.acquire_release(item, self.cache, documents, threading.Event())
             self.assertEqual(len(release["assets"]), 101)
             self.assertEqual(release["assets"][-1]["name"], "asset-100.txt")
-            self.assertEqual(api.call_args.args[0], "repos/ShaulLavo/mesh/releases/42/assets?per_page=100")
+            self.assertEqual(api.call_args.args, ("repos/ShaulLavo/mesh/releases/42/assets", HISTORY.ASSET_PAGE_SIZE))
 
     def test_small_embedded_asset_list_does_not_skip_the_authoritative_index(self):
         assets = [{"name": "retained-page.json", "digest": "sha256:" + self.digest}]

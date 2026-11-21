@@ -73,14 +73,6 @@ const (
 
 type Acceptance func(context.Context, Request, AcceptanceKind, func() error) error
 
-type AutomaticReference struct {
-	PolicyID        string `json:"policyId"`
-	CoordinatorID   string `json:"coordinatorId"`
-	Membership      string `json:"membership"`
-	Epoch           uint64 `json:"epoch"`
-	ConsentRevision uint64 `json:"consentRevision"`
-}
-
 type Config struct {
 	AuthorizeAcceptance Acceptance
 	StateDir            string
@@ -96,12 +88,11 @@ type Config struct {
 }
 
 type Request struct {
-	Automatic  *AutomaticReference `json:"automatic,omitempty"`
-	ID         string              `json:"id"`
-	TargetID   string              `json:"targetId"`
-	Generation uint64              `json:"generation"`
-	Manifest   release.Manifest    `json:"manifest"`
-	Current    release.Build       `json:"current"`
+	ID         string           `json:"id"`
+	TargetID   string           `json:"targetId"`
+	Generation uint64           `json:"generation"`
+	Manifest   release.Manifest `json:"manifest"`
+	Current    release.Build    `json:"current"`
 }
 
 type Settings struct {

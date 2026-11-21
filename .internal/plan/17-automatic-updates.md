@@ -1032,6 +1032,9 @@ Unit 13 removes the policy after the fleet runs on the host updater. `mesh
 update` fleet operations, administrator trust and configuration delivery are
 untouched.
 
+Done 2026-11-20: unit 13 removed the policy, the consent file and its idle
+check, and recorded the decision in `docs/adr/011-each-host-updates-itself.md`.
+
 ## Adopting the existing fleet
 
 v0.1.249, v0.1.255 and v0.1.257 contain no code that installs a release
@@ -1484,6 +1487,8 @@ installation-joining and cancellation tests: `coordinator.go:224`, `:266`,
 `:389` and `:394` use those functions for manual fleet operations. Add
 `docs/adr/009-each-host-updates-itself.md`. Mark plan 14's binary steps closed
 and turn `/work/reports/mesh-auto-update/PLAN.md` into a pointer to this file.
+Done 2026-11-20. ADR 009 was already taken, so the record is
+`docs/adr/011-each-host-updates-itself.md`.
 
 ## Rollout
 
@@ -1718,6 +1723,30 @@ capture. Keep deadlines unchanged and label every traced result diagnostic
 only. If the capture still does not identify the failing call, stop and report.
 This does not add a normal acceptance cycle or make the setup repair wait for
 the observer unit.
+
+### Darwin bootstrap adoption stalled in a prepared cohort
+
+PR 497 run 44499875809 attempt 2,
+[job 135612317670](https://github.com/ShaulLavo/mesh/actions/runs/44499875809/job/135612317670)
+("prepared-cohort (darwin/arm64, waypoint) / Complete profile (darwin/arm64,
+waypoint, none)", hosted macOS, harness `512d714b`, preparation `0786d7a7`).
+Groups 0 to 3 took 75.1, 72.5, 76.8 and 78.8 seconds. Group 4's bootstrap
+adoption of v0.1.9001 stayed in phase `waiting` until the job's shared
+20-minute installed fixture cap expired 875 seconds into the group. The
+prepared origin accepted no connection in its last 7 minutes
+(`producer-logs/prepared-origin.log`, goroutine 24 "IO wait, 7 minutes"), so
+the helper stopped fetching early in the group. The daemon log shows only its
+periodic Tailscale rediscovery. The stuck helper step is unknown: the job kept
+no helper output and lost the last adoption status when the cap fired while
+the error text was being built. Across the prepared-cohort Complete profile
+jobs of the 30 previous CI runs, 36 passed and none failed.
+
+The harness now stops the bootstrap wait 15 seconds short of the cap and keeps
+`adoption-wait-failure.json` (the last status, `host-adoption.json`,
+`host-update.json`, the installation journal and helper receipt) and
+`helper-service.txt` (launchd `print`, or systemd status and journal) next to
+the case's other logs. The fixture proxy also no longer keeps one goroutine
+per finished tunnel. On the next occurrence, start from those two files.
 
 `/work/reports/mesh-auto-update/design-evidence/` holds the manifest fetcher,
 the graph analysis, its output for v0.1.306, and the PC's read-only inventory.

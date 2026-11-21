@@ -158,24 +158,11 @@ func TestHostLedgerUsesBoundedEntryFilesAndPages(t *testing.T) {
 	}
 }
 
-func TestHostAdoptionConfirmationAndLegacyConsentYield(t *testing.T) {
-	for _, kind := range []string{"confirmation", "consent"} {
-		t.Run(kind, func(t *testing.T) { testHostOtherAuthority(t, kind) })
-	}
-}
-
-func testHostOtherAuthority(t *testing.T, kind string) {
+func TestHostAdoptionAwaitingConfirmationYield(t *testing.T) {
 	f := newHostFixture(t)
-	if kind == "confirmation" {
-		adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: discoveryDigest(f.files[f.current.Version+"/"+release.UpdateMetadataAssetName])}
-		if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		consent := RecipientConsent{Schema: 1, Revision: 1, LocalHostID: strings.Repeat("A", 43), CoordinatorID: strings.Repeat("A", 43), Membership: strings.Repeat("a", 64), Epoch: 1, Enabled: true}
-		if err := f.store.writeAuthority("automatic-consent.json", consent); err != nil {
-			t.Fatal(err)
-		}
+	adoption := HostAdoption{Schema: 1, Operation: strings.Repeat("a", 32), Pin: discoveryDigest(f.files[f.current.Version+"/"+release.UpdateMetadataAssetName])}
+	if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
+		t.Fatal(err)
 	}
 	f.tick()
 	if f.helperCalls != 0 {
@@ -245,7 +232,7 @@ func TestHostAdoptionConfirmationFencesRealGrant(t *testing.T) {
 	if err := f.store.writeAuthority("host-adoption.json", adoption); err != nil {
 		t.Fatal(err)
 	}
-	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	if _, err := engine.Stage(t.Context(), owned.Installation); err != nil {
 		t.Fatal(err)
 	}

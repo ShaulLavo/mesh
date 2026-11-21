@@ -293,7 +293,7 @@ func (u *HostUpdater) reserveTarget(ctx context.Context, policy HostPolicy, prio
 		}
 		generation = journal.Request.Generation + 1
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return HostTargetStatus{}, err
 	}

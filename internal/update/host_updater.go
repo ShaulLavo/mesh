@@ -522,7 +522,7 @@ func (u *HostUpdater) verifyOwned(ctx context.Context, owned OwnedRequest) (host
 }
 
 func (u *HostUpdater) acceptWorkers(proof hostHopProof) updateinstall.Acceptance {
-	authorize := u.Store.AuthorizeHostAcceptance(nil)
+	authorize := u.Store.AuthorizeHostAcceptance()
 	return func(ctx context.Context, request updateinstall.Request, kind updateinstall.AcceptanceKind, commit func() error) error {
 		if err := u.checkAcceptanceWorkers(ctx, request, proof.Workers); err != nil {
 			return err
@@ -754,7 +754,7 @@ func (u *HostUpdater) issue(ctx context.Context, state HostUpdate, policy HostPo
 	if exists && journal.Request.Generation == math.MaxUint64 {
 		return u.attention(ctx, state, "generation", errors.New("installation generation exhausted"))
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return err
 	}

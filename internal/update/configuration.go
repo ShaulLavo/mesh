@@ -137,6 +137,14 @@ type ConfigurationRecord struct {
 	Current      *ConfigurationChange    `json:"current,omitempty"`
 	LastMutation *MutationReceipt        `json:"lastMutation,omitempty"`
 }
+type MutationReceipt struct {
+	ID               string `json:"id"`
+	ActorID          string `json:"actorId"`
+	Digest           string `json:"digest"`
+	ExpectedRevision uint64 `json:"expectedRevision"`
+	ResultRevision   uint64 `json:"resultRevision"`
+	Attempt          uint64 `json:"attempt"`
+}
 type ConfigurationStatus struct {
 	Revision uint64               `json:"revision"`
 	Change   *ConfigurationChange `json:"change"`

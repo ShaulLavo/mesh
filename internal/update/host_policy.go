@@ -102,15 +102,9 @@ func (s *Store) SetHostPolicy(ctx context.Context, expected uint64, policy HostP
 	return policy, s.writeAuthority("host-policy.json", policy)
 }
 
-func (s *Store) AuthorizeHostAcceptance(manual updateinstall.Acceptance) updateinstall.Acceptance {
-	return func(ctx context.Context, request updateinstall.Request, kind updateinstall.AcceptanceKind, commit func() error) error {
+func (s *Store) AuthorizeHostAcceptance() updateinstall.Acceptance {
+	return func(ctx context.Context, request updateinstall.Request, _ updateinstall.AcceptanceKind, commit func() error) error {
 		if !updateinstall.IsHostAcceptance(ctx) {
-			if manual != nil {
-				return manual(ctx, request, kind, commit)
-			}
-			if request.Automatic != nil {
-				return errors.New("update: coordinator acceptance unavailable")
-			}
 			return commit()
 		}
 		unlock, err := s.lockContext(ctx)
@@ -151,15 +145,8 @@ func (s *Store) authorizeHost(request updateinstall.Request, commit func() error
 }
 
 func (s *Store) hostYield() (string, error) {
-	consent, err := s.recipientConsent()
-	if err != nil {
-		return "", err
-	}
-	if consent.Enabled {
-		return "coordinator consent enabled", nil
-	}
 	var adoption HostAdoption
-	err = s.readAuthority("host-adoption.json", &adoption)
+	err := s.readAuthority("host-adoption.json", &adoption)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
