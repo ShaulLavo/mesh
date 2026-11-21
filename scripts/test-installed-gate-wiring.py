@@ -13,6 +13,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 PIN = "de505f5b83d7f53a08c5663d1cdf431b96af75b4"
+RELEASE_PIN = "9f30ad52593969dd9a6c49133885750fdb7f893a"
 WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()
@@ -54,9 +55,9 @@ class InstalledGateWiringTests(unittest.TestCase):
             observed = json.loads((output / "harness-source.json").read_text())
             self.assertEqual((observed["actual"], observed["expected"]), (source, source))
 
-    def assert_consumer(self, source, producer):
-        self.assertEqual(field(source, "uses"), f"ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{PIN}")
-        for setting in (f"harness_source: {PIN}", "worker_artifact_prefix: update-native",
+    def assert_consumer(self, source, producer, pin):
+        self.assertEqual(field(source, "uses"), f"ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{pin}")
+        for setting in (f"harness_source: {pin}", "worker_artifact_prefix: update-native",
                         f"worker_artifact_run: ${{{{ fromJSON(needs.{producer}.outputs.worker_artifact_run) }}}}",
                         f"worker_artifact_source: ${{{{ needs.{producer}.outputs.worker_artifact_source }}}}"):
             self.assertIn(setting, source)
@@ -74,7 +75,7 @@ class InstalledGateWiringTests(unittest.TestCase):
 
     def test_normal_proofs_run_once_after_successful_preparation(self):
         installed = GATE.job(CI, "installed-catchup")
-        self.assert_consumer(installed, "update-proofs")
+        self.assert_consumer(installed, "update-proofs", PIN)
         self.assertEqual(field(installed, "needs"), "[changes, update-proofs]")
         self.assertEqual(field(installed, "if"), field(GATE.job(CI, "update-proofs"), "if"))
         self.assertEqual(CI.count(f"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{PIN}"), 1)
@@ -120,7 +121,7 @@ class InstalledGateWiringTests(unittest.TestCase):
         sections = re.split(r"^      - ", prepare, flags=re.M)
         self.assertNotIn("continue-on-error", sections[0])
         for step in sections[1:]:
-            if step.startswith("name: Cache this exact native preparation for parallel proof shards\n"):
+            if step.startswith("name: Cache this exact native preparation for parallel proofs\n"):
                 self.assertIn("uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25", step)
                 self.assertIn("continue-on-error: true", step)
                 continue
@@ -129,7 +130,7 @@ class InstalledGateWiringTests(unittest.TestCase):
     def test_native_build_upload_and_job_failures_cannot_be_optional(self):
         prepare = GATE.job(PROOFS, "prepare")
         for marker in ("    needs: policy", "      - name: Build the native candidate and startup-fault fixture once",
-                       "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1"):
+                       "      - id: native-upload"):
             changed = prepare.replace(marker, marker + "\n        continue-on-error: true", 1)
             with self.assertRaises(AssertionError):
                 self.assert_only_cache_save_is_optional(changed)
@@ -140,7 +141,7 @@ class InstalledGateWiringTests(unittest.TestCase):
 
     def test_publication_uses_the_actual_signed_reserved_draft(self):
         installed = GATE.job(RELEASE, "publication-native")
-        self.assert_consumer(installed, "prove-transition")
+        self.assert_consumer(installed, "prove-transition", RELEASE_PIN)
         self.assertEqual(field(installed, "needs"), "[reserve, prove-transition, publish]")
         self.assertEqual(field(installed, "if"), field(GATE.job(RELEASE, "publish"), "if"))
         for setting in ("publication_only: true", "release_version: ${{ needs.reserve.outputs.version }}",

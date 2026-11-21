@@ -66,6 +66,8 @@ jobs:
     needs: reserve
     if: needs.reserve.outputs.action == 'publish'
     runs-on: ubuntu-24.04
+    outputs:
+      candidate-artifact: ${{ steps.candidate-upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -102,11 +104,13 @@ jobs:
           SOURCE: ${{ needs.reserve.outputs.source }}
           BASELINE_ASSETS: ${{ needs.reserve.outputs.baseline_assets }}
         run: python3 scripts/prepare-draft-intake.py capture "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" --baselines "$BASELINE_ASSETS"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: candidate-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-candidate
           path: ${{ runner.temp }}/release-candidate
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Remove candidate intake staging
         if: always()
@@ -150,6 +154,7 @@ jobs:
       previous_tag: ${{ needs.reserve.outputs.previous_tag }}
       draft: true
       baseline_assets: ${{ needs.reserve.outputs.baseline_assets }}
+      candidate_artifact: ${{ needs.build.outputs.candidate-artifact }}
 
   publish:
     name: Sign complete release draft
@@ -164,13 +169,15 @@ jobs:
     needs: [reserve, build, prove-transition]
     if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    # Readers and finalize download exactly these uploads, even after a failed-jobs rerun.
     outputs:
-      tool-linux-amd64: ${{ steps.tool-linux-amd64.outputs.artifact-id }}
-      tool-linux-arm64: ${{ steps.tool-linux-arm64.outputs.artifact-id }}
-      tool-darwin-arm64: ${{ steps.tool-darwin-arm64.outputs.artifact-id }}
+      policy-artifact: ${{ needs.prove-transition.outputs.policy_artifact }}
+      tool-linux-amd64: ${{ needs.prove-transition.outputs.tool-linux-amd64 }}
+      tool-linux-arm64: ${{ needs.prove-transition.outputs.tool-linux-arm64 }}
+      tool-darwin-arm64: ${{ needs.prove-transition.outputs.tool-darwin-arm64 }}
+      signed-draft-artifact: ${{ steps.signed-draft.outputs.artifact-id }}
+      publication-input-artifact: ${{ steps.publication-input.outputs.artifact-id }}
+      publication-trust-artifact: ${{ steps.publication-trust.outputs.artifact-id }}
     env:
-      GOTOOLCHAIN: local
       MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
       MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
       MESH_RELEASE_TOOL_ROLE: source
@@ -179,53 +186,20 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.reserve.outputs.source }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: Configure explicit trusted tool paths
         run: |
           echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/release-source-tools/linux-amd64/mesh-release-sign" >> "$GITHUB_ENV"
           echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/mesh-release-trust" >> "$GITHUB_ENV"
-      - name: Build the reviewed SOURCE release tool once per target
+      - name: Acquire the exact SOURCE tools used by history policy
         env:
-          SOURCE: ${{ needs.reserve.outputs.source }}
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.prove-transition.outputs.tool-linux-amd64 }}
         run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE"
-          test -z "$(git status --porcelain)"
-          for target in linux/amd64 linux/arm64 darwin/arm64; do
-            system=${target%/*}
-            architecture=${target#*/}
-            directory="$RUNNER_TEMP/release-source-tools/$system-$architecture"
-            mkdir -p "$directory"
-            GOOS="$system" GOARCH="$architecture" CGO_ENABLED=0 go build -trimpath -o "$directory/mesh-release-sign" ./cmd/mesh-release-sign
-            GOOS="$system" GOARCH="$architecture" CGO_ENABLED=0 go build -trimpath -o "$directory/mesh-release-routes" ./cmd/mesh-release-routes
-            PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool record "$directory" "$SOURCE" "$GITHUB_RUN_ID" source "$target"
-          done
-      - id: tool-linux-amd64
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-tool-source-linux-amd64
-          path: ${{ runner.temp }}/release-source-tools/linux-amd64
-          if-no-files-found: error
-          retention-days: 7
-      - id: tool-linux-arm64
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-tool-source-linux-arm64
-          path: ${{ runner.temp }}/release-source-tools/linux-arm64
-          if-no-files-found: error
-          retention-days: 7
-      - id: tool-darwin-arm64
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: release-tool-source-darwin-arm64
-          path: ${{ runner.temp }}/release-source-tools/darwin-arm64
-          if-no-files-found: error
-          retention-days: 7
+          mkdir -p "$RUNNER_TEMP/release-source-tools"
+          PYTHONPATH=scripts python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source linux-amd64 "$RUNNER_TEMP/release-source-tools/linux-amd64" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-candidate
+          artifact-ids: ${{ needs.build.outputs.candidate-artifact || '0' }}
           path: ${{ runner.temp }}/release-candidate
       - name: Recover draft artifacts and proofs
         env:
@@ -233,30 +207,32 @@ jobs:
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
         run: |
-          mkdir -p dist/homebrew/Casks proofs "$RUNNER_TEMP/release-json"
+          mkdir -p dist/homebrew/Casks proofs
           python3 scripts/prepare-draft-intake.py verify "$RUNNER_TEMP/release-candidate" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID"
           cp "$RUNNER_TEMP/release-candidate"/mesh_*.tar.gz "$RUNNER_TEMP/release-candidate/checksums.txt" dist/
           gh release download "$VERSION" --pattern mesh.rb --dir dist/homebrew/Casks
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: update-proofs-*
+          artifact-ids: ${{ needs.prove-transition.outputs.proof_artifacts || '0' }}
           path: ${{ runner.temp }}/proof-shards
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-policy
+          artifact-ids: ${{ needs.prove-transition.outputs.policy_artifact || '0' }}
           path: ${{ runner.temp }}/mesh-policy
+      - name: Recover the manifest exercised by the original reader
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prove-transition.outputs.manifest_artifact || '0' }}
+          path: dist
       - name: Collect every native proof asset
         run: python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/proof-shards" proofs "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
-      - name: Build immutable release manifest
-        env:
-          VERSION: ${{ needs.reserve.outputs.version }}
-          SOURCE: ${{ needs.reserve.outputs.source }}
-        run: |
-          scripts/assemble-release-compatibility.py proofs "$RUNNER_TEMP/compatibility.json"
-          scripts/generate-release-manifest.sh \
-            -dist dist -version "$VERSION" -commit "$SOURCE" \
-            -compatibility "$RUNNER_TEMP/compatibility.json" -proofs proofs \
-            -output dist/mesh-release.json
+      - name: Restore same-run verified history bytes for the fresh retention check
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        continue-on-error: true
+        with:
+          path: ~/.cache/mesh-release-evidence
+          key: ${{ needs.prove-transition.outputs.history_cache_key }}
+          restore-keys: mesh-route-evidence-
       - name: Build verified update metadata and discovery pages
         env:
           GH_TOKEN: ${{ github.token }}
@@ -341,25 +317,33 @@ jobs:
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
         run: python3 scripts/prepare-draft-intake.py documents "$RUNNER_TEMP/release-signed-draft" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID" --destination "$RUNNER_TEMP/release-captured-logical"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: signed-draft
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-signed-draft
           path: ${{ runner.temp }}/release-signed-draft
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: publication-input
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-publication-input
           path: ${{ runner.temp }}/mesh-policy/input.json
+          if-no-files-found: error
+          overwrite: true
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: publication-trust
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-publication-trust
           path: ${{ runner.temp }}/mesh-release-trust
+          if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Remove signed draft intake staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/release-bundle" "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/release-captured-logical.logical-inventory.json"
+        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/release-bundle" "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/release-captured-logical.logical-inventory.json" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/proof-shards" "$RUNNER_TEMP/metadata-page.json"
 
   verify-readers:
     name: Verify original permitted readers (${{ matrix.platform }})
@@ -401,15 +385,15 @@ jobs:
         run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source ${{ matrix.key }} "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-policy
+          artifact-ids: ${{ needs.publish.outputs.policy-artifact || '0' }}
           path: ${{ runner.temp }}/mesh-policy
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-publication-input
+          artifact-ids: ${{ needs.publish.outputs.publication-input-artifact || '0' }}
           path: ${{ runner.temp }}/mesh-policy
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-publication-trust
+          artifact-ids: ${{ needs.publish.outputs.publication-trust-artifact || '0' }}
           path: ${{ runner.temp }}/mesh-release-trust
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -418,7 +402,7 @@ jobs:
           restore-keys: mesh-native-baselines-${{ matrix.key }}-
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-signed-draft
+          artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}
           path: ${{ runner.temp }}/publication-draft-input/${{ needs.reserve.outputs.version }}
       - name: Require the original source verifier to accept each automatic edge
         env:
@@ -455,9 +439,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@de505f5b83d7f53a08c5663d1cdf431b96af75b4
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@9f30ad52593969dd9a6c49133885750fdb7f893a
     with:
-      harness_source: de505f5b83d7f53a08c5663d1cdf431b96af75b4
+      harness_source: 9f30ad52593969dd9a6c49133885750fdb7f893a
       publication_only: true
       release_version: ${{ needs.reserve.outputs.version }}
       release_source: ${{ needs.reserve.outputs.source }}
@@ -496,11 +480,11 @@ jobs:
         run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source linux-amd64 "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-publication-trust
+          artifact-ids: ${{ needs.publish.outputs.publication-trust-artifact || '0' }}
           path: ${{ runner.temp }}/mesh-release-trust
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-signed-draft
+          artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}
           path: ${{ runner.temp }}/release-signed-draft
       - name: Recover the verified draft Cask
         env:

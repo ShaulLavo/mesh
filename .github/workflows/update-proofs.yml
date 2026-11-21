@@ -18,6 +18,9 @@ on:
       baseline_assets:
         default: ''
         type: string
+      candidate_artifact:
+        default: ''
+        type: string
 
     outputs:
       worker_artifact_source:
@@ -26,6 +29,20 @@ on:
       worker_artifact_run:
         description: This run containing the complete native preparation artifacts
         value: ${{ jobs.context.outputs.run }}
+      policy_artifact:
+        value: ${{ jobs.policy.outputs.artifact }}
+      history_cache_key:
+        value: ${{ jobs.policy.outputs.history_cache_key }}
+      proof_artifacts:
+        value: ${{ jobs.reader.outputs.proof_artifacts }}
+      manifest_artifact:
+        value: ${{ jobs.reader.outputs.manifest_artifact }}
+      tool-linux-amd64:
+        value: ${{ jobs.policy.outputs.tool-linux-amd64 }}
+      tool-linux-arm64:
+        value: ${{ jobs.prepare.outputs.tool-linux-arm64 }}
+      tool-darwin-arm64:
+        value: ${{ jobs.prepare.outputs.tool-darwin-arm64 }}
 
 permissions:
   contents: read
@@ -43,7 +60,9 @@ jobs:
       previous: ${{ steps.select.outputs.previous }}
       shards: ${{ steps.select.outputs.shards }}
       prove: ${{ steps.select.outputs.prove }}
-      cache_identity: ${{ steps.select.outputs.cache_identity }}
+      artifact: ${{ steps.policy-upload.outputs.artifact-id }}
+      history_cache_key: mesh-route-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      tool-linux-amd64: ${{ steps.tool-linux-amd64.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,13 +78,8 @@ jobs:
           restore-keys: mesh-route-evidence-
       - name: Prepare the explicit SOURCE metadata and route tools
         run: |
-          test "$(git rev-parse HEAD)" = "$MESH_RELEASE_TOOL_SOURCE"
-          test -z "$(git status --porcelain)"
-          mkdir -p "$RUNNER_TEMP/history-tools"
-          go build -trimpath -o "$RUNNER_TEMP/history-tools/mesh-release-sign" ./cmd/mesh-release-sign
-          go build -trimpath -o "$RUNNER_TEMP/history-tools/mesh-release-routes" ./cmd/mesh-release-routes
-          PYTHONPATH=scripts python3 -m fixtures.release_tool record "$RUNNER_TEMP/history-tools" "$MESH_RELEASE_TOOL_SOURCE" "$GITHUB_RUN_ID" source linux/amd64
-          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/history-tools/mesh-release-sign" >> "$GITHUB_ENV"
+          scripts/build-source-release-tools.sh "$RUNNER_TEMP/history-tools" linux/amd64
+          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/history-tools/linux-amd64/mesh-release-sign" >> "$GITHUB_ENV"
           echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/history-trust" >> "$GITHUB_ENV"
       - name: Prepare authenticated trust before reading signed history
         run: |
@@ -84,7 +98,6 @@ jobs:
           PREVIOUS: ${{ inputs.previous_tag }}
           DRAFT: ${{ inputs.draft }}
           BASELINE_ASSETS: ${{ inputs.baseline_assets }}
-          NATIVE_CACHE_INPUTS: ${{ toJSON(inputs) }}
         shell: bash
         run: |
           set -euo pipefail
@@ -100,20 +113,32 @@ jobs:
           fi
           published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           python3 scripts/prepare-release-policy.py "$root/history.json" "$root/documents" "$VERSION" "$published_at" "$root/input.json"
-          "$RUNNER_TEMP/history-tools/mesh-release-routes" -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
+          "${MESH_RELEASE_TOOL%/*}/mesh-release-routes" -operation select -input "$root/input.json" -documents "$root/documents" > "$root/selection.json"
           python3 scripts/prepare-release-baselines.py --pins "$root/selection.json" "$BASELINE_ASSETS"
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
           shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
+          matrix=$(python3 scripts/prepare-release-baselines.py --prove-matrix "$shards" "$DRAFT")
+          if [[ $DRAFT == true ]]; then
+            shards=$(python3 -c 'import json,sys; print(json.dumps(sorted({row["shard"] for row in json.loads(sys.argv[1])["include"]})))' "$matrix")
+          fi
           printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"
-          # The release path (draft) proves every shard everywhere; a pull request
-          # runs one Darwin smoke shard beside every Linux shard.
-          printf 'prove=%s\n' "$(python3 scripts/prepare-release-baselines.py --prove-matrix "$shards" "$DRAFT")" >> "$GITHUB_OUTPUT"
-          identity=$(python3 -c 'import hashlib,json,os,sys; value=[json.loads(os.environ["NATIVE_CACHE_INPUTS"]),json.load(open(sys.argv[1])),sys.argv[2:]]; print(hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":")).encode()).hexdigest())' "$root/selection.json" "$VERSION" "$PREVIOUS")
-          printf 'cache_identity=%s\n' "$identity" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          printf 'prove=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+      - id: policy-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-policy
           path: ${{ runner.temp }}/mesh-policy
+          retention-days: 7
+          overwrite: ${{ inputs.draft }}
+          if-no-files-found: error
+      - id: tool-linux-amd64
+        if: inputs.draft
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-tool-source-linux-amd64
+          path: ${{ runner.temp }}/history-tools/linux-amd64
+          if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Remove policy staging
         if: always()
@@ -121,6 +146,16 @@ jobs:
 
   prepare:
     needs: policy
+    outputs:
+      native-linux-amd64: ${{ matrix.key == 'linux-amd64' && steps.native-upload.outputs.artifact-id || '' }}
+      native-linux-arm64: ${{ matrix.key == 'linux-arm64' && steps.native-upload.outputs.artifact-id || '' }}
+      native-darwin-arm64: ${{ matrix.key == 'darwin-arm64' && steps.native-upload.outputs.artifact-id || '' }}
+      context-linux-amd64: ${{ matrix.key == 'linux-amd64' && steps.context-upload.outputs.artifact-id || '' }}
+      context-linux-arm64: ${{ matrix.key == 'linux-arm64' && steps.context-upload.outputs.artifact-id || '' }}
+      context-darwin-arm64: ${{ matrix.key == 'darwin-arm64' && steps.context-upload.outputs.artifact-id || '' }}
+      original-reader: ${{ steps.original-reader.outputs.artifact-id }}
+      tool-linux-arm64: ${{ matrix.key == 'linux-arm64' && steps.tool-upload.outputs.artifact-id || '' }}
+      tool-darwin-arm64: ${{ matrix.key == 'darwin-arm64' && steps.tool-upload.outputs.artifact-id || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -137,12 +172,9 @@ jobs:
             key: darwin-arm64
             archive: mesh_darwin_arm64.tar.gz
             runner: macos-15
-    # Trusted Darwin legs (the caller's main pushes, manual runs and
-    # same-repository PRs) run on the owner's Mac runner; fork PRs stay hosted.
-    # Preparation and proofs keep everything in their own work tree, home,
-    # temporary root and ephemeral ports, so they take the shared Mac runners,
-    # which run up to three such jobs at once.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    # Release preparation and proof batches use the hosted Mac capacity so
+    # they can start while the owner's Mac FIFO is occupied.
+    runs-on: ${{ !inputs.draft && matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -153,13 +185,13 @@ jobs:
           cache: ${{ runner.environment == 'github-hosted' }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-policy
+          artifact-ids: ${{ needs.policy.outputs.artifact || '0' }}
           path: ${{ runner.temp }}/mesh-policy
       - name: Recover exact reserved draft archives
         if: inputs.draft
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: release-candidate
+          artifact-ids: ${{ inputs.candidate_artifact || '0' }}
           path: ${{ runner.temp }}/release-candidate
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -210,27 +242,58 @@ jobs:
             python3 scripts/prepare-rollback-context.py record "$root/tools" "$root/retained.list"
           fi
           python3 -c 'from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_text("".join(str(Path(v).relative_to(p.parent))+"\n" for v in p.read_text().splitlines()))' "$root/retained.list"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: native-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-native-${{ matrix.key }}
           path: ${{ runner.temp }}/mesh-native.noindex
-          retention-days: 1
+          if-no-files-found: error
+          overwrite: ${{ inputs.draft }}
+          retention-days: ${{ inputs.draft && 7 || 1 }}
       # Cache's solid zstd archive shares bytes between historical executables.
       # Keep the full artifact for installed consumers and cache misses.
-      - name: Cache this exact native preparation for parallel proof shards
+      - name: Cache this exact native preparation for parallel proofs
         continue-on-error: true
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/mesh-native.noindex
-          key: mesh-native-inputs-v1-${{ matrix.key }}-${{ needs.policy.outputs.cache_identity }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          key: mesh-native-inputs-v2-${{ steps.native-upload.outputs.artifact-id }}
+      - id: context-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-context-${{ matrix.key }}
           path: ${{ runner.temp }}/mesh-native.noindex/tools/rollback-artifact.json
+          if-no-files-found: error
+          overwrite: ${{ inputs.draft }}
+          retention-days: 7
+      - id: original-reader
+        if: inputs.draft && matrix.platform == 'linux/amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-original-schema1-executable
+          path: ${{ runner.temp }}/mesh-native.noindex/retained/release-v0.1.249/mesh
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - name: Build the SOURCE release tools for this reader target
+        if: inputs.draft && matrix.platform != 'linux/amd64'
+        env:
+          GOTOOLCHAIN: local
+          MESH_RELEASE_TOOL_SOURCE: ${{ inputs.source_sha }}
+          PLATFORM: ${{ matrix.platform }}
+        run: scripts/build-source-release-tools.sh "$RUNNER_TEMP/history-tools" "$PLATFORM"
+      - id: tool-upload
+        if: inputs.draft && matrix.platform != 'linux/amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-tool-source-${{ matrix.key }}
+          path: ${{ runner.temp }}/history-tools/${{ matrix.key }}
+          if-no-files-found: error
+          overwrite: true
           retention-days: 7
       - name: Remove native staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/release-candidate"
+        run: rm -rf -- "$RUNNER_TEMP/mesh-native.noindex" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/history-tools"
 
   context:
     needs: prepare
@@ -238,13 +301,14 @@ jobs:
     outputs:
       source: ${{ steps.producer.outputs.source }}
       run: ${{ steps.producer.outputs.run }}
+      artifact: ${{ steps.context-upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.source_sha }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: update-context-*
+          artifact-ids: ${{ format('{0},{1},{2}', needs.prepare.outputs.context-linux-amd64 || '0', needs.prepare.outputs.context-linux-arm64 || '0', needs.prepare.outputs.context-darwin-arm64 || '0') }}
           path: ${{ runner.temp }}/rollback-context
       - name: Export the actual native preparation source and run
         id: producer
@@ -256,10 +320,13 @@ jobs:
           printf 'source=%s\nrun=%s\n' "$SOURCE" "$RUN" >> "$GITHUB_OUTPUT"
       - name: Aggregate only actual native artifact metadata
         run: python3 scripts/prepare-rollback-context.py assemble "$RUNNER_TEMP/rollback-context" "$RUNNER_TEMP/rollback-context/mesh-release-context.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: context-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: update-rollback-manifest
           path: ${{ runner.temp }}/rollback-context/mesh-release-context.json
+          if-no-files-found: error
+          overwrite: ${{ inputs.draft }}
           retention-days: 7
       - name: Remove context staging
         if: always()
@@ -268,14 +335,20 @@ jobs:
   prove:
     name: prove (${{ matrix.platform }}, ${{ matrix.shard }})
     needs: [policy, prepare, context]
+    outputs:
+      linux-amd64-0: ${{ inputs.draft && matrix.key == 'linux-amd64' && matrix.shard == 0 && steps.proof-upload.outputs.artifact-id || '' }}
+      linux-amd64-1: ${{ inputs.draft && matrix.key == 'linux-amd64' && matrix.shard == 1 && steps.proof-upload.outputs.artifact-id || '' }}
+      linux-arm64-0: ${{ inputs.draft && matrix.key == 'linux-arm64' && matrix.shard == 0 && steps.proof-upload.outputs.artifact-id || '' }}
+      linux-arm64-1: ${{ inputs.draft && matrix.key == 'linux-arm64' && matrix.shard == 1 && steps.proof-upload.outputs.artifact-id || '' }}
+      darwin-arm64-0: ${{ inputs.draft && matrix.key == 'darwin-arm64' && matrix.shard == 0 && steps.proof-upload.outputs.artifact-id || '' }}
+      darwin-arm64-1: ${{ inputs.draft && matrix.key == 'darwin-arm64' && matrix.shard == 1 && steps.proof-upload.outputs.artifact-id || '' }}
     strategy:
       fail-fast: false
-      # Platform, key, runner and shard rows from prepare-release-baselines.py
-      # --prove-matrix: all of them for a release, one Darwin shard on a PR.
       matrix: ${{ fromJSON(needs.policy.outputs.prove) }}
-    # Trusted Darwin legs run on the shared Mac runners after a Mac FIFO wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 105 || 60 }}
+    runs-on: ${{ !inputs.draft && matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    timeout-minutes: ${{ (inputs.draft || (matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository))) && 105 || 60 }}
+    env:
+      NATIVE_ARTIFACT: ${{ needs.prepare.outputs[format('native-{0}', matrix.key)] }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -303,7 +376,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ runner.temp }}/mesh-native.noindex
-          key: mesh-native-inputs-v1-${{ matrix.key }}-${{ needs.policy.outputs.cache_identity }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mesh-native-inputs-v2-${{ env.NATIVE_ARTIFACT }}
       - name: Remove incomplete cached inputs before artifact fallback
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
@@ -316,7 +389,7 @@ jobs:
         timeout-minutes: 15
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-native-${{ matrix.key }}
+          artifact-ids: ${{ env.NATIVE_ARTIFACT || '0' }}
           path: ${{ runner.temp }}/mesh-native.noindex
       - name: Remove incomplete native inputs before the single retry
         if: steps.native-download.outcome == 'failure'
@@ -328,17 +401,19 @@ jobs:
         timeout-minutes: 15
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-native-${{ matrix.key }}
+          artifact-ids: ${{ env.NATIVE_ARTIFACT || '0' }}
           path: ${{ runner.temp }}/mesh-native.noindex
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: update-rollback-manifest
+          artifact-ids: ${{ needs.context.outputs.artifact || '0' }}
           path: ${{ runner.temp }}/mesh-native.noindex
       - name: Exercise required sources with the actual native executables
         env:
           PLATFORM: ${{ matrix.platform }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ needs.policy.outputs.shards }}
+          DRAFT: ${{ inputs.draft }}
+          SOURCE: ${{ inputs.source_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -350,10 +425,15 @@ jobs:
             trap 'status=$?; python3 scripts/native-eperm-policy.py returned "$RUNNER_TEMP/update-proof" "$status"' EXIT
           fi
           root="$RUNNER_TEMP/mesh-native.noindex"
+          args=(--manifest "$root/mesh-release-context.json")
+          if [[ $DRAFT == true ]]; then
+            PYTHONPATH=scripts python3 -m fixtures.installed_artifacts native "$root" "$SOURCE" "$PLATFORM"
+            args+=(--batch)
+          fi
           chmod +x "$root"/tools/candidate "$root"/tools/startup-fault-candidate "$root"/tools/boundary "$root"/tools/worker-probe
           find "$root/retained" -type f -name mesh -exec chmod +x {} +
           count=$(python3 -c 'import json,os; print(len(json.loads(os.environ["SHARDS"])))')
-          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$count" --manifest "$root/mesh-release-context.json"
+          python3 scripts/run-update-proofs.py "$root/tools" "$root/retained.list" "$PLATFORM" "$RUNNER_TEMP/update-proof" --shard "$SHARD" --shards "$count" "${args[@]}"
       - name: Audit control and diagnostic ownership before removing native payloads
         id: eperm-cleanup
         if: always() && matrix.platform == 'linux/amd64'
@@ -364,14 +444,14 @@ jobs:
         id: proof-upload
         if: always()
         with:
-          name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}
+          name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}${{ inputs.draft && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ runner.temp }}/update-proof
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         id: counter-upload
         if: always() && matrix.platform == 'linux/amd64'
         with:
-          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}
+          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}${{ inputs.draft && format('-attempt-{0}', github.run_attempt) || '' }}
           path: ${{ runner.temp }}/update-proof/eperm-counter.json
           retention-days: 7
       - name: Remove proof staging
@@ -381,10 +461,14 @@ jobs:
         if: always() && matrix.platform == 'linux/amd64' && steps.eperm-cleanup.outcome == 'success' && steps.proof-upload.outcome == 'success' && steps.counter-upload.outcome == 'success'
         run: rm -rf -- "$RUNNER_TEMP/update-proof"
 
-  eperm-summary:
-    needs: [policy, prove]
+  reader:
+    name: ${{ inputs.draft && 'Original schema 1 release reader' || 'AMD64 EPERM run summary' }}
+    needs: [policy, prepare, prove]
     if: always()
     runs-on: ubuntu-24.04
+    outputs:
+      proof_artifacts: ${{ steps.proof-uploads.outputs.ids }}
+      manifest_artifact: ${{ steps.legacy-manifest.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -405,41 +489,48 @@ jobs:
           name: native-eperm-run-summary
           path: ${{ runner.temp }}/eperm-summary/result
           retention-days: 7
-      - name: Remove summary staging
-        if: always()
-        run: rm -rf -- "$RUNNER_TEMP/eperm-summary"
-
-  reader:
-    name: Original schema 1 release reader
-    needs: [policy, prepare, prove]
-    # It needs the complete proof matrix, which only the release path (draft)
-    # produces; a pull request proves one Darwin shard.
-    if: inputs.draft
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.source_sha }}
+          overwrite: ${{ inputs.draft }}
+      - name: Select every release batch upload from its producing job
+        id: proof-uploads
+        if: inputs.draft
+        env:
+          PROOF_RESULT: ${{ needs.prove.result }}
+          PROOF_MATRIX: ${{ needs.policy.outputs.prove }}
+          PROOF_UPLOADS: ${{ toJSON(needs.prove.outputs) }}
+        run: |
+          test "$PROOF_RESULT" = success
+          python3 scripts/collect-update-proofs.py --artifact-ids
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
         with:
           go-version-file: go.mod
           cache: true
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
         with:
-          pattern: update-native-*
-          path: ${{ runner.temp }}/reader-native
+          artifact-ids: ${{ needs.prepare.outputs.original-reader || '0' }}
+          path: ${{ runner.temp }}/original-reader
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
         with:
-          pattern: update-proofs-*
+          artifact-ids: ${{ steps.proof-uploads.outputs.ids || '0' }}
           path: ${{ runner.temp }}/reader-proofs
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
         with:
-          name: update-policy
+          artifact-ids: ${{ needs.policy.outputs.artifact || '0' }}
           path: ${{ runner.temp }}/mesh-policy
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
+        with:
+          artifact-ids: ${{ inputs.candidate_artifact || '0' }}
+          path: ${{ runner.temp }}/release-candidate
       - name: Decode generated assets with the unchanged published executable
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
         env:
           VERSION: ${{ needs.policy.outputs.version }}
           SOURCE: ${{ inputs.source_sha }}
+          PROOF_MATRIX: ${{ needs.policy.outputs.prove }}
         shell: bash
         run: |
           set -euo pipefail
@@ -449,18 +540,30 @@ jobs:
           root="$RUNNER_TEMP/reader"
           mkdir -p "$root"
           python3 scripts/collect-update-proofs.py "$RUNNER_TEMP/reader-proofs" "$root/proofs" "$RUNNER_TEMP/mesh-policy/selection.json" "$(git rev-parse HEAD)"
-          python3 scripts/prepare-legacy-reader-assets.py "$RUNNER_TEMP/reader-native" "$RUNNER_TEMP/mesh-policy" "$root/dist"
+          candidate="$RUNNER_TEMP/release-candidate"
+          python3 scripts/prepare-draft-intake.py verify "$candidate" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID"
           scripts/assemble-release-compatibility.py "$root/proofs" "$root/compatibility.json"
-          scripts/generate-release-manifest.sh -dist "$root/dist" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/dist/mesh-release.json"
-          original="$RUNNER_TEMP/reader-native/update-native-linux-amd64/retained/release-v0.1.249/mesh"
+          scripts/generate-release-manifest.sh -dist "$candidate" -version "$VERSION" -commit "$SOURCE" -compatibility "$root/compatibility.json" -proofs "$root/proofs" -output "$root/mesh-release.json"
+          python3 scripts/collect-update-proofs.py --check-batches "$RUNNER_TEMP/reader-proofs" "$root/mesh-release.json"
+          original="$RUNNER_TEMP/original-reader/mesh"
           chmod +x "$original"
-          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/dist/mesh-release.json" "$root/proofs" "$root/evidence" --history-inventory "$RUNNER_TEMP/mesh-policy/history.json"
+          python3 scripts/prove-legacy-release-reader.py "$original" "$RUNNER_TEMP/mesh-policy/documents" "$root/mesh-release.json" "$root/proofs" "$root/evidence" --history-inventory "$RUNNER_TEMP/mesh-policy/history.json"
+      - id: legacy-manifest
+        if: steps.proof-uploads.outcome == 'success' && inputs.draft
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: update-verified-legacy-manifest
+          path: ${{ runner.temp }}/reader/mesh-release.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && inputs.draft
         with:
           name: original-schema1-reader
           path: ${{ runner.temp }}/reader/evidence
+          overwrite: true
           retention-days: 7
       - name: Remove reader staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/reader" "$RUNNER_TEMP/reader-native" "$RUNNER_TEMP/reader-proofs" "$RUNNER_TEMP/mesh-policy"
+        run: rm -rf -- "$RUNNER_TEMP/reader" "$RUNNER_TEMP/original-reader" "$RUNNER_TEMP/reader-proofs" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/eperm-summary"

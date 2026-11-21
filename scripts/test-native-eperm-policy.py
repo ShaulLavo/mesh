@@ -8,7 +8,6 @@ import io
 import json
 import os
 from pathlib import Path
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -733,7 +732,7 @@ class HealthyTests(unittest.TestCase):
 class WiringTests(unittest.TestCase):
     def setUp(self):
         self.workflow = (REPO / ".github/workflows/update-proofs.yml").read_text()
-        self.prove = self.workflow.split("\n  prove:\n", 1)[1].split("\n  eperm-summary:\n", 1)[0]
+        self.prove = self.workflow.split("\n  prove:\n", 1)[1].split("\n  reader:\n", 1)[0]
 
     def test_all_declared_parallel_amd64_jobs_enable_policy(self):
         condition = "matrix.platform == 'linux/amd64'"
@@ -744,13 +743,12 @@ class WiringTests(unittest.TestCase):
         initialize = self.prove.split("Initialize this AMD64", 1)[1].split("- name: Create", 1)[0]
         self.assertIn("SHARDS: ${{ needs.policy.outputs.shards }}", initialize)
         self.assertIn('--shard "$SHARD" --shards "$SHARDS"', initialize)
-        # The matrix comes from prepare-release-baselines.py --prove-matrix, which
-        # keeps every declared AMD64 shard on pull requests and releases alike.
+        # Both paths declare the physical AMD64 partitions used by their controls.
         self.assertIn("matrix: ${{ fromJSON(needs.policy.outputs.prove) }}", self.prove)
         self.assertNotIn("max-parallel:", self.prove)
-        for release in (True, False):
+        for release, expected in ((True, [0, 1]), (False, [0, 1, 2])):
             rows = BASELINES.prove_matrix([0, 1, 2], release)["include"]
-            self.assertEqual([row["shard"] for row in rows if row["platform"] == "linux/amd64"], [0, 1, 2])
+            self.assertEqual([row["shard"] for row in rows if row["platform"] == "linux/amd64"], expected)
         self.assertIn("fail-fast: false", self.prove)
         self.assertIn("name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}", self.prove)
         self.assertIn("path: ${{ runner.temp }}/update-proof", self.prove)
@@ -771,7 +769,8 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(self.prove.count("name: Retry native proof inputs once"), 1)
         self.assertIn("&& 105 || 60 }}\n", self.prove)
         self.assertIn('status = process.wait(timeout=600)', Path(runner.__file__).read_text())
-        self.assertIn('--shard "$SHARD" --shards "$count" --manifest', self.prove)
+        self.assertIn('--shard "$SHARD" --shards "$count" "${args[@]}"', self.prove)
+        self.assertIn('args+=(--batch)', self.prove)
         reader = self.workflow.split("\n  reader:\n", 1)[1]
         self.assertIn("needs: [policy, prepare, prove]", reader)
         self.assertIn("scripts/collect-update-proofs.py", reader)
@@ -781,9 +780,9 @@ class WiringTests(unittest.TestCase):
         prepare = self.workflow.split("\n  prepare:\n", 1)[1].split("\n  context:\n", 1)[0]
         save = prepare.split("      - name: Cache this exact native preparation", 1)[1].split("      - uses:", 1)[0]
         restore = self.prove.split("      - name: Restore this exact producer", 1)[1].split("      - name:", 1)[0]
-        key = "mesh-native-inputs-v1-${{ matrix.key }}-${{ needs.policy.outputs.cache_identity }}-${{ github.run_id }}-${{ github.run_attempt }}"
+        self.assertIn("key: mesh-native-inputs-v2-${{ steps.native-upload.outputs.artifact-id }}", save)
+        self.assertIn("key: mesh-native-inputs-v2-${{ env.NATIVE_ARTIFACT }}", restore)
         for step in (save, restore):
-            self.assertIn("key: " + key, step)
             self.assertIn("path: ${{ runner.temp }}/mesh-native.noindex", step)
             self.assertIn("continue-on-error: true", step)
             self.assertNotIn("restore-keys:", step)
@@ -795,32 +794,14 @@ class WiringTests(unittest.TestCase):
         self.assertLess(fallback.index('rm -rf -- "$RUNNER_TEMP/mesh-native.noindex"'), fallback.index("id: native-download"))
         self.assertLess(prepare.index("name: update-native-${{ matrix.key }}"), prepare.index("actions/cache/save@"))
         self.assertLess(prepare.index("actions/cache/save@"), prepare.index("Remove native staging"))
-        self.assertIn("pattern: update-native-*", self.workflow.split("\n  reader:\n", 1)[1])
+        self.assertIn("artifact-ids: ${{ needs.prepare.outputs.original-reader || '0' }}", self.workflow.split("\n  reader:\n", 1)[1])
         self.assertIn("if: steps.native-download.outcome == 'failure'", self.prove)
 
-    def cache_identity(self, inputs, selection, version="v0.1.325", previous="v0.1.309"):
-        line = next(line.strip() for line in self.workflow.splitlines() if line.strip().startswith("identity=$(python3 -c "))
-        command = shlex.split(line.removeprefix("identity=$(").removesuffix(")"))
-        with tempfile.TemporaryDirectory(prefix="native-cache-key-") as scratch:
-            path = Path(scratch) / "selection.json"
-            path.write_text(json.dumps(selection))
-            return subprocess.check_output([sys.executable, "-c", command[2], str(path), version, previous],
-                env=os.environ | {"NATIVE_CACHE_INPUTS": json.dumps(inputs)}, text=True).strip()
-
-    def test_cache_identity_separates_draft_configuration_and_selected_inputs(self):
-        inputs = {"source_sha": "a" * 40, "draft": False, "version": "", "previous_tag": "", "baseline_assets": ""}
-        selection = {"sources": ["first", "second"]}
-        expected = self.cache_identity(inputs, selection)
-        self.assertRegex(expected, r"^[0-9a-f]{64}$")
-        self.assertEqual(self.cache_identity(dict(reversed(list(inputs.items()))), selection), expected)
-        for key, value in (("source_sha", "b" * 40), ("draft", True), ("version", "v0.1.325"),
-                           ("previous_tag", "v0.1.309"), ("baseline_assets", "baseline_pc.bin")):
-            self.assertNotEqual(self.cache_identity(inputs | {key: value}, selection), expected)
-        self.assertNotEqual(self.cache_identity(inputs, {"sources": ["other"]}), expected)
-        self.assertNotEqual(self.cache_identity(inputs, selection, version="v0.1.326"), expected)
-        self.assertNotEqual(self.cache_identity(inputs, selection, previous="v0.1.308"), expected)
-        self.assertIn("cache_identity: ${{ steps.select.outputs.cache_identity }}", self.workflow)
-        self.assertIn("NATIVE_CACHE_INPUTS: ${{ toJSON(inputs) }}", self.workflow)
+    def test_preparation_upload_pins_cache_and_both_downloads_across_attempts(self):
+        for key in ("linux-amd64", "linux-arm64", "darwin-arm64"):
+            self.assertIn(f"native-{key}: ${{{{ matrix.key == '{key}' && steps.native-upload.outputs.artifact-id || '' }}}}", self.workflow)
+        self.assertIn("NATIVE_ARTIFACT: ${{ needs.prepare.outputs[format('native-{0}', matrix.key)] }}", self.prove)
+        self.assertEqual(self.prove.count("artifact-ids: ${{ env.NATIVE_ARTIFACT || '0' }}"), 2)
 
     def test_single_existing_blocking_gate_contains_integration_controls(self):
         gates = (REPO / "scripts/check-packaging.sh").read_text()
@@ -861,8 +842,8 @@ class WiringTests(unittest.TestCase):
             f"scripts/native-eperm-policy.py returned {root}/update-proof {status}"])
 
     def test_summary_waits_for_all_shards_and_uploads_outside_proof_reader_prefix(self):
-        section = self.workflow.split("\n  eperm-summary:\n", 1)[1].split("\n  reader:\n", 1)[0]
-        self.assertIn("needs: [policy, prove]\n    if: always()", section)
+        section = self.workflow.split("\n  reader:\n", 1)[1]
+        self.assertIn("needs: [policy, prepare, prove]\n    if: always()", section)
         self.assertIn("SHARDS: ${{ needs.policy.outputs.shards }}", section)
         self.assertIn("pattern: native-eperm-counter-linux-amd64-*", section)
         self.assertIn("name: native-eperm-counter-linux-amd64-${{ matrix.shard }}", self.prove)

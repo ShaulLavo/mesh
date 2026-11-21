@@ -336,8 +336,8 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("name: ${{ matrix.artifact }}", native)
         self.assertIn("name: installed-publication-${{ matrix.key }}", aggregate)
         self.assertIn("publication-trust", aggregate)
-        pin = importlib.import_module("test-installed-gate-wiring").PIN
-        for name in ("release", "ci"):
+        pins = importlib.import_module("test-installed-gate-wiring")
+        for name, pin in (("release", pins.RELEASE_PIN), ("ci", pins.PIN)):
             caller = (ROOT / ".github/workflows" / (name + ".yml")).read_text()
             self.assertEqual(re.findall(r"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@([0-9a-f]{40})", caller), [pin])
             self.assertIn("harness_source: " + pin, caller)

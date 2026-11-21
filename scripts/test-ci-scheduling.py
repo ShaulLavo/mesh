@@ -44,6 +44,7 @@ MAC_ROUTE = "${{ " + TRUSTED + " && fromJSON('[\"self-hosted\",\"macOS\",\"ARM64
 # and skip the machine-wide cleanup the exclusive runner does. Only legs that
 # keep every file, process and port in their own job may use them.
 MAC_SHARED_ROUTE = MAC_ROUTE.replace('"mesh-mac"', '"mesh-mac-shared"')
+PR_PROOF_ROUTE = MAC_SHARED_ROUTE.replace("${{ ", "${{ !inputs.draft && ", 1)
 MAC_SHARED_JOBS = {("update-proofs.yml", "prepare"), ("update-proofs.yml", "prove")}
 # CI callers whose Mac legs all run on the shared runners.
 MAC_TURN_FREE = {"update-proofs"}
@@ -289,7 +290,8 @@ def check_mac_job(source, name, route=MAC_ROUTE):
     timeouts = re.findall(r"^    timeout-minutes: (.+)$", job, re.M)
     if not timeouts:
         return
-    match = re.fullmatch(r"\$\{\{ " + re.escape(TRUSTED) + r" && (\d+) \|\| (\d+) \}\}", timeouts[0])
+    predicate = f"(inputs.draft || ({TRUSTED}))" if route == PR_PROOF_ROUTE else TRUSTED
+    match = re.fullmatch(r"\$\{\{ " + re.escape(predicate) + r" && (\d+) \|\| (\d+) \}\}", timeouts[0])
     assert match, f"{name} must bound the Mac and hosted legs separately"
     mac, hosted = (int(value) for value in match.groups())
     assert mac == hosted + MAC_FIFO_MINUTES, f"{name} Mac hang cap must add the FIFO wait to the hosted bound"
@@ -298,11 +300,11 @@ def check_mac_job(source, name, route=MAC_ROUTE):
 def check_mac_routing(workflows):
     for name, jobs in MAC_JOBS.items():
         for job in jobs:
-            check_mac_job(workflows[name], job, MAC_SHARED_ROUTE if (name, job) in MAC_SHARED_JOBS else MAC_ROUTE)
+            check_mac_job(workflows[name], job, PR_PROOF_ROUTE if (name, job) in MAC_SHARED_JOBS else MAC_ROUTE)
     for name, source in workflows.items():
         # Signature verification's --deny-self-hosted-runners is not a route.
         routes = [line for line in source.splitlines() if "runs-on:" in line and "self-hosted" in line]
-        assert all(line in ("    runs-on: " + MAC_ROUTE, "    runs-on: " + MAC_SHARED_ROUTE) for line in routes), \
+        assert all(line in ("    runs-on: " + MAC_ROUTE, "    runs-on: " + PR_PROOF_ROUTE) for line in routes), \
             f"{name} has an unguarded self-hosted route"
         expected = 0 if name in HOSTED_ONLY else len(MAC_JOBS.get(name, ()))
         assert len(routes) == expected, f"{name} must route exactly its reviewed Darwin legs to the Mac"
@@ -315,7 +317,7 @@ def reject_mac_routing(workflows):
         ("ci.yml", lambda text: text.replace("\"mesh-mac\"", "\"other\"", 1)),
         ("ci.yml", lambda text: text.replace("&& 55 || 10", "&& 10 || 10", 1)),
         ("helper-recovery.yml", lambda text: text.replace("cache: " + MAC_GO_CACHE, "cache: true", 1)),
-        ("update-proofs.yml", lambda text: text.replace("    runs-on: " + MAC_SHARED_ROUTE, "    runs-on: ${{ matrix.runner }}", 1)),
+        ("update-proofs.yml", lambda text: text.replace("    runs-on: " + PR_PROOF_ROUTE, "    runs-on: " + MAC_SHARED_ROUTE, 1)),
         ("release.yml", lambda text: text.replace("    runs-on: ${{ matrix.runner }}", "    runs-on: " + MAC_ROUTE, 1)),
         # A leg with machine-wide fixtures must never run beside other Mac jobs.
         ("ci.yml", lambda text: text.replace("    runs-on: " + MAC_ROUTE, "    runs-on: " + MAC_SHARED_ROUTE, 1)),
@@ -441,12 +443,11 @@ def reject_mac_turn(ci, script):
         raise AssertionError("an unsafe Mac turn was accepted")
 
 
-PROVE_MATRIX_STEP = ("          printf 'prove=%s\\n' \"$(python3 scripts/prepare-release-baselines.py "
-                     "--prove-matrix \"$shards\" \"$DRAFT\")\" >> \"$GITHUB_OUTPUT\"\n")
+PROVE_MATRIX_STEP = '          matrix=$(python3 scripts/prepare-release-baselines.py --prove-matrix "$shards" "$DRAFT")\n'
 
 
 def check_darwin_smoke(workflows):
-    """A PR proves one Darwin shard; the release path still proves all of them."""
+    """PRs run their existing smoke matrix and releases require the full reader gate."""
     proofs, release = workflows["update-proofs.yml"], workflows["release.yml"]
     policy = JOB(proofs, "policy")
     assert "      prove: ${{ steps.select.outputs.prove }}\n" in policy
@@ -454,18 +455,18 @@ def check_darwin_smoke(workflows):
     prove = JOB(proofs, "prove")
     assert "      matrix: ${{ fromJSON(needs.policy.outputs.prove) }}\n" in prove
     assert re.findall(r"^    name: (.+)$", prove, re.M) == ["prove (${{ matrix.platform }}, ${{ matrix.shard }})"]
-    # The reader requires the complete proof matrix, so it runs on the release path only.
-    assert re.findall(r"^    if: (.+)$", JOB(proofs, "reader"), re.M) == ["inputs.draft"], "the reader must run only for a release"
+    reader = STEP(JOB(proofs, "reader"), "Decode generated assets with the unchanged published executable").split("\n      - ", 1)[0]
+    assert "if: steps.proof-uploads.outcome == 'success' && inputs.draft\n" in reader, "require the release batches before the reader"
     caller = JOB(release, "prove-transition")
     assert "    uses: ./.github/workflows/update-proofs.yml\n" in caller and "      draft: true\n" in caller, \
-        "the release path must prove every Darwin shard"
+        "the release path must require its complete proof batches"
     assert not re.search(r"^      draft:", JOB(workflows["ci.yml"], "update-proofs"), re.M), "PR proofs must not claim the release matrix"
 
 
 def reject_darwin_smoke(workflows):
     mutations = (
         ("release.yml", lambda text: text.replace("      draft: true\n", "      draft: false\n", 1)),
-        ("update-proofs.yml", lambda text: text.replace("one Darwin shard.\n    if: inputs.draft\n", "one Darwin shard.\n", 1)),
+        ("update-proofs.yml", lambda text: text.replace("name: Decode generated assets with the unchanged published executable\n        if: steps.proof-uploads.outcome == 'success' && inputs.draft", "name: Decode generated assets with the unchanged published executable", 1)),
         ("update-proofs.yml", lambda text: text.replace('"$shards" "$DRAFT"', '"$shards" false', 1)),
         ("update-proofs.yml", lambda text: text.replace("fromJSON(needs.policy.outputs.prove)", "fromJSON(needs.policy.outputs.shards)", 1)),
     )

@@ -140,19 +140,29 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
         self.assertNotIn(": write", permissions)
         self.assertIn("fixtures.release_tool download", readers)
 
-    def test_readers_and_finalize_download_the_exact_uploads_the_signer_reported(self):
+    def test_signer_readers_and_finalize_reuse_the_exact_source_tool_uploads(self):
         publish = WORKFLOW[WORKFLOW.index("\n  publish:\n"):WORKFLOW.index("\n  verify-readers:\n")]
         readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
+        proofs = (ROOT / ".github/workflows/update-proofs.yml").read_text()
         for key in ("linux-amd64", "linux-arm64", "darwin-arm64"):
-            self.assertIn(f"      tool-{key}: ${{{{ steps.tool-{key}.outputs.artifact-id }}}}\n", publish)
-            self.assertIn(f"      - id: tool-{key}\n        uses: actions/upload-artifact@", publish)
-            self.assertIn(f"          name: release-tool-source-{key}\n", publish)
+            self.assertIn(f"      tool-{key}: ${{{{ needs.prove-transition.outputs.tool-{key} }}}}\n", publish)
+            if key == "linux-amd64":
+                self.assertIn(f"      tool-{key}: ${{{{ steps.tool-{key}.outputs.artifact-id }}}}", proofs)
+                continue
+            self.assertIn(f"      tool-{key}: ${{{{ matrix.key == '{key}' && steps.tool-upload.outputs.artifact-id || '' }}}}", proofs)
+        self.assertIn("ARTIFACT: ${{ needs.prove-transition.outputs.tool-linux-amd64 }}", publish)
+        self.assertNotIn("go build", publish)
         self.assertIn("ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}", readers)
         self.assertIn("ARTIFACT: ${{ needs.publish.outputs['tool-linux-amd64'] }}", finalize)
         for job in (readers, finalize):
             download = next(line for line in job.splitlines() if "fixtures.release_tool download" in line)
             self.assertTrue(download.endswith('"$RUNNER_TEMP/release-source-tools" "$ARTIFACT"'), download)
+
+    def test_signer_requires_the_exact_manifest_checked_by_the_legacy_reader(self):
+        self.assertIn("artifact-ids: ${{ needs.prove-transition.outputs.manifest_artifact || '0' }}", WORKFLOW)
+        self.assertIn("artifact-ids: ${{ needs.prove-transition.outputs.proof_artifacts || '0' }}", WORKFLOW)
+        self.assertNotIn("scripts/generate-release-manifest.sh", WORKFLOW)
 
 
 if __name__ == "__main__":
