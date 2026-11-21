@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CODE_FILTER = "${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 DRAFT_FILTER = "github.event_name == 'pull_request' && github.event.pull_request.draft"
 FILTERED = {"app-pill", "socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
-MAC_TURN = {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery", "update-proofs"}
+MAC_TURN = {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
 PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
