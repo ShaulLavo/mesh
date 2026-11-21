@@ -4,9 +4,12 @@ import json
 import os
 import plistlib
 import shutil
+import signal
 import socket
+import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -50,6 +53,35 @@ class HelperRecoveryDaemonTemplateTest(unittest.TestCase):
             command = plist["ProgramArguments"][2]
             self.assertIn('PATH="${HOME}/.local/bin:$PATH" exec ', command)
             self.assertIn('"${HOME}/.local/bin/mesh" daemon ', command)
+
+
+class RetainedSessionTeardownTest(unittest.TestCase):
+    """Teardown must end retained sessions even though workers hold SIGTERM."""
+
+    def test_helper_recovery_close_ends_a_worker_that_holds_sigterm(self):
+        self.assert_close_ends_workers("prove-helper-recovery.py", "Installation")
+
+    def test_cutover_close_ends_a_worker_that_holds_sigterm(self):
+        self.assert_close_ends_workers("prove-device-auth-cutover.py", "Host")
+
+    def assert_close_ends_workers(self, script, class_name):
+        source = Path(__file__).resolve().parents[1] / "scripts" / script
+        tree = ast.parse(source.read_text(), filename=str(source))
+        fixture = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
+        fixture.body = [node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == "close"]
+        scope = {"os": os, "signal": signal, "LOCK": threading.RLock()}
+        # Loading the proof module would acquire releases and start services.
+        exec(compile(ast.Module(body=[fixture], type_ignores=[]), str(source), "exec"), scope)
+        worker = subprocess.Popen([sys.executable, "-c", "import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                                   "print('ready', flush=True); signal.pause()"], stdout=subprocess.PIPE)
+        self.addCleanup(worker.stdout.close)
+        self.addCleanup(lambda: worker.poll() is None and worker.kill())
+        self.assertEqual(worker.stdout.readline(), b"ready\n")
+        host = scope[class_name].__new__(scope[class_name])
+        host.terminals, host.logs, host.workers = [], [], [worker.pid]
+        host.stop = lambda unit: None
+        host.close()
+        self.assertEqual(worker.wait(timeout=10), -signal.SIGKILL)
 
 
 class HelperRecoveryPathsTest(unittest.TestCase):
