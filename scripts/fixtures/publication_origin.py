@@ -13,6 +13,13 @@ import urllib.parse
 
 from fixtures import published_releases, tls
 
+# The product store waits a bounded 1.5 seconds for the updater's authority lock.
+AUTHORITY_BUSY = "acquire authority lock: context deadline exceeded"
+
+
+class AuthorityBusy(RuntimeError):
+    """A product read found the updater holding its authority lock."""
+
 
 class Assets(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -195,8 +202,12 @@ class Origin:
             "MESH_INSTALLED_READ_OUTPUT": str(output.relative_to(state.parent))}
         result = subprocess.run([str(self.inspector), "-test.run=^TestInstalledHostRead$"], env=environment,
                                 capture_output=True, text=True, timeout=90 if kind == "seed" else 15, check=False)
-        if result.returncode:
-            raise RuntimeError("publication product " + kind + " failed: " + result.stdout[-4096:] + result.stderr[-4096:])
+        if not result.returncode:
+            return
+        message = "publication product " + kind + " failed: " + result.stdout[-4096:] + result.stderr[-4096:]
+        if AUTHORITY_BUSY in result.stdout + result.stderr:
+            raise AuthorityBusy(message)
+        raise RuntimeError(message)
 
     def close(self):
         self.stopping.set()

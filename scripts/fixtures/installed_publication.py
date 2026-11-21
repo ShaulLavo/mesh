@@ -15,6 +15,10 @@ from types import SimpleNamespace
 
 from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion, release_tool, release_documents
 
+# A daemon being replaced closes its control socket before, during or after
+# reading a request.
+DAEMON_SWAP = (installed_native.controls.EmptyResponse, BrokenPipeError, ConnectionResetError)
+
 
 def require_main():
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or os.environ.get("GITHUB_REF") != "refs/heads/main":
@@ -474,7 +478,10 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
     deadline, seen = deadline if deadline is not None else time.monotonic() + installed_clock.timeout(), set()
     while time.monotonic() < deadline:
         observe_published_hop(case, record, first, target, seen)
-        ledger = installed_chain.read_ledger(case)
+        ledger = read_route_ledger(case)
+        if ledger is None:
+            time.sleep(0.05)
+            continue
         journal = installed_chain.read_journal(case)
         terminal = journal.get("request", {}).get("manifest", {}).get("version") == target and journal.get("phase") == ("rolled_back" if rollback else "committed")
         if terminal and not ledger["state"].get("owned"):
@@ -484,10 +491,24 @@ def await_published_route(case, record, first, target, fault, rollback, *, deadl
     raise RuntimeError("original published updater did not finish its real retained route within the existing chain bound")
 
 
+def read_route_ledger(case):
+    try:
+        return installed_chain.read_ledger(case)
+    except publication_origin.AuthorityBusy:
+        # The updater holds its authority lock across a hop's commit, and the
+        # product reader's bounded wait can expire. Read again next tick.
+        return None
+
+
 def observe_published_hop(case, record, first, target, seen):
     if not case.ready():
         return
-    build = case.control("host.info")["host"]["build"]
+    try:
+        build = case.control("host.info")["host"]["build"]
+    except DAEMON_SWAP:
+        # The hop can replace the daemon between ready() and this read. The
+        # next tick observes again; validation and the route cap stay strict.
+        return
     if build["version"] in (first, target) or build["version"] in seen:
         return
     expected = next_expected_hop(record, build["version"])
@@ -546,13 +567,19 @@ def register_running_build(case, record, build, rollback):
     # published via head (an earlier real release) is known only through its
     # authenticated route plan, so it is registered here, after authentication
     # and before inspection. A restored daemon must already be a verified build.
+    # A version recorded independently keeps that record: the daemon's own
+    # report must match it rather than replace it.
+    known = case.releases.builds.get(build["version"])
     if rollback:
-        known = case.releases.builds.get(build["version"])
         if known is None or known["digest"] != build["digest"]:
             raise RuntimeError("restored published daemon is not a previously verified release")
         return
     authenticate_hop(case, build, record["authenticatedTarget"])
-    case.releases.builds[build["version"]] = case.releases.builds.get(build["version"], {}) | build
+    if known is None:
+        case.releases.builds[build["version"]] = build
+        return
+    if known["digest"] != build["digest"]:
+        raise RuntimeError("published daemon differs from its independently recorded release")
 
 
 def read_route_plan(case, target):

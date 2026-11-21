@@ -11,7 +11,7 @@ from terminal_window import Fixture, Terminal, PROMPT, eventually, require, run_
 
 
 class SSHFixture(Fixture):
-    def start_ssh(self, keys=None):
+    def start_ssh(self, keys=None, timeout=4):
         self.local.mkdir(exist_ok=keys is not None)
         if keys is None:
             self.key = self.root / "client-key"
@@ -38,7 +38,7 @@ class SSHFixture(Fixture):
         self.daemon = subprocess.Popen([self.binary, "daemon", "--tailnet-port", "0", "--ssh-port", str(self.port)],
                                        env=self.environment, stdin=subprocess.DEVNULL,
                                        stdout=self.daemon_log, stderr=subprocess.STDOUT)
-        eventually(self.listening, "SSH daemon did not listen")
+        eventually(self.listening, "SSH daemon did not listen", timeout=timeout)
 
     def listening(self):
         require(self.daemon.poll() is None, "SSH daemon exited")

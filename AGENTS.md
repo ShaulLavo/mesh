@@ -9,6 +9,10 @@ Mesh services are always tailnet-only. No public origin, public client, or publi
 port may reach any Mesh service. Do not add public serving, CORS or public-origin
 bypasses, reverse tunnels, or any other public exposure.
 
+## CI
+
+- Never cancel a queued or in-progress main CI run: it is the publish path. Pull request Mac legs wait for it (`mac-turn` in `.github/workflows/ci.yml`).
+
 ## Copy
 
 - Say what a thing is and does. Use plain words. Avoid "rather than", "instead of"

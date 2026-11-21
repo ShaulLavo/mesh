@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/shaul/mesh/internal/access"
 	"golang.org/x/crypto/ssh"
@@ -166,7 +165,7 @@ func changeDevice(ctx context.Context, stateDir, id string, approve bool) (bool,
 
 func changeDeviceWithPublisher(ctx context.Context, stateDir, id string, approve bool, publish func(string, string, []byte) error) (bool, error) {
 	var changed bool
-	err := access.WithClassWriter(ctx, stateDir, 250*time.Millisecond, func(ctx context.Context) error {
+	err := access.WithClassWriter(ctx, stateDir, access.ClassWriterBudget, func(ctx context.Context) error {
 		var err error
 		changed, err = changeDeviceOwned(ctx, stateDir, id, approve, publish)
 		return err
