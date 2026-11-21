@@ -179,7 +179,7 @@ class LifecycleControls(unittest.TestCase):
         with patch.object(installed_chain.installed_adoption, "AdoptionCase", return_value=case), \
                 patch.object(lifecycle, "prove", side_effect=primary), patch.object(installed_chain, "finish"):
             with self.assertRaises(lifecycle.CoverageIncomplete) as raised:
-                installed_chain.run_case(self.root, self.root, {}, {}, None, Mock(), Mock(), None, "final", {"index": 3})
+                installed_chain.run_case(self.root, self.root, {}, {}, None, Mock(), Mock(native_only=False), None, "final", {"index": 3})
         self.assertIs(raised.exception, primary)
         case.start_cohort.assert_not_called()
         case.write_fault.assert_not_called()
