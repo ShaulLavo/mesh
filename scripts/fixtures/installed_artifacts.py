@@ -13,7 +13,7 @@ from pathlib import Path
 
 KEYS = ("linux-amd64", "linux-arm64", "darwin-arm64")
 # Hang cap for one API read, shared by every attempt and retry pause.
-API_SECONDS = 300
+API_SECONDS = 120
 
 
 def verify_harness(expected, output):
@@ -30,8 +30,8 @@ def verify_harness(expected, output):
 # GitHub answers 502 on every 100-job page of a large CI run (90 jobs, run
 # 43912968125) while 30-job pages of the same run succeed.
 PAGE_SIZE = 30
-SERVER_ERROR_RETRIES = (2, 5, 10)
-SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
+SERVER_ERROR_RETRIES = (0.5, 1.0)
+SERVER_ERROR = re.compile(rb"\bHTTP (500|502|503|504)\b")
 
 
 def api(endpoint):
@@ -45,11 +45,12 @@ def api(endpoint):
         if result.returncode == 0:
             return json.loads(result.stdout)
         detail = api_error_detail(result.stderr)
-        if delay is None or not SERVER_ERROR.search(result.stderr or b""):
+        status = SERVER_ERROR.search(result.stderr or b"")
+        if delay is None or status is None:
             raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt} attempt(s), exit {result.returncode}: {detail}")
         if deadline - time.monotonic() <= delay:
             raise TimeoutError(f"GitHub API GET {endpoint} cannot retry within its {API_SECONDS}-second hang cap: {detail}")
-        print(f"GitHub API GET {endpoint} failed with a server error; retry {attempt + 1}/{attempts}", file=sys.stderr)
+        print(f"GitHub API GET {endpoint} returned HTTP {status[1].decode()}; retry {attempt + 1}/{attempts}", file=sys.stderr)
         time.sleep(delay)
 
 

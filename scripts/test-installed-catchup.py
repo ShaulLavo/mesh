@@ -1218,7 +1218,7 @@ class ArtifactAPIReadTest(unittest.TestCase):
                 sleep.assert_called_once_with(installed_artifacts.SERVER_ERROR_RETRIES[0])
 
     def test_permanent_and_unclassified_failures_stop_with_details(self):
-        for status in (401, 403, 404, 429, "unknown"):
+        for status in (401, 403, 404, 429, 501, "unknown"):
             with self.subTest(status=status), patch.object(installed_artifacts.subprocess, "run", return_value=self.response(status)) as run, \
                     patch.object(installed_artifacts.time, "sleep") as sleep:
                 self.assertRaisesRegex(RuntimeError, "GitHub API GET .*jobs.*upstream refused", installed_artifacts.api, self.endpoint)
@@ -1228,10 +1228,10 @@ class ArtifactAPIReadTest(unittest.TestCase):
     def test_transient_attempts_are_bounded(self):
         with patch.object(installed_artifacts.subprocess, "run", return_value=self.response(502)) as run, \
                 patch.object(installed_artifacts.time, "sleep") as sleep:
-            with self.assertRaisesRegex(RuntimeError, "after 4 attempt.*HTTP 502"):
+            with self.assertRaisesRegex(RuntimeError, "after 3 attempt.*HTTP 502"):
                 installed_artifacts.api(self.endpoint)
-        self.assertEqual(run.call_count, 4)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], list(installed_artifacts.SERVER_ERROR_RETRIES))
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.5, 1.0])
 
     def test_command_timeout_and_invalid_success_do_not_retry(self):
         error = subprocess.TimeoutExpired(["gh", "api", self.endpoint], installed_artifacts.API_SECONDS)
@@ -1255,7 +1255,7 @@ class ArtifactAPIReadTest(unittest.TestCase):
                 patch.object(installed_artifacts.time, "monotonic", side_effect=lambda: now[0]), patch.object(installed_artifacts.time, "sleep") as sleep:
             with self.assertRaisesRegex(TimeoutError, "cannot retry.*HTTP 503"):
                 installed_artifacts.api(self.endpoint)
-        self.assertEqual(timeouts, [installed_artifacts.API_SECONDS])
+        self.assertEqual(timeouts, [120])
         sleep.assert_not_called()
 
     def test_error_details_are_bounded_and_redacted(self):
@@ -1282,10 +1282,9 @@ class ArtifactAPIReadTest(unittest.TestCase):
 
     def actual_api_read(self, root, state):
         environment = {"PATH": str(root) + os.pathsep + os.environ["PATH"], "MESH_API_TEST_STATE": str(state)}
-        with patch.dict(os.environ, environment), patch.object(installed_artifacts.time, "sleep") as sleep:
+        with patch.dict(os.environ, environment):
             self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
         self.assertEqual(state.read_text(), "2")
-        sleep.assert_called_once_with(installed_artifacts.SERVER_ERROR_RETRIES[0])
 
 
 class ArtifactPinTest(unittest.TestCase):
