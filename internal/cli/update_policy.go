@@ -46,7 +46,7 @@ func (a *application) forgetHostDependent(cmd *cobra.Command, options *updateOpt
 	if _, err := update.PublicKey(id); err != nil {
 		return fmt.Errorf("dependent needs an exact public identity: %w", err)
 	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (a *application) forgetHostDependent(cmd *cobra.Command, options *updateOpt
 		return fmt.Errorf("release dependent history: %w", err)
 	}
 	if options.json {
-		return writeAutomaticJSON(cmd.OutOrStdout(), dependent)
+		return writeUpdateJSON(cmd.OutOrStdout(), dependent)
 	}
 	_, err = fmt.Fprintln(cmd.OutOrStdout(), "Released the update history retained for this machine. It may register again when it reads update evidence.")
 	return hostPolicyPrintError(err)
@@ -95,7 +95,7 @@ func (a *application) runHostPolicy(cmd *cobra.Command, options *updateOptions, 
 	if action != hostPolicyShow && !cmd.Flags().Changed("expected-revision") {
 		return errors.New("run mesh update policy show, then pass its revision with --expected-revision")
 	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (a *application) runHostPolicy(cmd *cobra.Command, options *updateOptions, 
 		return err
 	}
 	if options.json {
-		return writeAutomaticJSON(cmd.OutOrStdout(), policy)
+		return writeUpdateJSON(cmd.OutOrStdout(), policy)
 	}
 	if options.details {
 		return printUpdateDetails(cmd.OutOrStdout(), policy, a.privacy)

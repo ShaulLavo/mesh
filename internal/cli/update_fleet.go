@@ -63,7 +63,7 @@ func (a *application) runUpdateFleet(cmd *cobra.Command, options *updateOptions)
 	if options.coordinator != "" {
 		return errors.New("fleet status reads each machine directly; omit --coordinator")
 	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func (a *application) runUpdateFleet(cmd *cobra.Command, options *updateOptions)
 	}
 	status := readFleetUpdates(cmd.Context(), fleet.Members, environment.local.ID, a.dependencies.DialPassive, a.dependencies.Now())
 	if options.json {
-		err = writeAutomaticJSON(cmd.OutOrStdout(), status)
+		err = writeUpdateJSON(cmd.OutOrStdout(), status)
 	} else {
 		err = printFleetUpdates(cmd.OutOrStdout(), status, options.details, a.privacy)
 	}
@@ -361,10 +361,37 @@ func fleetUpdateDescription(member FleetUpdateMember) string {
 	} else {
 		text += "; last update unknown"
 	}
+	// A current or pending machine has no problem; its pending text is the
+	// ordinary reason it waits and must not read as a request for attention.
+	if member.State == fleetCurrent || member.State == fleetPending {
+		return text + fleetWaitingText(summary.Pending)
+	}
 	if member.Problem != "" || summary.Pending != "" {
 		text += ". " + fleetUpdateAttention(member)
 	}
 	return text
+}
+
+// fleetWaitingReasons maps the host updater's fixed waiting reasons to plain
+// copy. Other reasons can carry raw errors, so they stay behind --details.
+var fleetWaitingReasons = map[string]string{
+	"predecessors have no newer soaked release":                                      "Waiting until an earlier machine has run a newer release for its configured wait.",
+	"another installation is unfinished":                                             "Waiting for another installation on this machine to finish.",
+	"predecessor evidence holds the owned hop":                                       "Waiting for an earlier machine's update report.",
+	"failed edge quarantined; searching for a verified alternative":                  "A failed update step was set aside; looking for another verified path.",
+	"adoption awaits local confirmation of pinned image, policy and preserved state": "Waiting for this machine to confirm its adoption.",
+	"A newer release is waiting to install.":                                         "A newer release is waiting to install.",
+	"An approved local update is in progress.":                                       "An approved local update is in progress.",
+}
+
+func fleetWaitingText(pending string) string {
+	if pending == "" {
+		return ""
+	}
+	if text, known := fleetWaitingReasons[pending]; known {
+		return ". " + text
+	}
+	return ". Waiting. Use --details for the reason."
 }
 
 func fleetInstallationText(kind string) string {

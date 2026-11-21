@@ -566,6 +566,9 @@ def retain_logs(root, output, name):
     installed_attachment_evidence.retain(root, output, name)
     if (root / installed_continuity.RECORD).exists():
         shutil.copy2(root / installed_continuity.RECORD, output / (name + "-" + installed_continuity.RECORD))
+    for filename in ("adoption-wait-failure.json", "helper-service.txt"):
+        if (root / filename).is_file():
+            shutil.copy2(root / filename, output / (name + "-" + filename))
     for filename in ("daemon.log", "daemon.err", "client.err", "current-client.err"):
         path = root / filename
         if path.is_file():

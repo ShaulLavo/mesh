@@ -142,14 +142,18 @@ def validate_logical_inventory(directory, entries):
             raise ValueError("materialized logical bytes differ from the authenticated inventory")
 
 
-def download(repository, run, source, role, key, destination):
+def download(repository, run, source, role, key, destination, artifact=None):
     if repository != "ShaulLavo/mesh" or int(run) <= 0 or role not in ("source", "harness"):
         raise ValueError("release tool acquisition requires its owned repository, run and role")
     metadata = installed_artifacts.api(f"repos/{repository}/actions/runs/{run}")
     if role == "source" and metadata["head_sha"] != source:
         raise ValueError("SOURCE tool artifact run has another source")
-    assets = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
-    item = current_artifact(assets, f"release-tool-{role}-{key}", int(run))
+    name = f"release-tool-{role}-{key}"
+    # Listed by name, and each ID once: a paged listing of the whole run can
+    # repeat or skip uploads while other jobs upload or delete artifacts.
+    listed = installed_artifacts.named_artifacts(repository, run, name)
+    assets = list({item["id"]: item for item in listed}.values())
+    item = current_artifact(assets, name, int(run)) if artifact is None else named_artifact(assets, name, int(run), artifact)
     pin = {"id": item["id"], "size": item["size_in_bytes"], "digest": item.get("digest")}
     installed_artifacts.require_archive_pin(pin)
     destination.mkdir(exist_ok=False)
@@ -166,13 +170,30 @@ def current_artifact(assets, name, run):
     # run, and the artifact list carries no attempt number: the newest live
     # upload is the current attempt's. Every candidate must belong to this run.
     matches = [item for item in assets if item["name"] == name and not item["expired"]]
-    if not matches or any(item.get("workflow_run", {}).get("id") != run for item in matches):
+    if not matches or any(artifact_run(item) != run for item in matches):
         raise ValueError("release tool requires one exact live same-run artifact")
     newest = max(item["created_at"] for item in matches)
     current = [item for item in matches if item["created_at"] == newest]
     if len(current) != 1:
         raise ValueError("release tool requires one exact live same-run artifact")
     return current[0]
+
+
+def named_artifact(assets, name, run, artifact):
+    """The exact upload the producing job reported, when the workflow passes its ID."""
+    if not str(artifact).isdigit() or int(artifact) <= 0:
+        raise ValueError("release tool artifact ID must be a positive integer")
+    matches = [item for item in assets if item["id"] == int(artifact)]
+    if len(matches) != 1 or matches[0]["name"] != name or matches[0]["expired"] or artifact_run(matches[0]) != run:
+        raise ValueError("release tool requires its exact live same-run artifact " + str(artifact))
+    return matches[0]
+
+
+def artifact_run(item):
+    workflow_run = item.get("workflow_run")
+    if not isinstance(workflow_run, dict) or type(workflow_run.get("id")) is not int:
+        raise ValueError("release tool artifact does not name its workflow run")
+    return workflow_run["id"]
 
 
 def extract(archive, destination):
@@ -204,8 +225,10 @@ def main():
     parser.add_argument("values", nargs="+")
     args = parser.parse_args()
     if args.operation == "download":
-        repository, run, source, role, key, directory = args.values
-        download(repository, run, source, role, key, Path(directory))
+        if len(args.values) not in (6, 7):
+            parser.error("download takes REPOSITORY RUN SOURCE ROLE KEY DIRECTORY [ARTIFACT-ID]")
+        repository, run, source, role, key, directory, *artifact = args.values
+        download(repository, run, source, role, key, Path(directory), *artifact)
         return
     directory, source, run, role, *target = args.values
     if args.operation == "record":

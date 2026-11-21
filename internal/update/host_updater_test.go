@@ -82,7 +82,7 @@ func TestHostOffDuringArchiveDownloadRefusesStagedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine = engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine = engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	done := make(chan error, 1)
 	go func() { _, err := engine.Stage(t.Context(), owned.Installation); done <- err }()
 	<-blocked.entered

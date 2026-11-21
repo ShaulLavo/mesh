@@ -237,7 +237,8 @@ class WorkflowControls(unittest.TestCase):
         self.assertFalse((loaded / "helper").stat().st_mode & 0o111)
 
     def test_intake_checks_unique_pinned_archive_and_space_before_any_transfer(self):
-        artifact = {"id": 12, "name": "prepared", "size_in_bytes": 20, "digest": "sha256:" + "a" * 64, "expired": False}
+        artifact = {"id": 12, "name": "prepared", "size_in_bytes": 20, "digest": "sha256:" + "a" * 64, "expired": False,
+                    "workflow_run": {"id": 42}, "created_at": "2026-11-19T10:00:00Z"}
         control = self.root / "control"
         with patch.object(workflow.installed_artifacts, "pages", return_value=[artifact]), \
                 patch.object(workflow.installed_storage, "preflight", side_effect=RuntimeError("space")) as preflight, \
@@ -249,9 +250,23 @@ class WorkflowControls(unittest.TestCase):
         pin = json.loads((control / "prepared-pin.json").read_bytes())
         self.assertEqual(pin["run"], 42)
         self.assertEqual(pin["artifacts"]["prepared"]["digest"], artifact["digest"])
-        with patch.object(workflow.installed_artifacts, "pages", return_value=[artifact, artifact]):
-            with self.assertRaisesRegex(ValueError, "exactly one"):
+        for listed in ([artifact, artifact | {"id": 13}], [artifact | {"workflow_run": {"id": 43}}], []):
+            with patch.object(workflow.installed_artifacts, "pages", return_value=listed), self.assertRaisesRegex(ValueError, "exactly one"):
                 workflow.fetch("owner/repo", 42, "prepared", self.root / "bundle", control)
+        rerun = artifact | {"id": 13, "created_at": "2026-11-19T11:00:00Z"}
+        with patch.object(workflow.installed_artifacts, "pages", return_value=[artifact, rerun]), \
+                patch.object(workflow.installed_storage, "preflight", side_effect=RuntimeError("space")):
+            with self.assertRaisesRegex(RuntimeError, "space"):
+                workflow.fetch("owner/repo", 42, "prepared", self.root / "bundle", control)
+        self.assertEqual(json.loads((control / "prepared-pin.json").read_bytes())["artifacts"]["prepared"]["id"], 13)
+        # Only the name listing is trusted: a whole-run page here has skipped the rerun's upload.
+        def listing(endpoint, _field):
+            return [artifact, rerun] if endpoint.endswith("/artifacts?name=prepared") else [artifact]
+        with patch.object(workflow.installed_artifacts, "pages", side_effect=listing), \
+                patch.object(workflow.installed_storage, "preflight", side_effect=RuntimeError("space")):
+            with self.assertRaisesRegex(RuntimeError, "space"):
+                workflow.fetch("owner/repo", 42, "prepared", self.root / "bundle", control)
+        self.assertEqual(json.loads((control / "prepared-pin.json").read_bytes())["artifacts"]["prepared"]["id"], 13)
 
     def test_missing_or_negative_ownership_retains_all_payloads(self):
         control, proof = self.root / "cohort-control", self.root / "cohort-proof"

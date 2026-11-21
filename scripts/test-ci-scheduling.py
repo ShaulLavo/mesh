@@ -103,9 +103,6 @@ def check_schedule(ci):
         ("MESH_INTEGRATION_TIMEOUT", "60s")]
     assert "python3 -B scripts/test-ci-scheduling.py" in JOB(ci, "quality")
     assert "mac-turn" not in ci and "wait-for-main-ci.py" not in ci
-    concurrency = ci.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
-    assert "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}" in concurrency
-    assert "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in concurrency
     check_publication_schedule(ci)
 
 
@@ -117,7 +114,6 @@ def check_mutations(ci):
         ci.replace("go test -race ./...", "go test -race ./internal/cli", 1),
         ci.replace("        run: ./scripts/verify.sh", "        run: ./scripts/verify.sh\n      - run: ./scripts/verify.sh", 1),
         ci.replace("        run: ./scripts/verify.sh", "        if: false\n        run: ./scripts/verify.sh", 1),
-        ci.replace("number || github.run_id", "number || github.ref", 1),
     )
     for condition in ("!cancelled() && ", "needs.gate.result == 'success' && ", MAIN_PUSH):
         mutations += (ci.replace(publication, publication.replace(condition, "", 1), 1),)
@@ -275,6 +271,59 @@ def reject_mac_routing(workflows):
         raise AssertionError(f"Mac routing accepted a mutation of {name}")
 
 
+def actions_value(expression, context):
+    # GitHub's && and || return an operand, like Python's and/or.
+    python = expression.replace("&&", " and ").replace("||", " or ")
+    python = re.sub(r"!(?!=)", " not ", python)
+    python = re.sub(r"\bgithub\.([\w.]+)", lambda match: repr(context.get(match.group(1))), python)
+    assert re.fullmatch(r"[\s\w'.=!()\-/]*", python), python
+    return eval(python, {"__builtins__": {}})  # noqa: S307 - workflow expression from the repository
+
+
+def concurrency(ci, context):
+    block = re.search(r"^concurrency:\n  group: (.+)\n  cancel-in-progress: (.+)\n", ci, re.M)
+    assert block, "CI must declare one top-level concurrency group"
+    group = re.sub(r"\$\{\{ (.+?) \}\}", lambda match: str(actions_value(match.group(1), context)), block.group(1))
+    cancel = actions_value(re.fullmatch(r"\$\{\{ (.+) \}\}", block.group(2)).group(1), context)
+    return group, bool(cancel)
+
+
+def check_concurrency(ci):
+    def run(event, ref, run_id, number=None):
+        return {"workflow": "CI", "event_name": event, "ref": ref, "run_id": run_id, "event.pull_request.number": number}
+
+    first, second = run("push", "refs/heads/main", 101), run("push", "refs/heads/main", 102)
+    main = concurrency(ci, first)
+    # Main pushes share one group and never cancel a running publish run, so
+    # GitHub keeps the running one and replaces only a waiting one.
+    assert main == concurrency(ci, second) and main[1] is False, main
+    pr = concurrency(ci, run("pull_request", "refs/pull/7/merge", 103, 7))
+    assert pr == concurrency(ci, run("pull_request", "refs/pull/7/merge", 104, 7)) and pr[1] is True, pr
+    assert pr[0] != concurrency(ci, run("pull_request", "refs/pull/8/merge", 105, 8))[0]
+    manual = {concurrency(ci, run("workflow_dispatch", "refs/heads/main", run_id)) for run_id in (106, 107)}
+    assert len(manual) == 2 and all(cancel is False for _, cancel in manual), manual
+    assert main[0] not in {pr[0]} | {group for group, _ in manual}
+
+
+def reject_concurrency(ci):
+    old_group = "  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}\n"
+    new_group = re.search(r"^  group: .+\n", ci, re.M).group(0)
+    mutations = (
+        ci.replace(new_group, old_group, 1),
+        ci.replace("  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+                   "  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}", 1),
+        ci.replace("github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main'",
+                   "github.ref == 'refs/heads/main' && 'main'", 1),
+    )
+    for mutated in mutations:
+        assert mutated != ci, "concurrency mutation did not apply"
+        try:
+            check_concurrency(mutated)
+        except AssertionError:
+            continue
+        raise AssertionError("an unsafe CI concurrency was accepted")
+
+
 PROVE_MATRIX_STEP = ("          printf 'prove=%s\\n' \"$(python3 scripts/prepare-release-baselines.py "
                      "--prove-matrix \"$shards\" \"$DRAFT\")\" >> \"$GITHUB_OUTPUT\"\n")
 
@@ -345,6 +394,8 @@ def reject_mktemp_templates(sources):
 
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    check_concurrency(ci)
+    reject_concurrency(ci)
     check_schedule(ci)
     check_mutations(ci)
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
@@ -359,7 +410,7 @@ def main():
     check_apt_workflows(workflows, action)
     reject_apt_mutations(workflows, action)
     check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, one Darwin proof shard on PRs and all on releases, hosted PR Mac legs, offline apt cache and mutation controls")
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, one Darwin proof shard on PRs and all on releases, hosted PR Mac legs, offline apt cache, one never-cancelled main CI group and mutation controls")
 
 
 if __name__ == "__main__":

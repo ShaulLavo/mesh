@@ -20,7 +20,7 @@ func TestConfigurationDomainConflictSettlesIndependentFeed(t *testing.T) {
 	recipient := approval.Proposal.Recipients[0]
 	recipient.DomainExpected = &DomainExpectation{Value: before, Digest: before.Digest()}
 	recipient.Domain = &DomainChange{Primary: "new.test", Aliases: before.Policy.Domains()}
-	request := ConfigurationPut{mustAutomaticID(t), strings.Repeat("d", 64), approval.Proposal.Membership, c.ID, recipient}
+	request := ConfigurationPut{mustRandomID(t), strings.Repeat("d", 64), approval.Proposal.Membership, c.ID, recipient}
 	if _, err := c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, request, domain.writer); !errors.Is(err, domain.fail) {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestConfigurationDomainConflictSettlesIndependentFeed(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh := request
-	fresh.ChangeID = mustAutomaticID(t)
+	fresh.ChangeID = mustRandomID(t)
 	fresh.ProposalDigest = strings.Repeat("e", 64)
 	fresh.Recipient.Domain, fresh.Recipient.DomainExpected = nil, nil
 	fresh.Recipient.Expected = &snapshot.Feed

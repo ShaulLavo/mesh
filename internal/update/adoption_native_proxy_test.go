@@ -164,12 +164,15 @@ func (p *adoptionNativeProxy) connect(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	secure := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{p.certificate}, MinVersion: tls.VersionTLS12})
-	server := &http.Server{Handler: http.HandlerFunc(p.serve), ReadHeaderTimeout: 5 * time.Second}
+	listener := &adoptionSingleConnection{connection: secure, closed: make(chan struct{})}
+	server := &http.Server{Handler: http.HandlerFunc(p.serve), ReadHeaderTimeout: 5 * time.Second, ConnState: listener.connectionState}
 	p.mu.Lock()
 	p.connections[connection] = server
 	p.mu.Unlock()
-	listener := &adoptionSingleConnection{connection: secure, closed: make(chan struct{})}
 	_ = server.Serve(listener)
+	p.mu.Lock()
+	delete(p.connections, connection)
+	p.mu.Unlock()
 }
 
 func (p *adoptionNativeProxy) serve(w http.ResponseWriter, request *http.Request) {
@@ -231,8 +234,20 @@ func (listener *adoptionSingleConnection) Accept() (net.Conn, error) {
 
 func (listener *adoptionSingleConnection) Addr() net.Addr { return listener.connection.LocalAddr() }
 func (listener *adoptionSingleConnection) Close() error {
-	listener.closeOnce.Do(func() { close(listener.closed) })
+	listener.stop()
 	return hostError(listener.connection.Close())
+}
+
+func (listener *adoptionSingleConnection) stop() {
+	listener.closeOnce.Do(func() { close(listener.closed) })
+}
+
+// connectionState ends the listener once its one tunnel is closed, so Serve
+// returns instead of leaving a blocked goroutine for every finished tunnel.
+func (listener *adoptionSingleConnection) connectionState(_ net.Conn, state http.ConnState) {
+	if state == http.StateClosed || state == http.StateHijacked {
+		listener.stop()
+	}
 }
 
 func downloadAdoptionNativeArchive(ctx context.Context, client *http.Client, address string) ([]byte, error) {
