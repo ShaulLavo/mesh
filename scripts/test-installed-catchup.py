@@ -416,6 +416,22 @@ class InstalledPRTest(unittest.TestCase):
         self.assertEqual(installed_pr.chain_profiles("linux/arm64"), ("none", "final"))
         self.assertEqual(installed_pr.chain_profiles("darwin/arm64"), ("none", "final"))
 
+    def test_pr_chain_initializes_managed_defaults_before_adoption_takes_its_snapshot(self):
+        case = Mock()
+        case.start_adoption.return_value = {"pin": "fixture"}
+        releases = Mock(native_only=True)
+        first = installed_releases.VERSIONS[0]
+        with (patch.object(installed_adoption, "AdoptionCase", return_value=case),
+              patch.object(installed_chain.installed_transport_lifecycle, "prove"),
+              patch.object(installed_chain.installed_continuity, "reconnect_current"),
+              patch.object(installed_chain, "await_chain"), patch.object(installed_chain, "finish")):
+            installed_chain.run_case(None, None, None, None, None, Mock(), releases, None, "none")
+        operations = case.mock_calls
+        self.assertLess(operations.index(unittest.mock.call.require_unadopted()),
+                        operations.index(unittest.mock.call.initialize_preserved_baseline()))
+        self.assertLess(operations.index(unittest.mock.call.initialize_preserved_baseline()),
+                        operations.index(unittest.mock.call.start_adoption(first)))
+
     def test_every_current_edge_proves_rollback_for_both_live_worker_images(self):
         first, intermediate, final = installed_releases.VERSIONS
         releases = Mock(root=Path("unused"), directory=Path("unused/releases"),

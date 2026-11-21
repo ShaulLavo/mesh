@@ -38,6 +38,8 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
             case.require_unadopted()
         case.seed_prior()
         case.seed()
+        if releases.native_only:
+            record["baselineInitialization"] = case.initialize_preserved_baseline()
         start = case.start_adoption(first)
         record["bootstrap"] = case.validate_result(case.await_result(first), first, start["pin"])
         installed_transport_lifecycle.prove(case, record["bootstrap"])
