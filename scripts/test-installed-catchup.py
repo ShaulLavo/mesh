@@ -1201,12 +1201,19 @@ class AccountIsolationTest(unittest.TestCase):
         self.assertTrue(record["absent"])
 
 
+def gh_api_response(status, *, body=b"", error=b""):
+    headers = f"HTTP/2 {status}\nContent-Type: application/json\r\n\r\n".encode() if status else b""
+    return subprocess.CompletedProcess(["gh", "api", "--include"], int(not status or status >= 400), headers + body, error)
+
+
 class ArtifactAPIReadTest(unittest.TestCase):
     endpoint = "repos/ShaulLavo/mesh/actions/runs/123/jobs?per_page=100&page=1"
 
     def response(self, status=None):
-        return subprocess.CompletedProcess(["gh", "api", self.endpoint], 1 if status else 0,
-            b"" if status else b'{"jobs": []}', f"gh: upstream refused (HTTP {status})".encode() if status else b"")
+        if status is None:
+            return gh_api_response(200, body=b'{"jobs": []}')
+        code = status if isinstance(status, int) else None
+        return gh_api_response(code, error=f"gh: upstream refused (HTTP {status})".encode())
 
     def test_transient_reads_recover_and_preserve_endpoint(self):
         for status in (500, 502, 503, 504):
@@ -1214,7 +1221,7 @@ class ArtifactAPIReadTest(unittest.TestCase):
                     side_effect=[self.response(status), self.response()]) as run, patch.object(installed_artifacts.time, "sleep") as sleep:
                 self.assertEqual(installed_artifacts.api(self.endpoint), {"jobs": []})
                 self.assertEqual(run.call_count, 2)
-                self.assertTrue(all(call.args[0] == ["gh", "api", self.endpoint] for call in run.call_args_list))
+                self.assertTrue(all(call.args[0] == ["gh", "api", "--include", self.endpoint] for call in run.call_args_list))
                 sleep.assert_called_once_with(installed_artifacts.SERVER_ERROR_RETRIES[0])
 
     def test_permanent_and_unclassified_failures_stop_with_details(self):
@@ -1233,14 +1240,24 @@ class ArtifactAPIReadTest(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [0.5, 1.0])
 
+    def test_error_detail_does_not_override_the_actual_response_status(self):
+        response = subprocess.CompletedProcess([], 1, b"HTTP/2 404 Not Found\n\r\n",
+            b"gh: the missing job reported HTTP 502 (HTTP 404)\n")
+        with patch.object(installed_artifacts.subprocess, "run", return_value=response) as run, \
+                patch.object(installed_artifacts.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, r"after 1 attempt.*\(HTTP 404\)"):
+                installed_artifacts.api(self.endpoint)
+        run.assert_called_once()
+        sleep.assert_not_called()
+
     def test_command_timeout_and_invalid_success_do_not_retry(self):
-        error = subprocess.TimeoutExpired(["gh", "api", self.endpoint], installed_artifacts.API_SECONDS)
+        error = subprocess.TimeoutExpired(["gh", "api", "--include", self.endpoint], installed_artifacts.API_SECONDS)
         with patch.object(installed_artifacts.subprocess, "run", side_effect=error) as run:
             with self.assertRaises(subprocess.TimeoutExpired) as caught:
                 installed_artifacts.api(self.endpoint)
             self.assertIs(caught.exception, error)
             self.assertEqual(run.call_count, 1)
-        with patch.object(installed_artifacts.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"{", b"")) as run:
+        with patch.object(installed_artifacts.subprocess, "run", return_value=gh_api_response(200, body=b"{")) as run:
             with self.assertRaises(json.JSONDecodeError):
                 installed_artifacts.api(self.endpoint)
             self.assertEqual(run.call_count, 1)
@@ -1274,8 +1291,9 @@ class ArtifactAPIReadTest(unittest.TestCase):
             command = root / "gh"
             command.write_text(f"#!{sys.executable}\n" + "import os, sys\nfrom pathlib import Path\n"
                 "path = Path(os.environ['MESH_API_TEST_STATE'])\ncount = int(path.read_text())\npath.write_text(str(count + 1))\n"
-                "if count == 0:\n    print('gh: upstream unavailable (HTTP 502)', file=sys.stderr)\n    sys.exit(1)\n"
-                "print('{\"jobs\": []}')\n")
+                "assert sys.argv[1:3] == ['api', '--include']\n"
+                "if count == 0:\n    print('HTTP/2 502\\n')\n    print('gh: upstream unavailable (HTTP 502)', file=sys.stderr)\n    sys.exit(1)\n"
+                "print('HTTP/2 200\\nContent-Type: application/json\\r\\n\\r\\n{\"jobs\": []}')\n")
             command.chmod(0o700)
             self.actual_api_read(root, state)
         self.assertFalse(root.exists())
@@ -1320,9 +1338,6 @@ class ArtifactPinTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "darwin-arm64"):
                 installed_artifacts.verify_set("ShaulLavo/mesh", 123, "a" * 40, "update-native")
 
-    def gh_result(self, code, stdout=b"", stderr=b""):
-        return subprocess.CompletedProcess(["gh", "api"], code, stdout, stderr)
-
     def test_pages_use_small_pages_until_a_partial_page(self):
         size = installed_artifacts.PAGE_SIZE
         batches = [{"jobs": list(range(size))}, {"jobs": list(range(size))}, {"jobs": [0]}]
@@ -1333,9 +1348,9 @@ class ArtifactPinTest(unittest.TestCase):
                          [f"repos/o/r/actions/runs/7/jobs?per_page={size}&page={page}" for page in (1, 2, 3)])
 
     def test_api_retries_server_errors_then_returns(self):
-        outcomes = [self.gh_result(1, stderr=b"gh: HTTP 502: Server Error (https://api.github.com/x)"),
-                    self.gh_result(1, stderr=b"HTTP 503: Service Unavailable"),
-                    self.gh_result(0, stdout=b'{"jobs": []}')]
+        outcomes = [gh_api_response(502, error=b"gh: HTTP 502"),
+                    gh_api_response(503, error=b"gh: HTTP 503"),
+                    gh_api_response(200, body=b'{"jobs": []}')]
         with patch.object(installed_artifacts.subprocess, "run", side_effect=outcomes) as run, \
                 patch.object(installed_artifacts.time, "sleep") as sleep:
             self.assertEqual(installed_artifacts.api("repos/o/r/actions/runs/7/jobs"), {"jobs": []})
@@ -1343,7 +1358,7 @@ class ArtifactPinTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in sleep.call_args_list], list(installed_artifacts.SERVER_ERROR_RETRIES[:2]))
 
     def test_api_does_not_retry_client_errors(self):
-        with patch.object(installed_artifacts.subprocess, "run", return_value=self.gh_result(1, stderr=b"HTTP 404: Not Found")) as run, \
+        with patch.object(installed_artifacts.subprocess, "run", return_value=gh_api_response(404, error=b"gh: HTTP 404")) as run, \
                 patch.object(installed_artifacts.time, "sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "HTTP 404"):
                 installed_artifacts.api("repos/o/r/actions/runs/7/jobs")
@@ -1351,7 +1366,7 @@ class ArtifactPinTest(unittest.TestCase):
         sleep.assert_not_called()
 
     def test_api_gives_up_after_bounded_server_error_retries(self):
-        failure = self.gh_result(1, stderr=b"HTTP 502: Server Error")
+        failure = gh_api_response(502, error=b"gh: HTTP 502")
         with patch.object(installed_artifacts.subprocess, "run", return_value=failure) as run, \
                 patch.object(installed_artifacts.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "HTTP 502"):

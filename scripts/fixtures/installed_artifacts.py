@@ -31,7 +31,7 @@ def verify_harness(expected, output):
 # 43912968125) while 30-job pages of the same run succeed.
 PAGE_SIZE = 30
 SERVER_ERROR_RETRIES = (0.5, 1.0)
-SERVER_ERROR = re.compile(rb"\bHTTP (500|502|503|504)\b")
+SERVER_ERROR = re.compile(rb"\AHTTP/\d(?:\.\d)? (500|502|503|504)(?:[ \t]|\r?\n|\Z)")
 
 
 def api(endpoint):
@@ -41,17 +41,22 @@ def api(endpoint):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(f"GitHub API GET {endpoint} exhausted its {API_SECONDS}-second hang cap")
-        result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=False, timeout=remaining)
+        result = subprocess.run(["gh", "api", "--include", endpoint], capture_output=True, check=False, timeout=remaining)
         if result.returncode == 0:
-            return json.loads(result.stdout)
+            return api_body(result.stdout)
         detail = api_error_detail(result.stderr)
-        status = SERVER_ERROR.search(result.stderr or b"")
+        status = SERVER_ERROR.match(result.stdout)
         if delay is None or status is None:
             raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt} attempt(s), exit {result.returncode}: {detail}")
         if deadline - time.monotonic() <= delay:
             raise TimeoutError(f"GitHub API GET {endpoint} cannot retry within its {API_SECONDS}-second hang cap: {detail}")
         print(f"GitHub API GET {endpoint} returned HTTP {status[1].decode()}; retry {attempt + 1}/{attempts}", file=sys.stderr)
         time.sleep(delay)
+
+
+def api_body(response):
+    _, body = re.split(rb"\r?\n\r?\n", response, maxsplit=1)
+    return json.loads(body)
 
 
 def api_error_detail(data):
