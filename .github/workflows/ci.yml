@@ -16,8 +16,12 @@ on:
 permissions:
   contents: read
 
+# Pushes to main share one group and never cancel: the running main run (the
+# publish path) always finishes, at most one newer main run waits, and GitHub
+# replaces a waiting one with the next push. PRs keep one group each and
+# cancel superseded runs; manual runs stay independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main' || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
