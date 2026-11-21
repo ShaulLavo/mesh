@@ -111,8 +111,9 @@ jobs:
               - '.github/actions/installed-go/**'
 
   mac-turn:
-    # One mesh-mac runner serves every trusted Darwin leg, and GitHub gives it
-    # whichever queued job it picks. A same-repository PR's Mac legs wait here,
+    # The owner's Mac runners (mesh-mac alone, mesh-mac-shared up to three at
+    # once) serve every trusted Darwin leg, and GitHub gives them whichever
+    # queued job it picks. A same-repository PR's Mac legs wait here,
     # on a hosted runner, until no main CI run (the publish path) is queued or
     # running. Main, manual, fork and draft runs pass at once.
     if: ${{ !inputs.client_interrupt }}
@@ -541,7 +542,9 @@ jobs:
 
   update-proofs:
     name: Required native update proofs
-    needs: [changes, mac-turn]
+    # Its Darwin legs use the shared Mac runners, whose three slots leave room
+    # for main, so it does not wait for its Mac turn.
+    needs: changes
     if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
     uses: ./.github/workflows/update-proofs.yml
     with:
