@@ -13,15 +13,20 @@ import sys
 import tempfile
 import time
 
-PACKAGES = ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv")
+PACKAGES = ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv", "machinename")
+ENROLLMENT = ("TestCheckedApprovalNativeBindingAndIdempotency", "TestApproveFleetSystemSSHRequiresExistingHostKeyTrust")
+DARWIN_NAMING = (
+    "TestDestinationNamePublishedAfterCommitAndRetryCoalesces",
+    "TestHostRenameErrorsAreStructuredAndWatchReadOnly",
+    "TestHostRenameCannotHealRevokedConnection",
+)
 LINUX_TESTS = {
     "daemon": ("TestServeRejectsLongSocketPathPromptly", "TestSocketFixturesBindUnderLongScratchRoot"),
-    "cli": ("TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot",),
+    "cli": ("TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot",) + ENROLLMENT,
     "worker": ("TestRunRejectsLongSocketPathBeforeStartingCommand",),
     "paths": ("TestSocketPathNativeBoundary",),
     "testenv": ("TestSocketScratchCanonicalizesCallerRoot", "TestSocketScratchRejectsLongOverrideAndUsesShortRoot"),
 }
-DARWIN_ENROLLMENT = ("TestCheckedApprovalNativeBindingAndIdempotency", "TestApproveFleetSystemSSHRequiresExistingHostKeyTrust")
 CLI_PARTITIONS = 4
 CONCURRENCY = 4
 ALARM = "350s"
@@ -277,7 +282,7 @@ def main():
     try:
         tests = LINUX_TESTS if sys.platform == "linux" else None
         packages = tuple(tests) if tests else PACKAGES
-        must_pass = DARWIN_ENROLLMENT if sys.platform == "darwin" else ()
+        must_pass = ENROLLMENT + DARWIN_NAMING if sys.platform == "darwin" else ENROLLMENT
         asyncio.run(run(Path(__file__).resolve().parents[1], args.output.resolve(), args.short_base, args.scratch_base,
                         packages, tests, must_pass))
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as error:
