@@ -35,24 +35,7 @@ type dismissal struct {
 	Until time.Time `json:"until,omitempty"`
 }
 
-type CheckedRelease struct {
-	Manifest  release.Manifest `json:"manifest"`
-	Digest    string           `json:"digest"`
-	CheckedAt time.Time        `json:"checkedAt"`
-}
-
-func (c CheckedRelease) Validate() error {
-	if err := c.Manifest.Validate(); err != nil {
-		return fmt.Errorf("checked release manifest: %w", err)
-	}
-	if c.Digest != c.Manifest.Digest() || c.CheckedAt.IsZero() {
-		return errors.New("invalid checked release observation")
-	}
-	return nil
-}
-
 type cacheState struct {
-	Checked     *CheckedRelease      `json:"checked,omitempty"`
 	Version     string               `json:"version,omitempty"`
 	CheckedAt   time.Time            `json:"checkedAt,omitempty"`
 	AttemptedAt time.Time            `json:"attemptedAt,omitempty"`
@@ -162,7 +145,6 @@ func (s *Store) Record(ctx context.Context, manifest release.Manifest) error {
 	return s.change(ctx, func(current *cacheState) {
 		current.Version = manifest.Version
 		current.CheckedAt = s.now()
-		current.Checked = &CheckedRelease{manifest, manifest.Digest(), current.CheckedAt}
 		current.NextAttempt = current.CheckedAt.Add(checkInterval + s.jitter())
 	})
 }
@@ -221,6 +203,11 @@ func (s *Store) read() (cacheState, error) {
 		return state, errors.New("update notice cache directory is required")
 	}
 	err := readJSON(filepath.Join(s.directory, "notice.json"), &state)
+	// A cache this build cannot decode is only lost throttle and dismissal
+	// state. Treat it as absent so the next check or dismissal rewrites it.
+	if errors.Is(err, errUnreadableCache) {
+		return cacheState{}, nil
+	}
 	return state, err
 }
 
@@ -236,32 +223,4 @@ func (s *Store) change(ctx context.Context, mutate func(*cacheState)) error {
 	}
 	mutate(&state)
 	return writeJSON(filepath.Join(s.directory, "notice.json"), state)
-}
-
-// CheckedRelease reads a settled successful observation without fetching a release.
-func (s *Store) CheckedRelease(ctx context.Context) (*CheckedRelease, error) {
-	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	defer cancel()
-	unlock, err := s.lock(ctx, "state.lock", true)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-	state, err := s.read()
-	if err != nil {
-		return nil, err
-	}
-	if state.Checked == nil {
-		return nil, nil
-	}
-	if err = state.Checked.Validate(); err != nil {
-		return nil, err
-	}
-	if state.Version != state.Checked.Manifest.Version || !state.CheckedAt.Equal(state.Checked.CheckedAt) {
-		return nil, errors.New("checked release differs from successful notice")
-	}
-	if err = settleCache(s.directory); err != nil {
-		return nil, err
-	}
-	return state.Checked, nil
 }

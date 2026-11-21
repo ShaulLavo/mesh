@@ -76,6 +76,16 @@ class Manager:
         result = self.launchctl("list")
         return {"manager": "launchd-gui", "domain": self.domain, "units": result.stdout.splitlines()}
 
+    def describe(self):
+        """The service manager's own view of this unit and its recent output, for failure records."""
+        if self.system == "Linux":
+            status = self.systemctl("status", "--no-pager", "--full", self.label + ".service", check=False)
+            journal = command(["/usr/bin/journalctl", "--user", "--no-pager", "-n", "200", "-u", self.label + ".service"],
+                              self.environment, False)
+            return status.stdout + status.stderr + "\n--- journal\n" + journal.stdout + journal.stderr
+        result = self.launchctl("print", self.domain + "/" + self.label, check=False)
+        return result.stdout + result.stderr
+
     def exists(self):
         if self.system == "Linux":
             result = self.systemctl("show", self.label + ".service", "--property=LoadState", "--value", check=False)

@@ -80,7 +80,7 @@ func TestHostFreshDefaultOffFencesUnissuedOwnership(t *testing.T) {
 	if _, err := f.store.SetHostPolicy(t.Context(), 0, HostPolicy{Mode: HostManual}); err != nil {
 		t.Fatal(err)
 	}
-	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	if _, err := engine.Stage(t.Context(), owned.Installation); err == nil {
 		t.Fatal("off did not fence revision-zero ownership")
 	}

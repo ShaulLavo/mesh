@@ -754,6 +754,72 @@ class ProductReaderAuthorityTest(unittest.TestCase):
             self.assertNotIsInstance(caught.exception, publication_origin.AuthorityBusy)
 
 
+class AdoptionWaitEvidenceTest(unittest.TestCase):
+    """A stalled bootstrap adoption fails with its own message and keeps what explains it."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="adoption-wait-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.case = object.__new__(installed_adoption.AdoptionCase)
+        self.case.root, self.case.state, self.case.scenario = self.root, self.root / "state", "chain"
+        self.helper = SimpleNamespace(describe=Mock(return_value="state = running\npid = 31266\n"))
+        self.case.units = SimpleNamespace(managers={"helper": self.helper})
+        self.write("updates/host-adoption.json", {"details": {"phase": "waiting"}})
+        self.write("update/helper/installed.json", {"digest": "helper-image"})
+
+    def write(self, name, value):
+        path = self.case.state / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value))
+
+    def await_stalled(self):
+        cap = installed_adoption.ADOPTION_EVIDENCE_SECONDS + 0.2
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=cap), \
+                self.assertRaisesRegex(RuntimeError, r"adopting v0\.1\.9001 before the installed fixture cap; last phase waiting"):
+            self.case.await_result("v0.1.9001")
+
+    def test_a_stalled_adoption_keeps_its_status_journals_receipt_and_helper_service(self):
+        self.await_stalled()
+        evidence = json.loads((self.root / "adoption-wait-failure.json").read_text())
+        self.assertEqual(evidence["lastStatus"], {"details": {"phase": "waiting"}})
+        self.assertEqual(evidence["updates/host-adoption.json"], {"details": {"phase": "waiting"}})
+        self.assertEqual(evidence["update/helper/installed.json"], {"digest": "helper-image"})
+        self.assertIsNone(evidence["update/installation.json"])
+        self.assertEqual((self.root / "helper-service.txt").read_text(), "state = running\npid = 31266\n")
+        output = self.root / "output"
+        output.mkdir()
+        installed_native.retain_logs(self.root, output, "mac-chain")
+        self.assertTrue((output / "mac-chain-adoption-wait-failure.json").is_file())
+        self.assertTrue((output / "mac-chain-helper-service.txt").is_file())
+
+    def test_an_unreadable_helper_service_still_keeps_the_message_and_status(self):
+        self.helper.describe.side_effect = RuntimeError("launchctl unavailable")
+        self.await_stalled()
+        self.assertIn("launchctl unavailable", (self.root / "helper-service.txt").read_text())
+        self.assertTrue((self.root / "adoption-wait-failure.json").is_file())
+
+    def test_failing_evidence_writes_keep_the_stall_as_the_failure(self):
+        cap = installed_adoption.ADOPTION_EVIDENCE_SECONDS + 0.2
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=cap), \
+                patch.object(Path, "write_text", side_effect=OSError("No space left on device")), \
+                self.assertRaisesRegex(RuntimeError, r"last phase waiting; its evidence was not written: No space left"):
+            self.case.await_result("v0.1.9001")
+
+    def test_status_is_read_even_with_less_than_the_evidence_margin_left(self):
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=1.0), \
+                self.assertRaisesRegex(RuntimeError, "last phase waiting"):
+            self.case.await_result("v0.1.9001")
+        self.write("updates/host-adoption.json", {"details": {"phase": "adopted"}})
+        with patch.object(installed_adoption.installed_clock, "timeout", return_value=0.0):
+            self.assertEqual(self.case.await_result("v0.1.9001"), {"details": {"phase": "adopted"}})
+
+    def test_a_finished_adoption_returns_without_evidence(self):
+        self.write("updates/host-adoption.json", {"details": {"phase": "adopted"}})
+        self.assertEqual(self.case.await_result("v0.1.9001"), {"details": {"phase": "adopted"}})
+        self.assertFalse((self.root / "adoption-wait-failure.json").exists())
+
+
 class FreshSummaryLockTest(unittest.TestCase):
     """The revision-zero checks read past a held-lock summary and stay strict otherwise."""
     BUSY = "update: acquire authority lock: context deadline exceeded"
@@ -783,10 +849,12 @@ class FreshSummaryLockTest(unittest.TestCase):
             self.case.require_automatic_zero(host)
 
     def test_a_real_wrong_summary_fails_at_once(self):
+        # A short cap, so a widened busy match fails here quickly instead of after the full fixture cap.
         for summary in ({"mode": "manual"}, {"revision": 1}, {"installation": "unmanaged"},
                         {"mode": "unknown", "phase": "attention", "problem": "update: lock authority: permission denied"}):
             self.case.control = Mock(return_value=self.host(**summary))
-            host = self.case.settled_host()
+            with patch.object(installed_fresh.installed_clock, "timeout", return_value=0.2):
+                host = self.case.settled_host()
             self.assertEqual(self.case.control.call_count, 1)
             with self.subTest(summary), self.assertRaisesRegex(RuntimeError, "revision-zero automatic default"):
                 self.case.require_automatic_zero(host)

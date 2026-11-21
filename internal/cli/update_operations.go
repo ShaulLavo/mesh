@@ -22,8 +22,6 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 	if action == "status" {
 		args, usage = cobra.MaximumNArgs(1), "status [RUN]"
 	}
-	var expected uint64
-	var commandID string
 	command := &cobra.Command{Use: usage, Short: updateActionDescription(action), Args: func(cmd *cobra.Command, arguments []string) error {
 		if options.local {
 			return cobra.NoArgs(cmd, arguments)
@@ -34,18 +32,14 @@ func (a *application) updateOperationCommand(action string, options *updateOptio
 			if options.local {
 				return a.localTargetOperation(cmd, action, options)
 			}
-			return a.runUpdateOperationCommand(cmd, args, action, options, expected, commandID)
+			return a.runUpdateOperationCommand(cmd, args, action, options)
 		},
 	}
 	command.Flags().BoolVar(&options.local, "local", false, "read or control this machine's approved update target")
-	if action != "status" {
-		command.Flags().Uint64Var(&expected, "expected-policy-revision", 0, "expected automatic policy revision; required for automatic runs")
-		command.Flags().StringVar(&commandID, "command-id", "", "exact administrative command identity for response-loss replay")
-	}
 	return command
 }
 
-func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []string, action string, options *updateOptions, expected uint64, commandID string) error {
+func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []string, action string, options *updateOptions) error {
 
 	id := ""
 	if len(args) > 0 {
@@ -64,7 +58,7 @@ func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []strin
 	}
 	open := openUpdateEnvironment
 	if action == "status" {
-		open = existingAutomaticEnvironment
+		open = existingUpdateEnvironment
 	}
 	environment, err := open(cmd.Context(), resolved.coordinator)
 	if err != nil {
@@ -74,12 +68,7 @@ func (a *application) runUpdateOperationCommand(cmd *cobra.Command, args []strin
 		environment.client = a.dependencies.UpdateCaller
 	}
 	output := updateOutput{cmd.OutOrStdout(), cmd.ErrOrStderr(), a.privacy, options.details}
-	request, err := automaticOperationRequest(cmd, action, id, expected, commandID)
-	if err != nil {
-		return err
-	}
-
-	return a.runUpdateOperation(cmd.Context(), environment, action, request, options.json, output)
+	return a.runUpdateOperation(cmd.Context(), environment, action, update.Operation{ID: id}, options.json, output)
 }
 
 func updateActionDescription(action string) string {
@@ -202,9 +191,9 @@ func printListedUpdateOperations(ctx context.Context, environment updateEnvironm
 	updates := readUpdatePresentation(ctx, environment)
 	if structured {
 		if len(updates.Sources) == 0 && updates.Problem == "" {
-			return writeAutomaticJSON(output.out, runs)
+			return writeUpdateJSON(output.out, runs)
 		}
-		return writeAutomaticJSON(output.out, struct {
+		return writeUpdateJSON(output.out, struct {
 			Runs    []update.Run     `json:"runs"`
 			Updates DashboardUpdates `json:"updates"`
 		}{runs, updates})
@@ -314,26 +303,10 @@ func removeClientOnlyApproval(status updateinstall.Status) error {
 	return err
 }
 
-func automaticOperationRequest(cmd *cobra.Command, action, id string, expected uint64, commandID string) (update.Operation, error) {
-	request := update.Operation{ID: id, CommandID: commandID}
-	if cmd.Flags().Changed("expected-policy-revision") {
-		request.ExpectedPolicyRevision = &expected
-	}
-	if commandID != "" || action == "status" {
-		return request, nil
-	}
-	generated, err := update.NewAutomaticCommandID()
-	if err != nil {
-		return request, fmt.Errorf("allocate automatic operation command: %w", err)
-	}
-	request.CommandID = generated
-	return request, nil
-}
-
 func readUpdatePresentation(ctx context.Context, environment updateEnvironment) DashboardUpdates {
 	selection, err := readDashboardUpdateSelection(ctx, environment.stateDir, environment.local.ID)
 	if err != nil {
-		return DashboardUpdates{Problem: "Saved update status unavailable; inspect mesh update automatic status or mesh update config status with --details."}
+		return DashboardUpdates{Problem: "Saved update status unavailable; inspect mesh update config status with --details."}
 	}
 	watcher := newDashboardUpdateWatcher(environment.stateDir, environment.local.ID, environment.client)
 	sources := watcher.observe(ctx, selection)

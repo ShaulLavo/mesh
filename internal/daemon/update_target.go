@@ -28,7 +28,7 @@ func (u *updateController) localTarget(ctx context.Context, actor update.Verifie
 	}
 	if action == update.HostTargetCancelAction {
 		var expected uint64
-		if err := update.DecodeAutomatic(data, &expected); err != nil {
+		if err := update.DecodeStrict(data, &expected); err != nil {
 			return nil, fmt.Errorf("read local target revision: %w", err)
 		}
 		status, err := u.coordinator.Store.CancelLocalTarget(ctx, expected)
@@ -38,7 +38,7 @@ func (u *updateController) localTarget(ctx context.Context, actor update.Verifie
 		return nil, errors.New("local host updater unavailable")
 	}
 	var input update.HostTargetSubmission
-	if err := update.DecodeAutomatic(data, &input); err != nil {
+	if err := update.DecodeStrict(data, &input); err != nil {
 		return nil, fmt.Errorf("read local update target: %w", err)
 	}
 	if action == update.HostTargetPlanAction {

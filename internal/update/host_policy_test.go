@@ -123,7 +123,7 @@ func testHostAcceptanceState(t *testing.T, kind string) {
 			t.Fatal(err)
 		}
 	}
-	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	if _, err := engine.Stage(t.Context(), owned.Installation); err == nil {
 		t.Fatal("host stage fell through to manual")
 	}
@@ -141,7 +141,7 @@ func TestHostOffFencesRealStageRetryAndGrant(t *testing.T) {
 func testHostAcceptanceRace(t *testing.T, kind string) {
 	f := newHostFixture(t)
 	owned := reserveHostWithoutStage(t, f)
-	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance(nil))
+	engine := f.engine.WithHostOrigin().WithAcceptance(f.store.AuthorizeHostAcceptance())
 	if kind != "stage" {
 		if _, err := engine.Stage(t.Context(), owned.Installation); err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func testHostAcceptanceRace(t *testing.T, kind string) {
 		failHostBeforeActivation(t, f, engine, owned)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
-	acceptance := f.store.AuthorizeHostAcceptance(nil)
+	acceptance := f.store.AuthorizeHostAcceptance()
 	engine = engine.WithAcceptance(func(ctx context.Context, request updateinstall.Request, phase updateinstall.AcceptanceKind, commit func() error) error {
 		close(entered)
 		<-release
@@ -215,7 +215,7 @@ func TestHostOffReturnsAfterAcceptanceCommit(t *testing.T) {
 	owned := reserveHostWithoutStage(t, f)
 	entered, release := make(chan struct{}), make(chan struct{})
 	finished := make(chan error, 1)
-	authorize := f.store.AuthorizeHostAcceptance(nil)
+	authorize := f.store.AuthorizeHostAcceptance()
 	engine := f.engine.WithHostOrigin().WithAcceptance(func(ctx context.Context, request updateinstall.Request, kind updateinstall.AcceptanceKind, commit func() error) error {
 		return authorize(ctx, request, kind, func() error { close(entered); <-release; return errors.New("interrupted commit") })
 	})

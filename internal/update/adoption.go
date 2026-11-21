@@ -95,7 +95,7 @@ func (a Adoption) validate() error {
 	if !validAdoptionPhase(a.Phase) || a.Settings.ClientOnly || a.Settings.StateDir == "" || !hostDigest(a.Host.Service) {
 		return errors.New("update: invalid adoption phase or daemon installation")
 	}
-	if a.Request.ID != a.ID || a.Request.TargetID != a.Host.Health.HostID || a.Request.Generation == 0 || a.Request.Automatic != nil || !sameHostIdentity(a.Request.Current, a.Host.Health.Build) || a.Version != a.Request.Manifest.Version {
+	if a.Request.ID != a.ID || a.Request.TargetID != a.Host.Health.HostID || a.Request.Generation == 0 || !sameHostIdentity(a.Request.Current, a.Host.Health.Build) || a.Version != a.Request.Manifest.Version {
 		return errors.New("update: adoption request differs from observed installation")
 	}
 	if err := validateAdoptionPeers(a.Host.Health.HostID, a.Require); err != nil {

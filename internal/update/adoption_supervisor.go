@@ -198,7 +198,7 @@ func (u *AdoptionSupervisor) prepare(ctx context.Context, start AdoptionStart, p
 		return Adoption{}, 0, err
 	}
 	if start.ID == "" {
-		start.ID, err = newAutomaticID()
+		start.ID, err = newRandomID()
 		if err != nil {
 			return Adoption{}, 0, err
 		}

@@ -38,7 +38,7 @@ type dashboardFeedWatcher struct {
 
 func newDashboardFeedWatcher(localID, socket string) *dashboardFeedWatcher {
 	watcher := &dashboardFeedWatcher{read: readDashboardFeed, fetcher: func(url string) (dashboardFeedRunner, error) { return usagefeed.New(usagefeed.Config{URL: url}) }, hostID: localID, acknowledgements: make(chan DashboardUsageAcknowledgement, 1), interval: time.Second, heartbeat: dashboardObserverHeartbeat}
-	watcher.instanceID, _ = update.NewAutomaticCommandID()
+	watcher.instanceID, _ = update.NewCommandID()
 
 	watcher.observe = localDashboardObserver(localID, socket)
 	return watcher
