@@ -293,7 +293,7 @@ else:
     def test_blocking_packaging_ci_runs_intake_beside_signing(self):
         packaging = (ROOT / "scripts/check-packaging.sh").read_text()
         self.assertIn("python3 scripts/test-release-signing.py\n  python3 scripts/test-prepare-draft-intake.py", packaging)
-        self.assertIn("run: ./scripts/check-packaging.sh --archives dist", (ROOT / ".github/workflows/ci.yml").read_text())
+        self.assertIn("run: ./scripts/check-packaging.sh dist", (ROOT / ".github/workflows/ci.yml").read_text())
 
 
 if __name__ == "__main__":

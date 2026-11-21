@@ -310,15 +310,15 @@ check_release_dist() (
   done
 )
 
-case $#:${1:-} in
-  0:)
+case $# in
+  0)
     check_source_contract
     check_demo_commands
     ;;
-  2:--archives)
-    check_release_dist "$2"
+  1)
+    check_release_dist "$1"
     ;;
-  *) fail 'usage: scripts/check-packaging.sh [--archives dist-directory]' ;;
+  *) fail 'usage: scripts/check-packaging.sh [dist-directory]' ;;
 esac
 
 echo 'PASS: packaging contract'

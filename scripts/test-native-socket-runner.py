@@ -50,6 +50,8 @@ class PartitionTest(unittest.TestCase):
         events = [{"Test": "TestOne", "Action": "run"}, {"Test": "TestOne", "Action": "pass"}]
         runner.check_coverage(["TestOne"], events)
         runner.check_coverage(["TestOne"], [events[0], {"Test": "TestOne", "Action": "skip"}])
+        with self.assertRaisesRegex(ValueError, "required native tests did not pass"):
+            runner.check_coverage(["TestOne"], [events[0], {"Test": "TestOne", "Action": "skip"}], ["TestOne"])
         bad = (events[:1], events + events, events + [{"Test": "TestOther", "Action": "run"}],
                [events[0], {"Test": "TestOne", "Action": "fail"}])
         for entries in bad:
@@ -357,8 +359,9 @@ class SelectionTest(unittest.IsolatedAsyncioTestCase):
             responses = [inventory, b"", b"/go/test2json", b"TestDaemon\nTestOther\n", b"TestWorker\n"]
             tests = {"daemon": ("TestDaemon",), "worker": ("TestWorker",)}
             with patch.object(runner, "command", AsyncMock(side_effect=responses)):
-                result = await runner.prepare(root, root / "binaries", {}, tuple(tests), tests=tests)
+                result = await runner.prepare(root, root / "binaries", {}, tuple(tests), tests=tests, must_pass=("TestWorker",))
         self.assertEqual([shard["tests"] for shard in result], [["TestDaemon"], ["TestWorker"]])
+        self.assertEqual([shard["mustPass"] for shard in result], [[], ["TestWorker"]])
 
 
 class BinaryTest(unittest.TestCase):

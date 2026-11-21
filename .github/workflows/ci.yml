@@ -404,7 +404,7 @@ jobs:
       - name: Verify snapshot archives
         id: snapshot_contract
         if: needs.changes.outputs.packaging == 'true'
-        run: ./scripts/check-packaging.sh --archives dist
+        run: ./scripts/check-packaging.sh dist
 
   update-proofs:
     name: Required native update proofs
