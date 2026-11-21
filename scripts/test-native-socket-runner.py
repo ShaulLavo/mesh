@@ -58,14 +58,21 @@ class PartitionTest(unittest.TestCase):
 
     def test_workflow_keeps_native_matrix_bounds_artifacts_and_blocking_runner(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
-        job = workflow.split("  socket-portability:\n", 1)[1].split("\n  auth-cutover:", 1)[0]
-        for contract in ("&& 55 || 10 }}", "runner: [ubuntu-24.04, macos-15]",
+        job = workflow.split("  native:\n", 1)[1].split("\n  quality:", 1)[0]
+        for contract in ("&& 85 || 40 }}", "runner: ubuntu-24.04", "runner: macos-15",
                          'python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"',
-                         "python3 scripts/test-native-socket-runner.py", "native-socket-results.schedule.json"):
+                         "native-socket-results.schedule.json"):
             self.assertIn(contract, job)
         self.assertNotIn("continue-on-error", job)
         self.assertEqual(runner.ALARM, "350s")
         self.assertEqual(runner.PACKAGES, ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv"))
+
+
+    def test_linux_socket_selection_requires_the_actual_runtime_cases(self):
+        available = ["TestSocketFixturesBindUnderLongScratchRoot", "TestServeRejectsLongSocketPathPromptly", "TestOther"]
+        self.assertEqual(set(runner.selected_tests("daemon", available, runner.LINUX_TESTS)), set(available[:2]))
+        with self.assertRaisesRegex(ValueError, "missing native socket tests"):
+            runner.selected_tests("daemon", available[1:], runner.LINUX_TESTS)
 
 
 class ProcessTest(unittest.IsolatedAsyncioTestCase):

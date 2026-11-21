@@ -83,7 +83,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Verify final archives
-        run: ./scripts/check-packaging.sh dist
+        run: ./scripts/check-packaging.sh --archives dist
       - name: Store final artifacts in the reserved draft
         env:
           GH_TOKEN: ${{ github.token }}

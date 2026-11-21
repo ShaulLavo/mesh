@@ -14,6 +14,13 @@ import tempfile
 import time
 
 PACKAGES = ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv")
+LINUX_TESTS = {
+    "daemon": ("TestServeRejectsLongSocketPathPromptly", "TestSocketFixturesBindUnderLongScratchRoot"),
+    "cli": ("TestSocketFixturesBindAndDetectAbsentDaemonUnderLongScratchRoot",),
+    "worker": ("TestRunRejectsLongSocketPathBeforeStartingCommand",),
+    "paths": ("TestSocketPathNativeBoundary",),
+    "testenv": ("TestSocketScratchCanonicalizesCallerRoot", "TestSocketScratchRejectsLongOverrideAndUsesShortRoot"),
+}
 CLI_PARTITIONS = 4
 CONCURRENCY = 4
 ALARM = "350s"
@@ -160,7 +167,17 @@ def isolated_environment(env, root):
                   "XDG_CONFIG_HOME": str(root / "xdg-config"), "XDG_CACHE_HOME": str(root / "xdg-cache")}
 
 
-async def prepare(repo, binaries, env, packages, runtime_root=None):
+def selected_tests(name, names, tests):
+    if tests is None:
+        return names
+    expected = tests[name]
+    missing = set(expected) - set(names)
+    if missing:
+        raise ValueError(f"missing native socket tests in {name}: {sorted(missing)}")
+    return expected
+
+
+async def prepare(repo, binaries, env, packages, runtime_root=None, tests=None):
     runtime_root = runtime_root or binaries.parent / "runtime"
     selected = [f"./internal/{name}" for name in packages]
     metadata = await command(("go", "list", "-f", "{{.ImportPath}}\t{{.Dir}}\t{{.Name}}", *selected), repo, env,
@@ -176,7 +193,8 @@ async def prepare(repo, binaries, env, packages, runtime_root=None):
         binary = binaries / f"{name}.test"
         listing = await command((binary, "-test.list=.", f"-test.timeout={ALARM}"), cwd,
                                 isolated_environment(env, runtime_root / f"{name}-inventory"))
-        groups = partition(inventory(listing), CLI_PARTITIONS if name == "cli" else 1)
+        selected_names = selected_tests(name, inventory(listing), tests)
+        groups = partition(selected_names, CLI_PARTITIONS if name == "cli" else 1)
         for index, tests in enumerate(groups):
             shards.append({"id": f"{name}-{index + 1}", "package": package, "cwd": cwd,
                            "binary": str(binary), "tests": tests, "status": "pending",
@@ -185,13 +203,13 @@ async def prepare(repo, binaries, env, packages, runtime_root=None):
     return shards
 
 
-async def run(repo, output_path, short_base, scratch_base, packages=PACKAGES):
+async def run(repo, output_path, short_base, scratch_base, packages=PACKAGES, tests=None):
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)
     schedule = {"alarm": ALARM, "concurrency": CONCURRENCY, "shards": [], "status": "fail"}
     started = time.monotonic()
     try:
-        await run_in_scratch(repo, output_path, short_base, scratch_base, packages, schedule)
+        await run_in_scratch(repo, output_path, short_base, scratch_base, packages, schedule, tests)
         schedule["status"] = "pass"
     except BaseException as error:
         schedule["error"] = str(error) or type(error).__name__
@@ -204,7 +222,7 @@ async def run(repo, output_path, short_base, scratch_base, packages=PACKAGES):
         output_path.with_suffix(".schedule.json").write_text(json.dumps(schedule, indent=2) + "\n")
 
 
-async def run_in_scratch(repo, output_path, short_base, scratch_base, packages, schedule):
+async def run_in_scratch(repo, output_path, short_base, scratch_base, packages, schedule, tests):
     with ExitStack() as cleanup, output_path.open("w") as output:
         short = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="ns-", dir=short_base)))
         long = Path(cleanup.enter_context(tempfile.TemporaryDirectory(
@@ -218,7 +236,7 @@ async def run_in_scratch(repo, output_path, short_base, scratch_base, packages, 
         env.update(json.loads(caches))
         # Keep toolchain shims that depend on the caller's HOME out of isolated tests.
         env["PATH"] = str(Path(env["GOROOT"]) / "bin") + os.pathsep + env["PATH"]
-        schedule["shards"] = await prepare(repo, binaries, env, packages, short)
+        schedule["shards"] = await prepare(repo, binaries, env, packages, short, tests)
         await run_shards(schedule["shards"], env, output)
         # Keep the native long-path rejection and physical short-socket controls blocking.
         code = await command((sys.executable, repo / "scripts/test-helper-recovery-paths.py"), repo, env,
@@ -247,7 +265,10 @@ def main():
     parser.add_argument("--scratch-base", type=Path, default=Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())))
     args = parser.parse_args()
     try:
-        asyncio.run(run(Path(__file__).resolve().parents[1], args.output.resolve(), args.short_base, args.scratch_base))
+        tests = LINUX_TESTS if sys.platform == "linux" else None
+        packages = tuple(tests) if tests else PACKAGES
+        asyncio.run(run(Path(__file__).resolve().parents[1], args.output.resolve(), args.short_base, args.scratch_base,
+                        packages, tests))
     except (Exception, KeyboardInterrupt, asyncio.CancelledError) as error:
         print(f"native socket runner: {error or type(error).__name__}", file=sys.stderr)
         return 1

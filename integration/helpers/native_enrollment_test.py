@@ -104,7 +104,7 @@ class NativeEnrollmentTest(unittest.TestCase):
 
     def test_native_workflow_does_not_depend_on_generic_guard(self):
         workflow = (REPO / ".github/workflows/ci.yml").read_text()
-        auth = workflow.split("  auth-cutover:\n", 1)[1].split("  machine-naming:\n", 1)[0]
+        auth = workflow.split("  native:\n", 1)[1].split("  quality:\n", 1)[0]
         self.assertIn("- platform: darwin/arm64\n            runner: macos-15", auth)
         step = workflow.split("      - name: Verify native pinned-fleet enrollment\n", 1)[1]
         step = step.split("      - name:", 1)[0]

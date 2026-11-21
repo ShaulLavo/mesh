@@ -11,7 +11,7 @@ bypasses, reverse tunnels, or any other public exposure.
 
 ## CI
 
-- Never cancel a queued or in-progress main CI run: it is the publish path. Pull request Mac legs wait for it (`mac-turn` in `.github/workflows/ci.yml`).
+- Never cancel a queued or in-progress main CI run: it is the publish path. Pull request Mac legs use GitHub-hosted runners.
 
 ## Copy
 
