@@ -3,7 +3,6 @@
 import errno
 import os
 import select
-import signal
 import subprocess
 import sys
 from typing import NamedTuple
@@ -15,16 +14,17 @@ class ProcessInfo(NamedTuple):
     uid: int
     parent: int
     birth: tuple[str, ...]
+    command: str
 
 
 def process_info(pid):
-    result = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "uid=,ppid=,lstart=,stat="],
+    result = subprocess.run(["/bin/ps", "-ww", "-p", str(pid), "-o", "uid=,ppid=,lstart=,stat=,command="],
                             env=os.environ | {"LC_ALL": "C"}, capture_output=True, text=True,
                             timeout=5, check=False)
-    fields = result.stdout.split()
-    if result.returncode or len(fields) != 8 or fields[-1].startswith("Z"):
+    fields = result.stdout.split(maxsplit=8)
+    if result.returncode or len(fields) != 9 or fields[7].startswith("Z"):
         return None
-    return ProcessInfo(int(fields[0]), int(fields[1]), tuple(fields[2:-1]))
+    return ProcessInfo(int(fields[0]), int(fields[1]), tuple(fields[2:7]), fields[8].strip())
 
 
 class LinuxReference:
@@ -37,13 +37,10 @@ class LinuxReference:
     def exited(self, timeout=0):
         poller = select.poll()
         poller.register(self.fd, select.POLLIN)
-        ready = poller.poll(timeout * 1000)
+        ready = poller.poll(int(timeout * 1000 + 0.5))
         if ready and not ready[0][1] & (select.POLLIN | select.POLLHUP):
             raise RuntimeError("could not observe exit through retained pidfd")
         return bool(ready)
-
-    def kill(self):
-        self.kernel.send(self.fd, signal.SIGKILL)
 
     def close(self):
         self.kernel.close(self.fd)
@@ -71,22 +68,12 @@ class DarwinReference:
             raise RuntimeError(f"could not observe exit of retained process {self.pid}")
         return self.saw_exit
 
-    def kill(self):
-        # kqueue follows the original lifetime but Darwin's kill is still by PID.
-        # Keep the last exit check adjacent to the signal to narrow that race.
-        if not self.exited():
-            os.kill(self.pid, signal.SIGKILL)
-
     def close(self):
         self.queue.close()
 
 
 class RetainedProcess:
-    @classmethod
-    def from_socket_peer(cls, socket_peer):
-        return cls(socket_peer(), socket_peer=socket_peer)
-
-    def __init__(self, pid, *, parent=None, socket_peer=None):
+    def __init__(self, pid, *, parent=None, matches=None):
         if type(pid) is not int or pid <= 1 or pid == os.getpid():
             raise ValueError(f"invalid retained process PID {pid!r}")
         self.pid = pid
@@ -95,8 +82,8 @@ class RetainedProcess:
             info = process_info(pid)
             if info is None or info.uid != os.getuid():
                 raise RuntimeError(f"could not verify ownership of retained process {pid}")
-            if socket_peer is not None and socket_peer() != pid:
-                raise RuntimeError(f"retained worker {pid} no longer owns the fixture socket")
+            if matches is not None and not matches(info.command):
+                raise RuntimeError(f"process {pid} does not match the fixture worker command")
             if parent is not None and (info.parent != parent.pid or not parent.is_current()):
                 raise RuntimeError(f"retained shell {pid} is not a child of the fixture worker")
             self.birth = info.birth
@@ -117,19 +104,7 @@ class RetainedProcess:
             raise RuntimeError(f"could not verify ownership of retained process {self.pid}")
         return True
 
-    def kill(self):
-        if self.reference is None:
-            return
-        try:
-            if not self.is_current():
-                return
-            try:
-                # The worker holds SIGTERM across daemon restarts, and its shell ignores it.
-                self.reference.kill()
-            except ProcessLookupError:
-                pass
-            if not self.reference.exited(timeout=5):
-                raise RuntimeError(f"retained process {self.pid} did not exit after SIGKILL")
-        finally:
+    def close(self):
+        if self.reference is not None:
             self.reference.close()
             self.reference = None

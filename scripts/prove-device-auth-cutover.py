@@ -6,8 +6,8 @@ import importlib
 import io
 import json
 import os
-import plistlib
 import platform
+import plistlib
 import re
 import select
 import socket
@@ -27,7 +27,7 @@ fixture_tls = importlib.import_module("fixtures.tls")
 published_releases = importlib.import_module("fixtures.published_releases")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
-retained_process = importlib.import_module("retained_process")
+retained_session = importlib.import_module("retained_session")
 terminals = importlib.import_module("terminal_window")
 round_trip = controls.round_trip
 Terminal, PROMPT = terminals.Terminal, terminals.PROMPT
@@ -238,7 +238,8 @@ sys.exit(data["status"])
         self.restarts = []
         self.logs = []
         self.terminals = []
-        self.retained_processes = []
+        self.retained_session = None
+        self.closed = False
         self.id = None
         HOSTS[name] = self
 
@@ -297,6 +298,7 @@ sys.exit(data["status"])
 
     def start(self, unit):
         with LOCK:
+            require(not self.closed, "fixture is closed")
             current = self.processes.get(unit)
             if current and current.poll() is None:
                 return
@@ -331,12 +333,16 @@ sys.exit(data["status"])
                 event("stop", host=self.name, unit=unit, pid=process.pid)
 
     def restart(self, unit):
-        self.stop(unit)
-        self.start(unit)
+        with LOCK:
+            if self.closed:
+                return
+            self.stop(unit)
+            self.start(unit)
 
     def queue_restart(self, unit):
-        restart = threading.Timer(0.2, self.restart, args=[unit])
         with LOCK:
+            require(not self.closed, "fixture is closed")
+            restart = threading.Timer(0.2, self.restart, args=[unit])
             self.restarts.append(restart)
             restart.start()
 
@@ -377,38 +383,25 @@ sys.exit(data["status"])
         (self.root / "cli-failure.log").write_text(json.dumps(failure) + "\n")
 
     def seed(self):
-        terminal = Terminal([str(self.binary), "local", "--", str(HELPERS / "window_shell.sh")], self.environment, self.root, timeout=8)
+        self.retained_session = retained_session.RetainedSession(self.state, self.binary, HELPERS / "window_shell.sh")
+        self.retained_session.check_empty()
+        command = [str(self.binary), "local", "--"] + self.retained_session.command
+        terminal = Terminal(command, self.environment, self.root, timeout=8)
         self.terminals.append(terminal)
         terminal.expect(PROMPT)
-        session = self.control("session.list")["sessions"][0]["id"]
-        worker = retained_process.RetainedProcess.from_socket_peer(lambda: self.worker_identity(session))
-        self.retained_processes.append(worker)
-        self.worker_pid = worker.pid
-        meta = json.loads((self.state / "s" / session / "meta.json").read_text())
-        self.shell_pid = meta["pid"]
-        self.retained_processes.append(retained_process.RetainedProcess(self.shell_pid, parent=worker))
+        self.session = self.control("session.list")["sessions"][0]["id"]
         start = len(terminal.drain())
         terminal.send("printf '__RETAINED_PID__%s__END__\\n' \"$$\"\n")
         match = eventually(lambda: re.search(rb"__RETAINED_PID__([0-9]+)__END__", terminal.drain()[start:]), "shell pid not printed", timeout=8)
-        require(int(match[1]) == self.shell_pid, "retained shell PID differs from fixture metadata")
-        self.session = session
+        self.retained_session.capture(self.session, int(match[1]))
+        self.worker_pid = self.retained_session.worker.pid
+        self.shell_pid = self.retained_session.shell.pid
         terminal.close()
         self.terminals.remove(terminal)
-        event("seed", host=self.name, session=session, worker=self.worker_pid, shell=self.shell_pid)
-
-    def worker_identity(self, session):
-        with socket.socket(socket.AF_UNIX) as sock:
-            sock.connect(str(self.state / "s" / session / "sock"))
-            if OLD_BUILD["platform"]["os"] == "darwin":
-                # Darwin's SOL_LOCAL/LOCAL_PEERPID prove the actual socket owner.
-                return sock.getsockopt(0, 2)
-            return struct.unpack("3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
+        event("seed", host=self.name, session=self.session, worker=self.worker_pid, shell=self.shell_pid)
 
     def check_retained(self):
-        meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())
-        require(meta["pid"] == self.shell_pid, "shell metadata PID changed")
-        require(self.worker_identity(self.session) == self.worker_pid, "retained worker process changed")
-        require(all(process.is_current() for process in self.retained_processes), "retained process exited")
+        self.retained_session.check_current()
         require(any(row["id"] == self.session for row in self.control("session.list")["sessions"]), "daemon lost retained session")
 
     def prove_loaded_image(self, expected):
@@ -493,15 +486,26 @@ sys.exit(data["status"])
         event("retained-io", host=self.name, worker=self.worker_pid, shell=self.shell_pid)
 
     def close(self):
+        with LOCK:
+            self.closed = True
+            restarts = self.restarts.copy()
         with ExitStack() as cleanup:
             for log in self.logs:
                 cleanup.callback(log.close)
-            for process in self.retained_processes:
-                cleanup.callback(process.kill)
+            if self.retained_session is not None:
+                cleanup.callback(self.retained_session.close)
             cleanup.callback(self.stop, "mesh.service")
             cleanup.callback(self.stop, "mesh-update-helper.service")
             for terminal in reversed(self.terminals):
                 cleanup.callback(terminal.close)
+            cleanup.callback(self.drain_restarts, restarts)
+
+    def drain_restarts(self, restarts):
+        for restart in restarts:
+            restart.cancel()
+        for restart in restarts:
+            restart.join(timeout=10)
+        require(not any(restart.is_alive() for restart in restarts), "fixture service restart did not finish during teardown")
 
 
 for binary in (NEW, FLEET, CONTROL_CLIENT):
@@ -685,7 +689,7 @@ try:
                    "session": host.session} for host in hosts]}, indent=2))
 finally:
     try:
-        with ExitStack() as cleanup:
+        with retained_session.confirm_cleanup(ROOT) as cleanup:
             for server in (proxy, services):
                 cleanup.callback(server.server_close)
                 cleanup.callback(server.shutdown)

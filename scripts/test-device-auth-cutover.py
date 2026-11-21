@@ -60,10 +60,12 @@ class CutoverEventsTest(unittest.TestCase):
         definitions = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
                        and node.name in names]
         exec(compile(ast.Module(body=definitions, type_ignores=[]), str(SOURCE), "exec"), self.scope)
-        self.hosts = [self.host("h0"), self.host("h1")]
+        self.hosts = []
+        self.addCleanup(self.close)
+        for name in ("h0", "h1"):
+            self.host(name)
         self.scope["hosts"] = self.hosts
         self.scope["HOSTS"] = {host.name: host for host in self.hosts}
-        self.addCleanup(self.close)
         self.target_bytes = b"isolated candidate installation"
         self.target = {"version": "v0.1.160", "digest": hashlib.sha256(self.target_bytes).hexdigest()}
         for host in self.hosts:
@@ -78,8 +80,11 @@ class CutoverEventsTest(unittest.TestCase):
         host.binary = host.root / "mesh"
         host.binary.write_bytes(b"unchanged original installation")
         host.environment = dict(os.environ)
-        host.processes, host.logs, host.terminals, host.retained_processes, host.restarts = {}, [], [], [], []
+        host.processes, host.logs, host.terminals, host.restarts = {}, [], [], []
+        host.retained_session = None
+        host.closed = False
         host.service_plists = {}
+        self.hosts.append(host)
         for unit in ("mesh.service", "mesh-update-helper.service"):
             path = host.root / (unit + ".plist")
             path.write_bytes(plistlib.dumps({"AbandonProcessGroup": True, "ProgramArguments":
@@ -94,7 +99,6 @@ class CutoverEventsTest(unittest.TestCase):
         host.prove_loaded_image = lambda target: None
         host.check_io = lambda: None
         host.await_helper = lambda target: None
-        return host
 
     def close(self):
         self.release.set()
@@ -253,6 +257,30 @@ class CutoverEventsTest(unittest.TestCase):
         self.cutover(first)
         self.assertNotEqual(first.processes["mesh-update-helper.service"].pid, prior_pid)
         self.cutover(second)
+
+    def test_teardown_drains_running_restart_and_refuses_new_starts(self):
+        first = self.hosts[0]
+        unit = "mesh-update-helper.service"
+        original = first.processes[unit]
+        restart = first.restart
+
+        def blocked_restart(unit):
+            self.entered.set()
+            require(self.release.wait(timeout=10), "fixture restart was not released")
+            restart(unit)
+            self.finished.set()
+
+        first.restart = blocked_restart
+        first.queue_restart(unit)
+        self.assertTrue(self.entered.wait(timeout=10))
+        first.close()
+        self.assertTrue(self.finished.is_set())
+        self.assertFalse(first.restarts[0].is_alive())
+        self.assertIs(first.processes[unit], original)
+        self.assertIsNotNone(original.poll())
+        for operation in (first.queue_restart, first.start):
+            with self.assertRaisesRegex(RuntimeError, "fixture is closed"):
+                operation(unit)
 
     def test_true_unrelated_installation_change_is_rejected(self):
         target, unrelated = self.hosts
