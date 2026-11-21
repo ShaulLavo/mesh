@@ -10,7 +10,6 @@ import os
 import platform
 import plistlib
 import re
-import signal
 import shlex
 import socket
 import socketserver
@@ -22,6 +21,7 @@ import sys
 import tarfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from fixtures import helper_recovery_paths, published_releases, tls
@@ -30,6 +30,7 @@ sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
+retained_process = importlib.import_module("retained_process")
 terminals = importlib.import_module("terminal_window")
 round_trip = controls.round_trip
 PROMPT, Terminal = terminals.PROMPT, terminals.Terminal
@@ -202,7 +203,7 @@ sys.exit(result["status"])
         self.closed = False
         self.departing = {}
         self.delay, self.fail_candidate, self.fail_original, self.helper_failure = 0, False, False, ""
-        self.workers = []
+        self.retained_processes = []
         self.terminals = []
         if NATIVE["os"] == "darwin":
             agents = self.home / "Library" / "LaunchAgents"
@@ -349,13 +350,17 @@ sys.exit(result["status"])
         self.terminals.append(terminal)
         terminal.expect(PROMPT)
         self.session = self.control("session.list")["sessions"][0]["id"]
+        directory = self.state / "s" / self.session
+        worker = retained_process.RetainedProcess.from_socket_peer(lambda: self.socket_pid(directory / "sock"))
+        self.retained_processes.append(worker)
+        self.worker = worker.pid
+        self.shell = json.loads((directory / "meta.json").read_text())["pid"]
+        self.retained_processes.append(retained_process.RetainedProcess(self.shell, parent=worker))
+        self.worker_inode = self.binary.stat().st_ino
         start = len(terminal.drain())
         terminal.send("printf '__SHELL__%s__END__\\n' \"$$\"\n")
         match = eventually(lambda: re.search(rb"__SHELL__([0-9]+)__END__", terminal.drain()[start:]), "original shell PID missing", timeout=8)
-        self.shell = int(match[1])
-        self.worker = self.socket_pid(self.state / "s" / self.session / "sock")
-        self.worker_inode = self.binary.stat().st_ino
-        self.workers.extend((self.worker, self.shell))
+        require(int(match[1]) == self.shell, "original shell PID differs from fixture metadata")
         terminal.close()
         self.terminals.remove(terminal)
         key_blob = struct.pack(">I", 11) + b"ssh-ed25519" + struct.pack(">I", 32) + os.urandom(32)
@@ -386,8 +391,7 @@ sys.exit(result["status"])
         require(self.socket_pid(self.state / "s" / self.session / "sock") == self.worker, "worker PID changed")
         meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())
         require(meta["pid"] == self.shell, "shell PID changed")
-        for pid in self.workers:
-            os.kill(pid, 0)
+        require(all(process.is_current() for process in self.retained_processes), "retained process exited")
         candidates = [self.binary, *self.binary.parent.glob(".mesh-update-*.previous")]
         original_image = next((path for path in candidates if path.stat().st_ino == self.worker_inode), None)
         require(original_image is not None, "original worker image inode was not retained")
@@ -437,19 +441,15 @@ sys.exit(result["status"])
     def close(self):
         with LOCK:
             self.closed = True
-        for terminal in self.terminals:
-            terminal.close()
-        self.stop("helper")
-        self.stop("daemon")
-        # Session workers hold SIGTERM so a daemon restart cannot end sessions, and
-        # the interactive shell ignores it; only SIGKILL ends the retained session.
-        for pid in self.workers:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        for log in self.logs:
-            log.close()
+        with ExitStack() as cleanup:
+            for log in self.logs:
+                cleanup.callback(log.close)
+            for process in self.retained_processes:
+                cleanup.callback(process.kill)
+            cleanup.callback(self.stop, "daemon")
+            cleanup.callback(self.stop, "helper")
+            for terminal in reversed(self.terminals):
+                cleanup.callback(terminal.close)
 
 
 def historical_failure_phase(host, expected):
@@ -594,9 +594,12 @@ try:
         "chain": ["v0.1.149", "v0.1.151", "v0.1.159"]}, indent=2) + "\n")
     print("PASS native helper recovery, failure restoration, genuine rollback settlement and published v149 -> v151 -> v159 retained-session chain", flush=True)
 finally:
-    for host in reversed(hosts):
-        host.close()
-    for server in (services, proxy):
-        server.shutdown()
-        server.server_close()
-    tls.verify_artifacts(original_digests, sys.exc_info()[1], event)
+    try:
+        with ExitStack() as cleanup:
+            for server in (proxy, services):
+                cleanup.callback(server.server_close)
+                cleanup.callback(server.shutdown)
+            for host in hosts:
+                cleanup.callback(host.close)
+    finally:
+        tls.verify_artifacts(original_digests, sys.exc_info()[1], event)

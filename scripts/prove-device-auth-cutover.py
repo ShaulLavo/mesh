@@ -8,8 +8,8 @@ import json
 import os
 import plistlib
 import platform
+import re
 import select
-import signal
 import socket
 import socketserver
 import ssl
@@ -19,6 +19,7 @@ import sys
 import tarfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -26,6 +27,7 @@ fixture_tls = importlib.import_module("fixtures.tls")
 published_releases = importlib.import_module("fixtures.published_releases")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
+retained_process = importlib.import_module("retained_process")
 terminals = importlib.import_module("terminal_window")
 round_trip = controls.round_trip
 Terminal, PROMPT = terminals.Terminal, terminals.PROMPT
@@ -236,7 +238,7 @@ sys.exit(data["status"])
         self.restarts = []
         self.logs = []
         self.terminals = []
-        self.workers = []
+        self.retained_processes = []
         self.id = None
         HOSTS[name] = self
 
@@ -379,15 +381,17 @@ sys.exit(data["status"])
         self.terminals.append(terminal)
         terminal.expect(PROMPT)
         session = self.control("session.list")["sessions"][0]["id"]
+        worker = retained_process.RetainedProcess.from_socket_peer(lambda: self.worker_identity(session))
+        self.retained_processes.append(worker)
+        self.worker_pid = worker.pid
         meta = json.loads((self.state / "s" / session / "meta.json").read_text())
-        self.workers.append(meta["pid"])
+        self.shell_pid = meta["pid"]
+        self.retained_processes.append(retained_process.RetainedProcess(self.shell_pid, parent=worker))
         start = len(terminal.drain())
         terminal.send("printf '__RETAINED_PID__%s__END__\\n' \"$$\"\n")
-        import re
         match = eventually(lambda: re.search(rb"__RETAINED_PID__([0-9]+)__END__", terminal.drain()[start:]), "shell pid not printed", timeout=8)
-        self.session, self.shell_pid = session, int(match[1])
-        self.worker_pid = self.worker_identity(session)
-        self.workers.append(self.worker_pid)
+        require(int(match[1]) == self.shell_pid, "retained shell PID differs from fixture metadata")
+        self.session = session
         terminal.close()
         self.terminals.remove(terminal)
         event("seed", host=self.name, session=session, worker=self.worker_pid, shell=self.shell_pid)
@@ -404,8 +408,7 @@ sys.exit(data["status"])
         meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())
         require(meta["pid"] == self.shell_pid, "shell metadata PID changed")
         require(self.worker_identity(self.session) == self.worker_pid, "retained worker process changed")
-        for pid in (self.worker_pid, self.shell_pid):
-            os.kill(pid, 0)
+        require(all(process.is_current() for process in self.retained_processes), "retained process exited")
         require(any(row["id"] == self.session for row in self.control("session.list")["sessions"]), "daemon lost retained session")
 
     def prove_loaded_image(self, expected):
@@ -490,19 +493,15 @@ sys.exit(data["status"])
         event("retained-io", host=self.name, worker=self.worker_pid, shell=self.shell_pid)
 
     def close(self):
-        for terminal in self.terminals:
-            terminal.close()
-        self.stop("mesh-update-helper.service")
-        self.stop("mesh.service")
-        # Session workers hold SIGTERM so a daemon restart cannot end sessions, and
-        # the interactive shell ignores it; only SIGKILL ends the retained session.
-        for pid in self.workers:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        for log in self.logs:
-            log.close()
+        with ExitStack() as cleanup:
+            for log in self.logs:
+                cleanup.callback(log.close)
+            for process in self.retained_processes:
+                cleanup.callback(process.kill)
+            cleanup.callback(self.stop, "mesh.service")
+            cleanup.callback(self.stop, "mesh-update-helper.service")
+            for terminal in reversed(self.terminals):
+                cleanup.callback(terminal.close)
 
 
 for binary in (NEW, FLEET, CONTROL_CLIENT):
@@ -686,10 +685,11 @@ try:
                    "session": host.session} for host in hosts]}, indent=2))
 finally:
     try:
-        for host in reversed(hosts):
-            host.close()
-        for server in (services, proxy):
-            server.shutdown()
-            server.server_close()
+        with ExitStack() as cleanup:
+            for server in (proxy, services):
+                cleanup.callback(server.server_close)
+                cleanup.callback(server.shutdown)
+            for host in hosts:
+                cleanup.callback(host.close)
     finally:
         fixture_tls.verify_artifacts(original_digests, sys.exc_info()[1], event)

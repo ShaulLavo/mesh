@@ -15,6 +15,7 @@ import threading
 import time
 import types
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -51,7 +52,7 @@ class CutoverEventsTest(unittest.TestCase):
             "OLD_BUILD": {"platform": {"os": "darwin"}}, "threading": types.SimpleNamespace(Timer=JoiningTimer),
             "os": os, "json": json, "plistlib": plistlib, "subprocess": subprocess, "time": time,
             "require": require, "eventually": eventually, "Path": Path, "hashlib": hashlib,
-            "socketserver": socketserver,
+            "socketserver": socketserver, "ExitStack": ExitStack,
         }
         # Importing the proof starts release acquisition and services.
         tree = ast.parse(SOURCE.read_text(), filename=str(SOURCE))
@@ -77,7 +78,7 @@ class CutoverEventsTest(unittest.TestCase):
         host.binary = host.root / "mesh"
         host.binary.write_bytes(b"unchanged original installation")
         host.environment = dict(os.environ)
-        host.processes, host.logs, host.terminals, host.workers, host.restarts = {}, [], [], [], []
+        host.processes, host.logs, host.terminals, host.retained_processes, host.restarts = {}, [], [], [], []
         host.service_plists = {}
         for unit in ("mesh.service", "mesh-update-helper.service"):
             path = host.root / (unit + ".plist")

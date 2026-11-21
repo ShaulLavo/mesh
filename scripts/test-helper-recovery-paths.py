@@ -1,8 +1,10 @@
 """Portable daemon plist rendering and native Unix socket proof controls."""
 import ast
+import importlib
 import json
 import os
 import plistlib
+import select
 import shutil
 import signal
 import socket
@@ -12,10 +14,15 @@ import tempfile
 import threading
 import types
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fixtures import helper_recovery_paths as paths
+
+HELPERS = Path(__file__).resolve().parents[1] / "integration" / "helpers"
+sys.path.insert(0, str(HELPERS))
+retained_process = importlib.import_module("retained_process")
 
 
 class HelperRecoveryDaemonTemplateTest(unittest.TestCase):
@@ -64,24 +71,95 @@ class RetainedSessionTeardownTest(unittest.TestCase):
     def test_cutover_close_ends_a_worker_that_holds_sigterm(self):
         self.assert_close_ends_workers("prove-device-auth-cutover.py", "Host")
 
-    def assert_close_ends_workers(self, script, class_name):
+    def fixture(self, script, class_name):
         source = Path(__file__).resolve().parents[1] / "scripts" / script
         tree = ast.parse(source.read_text(), filename=str(source))
         fixture = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == class_name)
         fixture.body = [node for node in fixture.body if isinstance(node, ast.FunctionDef) and node.name == "close"]
-        scope = {"os": os, "signal": signal, "LOCK": threading.RLock()}
+        scope = {"ExitStack": ExitStack, "LOCK": threading.RLock()}
         # Loading the proof module would acquire releases and start services.
         exec(compile(ast.Module(body=[fixture], type_ignores=[]), str(source), "exec"), scope)
-        worker = subprocess.Popen([sys.executable, "-c", "import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                                   "print('ready', flush=True); signal.pause()"], stdout=subprocess.PIPE)
-        self.addCleanup(worker.stdout.close)
-        self.addCleanup(lambda: worker.poll() is None and worker.kill())
-        self.assertEqual(worker.stdout.readline(), b"ready\n")
         host = scope[class_name].__new__(scope[class_name])
-        host.terminals, host.logs, host.workers = [], [], [worker.pid]
+        host.terminals, host.logs, host.retained_processes = [], [], []
         host.stop = lambda unit: None
+        return host
+
+    def start_worker(self):
+        worker = subprocess.Popen([sys.executable, "-c", "import signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                                   "print('ready', flush=True); sys.stdin.buffer.read(1)"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.addCleanup(self.join_worker, worker)
+        self.assertTrue(select.select([worker.stdout], [], [], 10)[0], "worker did not report readiness")
+        self.assertEqual(worker.stdout.readline(), b"ready\n")
+        return worker
+
+    def join_worker(self, worker):
+        try:
+            if worker.poll() is None:
+                worker.kill()
+            worker.wait(timeout=10)
+        finally:
+            worker.stdin.close()
+            worker.stdout.close()
+
+    def track(self, worker):
+        process = retained_process.RetainedProcess(worker.pid)
+        self.addCleanup(process.kill)
+        return process
+
+    def assert_close_ends_workers(self, script, class_name):
+        worker = self.start_worker()
+        host = self.fixture(script, class_name)
+        host.retained_processes.append(self.track(worker))
+        worker.terminate()
         host.close()
         self.assertEqual(worker.wait(timeout=10), -signal.SIGKILL)
+
+    def test_exited_reference_cannot_signal_recycled_pid(self):
+        worker = self.start_worker()
+        process = self.track(worker)
+        worker.stdin.close()
+        self.assertEqual(worker.wait(timeout=10), 0)
+        with patch.object(retained_process, "process_info") as lookup, patch.object(process.reference, "kill") as send:
+            process.kill()
+        lookup.assert_not_called()
+        send.assert_not_called()
+
+    def test_teardown_refuses_changed_or_unverifiable_process(self):
+        for script, class_name in (("prove-helper-recovery.py", "Installation"), ("prove-device-auth-cutover.py", "Host")):
+            with self.subTest(script=script):
+                self.assert_close_refuses_process(script, class_name)
+
+    def assert_close_refuses_process(self, script, class_name):
+        worker = self.start_worker()
+        original = retained_process.process_info(worker.pid)
+        for current in (original._replace(birth=("replacement",)), original._replace(uid=original.uid + 1), None):
+            self.assert_denied(script, class_name, worker, current)
+
+    def assert_denied(self, script, class_name, worker, current):
+        process = self.track(worker)
+        host = self.fixture(script, class_name)
+        host.retained_processes.append(process)
+        log = Mock()
+        host.logs.append(log)
+        with patch.object(retained_process, "process_info", return_value=current), patch.object(process.reference, "kill") as send:
+            with self.assertRaisesRegex(RuntimeError, "could not verify ownership"):
+                host.close()
+        send.assert_not_called()
+        log.close.assert_called_once_with()
+        self.assertIsNone(worker.poll())
+
+    def test_capture_rechecks_socket_peer_and_shell_parent(self):
+        worker = self.start_worker()
+        peer = Mock(side_effect=[worker.pid, worker.pid + 1])
+        with self.assertRaisesRegex(RuntimeError, "no longer owns the fixture socket"):
+            retained_process.RetainedProcess.from_socket_peer(peer)
+        original = self.track(worker)
+        sibling = self.start_worker()
+        with self.assertRaisesRegex(RuntimeError, "is not a child of the fixture worker"):
+            retained_process.RetainedProcess(sibling.pid, parent=original)
+        self.assertIsNone(worker.poll())
+        self.assertIsNone(sibling.poll())
 
 
 class HelperRecoveryPathsTest(unittest.TestCase):
