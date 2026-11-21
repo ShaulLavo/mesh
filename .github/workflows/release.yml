@@ -164,6 +164,11 @@ jobs:
     needs: [reserve, build, prove-transition]
     if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # Readers and finalize download exactly these uploads, even after a failed-jobs rerun.
+    outputs:
+      tool-linux-amd64: ${{ steps.tool-linux-amd64.outputs.artifact-id }}
+      tool-linux-arm64: ${{ steps.tool-linux-arm64.outputs.artifact-id }}
+      tool-darwin-arm64: ${{ steps.tool-darwin-arm64.outputs.artifact-id }}
     env:
       GOTOOLCHAIN: local
       MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
@@ -197,19 +202,22 @@ jobs:
             GOOS="$system" GOARCH="$architecture" CGO_ENABLED=0 go build -trimpath -o "$directory/mesh-release-routes" ./cmd/mesh-release-routes
             PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool record "$directory" "$SOURCE" "$GITHUB_RUN_ID" source "$target"
           done
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: tool-linux-amd64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-tool-source-linux-amd64
           path: ${{ runner.temp }}/release-source-tools/linux-amd64
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: tool-linux-arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-tool-source-linux-arm64
           path: ${{ runner.temp }}/release-source-tools/linux-arm64
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - id: tool-darwin-arm64
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-tool-source-darwin-arm64
           path: ${{ runner.temp }}/release-source-tools/darwin-arm64
@@ -389,7 +397,8 @@ jobs:
       - name: Acquire the exact same-run SOURCE release tool
         env:
           GH_TOKEN: ${{ github.token }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source ${{ matrix.key }} "$RUNNER_TEMP/release-source-tools"
+          ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source ${{ matrix.key }} "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-policy
@@ -483,7 +492,8 @@ jobs:
       - name: Acquire the exact same-run SOURCE release tool
         env:
           GH_TOKEN: ${{ github.token }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source linux-amd64 "$RUNNER_TEMP/release-source-tools"
+          ARTIFACT: ${{ needs.publish.outputs['tool-linux-amd64'] }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source linux-amd64 "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: update-publication-trust
