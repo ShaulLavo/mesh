@@ -4,6 +4,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,7 +72,7 @@ func holdInstalledHelper(path string) {
 	}
 	marker := prefix + ".helper." + release.Version + ".json"
 	value, _ := json.Marshal(map[string]any{"pid": os.Getpid(), "version": release.Version})
-	if err := os.WriteFile(marker, value, 0600); err != nil {
+	if err := writeInstalledMarker(marker, value); err != nil {
 		os.Exit(73)
 	}
 	for slices.Contains(fault.Hold, release.Version) {
@@ -97,7 +99,23 @@ func recordInstalledStart() {
 	if err != nil {
 		os.Exit(73)
 	}
-	if err := os.WriteFile(path+"."+release.Version+".json", data, 0600); err != nil {
+	if err := writeInstalledMarker(path+"."+release.Version+".json", data); err != nil {
 		os.Exit(73)
 	}
+}
+
+func writeInstalledMarker(path string, value []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".installed-start-*")
+	if err != nil {
+		return fmt.Errorf("create installed startup marker: %w", err)
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	_, writeErr := file.Write(value)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return fmt.Errorf("write installed startup marker: %w", err)
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return fmt.Errorf("replace installed startup marker: %w", err)
+	}
+	return nil
 }

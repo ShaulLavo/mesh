@@ -397,8 +397,11 @@ jobs:
           retention-days: 7
       - name: govulncheck v1.7.0
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
-      - name: Verify opt-in transport observer fixture
-        run: go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s -run '^(TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$' ./internal/transporttrace ./internal/transport ./internal/daemon
+      - name: Verify opt-in native fixture controls
+        run: >-
+          go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s
+          -run '^(TestInstalledStartMarkerReplacesFile|TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$'
+          ./cmd/mesh ./internal/transporttrace ./internal/transport ./internal/daemon
       - name: Verify default-branch failure fixtures
         run: python3 scripts/test-check-default-branch.py
       - name: Require main as the repository default branch
