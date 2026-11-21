@@ -11,7 +11,7 @@ bypasses, reverse tunnels, or any other public exposure.
 
 ## CI
 
-- Never cancel a queued or in-progress main CI run: it is the publish path. Pull request Mac legs wait for it (`mac-turn` in `.github/workflows/ci.yml`).
+- Never cancel a main CI run by hand; GitHub's concurrency replaces only a waiting main run with a newer one. Main CI is the publish path, and pull request Mac legs wait for it (`mac-turn` in `.github/workflows/ci.yml`).
 
 ## Copy
 

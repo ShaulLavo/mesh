@@ -83,20 +83,27 @@ func startLegacyFixture(t *testing.T, binary string) (string, func()) {
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	var once sync.Once
-	cleanup := func() { once.Do(func() { stopLegacyFixture(t, state, command, &output) }) }
+	// One Wait, so a daemon that exits early is seen at once and cleanup
+	// never calls Wait concurrently with it.
+	exited := make(chan struct{})
+	cleanup := func() { once.Do(func() { stopLegacyFixture(t, state, command, exited, &output) }) }
 	t.Cleanup(cleanup)
 	if err = command.Start(); err != nil {
 		t.Fatal(err)
 	}
-	awaitLegacyDaemonSocket(t, filepath.Join(state, "daemon.sock"))
+	go func() {
+		_ = command.Wait()
+		close(exited)
+	}()
+	awaitLegacyDaemonSocket(t, filepath.Join(state, "daemon.sock"), exited)
 	return state, cleanup
 }
 
-func stopLegacyFixture(t *testing.T, state string, command *exec.Cmd, output *bytes.Buffer) {
+func stopLegacyFixture(t *testing.T, state string, command *exec.Cmd, exited <-chan struct{}, output *bytes.Buffer) {
 	t.Helper()
 	if command.Process != nil {
 		_ = command.Process.Kill()
-		_ = command.Wait()
+		<-exited
 	}
 	if err := cleanupLegacyWorkers(state); err != nil {
 		t.Errorf("retained fixture cleanup: %v; state kept at %s", err, state)
@@ -265,14 +272,18 @@ func testLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T, binary string) 
 	}
 }
 
-func awaitLegacyDaemonSocket(t *testing.T, path string) {
+func awaitLegacyDaemonSocket(t *testing.T, path string, exited <-chan struct{}) {
 	t.Helper()
 	deadline := time.Now().Add(testenv.HangTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-exited:
+			t.Fatal("retained daemon did not open its socket: it exited first")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	t.Fatal("retained daemon did not open its socket")
 }

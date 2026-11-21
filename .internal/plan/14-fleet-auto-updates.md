@@ -1,9 +1,10 @@
 # Keep the fleet current
 
-Binary rollout (steps 1, 2, 3 and 6 below) is replaced by
-[17: Mesh updates itself everywhere](17-automatic-updates.md), Approved
-2026-11-10. Configuration delivery and drift presentation (steps 4 and 5) stay
-here.
+Binary rollout (steps 1, 2, 3 and 6 below) is closed (2026-11-20). Plan
+[17: Mesh updates itself everywhere](17-automatic-updates.md) replaced it: every
+fleet machine runs the per-host updater, and unit 13 removed the consent-bound
+coordinator policy those steps built. Configuration delivery and drift
+presentation (steps 4 and 5) stay here.
 
 Status: Approved, 2026-10-09. Execution follow-up to
 [T26: fleet updates](../tasks/T26-mesh-updates.md). T26's requested operations,

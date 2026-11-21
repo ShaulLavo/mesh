@@ -15,6 +15,7 @@ import time
 import unittest
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fixtures import published_releases as published
@@ -560,7 +561,9 @@ published.download_worker(*sys.argv[1:])
         patch.object(published, "DOWNLOAD_BACKOFF", PRODUCTION_BACKOFF).start()
         patch.object(published, "DOWNLOAD_BUDGET", PRODUCTION_BUDGET).start()
         self.waits = []
-        patch.object(published.time, "sleep", side_effect=self.waits.append).start()
+        # subprocess polls for worker exit using the shared time module.
+        clock = SimpleNamespace(monotonic=time.monotonic, sleep=self.waits.append)
+        patch.object(published, "time", clock).start()
 
     def test_a_server_error_burst_through_every_backoff_recovers(self):
         self.production_schedule()

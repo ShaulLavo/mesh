@@ -35,11 +35,6 @@ const (
 )
 
 type Target struct {
-	ConsentRevision        uint64                      `json:"consentRevision,omitempty"`
-	StageAttempt           uint64                      `json:"stageAttempt,omitempty"`
-	RetryAttempt           uint64                      `json:"retryAttempt,omitempty"`
-	StageUnsettled         bool                        `json:"stageUnsettled,omitempty"`
-	RetryUnsettled         bool                        `json:"retryUnsettled,omitempty"`
 	GrantAccepted          bool                        `json:"grantAccepted,omitempty"`
 	JoinedUnsettled        bool                        `json:"joinedUnsettled,omitempty"`
 	Commands               []updateinstall.CommandCopy `json:"commands,omitempty"`
@@ -64,9 +59,7 @@ type Target struct {
 }
 
 type Run struct {
-	Origin               *AutomaticOrigin `json:"origin,omitempty"`
 	archive              *operationArchive
-	statusOnly           bool
 	CoordinatorSetup     bool             `json:"coordinatorSetup,omitempty"`
 	SetupExecutable      string           `json:"setupExecutable,omitempty"`
 	SetupBuild           *release.Build   `json:"setupBuild,omitempty"`
@@ -104,7 +97,7 @@ func (r Run) Done() bool {
 func Unfinished(runs []Run) []Run {
 	var pending []Run
 	for _, run := range runs {
-		if run.statusOnly || run.Done() {
+		if run.Done() {
 			continue
 		}
 		for _, target := range run.Targets {
@@ -196,7 +189,7 @@ func newRun(coordinator string, fleet Fleet, manifest release.Manifest) (Run, er
 	if err != nil {
 		return Run{}, err
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return Run{}, err
 	}
@@ -214,13 +207,6 @@ func ValidRunID(id string) bool {
 }
 
 func (s *Store) Read(id string) (Run, error) {
-	automatic, err := s.readAutomatic()
-	if err != nil {
-		return Run{}, err
-	}
-	if automatic != nil && automatic.Current != nil && automatic.Current.ID == id {
-		return *automatic.Current, nil
-	}
 	run, err := s.read(id)
 	if err != nil {
 		return Run{}, err
@@ -243,7 +229,6 @@ func (s *Store) read(id string) (Run, error) {
 	if err := validateRunMembership(run); err != nil {
 		return Run{}, err
 	}
-	run.statusOnly = run.Origin != nil
 	return run, nil
 }
 
@@ -277,13 +262,6 @@ func (s *Store) List() ([]Run, error) {
 		return nil, err
 	}
 	var runs []Run
-	automatic, err := s.readAutomatic()
-	if err != nil {
-		return nil, err
-	}
-	if automatic != nil && automatic.Current != nil {
-		runs = append(runs, *automatic.Current)
-	}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -291,9 +269,6 @@ func (s *Store) List() ([]Run, error) {
 		run, err := s.read(strings.TrimSuffix(entry.Name(), ".json"))
 		if err != nil {
 			return nil, err
-		}
-		if automatic != nil && automatic.Current != nil && run.ID == automatic.Current.ID {
-			continue
 		}
 		runs = append(runs, run)
 	}
@@ -316,9 +291,6 @@ func (s *Store) Change(id string, apply func(*Run) error) (Run, error) {
 	run, err := s.Read(id)
 	if err != nil {
 		return Run{}, err
-	}
-	if run.Origin != nil {
-		return s.changeAutomaticRun(id, func(r *Run, _ *AutomaticRecord) error { return apply(r) })
 	}
 	approval := run.approvalIdentity()
 	if err := apply(&run); err != nil {
@@ -345,12 +317,7 @@ func (s *Store) Cancel(id string) (Run, error) {
 }
 
 func (s *Store) Retry(id string) (Run, error) {
-	return s.Change(id, func(r *Run) error {
-		if r.Origin != nil {
-			return problem("automatic.stopped", "automatic retry requires policy-owner approval and --expected-policy-revision")
-		}
-		return retryRun(r)
-	})
+	return s.Change(id, retryRun)
 }
 
 func retryRun(run *Run) error {
@@ -533,11 +500,7 @@ var syncOperationDirectory = func(path string) error {
 
 func (s *Store) existingApproval(runs []Run, fleet Fleet, manifest release.Manifest) (Run, bool, error) {
 	for _, existing := range runs {
-		found, err := automaticApproval(existing, fleet, manifest)
-		if found || err != nil {
-			return existing, found, err
-		}
-		if existing.Origin != nil || existing.Done() || existing.Cancel || existing.Membership != fleet.Digest() || existing.ReleaseDigest != manifest.Digest() {
+		if existing.Done() || existing.Cancel || existing.Membership != fleet.Digest() || existing.ReleaseDigest != manifest.Digest() {
 			continue
 		}
 		if !existing.Stopped {
@@ -550,20 +513,4 @@ func (s *Store) existingApproval(runs []Run, fleet Fleet, manifest release.Manif
 		return existing, true, s.write(existing)
 	}
 	return Run{}, false, nil
-}
-func automaticApproval(existing Run, fleet Fleet, manifest release.Manifest) (bool, error) {
-	if existing.Origin == nil {
-		return false, nil
-	}
-	matching := existing.Membership == fleet.Digest() && existing.ReleaseDigest == manifest.Digest()
-	if existing.Stopped && matching {
-		return true, nil
-	}
-	if automaticSettled(existing) || !fleetsOverlap(existing.Fleet, fleet) {
-		return false, nil
-	}
-	if matching {
-		return true, nil
-	}
-	return false, problem("automatic.conflict", "overlapping automatic run "+existing.ID+"; explicitly retry or cancel it")
 }

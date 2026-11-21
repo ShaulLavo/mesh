@@ -416,94 +416,10 @@ Publishing makes an update available for review. Fleet activation follows the
 approval recorded by `mesh update`; an available release does not silently
 restart every machine.
 
-## Enable automatic updates for a saved fleet
-
-Automatic updates use the coordinator's own `fleet.json`. Device access, update
-administrator trust and fleet notes do not enable them. The coordinator must be a
-member and already have update-administrator admission on every recipient.
-The existing update helper must already be installed on every recipient.
-
-Inspect the coordinator before enabling it:
-
-```bash
-mesh update automatic status --coordinator COORDINATOR --json
-mesh update automatic enable --coordinator COORDINATOR --expected-revision 0 --yes
-```
-
-The approval prints the saved fleet, membership digest and pending enrollment
-epoch. On each recipient, including the coordinator, authorize that exact fleet
-and epoch locally. Use its current consent revision, zero for a new binding:
-
-```bash
-mesh update automatic authorize COORDINATOR_ID --fleet FILE --epoch E --expected-revision 0
-```
-
-This command does not install a helper, create an identity, grant device access or
-start a daemon. It cannot use `--coordinator`. Replace a local binding only after
-revoking it and settling its outstanding installation. The policy waits for all
-initial recipient confirmations. Each subsequent automatic stage, retry and grant
-checks the recipient's current consent revision again.
-
-The existing release checker saves the complete checked manifest. The coordinator
-consumes that observation without another feed request, pins one release and
-fleet, and uses the existing installation engine. It chooses one actual
-installation as canary. An already-current machine or a joined manual
-installation does not unlock later activation grants. A failed direct transition
-requires manual bridge review. Automatic updates do not discover an intermediate
-release chain.
-
-## Stop and recover automatic work
-
-Inspect status for the current administrative revision before each change:
-
-```bash
-mesh update automatic disable --coordinator COORDINATOR --expected-revision N
-mesh update automatic revoke --expected-revision N
-mesh update retry RUN --coordinator COORDINATOR --expected-policy-revision N
-mesh update cancel RUN --coordinator COORDINATOR --expected-policy-revision N
-mesh update automatic acknowledge-stop RUN_OR_POLICY_ID --coordinator COORDINATOR --expected-revision N
-```
-
-Disable stops new dispatch intentions and supersedes an explicit continuation.
-Previously issued activation work may still finish. Target-local revoke fences
-new recipient acceptance, including delayed requests and identical replays.
-Neither operation retracts a grant the target already accepted.
-
-Failure and cancellation are durable stops. Repeated checks, a newer release,
-restart, ordinary enable and plain manual approval cannot clear them. Explicit
-retry approves only the same pinned run and one new attempt. If the policy is
-disabled, status shows its durable continuation authority. A later disable or
-cancel supersedes that authority. Retry response loss does not allocate another
-attempt. Supply the same `--command-id` and original expected revision to replay
-the same administrative decision.
-
-Cancellation disables the policy. After all issued and externally owned joined
-work settles, `acknowledge-stop` archives the run as status-only history and leaves
-the policy disabled. A separate enable is required for future releases. A local
-coordinator may use `enable --take-ownership` only after this disabled, settled and
-acknowledged state. That decision advances the epoch and needs fresh recipient
-consent.
-
-Automatic status includes policy ownership and revision, exact membership,
-enrollment observations, pinned target progress, canary, sticky stop, explicit
-continuation and last completed fleet release. A corrupt or unsafe authority file
-has an unknown revision, not revision zero. A local fallback names coordinator
-transport failure separately from saved state. Saved intent is not proof that the
-coordinator is running. Configuration delivery and dashboard drift presentation
-are separate work and are not enabled by binary enrollment.
-
-A stop before the first run has no run to cancel. Explicitly disable the policy,
-then pass its exact policy ID to `acknowledge-stop`. This is allowed only when no
-current run, executable continuation or unsettled issued work exists. Its receipt
-retains the stop cause and approving actor. Background polling cannot recreate an
-acknowledged disabled stop. If a current run exists, use its run ID and complete
-the cancellation and settlement path first.
-
 ## Deliver approved configuration separately
 
 `mesh update config` delivers an explicitly approved usage-feed URL through a
-separate target-local grant. It does not require automatic binary enrollment or
-restart processes. Preview binds the actual approver and exact selected values.
+separate target-local grant. It does not restart processes. Preview binds the actual approver and exact selected values.
 Status distinguishes saved bytes from a running dashboard's acknowledged load
 and feed result. See [Deliver dashboard feed settings](fleet-configuration.md)
 for allowance, preview, approval, cancellation, revocation, and recovery.
@@ -512,9 +428,8 @@ Domain and feed delivery have separate grants and component receipts. See [fleet
 
 ## Inspect fleet drift
 
-`mesh update status` includes independently enrolled automatic and configuration
-status alongside saved operations. `mesh update automatic status` shows the
-binary policy alone. Default output names the affected machine and next action.
+`mesh update status` includes configuration delivery status alongside saved
+operations. Default output names the affected machine and next action.
 Use `--details` for identifiers and stored diagnostics, or `--json` for the
 complete operational values without a human preamble. Privacy mode hides human
 details; structured output keeps the original identifiers.
@@ -523,19 +438,14 @@ When saved enrollment is present, the no-run JSON status is an object with
 `runs` and `updates`. Without enrollment it retains the ordinary run array.
 A named run keeps its existing JSON shape. Each update source carries its pinned
 coordinator, independent status availability, observation time, and complete
-binary or configuration value.
+configuration value.
 
-The dashboard and TV show a bounded update attention area. Binary status keeps
-the pinned target release, last observed daemon version, last successful fleet
-release, offline members, canary, and sticky stop separate. An offline member
-still belongs to its original pinned release. An unavailable or refused status
-read does not mark the machine unreachable. A direct-transition block retains
-manual bridge-review advice; Mesh does not step through historical releases.
+The dashboard and TV show a bounded update attention area. An unavailable or
+refused status read does not mark the machine unreachable.
 
 The CLI owns the dashboard's joined read-only watcher. It uses existing local
-policy, recipient consent, or configuration grants and the exact saved fleet
-endpoint. Binary and configuration coordinators may differ. No relevant saved
-enrollment means no automatic polling. Each status request has a five-second
+configuration grants and the exact saved fleet endpoint. No relevant saved
+grant means no polling. Each status request has a five-second
 deadline and the watcher polls every 30 seconds. It does not fetch release feeds,
 wake machines, enroll recipients, create identities, or change trust. Closing
 the dashboard cancels and joins its requests.

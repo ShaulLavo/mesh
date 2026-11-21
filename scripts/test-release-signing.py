@@ -140,6 +140,20 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
         self.assertNotIn(": write", permissions)
         self.assertIn("fixtures.release_tool download", readers)
 
+    def test_readers_and_finalize_download_the_exact_uploads_the_signer_reported(self):
+        publish = WORKFLOW[WORKFLOW.index("\n  publish:\n"):WORKFLOW.index("\n  verify-readers:\n")]
+        readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
+        finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
+        for key in ("linux-amd64", "linux-arm64", "darwin-arm64"):
+            self.assertIn(f"      tool-{key}: ${{{{ steps.tool-{key}.outputs.artifact-id }}}}\n", publish)
+            self.assertIn(f"      - id: tool-{key}\n        uses: actions/upload-artifact@", publish)
+            self.assertIn(f"          name: release-tool-source-{key}\n", publish)
+        self.assertIn("ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}", readers)
+        self.assertIn("ARTIFACT: ${{ needs.publish.outputs['tool-linux-amd64'] }}", finalize)
+        for job in (readers, finalize):
+            download = next(line for line in job.splitlines() if "fixtures.release_tool download" in line)
+            self.assertTrue(download.endswith('"$RUNNER_TEMP/release-source-tools" "$ARTIFACT"'), download)
+
 
 if __name__ == "__main__":
     unittest.main()

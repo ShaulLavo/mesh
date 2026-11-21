@@ -18,14 +18,14 @@ func (u *updateController) hostPolicy(ctx context.Context, actor update.Verified
 	}
 	if action == "host-policy.forget" {
 		var dependent update.HostDependentForget
-		if err := update.DecodeAutomatic(data, &dependent); err != nil {
+		if err := update.DecodeStrict(data, &dependent); err != nil {
 			return nil, fmt.Errorf("read dependent to forget: %w", err)
 		}
 		err := u.coordinator.Store.ForgetHostDependent(ctx, dependent.ID)
 		return dependent, hostControllerError(err)
 	}
 	var change update.HostPolicyChange
-	if err := update.DecodeAutomatic(data, &change); err != nil {
+	if err := update.DecodeStrict(data, &change); err != nil {
 		return nil, fmt.Errorf("read host policy change: %w", err)
 	}
 	policy, err := u.coordinator.Store.SetHostPolicy(ctx, change.ExpectedRevision, change.Policy)

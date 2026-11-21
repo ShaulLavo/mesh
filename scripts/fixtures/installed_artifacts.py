@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -72,8 +73,9 @@ def api_error_detail(data):
 
 def pages(endpoint, field):
     result, page = [], 1
+    separator = "&" if "?" in endpoint else "?"
     while True:
-        batch = api(f"{endpoint}?per_page={PAGE_SIZE}&page={page}")[field]
+        batch = api(f"{endpoint}{separator}per_page={PAGE_SIZE}&page={page}")[field]
         result.extend(batch)
         if len(batch) < PAGE_SIZE:
             return result
@@ -88,19 +90,53 @@ def verify_preparation(jobs):
             raise RuntimeError("native artifact preparation has not completed successfully for " + platform)
 
 
+def named_artifacts(repository, run, name):
+    """This run's uploads of one artifact name, listed by name so no paging is involved."""
+    return pages(f"repos/{repository}/actions/runs/{run}/artifacts?name={urllib.parse.quote(name, safe='')}", "artifacts")
+
+
+def current_artifacts(artifacts, run):
+    """The newest live upload of each artifact name in this run.
+
+    A failed-jobs rerun uploads a name again and the artifact list carries no
+    attempt number, so the newest upload is the current attempt's. Every live
+    upload must name this run, and two equally new uploads of one name fail.
+    A paged listing taken while jobs upload or delete artifacts can repeat an
+    upload across pages, so each ID counts once."""
+    live = list({item["id"]: item for item in artifacts if not item["expired"]}.values())
+    if any(artifact_run(item) != run for item in live):
+        raise RuntimeError("live artifacts belong to another run")
+    current = {}
+    for name in {item["name"] for item in live}:
+        uploads = [item for item in live if item["name"] == name]
+        newest = max(item["created_at"] for item in uploads)
+        chosen = [item for item in uploads if item["created_at"] == newest]
+        if len(chosen) != 1:
+            raise RuntimeError("artifact " + name + " has no single newest upload")
+        current[name] = chosen[0]
+    return current
+
+
+def artifact_run(item):
+    workflow_run = item.get("workflow_run")
+    if not isinstance(workflow_run, dict) or type(workflow_run.get("id")) is not int:
+        raise RuntimeError("artifact " + str(item.get("name")) + " does not name its workflow run")
+    return workflow_run["id"]
+
+
 def verify_set(repository, run, source, prefix):
     if run <= 0 or not re.fullmatch(r"[0-9a-f]{40}", source) or not re.fullmatch(r"[A-Za-z0-9_.-]+", prefix):
         raise RuntimeError("native artifact inputs require an exact run, source SHA and artifact prefix")
     metadata = api(f"repos/{repository}/actions/runs/{run}")
     verify_preparation(pages(f"repos/{repository}/actions/runs/{run}/jobs", "jobs"))
-    artifacts = pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
     result = {}
     for key in KEYS:
         expected = prefix + "-" + key
-        matches = [item for item in artifacts if item["name"] == expected and not item["expired"]]
-        if len(matches) != 1:
+        # By name: a paged listing of the whole run can skip a rerun's newer upload.
+        item = current_artifacts(named_artifacts(repository, run, expected), run).get(expected)
+        if item is None:
             raise RuntimeError("complete native artifact set requires exactly one live " + expected)
-        result[key] = {"id": matches[0]["id"], "name": expected, "size": matches[0]["size_in_bytes"], "digest": matches[0].get("digest")}
+        result[key] = {"id": item["id"], "name": expected, "size": item["size_in_bytes"], "digest": item.get("digest")}
         require_archive_pin(result[key])
     return {"run": run, "source": source, "runHead": metadata["head_sha"], "artifacts": result}
 

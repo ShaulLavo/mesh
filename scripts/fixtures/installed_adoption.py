@@ -13,6 +13,18 @@ import time
 from fixtures import fleet_baselines, installed_native, installed_origin, installed_releases, installed_cohort, release_worker_groups, installed_clock
 from fixtures import installed_continuity
 
+# Part of the installed fixture cap kept for writing a stalled adoption's evidence.
+ADOPTION_EVIDENCE_SECONDS = 15
+
+
+def read_optional_json(path):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        return {"unreadable": str(error)}
+
 
 class AdoptionCase(installed_native.Installation):
     def __init__(self, root, host, pair, preparer, origin, releases, scenario, previous=None):
@@ -167,17 +179,39 @@ class AdoptionCase(installed_native.Installation):
             raise RuntimeError("actual side-process native manager context failed: " + result.stderr.strip())
 
     def await_result(self, version):
-        deadline = time.monotonic() + installed_clock.timeout()
-        last = {}
-        while time.monotonic() < deadline:
+        # Stop short of the installed fixture cap so the failure keeps its own
+        # message and evidence instead of being replaced by the clock expiry.
+        deadline = time.monotonic() + max(0.0, installed_clock.timeout() - ADOPTION_EVIDENCE_SECONDS)
+        while True:
+            # Read at least once, even with little of the cap left.
             last = self.adoption_status()
             phase = last.get("details", {}).get("phase")
             if self.scenario == "helper" and last.get("details", {}).get("problem"):
                 return last
             if phase in ("adopted", "rolled-back", "attention"):
                 return last
+            if time.monotonic() >= deadline:
+                break
             time.sleep(0.05)
-        raise RuntimeError("real helper did not finish adoption in its existing 90 s fixture bound: " + json.dumps(last))
+        message = f"real helper did not finish adopting {version} before the installed fixture cap; last phase {phase}"
+        try:
+            self.retain_adoption_wait(version, last)
+        except (OSError, ValueError, TypeError) as error:
+            # The stall stays the reported failure; missing evidence is only noted.
+            message += "; its evidence was not written: " + str(error)
+        raise RuntimeError(message)
+
+    def retain_adoption_wait(self, version, last):
+        """Keep what explains a stalled adoption: its status, journals, receipt and the helper's service."""
+        evidence = {"version": version, "lastStatus": last}
+        for name in ("updates/host-adoption.json", "updates/host-update.json", "update/installation.json", "update/helper/installed.json"):
+            evidence[name] = read_optional_json(self.state / name)
+        (self.root / "adoption-wait-failure.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        try:
+            described = self.units.managers["helper"].describe()
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            described = "helper service state unavailable: " + str(error)
+        (self.root / "helper-service.txt").write_text(described)
 
     def adoption_status(self):
         path = self.state / "updates/host-adoption.json"

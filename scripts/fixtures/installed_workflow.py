@@ -43,11 +43,13 @@ def selection(bundle, profile):
 
 def fetch(repository, run, name, destination, output):
     output.mkdir(parents=True, exist_ok=True)
-    artifacts = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
-    matches = [item for item in artifacts if item["name"] == name and not item["expired"]]
-    if len(matches) != 1:
+    artifacts = installed_artifacts.named_artifacts(repository, run, name)
+    try:
+        item = installed_artifacts.current_artifacts(artifacts, int(run)).get(name)
+    except RuntimeError as error:
+        raise ValueError("prepared intake requires exactly one live same-run artifact: " + name) from error
+    if item is None:
         raise ValueError("prepared intake requires exactly one live same-run artifact: " + name)
-    item = matches[0]
     artifact = {"id": item["id"], "name": name, "size": item["size_in_bytes"], "digest": item.get("digest")}
     installed_artifacts.require_archive_pin(artifact)
     pin = output / "prepared-pin.json"
