@@ -10,6 +10,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ClassWriterBudget caps how long a policy writer waits for its locks when the
+// caller sets no shorter deadline. It is a hang cap, not a speed target: on a
+// loaded host another writer can legitimately hold a policy lock for a while.
+const ClassWriterBudget = 5 * time.Second
+
 // WithClassWriter acquires class exclusion before any native role lock. The
 // callback receives the original absolute admission deadline, not a new budget.
 func WithClassWriter(ctx context.Context, stateDir string, budget time.Duration, change func(context.Context) error) error {

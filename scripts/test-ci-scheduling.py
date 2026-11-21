@@ -1,13 +1,31 @@
 #!/usr/bin/env python3
 """Execute the ordinary test verdicts and reject scheduling regressions."""
 
+import io
 import itertools
 import os
 from pathlib import Path
 import re
 import runpy
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+APT_ACTION = "        uses: ./.github/actions/apt-packages\n"
+# Stand-ins for sudo and apt-get. apt-get logs each call and behaves like an
+# archive: update writes lists, an online install writes a .deb, and an
+# offline (--no-download) install succeeds only when the .deb is cached.
+FAKE_SUDO = '#!/bin/sh\nexec "$@"\n'
+FAKE_APT = """#!/bin/sh
+printf '%s\\n' "$*" >> "$APT_LOG"
+lists=$(printf '%s\\n' "$@" | sed -n 's/^Dir::State::Lists=//p')
+archives=$(printf '%s\\n' "$@" | sed -n 's/^Dir::Cache::Archives=//p')
+case " $* " in
+  *" update "*) touch "$lists/archive_Packages"; exit 0 ;;
+  *" --no-download "*) [ -f "$archives/zsh.deb" ] && [ -z "$APT_OFFLINE_SHORT" ]; exit $? ;;
+  *) touch "$archives/zsh.deb" ;;
+esac
+"""
 CONTRACT = runpy.run_path(str(ROOT / "scripts/test-helper-recovery-gate.py"))
 JOB = CONTRACT["job"]
 STEP = CONTRACT["step"]
@@ -114,7 +132,7 @@ def check_schedule(ci, recovery):
     assert "      - name: Require a tidy module graph\n" in race
     assert "          go mod tidy\n          git diff --exit-code -- go.mod go.sum\n" in race
     assert "          python3 scripts/test-private-boundary.py\n          scripts/check-private-hosting-boundary.sh\n" in race
-    assert "      - run: sudo apt-get update && sudo apt-get install -y zsh\n" in integration
+    assert "      - name: Install zsh\n" + APT_ACTION + "        with:\n          packages: zsh\n" in integration
     assert re.findall(r"^          (MESH_INTEGRATION_\w+): (.+)$", integration, re.M) == [
         ("MESH_INTEGRATION_TIMEOUT", "60s")]
     check_test_gate(ci)
@@ -143,7 +161,7 @@ def check_mutations(ci, recovery):
                    "[[ $RACE == success && $INTEGRATION == success ]] || true", 1),
         ci.replace("$TEST == success && ", "", 1),
         CONTRACT["without_gate_dependency"](ci, "test"),
-        ci.replace("timeout-minutes: 20", "timeout-minutes: 21", 1),
+        ci.replace("timeout-minutes: 20\n", "timeout-minutes: 21\n", 1),
         ci.replace("          cache: true", "          cache: false"),
         ci.replace("go test -race ./...", "go test -race ./internal/cli", 1),
         ci.replace("        run: ./scripts/verify.sh", "        run: ./scripts/verify.sh\n      - run: ./scripts/verify.sh", 1),
@@ -157,6 +175,99 @@ def check_mutations(ci, recovery):
     )
     for mutated in mutations:
         reject_mutation(ci, recovery, mutated)
+
+
+def check_apt_workflows(workflows, action):
+    """Every hosted apt install goes through the cached action, which tries
+    the cache offline before it ever contacts the archive."""
+    for name, source in workflows.items():
+        assert not re.search(r"apt-get|apt install|--with-deps|install-deps(?! --dry-run)", source), \
+            f"{name} installs from the live Ubuntu archive; use ./.github/actions/apt-packages"
+    pill = JOB(workflows["ci.yml"], "app-pill")
+    assert "playwright install-deps --dry-run chromium webkit\n" in pill
+    assert '[ "${arguments[*]:0:3}" != "install -s --no-install-recommends" ]' in pill
+    assert ("        timeout-minutes: 25\n" + APT_ACTION
+            + "        with:\n          packages: ${{ steps.browser-packages.outputs.packages }}\n"
+            "          options: --no-install-recommends\n") in pill
+    assert "        run: pnpm --dir web/app-pill exec playwright install chromium webkit\n" in pill
+    assert pill.index("install-deps --dry-run") < pill.index(APT_ACTION) < pill.index("playwright install chromium")
+    diagnostic = JOB(workflows["ci.yml"], "client-interrupt-diagnostic")
+    assert APT_ACTION + "        with:\n          packages: strace\n" in diagnostic
+    order = [action.index(text) for text in (
+        "uses: actions/cache/restore@", "install.sh", "uses: actions/cache/save@")]
+    assert order == sorted(order), "the cache must be restored before and saved after the install"
+    assert "      if: steps.restore.outputs.cache-hit != 'true' && steps.install.outputs.source == 'network'\n" in action
+    assert re.search(r"key: \$\{\{ steps\.identity\.outputs\.key \}\}", action)
+    assert 'key=$prefix${ImageVersion:-unknown}' in action and "${ImageOS:-unknown}" in action
+    # A new runner image falls back to the newest cache for the same request.
+    prefix = re.search(r'^        prefix="(.+)"$', action, re.M)
+    assert prefix and "ImageVersion" not in prefix.group(1) and "$request" in prefix.group(1), \
+        "the restore prefix must name the request but not the runner image version"
+    assert "        restore-keys: ${{ steps.identity.outputs.prefix }}\n" in action
+
+
+def run_apt_install(cache, bin_dir, log, **env):
+    environment = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", APT_LOG=str(log),
+                       GITHUB_OUTPUT=str(log.with_suffix(".out")), **env)
+    log.write_text("")
+    log.with_suffix(".out").write_text("")
+    subprocess.run([str(ROOT / ".github/actions/apt-packages/install.sh"), str(cache), "zsh"],
+                   env=environment, check=True, stdout=subprocess.DEVNULL)
+    return log.read_text().splitlines(), log.with_suffix(".out").read_text()
+
+
+def check_apt_install(script):
+    with tempfile.TemporaryDirectory(prefix="mesh-apt-") as scratch:
+        root = Path(scratch)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        for name, body in (("sudo", FAKE_SUDO), ("apt-get", FAKE_APT)):
+            (bin_dir / name).write_text(body)
+            (bin_dir / name).chmod(0o755)
+        cache, log = root / "cache", root / "apt.log"
+        calls, output = run_apt_install(cache, bin_dir, log)
+        assert [call.split()[0] for call in calls] == ["update", "install"], calls
+        assert "--no-download" not in calls[1] and "APT::Keep-Downloaded-Packages=true" in calls[1]
+        assert output == "source=network\n", output
+        assert (cache / "lists/archive_Packages").exists() and (cache / "archives/zsh.deb").exists()
+        # A warm cache, whether saved on this runner image or restored through
+        # restore-keys from an older one, installs with apt's downloads
+        # disabled and never refreshes the lists: no archive contact at all.
+        calls, output = run_apt_install(cache, bin_dir, log)
+        assert len(calls) == 1 and calls[0].startswith("install -y --no-download "), calls
+        assert "Acquire::http::Proxy=http://127.0.0.1:9" in calls[0] and calls[0].endswith(" zsh"), calls
+        assert f"Dir::Cache::Archives={cache}/archives" in calls[0], calls
+        assert output == "source=cache\n", output
+        # An older image's cache that no longer covers the request (its .deb
+        # versions are gone from the lists) falls back to the archive and
+        # reports network, which saves a fresh cache under the exact key.
+        calls, output = run_apt_install(cache, bin_dir, log, APT_OFFLINE_SHORT="1")
+        assert [call.split()[0] for call in calls] == ["install", "update", "install"], calls
+        assert output == "source=network\n", output
+    assert "--no-download" in script
+
+
+def reject_apt_mutations(workflows, action):
+    ci = workflows["ci.yml"]
+    mutations = (
+        ("ci.yml", ci.replace("      - name: Install zsh\n" + APT_ACTION + "        with:\n          packages: zsh\n",
+                              "      - run: sudo apt-get update && sudo apt-get install -y zsh\n", 1)),
+        ("ci.yml", ci.replace("exec playwright install chromium webkit", "exec playwright install --with-deps chromium webkit", 1)),
+        ("ci.yml", ci.replace("          options: --no-install-recommends\n", "", 1)),
+        ("action", action.replace("steps.install.outputs.source == 'network'", "always()", 1)),
+        ("action", action.replace("        restore-keys: ${{ steps.identity.outputs.prefix }}\n", "", 1)),
+        ("action", action.replace('-$request-"', '-$request-${ImageVersion:-unknown}-"', 1)),
+    )
+    for target, mutated in mutations:
+        assert mutated != (action if target == "action" else ci), f"apt mutation did not apply to {target}"
+        try:
+            if target == "action":
+                check_apt_workflows(workflows, mutated)
+            else:
+                check_apt_workflows(dict(workflows, **{target: mutated}), action)
+        except AssertionError:
+            continue
+        raise AssertionError(f"live-archive apt install accepted in {target}")
 
 
 def check_mac_job(source, name):
@@ -209,8 +320,115 @@ def reject_mac_routing(workflows):
         raise AssertionError(f"Mac routing accepted a mutation of {name}")
 
 
+MAC_TURN_ENV = {"GH_TOKEN": "${{ github.token }}", "EVENT": "${{ github.event_name }}",
+                "DRAFT": "${{ github.event.pull_request.draft }}",
+                "HEAD_REPOSITORY": "${{ github.event.pull_request.head.repo.full_name }}",
+                "REPOSITORY": "${{ github.repository }}"}
+WAIT_SCRIPT = ROOT / "scripts/wait-for-main-ci.py"
+
+
+def mac_users(ci):
+    # Jobs with a Mac leg of their own, and callers of workflows that have one.
+    callers = [name for name, workflow in re.findall(r"^  ([\w-]+):\n(?:    .*\n|\n)*?    uses: \./\.github/workflows/([\w-]+\.yml)$", ci, re.M)
+               if workflow in MAC_JOBS]
+    return set(MAC_JOBS["ci.yml"]) | set(callers)
+
+
+def check_mac_turn(ci):
+    turn = JOB(ci, "mac-turn")
+    assert re.findall(r"^    if: (.+)$", turn, re.M) == ["${{ !inputs.client_interrupt }}"]
+    assert re.findall(r"^    runs-on: (.+)$", turn, re.M) == ["ubuntu-24.04"], "the Mac turn must wait on a hosted runner"
+    assert not re.search(r"^    needs:|continue-on-error:", turn, re.M), "the Mac turn must start at once and block"
+    assert re.findall(r"^    timeout-minutes: (\d+)$", turn, re.M) == ["200"], "the hang cap must exceed the script deadline"
+    assert "      actions: read\n" in turn
+    assert "        run: python3 -B scripts/wait-for-main-ci.py\n" in turn
+    assert dict(re.findall(r"^          (\w+): (\$\{\{ .+ \}\})$", turn, re.M)) == MAC_TURN_ENV
+    users = mac_users(ci)
+    assert users == {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery", "update-proofs"}, users
+    for name in users:
+        needs = re.findall(r"^    needs: (.+)$", JOB(ci, name), re.M)
+        assert needs == ["[changes, mac-turn]"], f"{name} must wait for its Mac turn"
+
+
+class FakeGitHub:
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.endpoints = []
+
+    def __call__(self, endpoint):
+        self.endpoints.append(endpoint)
+        answer = self.answers[0] if len(self.answers) == 1 else self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return {"workflow_runs": [{"id": 7, "status": "queued"}] if answer else []}
+
+
+def run_wait(wait, environment, answers, minutes=180):
+    github, clock, sleeps = FakeGitHub(answers), [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    out = io.StringIO()
+    status = wait(dict(environment, DEADLINE_MINUTES=str(minutes)), api=github, sleep=sleep, clock=lambda: clock[0], out=out)
+    return status, github.endpoints, sleeps, out.getvalue()
+
+
+def check_wait_script(source):
+    wait = {"__name__": "wait_for_main_ci"}
+    exec(compile(source, str(WAIT_SCRIPT), "exec"), wait)  # noqa: S102 - the repository's own script under test
+    ACTIVE = wait["ACTIVE"]
+    pr = {"EVENT": "pull_request", "DRAFT": "false", "HEAD_REPOSITORY": "ShaulLavo/mesh", "REPOSITORY": "ShaulLavo/mesh"}
+    for environment in (dict(pr, EVENT="push"), dict(pr, EVENT="workflow_dispatch"),
+                        dict(pr, HEAD_REPOSITORY="someone/mesh"), dict(pr, DRAFT="true")):
+        status, endpoints, sleeps, _ = run_wait(wait["wait"], environment, [True])
+        assert (status, endpoints, sleeps) == (0, [], []), environment
+    status, endpoints, sleeps, _ = run_wait(wait["wait"], pr, [False])
+    assert status == 0 and sleeps == [] and len(endpoints) == len(ACTIVE)
+    assert set(ACTIVE) >= {"queued", "in_progress", "waiting", "requested", "pending"}
+    for endpoint, active in zip(endpoints, ACTIVE):
+        assert endpoint == f"repos/ShaulLavo/mesh/actions/workflows/ci.yml/runs?branch=main&status={active}&per_page=20", endpoint
+    # Busy for two polls of every status, then idle: the PR waits, then runs.
+    busy = [True] * len(ACTIVE) * 2 + [False]
+    status, _, sleeps, out = run_wait(wait["wait"], pr, busy)
+    assert status == 0 and len(sleeps) == 2 and "waiting for main CI: 7 (queued)" in out
+    # An unreadable API counts as busy, never as idle.
+    status, _, sleeps, _ = run_wait(wait["wait"], pr, [RuntimeError("HTTP 502")] + [False] * len(ACTIVE))
+    assert status == 0 and len(sleeps) == 1
+    # Past the hang cap a PR proceeds with a warning.
+    status, _, sleeps, out = run_wait(wait["wait"], pr, [True], minutes=3)
+    assert status == 0 and len(sleeps) == 3 and "::warning::" in out
+
+
+def reject_mac_turn(ci, script):
+    mutations = (
+        (ci.replace("  socket-portability:\n    needs: [changes, mac-turn]", "  socket-portability:\n    needs: changes", 1), script),
+        (ci.replace("    name: Required native update proofs\n    needs: [changes, mac-turn]",
+                    "    name: Required native update proofs\n    needs: changes", 1), script),
+        (ci.replace("    timeout-minutes: 200\n", "    timeout-minutes: 20\n", 1), script),
+        (ci.replace("    name: Wait for main CI before Mac legs\n", "    name: Wait for main CI before Mac legs\n    continue-on-error: true\n", 1), script),
+        (ci, script.replace('return environment.get("HEAD_REPOSITORY") == environment.get("REPOSITORY")', "return False", 1)),
+        (ci, script.replace("branch=main&", "branch=topic&", 1)),
+        (ci, script.replace('runs = [f"unknown ({error})"]', "runs = []", 1)),
+        (ci, script.replace('ACTIVE = ("queued", "in_progress", ', 'ACTIVE = (', 1)),
+    )
+    for mutated, mutated_script in mutations:
+        assert (mutated, mutated_script) != (ci, script), "Mac turn mutation did not apply"
+        try:
+            check_mac_turn(mutated)
+            check_wait_script(mutated_script)
+        except AssertionError:
+            continue
+        raise AssertionError("an unsafe Mac turn was accepted")
+
+
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    script = WAIT_SCRIPT.read_text()
+    check_mac_turn(ci)
+    check_wait_script(script)
+    reject_mac_turn(ci, script)
     recovery = (ROOT / ".github/workflows/helper-recovery.yml").read_text()
     check_schedule(ci, recovery)
     check_mutations(ci, recovery)
@@ -218,7 +436,11 @@ def main():
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing and mutation controls")
+    action = (ROOT / ".github/actions/apt-packages/action.yml").read_text()
+    check_apt_workflows(workflows, action)
+    reject_apt_mutations(workflows, action)
+    check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded Mac routing, PR Mac legs behind main CI, offline apt cache and mutation controls")
 
 
 if __name__ == "__main__":

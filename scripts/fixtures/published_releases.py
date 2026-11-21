@@ -17,11 +17,14 @@ from pathlib import Path
 VERSIONS = ("v0.1.149", "v0.1.151", "v0.1.159")
 ORIGIN = "https://github.com/ShaulLavo/mesh/releases/download/"
 COMPATIBILITY_FIELDS = ("stateReadMin", "stateReadMax", "stateWrite", "workerMin", "workerMax", "workerWrite", "journalVersion")
-DOWNLOAD_BUDGET = 60
-# GitHub release 5xx bursts outlast sub-second backoff. Capping each attempt lets a
-# stalled connection be retried; later attempts use only the remaining total budget.
+# GitHub release 5xx bursts can last a minute or two (release D lost a run to one
+# that beat three attempts over 8 seconds). Transient failures back off for up to
+# 113 seconds in total; the budget is a hang cap that fits every attempt. Capping
+# each attempt lets a stalled connection be retried; later attempts use only the
+# remaining total budget. Permanent failures (4xx, TLS, redirects, size) never retry.
+DOWNLOAD_BUDGET = 300
 ATTEMPT_LIMIT = 20
-DOWNLOAD_BACKOFF = (2, 6)
+DOWNLOAD_BACKOFF = (2, 6, 15, 30, 60)
 DOWNLOAD_WORKER = (sys.executable, str(Path(__file__).resolve()))
 
 

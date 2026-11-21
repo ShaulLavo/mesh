@@ -440,12 +440,18 @@ func serveSSHTestSession(channel ssh.Channel, requests <-chan *ssh.Request) {
 			return
 		}
 		_ = request.Reply(true, nil)
-		if payload.Command == "large-output" {
+		status := uint32(0)
+		switch payload.Command {
+		case "large-output":
 			_, _ = fmt.Fprint(channel, "xxxxxxxx")
-		} else {
+		case "fail-with-stderr":
+			_, _ = fmt.Fprint(channel, `{"partial":true}`)
+			_, _ = fmt.Fprint(channel.Stderr(), "adoption: host updater: inspect daemon service using plutil: exit status 1\n")
+			status = 1
+		default:
 			_, _ = fmt.Fprintf(channel, "ran:%s", payload.Command)
 		}
-		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: 0}))
+		_, _ = channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{Status: status}))
 		return
 	}
 }

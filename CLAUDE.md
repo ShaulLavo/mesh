@@ -16,7 +16,7 @@ and the matching file in `docs/adr/` before re-litigating a design choice.
 6. Each host is authoritative for its own sessions. There is no central database.
 
 The explicit `mesh ssh HOST [-- command...]` mode owns an ordinary process for
-one SSH connection. It ends on disconnect and creates no persistent session,
+one SSH channel. It ends on disconnect and creates no persistent session,
 worker, replay, or recovery state. The session invariants above apply to the
 default persistent mode.
 

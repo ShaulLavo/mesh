@@ -149,10 +149,7 @@ def download(repository, run, source, role, key, destination):
     if role == "source" and metadata["head_sha"] != source:
         raise ValueError("SOURCE tool artifact run has another source")
     assets = installed_artifacts.pages(f"repos/{repository}/actions/runs/{run}/artifacts", "artifacts")
-    matches = [item for item in assets if item["name"] == f"release-tool-{role}-{key}" and not item["expired"]]
-    if len(matches) != 1:
-        raise ValueError("release tool requires one exact live same-run artifact")
-    item = matches[0]
+    item = current_artifact(assets, f"release-tool-{role}-{key}", int(run))
     pin = {"id": item["id"], "size": item["size_in_bytes"], "digest": item.get("digest")}
     installed_artifacts.require_archive_pin(pin)
     destination.mkdir(exist_ok=False)
@@ -162,6 +159,20 @@ def download(repository, run, source, role, key, destination):
         extract(archive, destination)
     verify(destination, source, run, role)
     (destination / "artifact-pin.json").write_text(json.dumps(pin | {"run": int(run), "source": source, "role": role}) + "\n")
+
+
+def current_artifact(assets, name, run):
+    # A failed-jobs rerun rebuilds the tool under the same name in the same
+    # run, and the artifact list carries no attempt number: the newest live
+    # upload is the current attempt's. Every candidate must belong to this run.
+    matches = [item for item in assets if item["name"] == name and not item["expired"]]
+    if not matches or any(item.get("workflow_run", {}).get("id") != run for item in matches):
+        raise ValueError("release tool requires one exact live same-run artifact")
+    newest = max(item["created_at"] for item in matches)
+    current = [item for item in matches if item["created_at"] == newest]
+    if len(current) != 1:
+        raise ValueError("release tool requires one exact live same-run artifact")
+    return current[0]
 
 
 def extract(archive, destination):

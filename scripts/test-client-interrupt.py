@@ -377,11 +377,11 @@ class DiagnosticTest(unittest.TestCase):
     def test_registered_vehicle_runs_only_one_diagnostic_job_and_cannot_publish(self):
         source = (Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text()
         jobs = dict(re.findall(r"^  ([\w-]+):\n(.*?)(?=^  [\w-]+:|\Z)", source.split("jobs:\n", 1)[1], re.MULTILINE | re.DOTALL))
-        guarded = {"changes", "race", "integration", "test", "gates", "vulnerability", "packaging", "gate"}
+        guarded = {"changes", "mac-turn", "race", "integration", "test", "gates", "vulnerability", "packaging", "gate"}
         for name in guarded:
             self.assertIn("!inputs.client_interrupt", jobs[name])
         for name in set(jobs).difference(guarded, {"client-interrupt-diagnostic", "publish"}):
-            self.assertRegex(jobs[name], r"(?m)^    needs: (?:changes|\[changes, update-proofs\])$")
+            self.assertRegex(jobs[name], r"(?m)^    needs: (?:changes|\[changes, (?:update-proofs|mac-turn)\])$")
             condition = re.findall(r"^    if: (.+)$", jobs[name], re.MULTILINE)
             self.assertEqual(len(condition), 1)
             self.assertNotIn("always()", condition[0])
