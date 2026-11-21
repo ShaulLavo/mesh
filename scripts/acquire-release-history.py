@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import tempfile
+import time
 import os
 
 from fixtures import published_releases, release_documents, release_tool, release_worker_groups, release_worker_index
@@ -24,17 +25,44 @@ LIMITS["mesh-workers.json"] = 8 << 20
 LIMITS["mesh-worker-groups.json"] = 1 << 20
 
 
-def api(endpoint):
+# A single GitHub 502 on the release listing cost release B an attempt. Each
+# release embeds its whole asset list, so listings use small pages; asset
+# objects are small, so asset pages stay at the API maximum.
+RELEASE_PAGE_SIZE = 30
+ASSET_PAGE_SIZE = 100
+SERVER_ERROR_RETRIES = (2, 5, 10)
+SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
+
+
+def api(endpoint, page_size):
+    items, page = [], 1
+    while True:
+        batch = api_page(f"{endpoint}?per_page={page_size}&page={page}")
+        items.extend(batch)
+        if len(batch) < page_size:
+            return items
+        page += 1
+
+
+def api_page(endpoint):
+    for delay in SERVER_ERROR_RETRIES + (None,):
+        try:
+            return json.loads(gh_api(endpoint))
+        except subprocess.CalledProcessError as error:
+            if delay is None or not SERVER_ERROR.search(error.stderr or b""):
+                raise
+        time.sleep(delay)
+
+
+def gh_api(endpoint):
     try:
-        result = subprocess.run(["gh", "api", "--paginate", "--slurp", endpoint],
-                                check=True, capture_output=True, timeout=120)
+        return subprocess.run(["gh", "api", endpoint], check=True, capture_output=True, timeout=120).stdout
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         for name in ("stdout", "stderr"):
             data = getattr(error, name) or b""
             text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
             error.add_note(f"release API {name}: {text[:32768]}" + (" [truncated]" if len(text) > 32768 else ""))
         raise
-    return [item for page in json.loads(result.stdout) for item in page]
 
 
 def digest(data):
@@ -97,7 +125,7 @@ def api_digest(asset, cache):
 
 
 def acquire_release(item, cache, documents, cancelled):
-    assets = api(f"repos/{REPOSITORY}/releases/{item['id']}/assets?per_page=100")
+    assets = api(f"repos/{REPOSITORY}/releases/{item['id']}/assets", ASSET_PAGE_SIZE)
     names = [asset["name"] for asset in assets]
     if len(names) != len(set(names)):
         raise ValueError(f"duplicate release assets: {item['tag_name']}")
@@ -214,7 +242,7 @@ def main():
     args = parser.parse_args()
     args.cache.mkdir(parents=True, exist_ok=True)
     args.documents.mkdir(parents=True, exist_ok=True)
-    history = api(f"repos/{REPOSITORY}/releases?per_page=100")
+    history = api(f"repos/{REPOSITORY}/releases", RELEASE_PAGE_SIZE)
     history = [item for item in history if not item["draft"] and not item["prerelease"]
                and TAG.fullmatch(item["tag_name"])]
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
