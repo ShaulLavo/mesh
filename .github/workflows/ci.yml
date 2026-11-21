@@ -261,6 +261,7 @@ jobs:
           grep -Fq -- '--- PASS: TestCheckedApprovalNativeBindingAndIdempotency ' "$RUNNER_TEMP/device-enrollment-test.log"
           grep -Fq -- '--- PASS: TestApproveFleetSystemSSHRequiresExistingHostKeyTrust ' "$RUNNER_TEMP/device-enrollment-test.log"
           go test -race -count=1 -run '^Test(DestinationNamePublishedAfterCommitAndRetryCoalesces|HostRenameErrorsAreStructuredAndWatchReadOnly|HostRenameCannotHealRevokedConnection)$' ./internal/daemon
+          go test -race -count=1 ./internal/machinename
       - name: Verify Darwin retains its mapped executable
         if: matrix.platform == 'darwin/arm64'
         run: |

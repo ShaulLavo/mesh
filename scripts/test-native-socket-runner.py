@@ -67,7 +67,8 @@ class PartitionTest(unittest.TestCase):
             self.assertIn(contract, job)
         self.assertNotIn("continue-on-error", job)
         self.assertEqual(runner.ALARM, "350s")
-        self.assertEqual(runner.PACKAGES, ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv"))
+        self.assertTrue(set(runner.ENROLLMENT) <= set(runner.LINUX_TESTS["cli"]))
+        self.assertEqual(runner.PACKAGES, ("daemon", "cli", "worker", "updatebootstrap", "paths", "testenv", "machinename"))
 
 
     def test_linux_socket_selection_requires_the_actual_runtime_cases(self):
