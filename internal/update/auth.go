@@ -377,7 +377,7 @@ func (a *Authority) HandleControl(ctx context.Context, request protocol.Control)
 	if err != nil {
 		response.Problem = err.Error()
 		response.ProblemCode = responseProblemCode(err)
-		if automaticAction(message.Action) || response.ProblemCode != "" {
+		if response.ProblemCode != "" {
 			response.Problem = boundedProblem(response.Problem)
 		}
 	} else {
@@ -410,15 +410,10 @@ func (a *Authority) dispatch(ctx context.Context, message Message) (any, error) 
 	_, remote := transport.Peer(ctx)
 	actor.local = !remote
 	if !a.IsAdministrator(actor.id) {
-		return nil, problem("automatic.conflict", "update administrator was withdrawn")
+		return nil, problem("administrator.withdrawn", "update administrator was withdrawn")
 	}
 	if configurationAction(message.Action) {
 		if err := requireConfigurationActor(ctx, actor, message.Action == "configuration.observe", a.ID); err != nil {
-			return nil, err
-		}
-	}
-	if automaticAction(message.Action) {
-		if err := RequireAutomaticActor(ctx, actor); err != nil {
 			return nil, err
 		}
 	}

@@ -71,8 +71,8 @@ func (c Client) Call(ctx context.Context, host Host, action string, input, outpu
 	if output == nil {
 		return nil
 	}
-	if automaticAction(action) || configurationAction(action) {
-		return decodeAutomaticOutput(response.Data, output)
+	if configurationAction(action) {
+		return decodeWholeOutput(response.Data, output)
 	}
 	return json.Unmarshal(response.Data, output)
 }
@@ -154,14 +154,16 @@ func (c Client) dialUpdate(ctx context.Context, host Host) (transport.Conn, erro
 	return c.dialAuthenticated(ctx, host, transport.SignedUpdateAdmission)
 }
 
-func decodeAutomaticOutput(data []byte, output any) error {
+// decodeWholeOutput replaces the caller's value, so a field the response
+// omits cannot keep a stale value from an earlier status read.
+func decodeWholeOutput(data []byte, output any) error {
 	destination := reflect.ValueOf(output)
 	if destination.Kind() != reflect.Pointer || destination.IsNil() {
-		return errors.New("automatic response requires a non-nil output pointer")
+		return errors.New("update response requires a non-nil output pointer")
 	}
 	replacement := reflect.New(destination.Elem().Type())
 	if err := json.Unmarshal(data, replacement.Interface()); err != nil {
-		return fmt.Errorf("decode automatic response: %w", err)
+		return fmt.Errorf("decode update response: %w", err)
 	}
 	destination.Elem().Set(replacement.Elem())
 	return nil

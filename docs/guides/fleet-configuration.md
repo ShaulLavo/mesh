@@ -17,7 +17,6 @@ mesh update config allow COORDINATOR_ID --usage-feed --expected-revision 0
 The result contains the new target-local grant revision. Allowance replaces the
 grant using that revision. It does not add an update administrator. The
 coordinator must already have update-administrator admission on the recipient.
-No binary policy needs to be enabled.
 
 The grant selects usage-feed delivery, domain-policy delivery, or both. Add
 `--domain-policy` to allow the primary domain and complete alias list. Each

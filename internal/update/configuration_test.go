@@ -45,7 +45,7 @@ func configurationProposalFixture(t *testing.T, c *Coordinator, actor VerifiedAc
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := ConfigurationProposal{ID: mustAutomaticID(t), CoordinatorID: c.ID, OwnerID: actor.id, Fleet: fleet, Membership: fleet.Digest()}
+	p := ConfigurationProposal{ID: mustRandomID(t), CoordinatorID: c.ID, OwnerID: actor.id, Fleet: fleet, Membership: fleet.Digest()}
 	for _, host := range fleet.Members {
 		v := FeedValue{}
 		p.Recipients = append(p.Recipients, RecipientConfiguration{Host: host, GrantRevision: 1, Feed: &FeedChange{}, Expected: &ComponentExpectation{Value: v, Digest: v.Digest()}})
@@ -54,7 +54,7 @@ func configurationProposalFixture(t *testing.T, c *Coordinator, actor VerifiedAc
 	if err := c.saveConfigurationPreview(t.Context(), actor, p); err != nil {
 		t.Fatal(err)
 	}
-	return ConfigurationApproval{mustAutomaticID(t), p}
+	return ConfigurationApproval{mustRandomID(t), p}
 }
 func TestConfigurationApproverCASReplayAndCurrentTrust(t *testing.T) {
 	c, actor, _ := configurationFixture(t, 1)
@@ -72,7 +72,7 @@ func TestConfigurationApproverCASReplayAndCurrentTrust(t *testing.T) {
 		t.Fatal("another approver adopted preview")
 	}
 	for _, action := range []string{"retry", configurationCancel} {
-		_, err = c.ChangeConfiguration(t.Context(), VerifiedActor{id: other}, action, ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: first.Revision})
+		_, err = c.ChangeConfiguration(t.Context(), VerifiedActor{id: other}, action, ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: first.Revision})
 		if err == nil {
 			t.Fatal("unowned mutation", action)
 		}
@@ -216,7 +216,7 @@ func TestConfigurationWithdrawalIsStickyAndLocalRetirementDoesNotTakeOwnership(t
 	if status.Change.Targets[0].Issued {
 		t.Fatal("restored trust resumed dispatch")
 	}
-	command := ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision, Retire: true}
+	command := ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision, Retire: true}
 	retired, err := c.ChangeConfiguration(t.Context(), actor, configurationCancel, command)
 	if err != nil || !retired.Change.Retired || retired.Change.Proposal.OwnerID != owner {
 		t.Fatalf("retirement: %+v %v", retired, err)
@@ -277,7 +277,7 @@ func TestConfigurationFiniteCallsCancelJoinAndLeaveUncertainty(t *testing.T) {
 	if remote.peak.Load() != 4 {
 		t.Fatal(remote.peak.Load())
 	}
-	if _, err = c.ChangeConfiguration(ctx, actor, configurationCancel, ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}); err != nil {
+	if _, err = c.ChangeConfiguration(ctx, actor, configurationCancel, ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}); err != nil {
 		t.Fatal("cancel waited on network", err)
 	}
 	cancel()
@@ -334,7 +334,7 @@ func TestConfigurationCancelPreservesLateIssuedAcceptance(t *testing.T) {
 	if err != nil || dispatch == nil {
 		t.Fatal(err)
 	}
-	command := ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}
+	command := ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}
 	if _, err = c.ChangeConfiguration(t.Context(), actor, configurationCancel, command); err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestConfigurationDomainReceiptRecoveryPartialAndFeedHistory(t *testing.T) {
 	domain := &configurationDomainFixture{value: DomainValue{Present: true, Policy: domainpolicy.Current()}}
 	expected := &DomainExpectation{Value: domain.value, Digest: domain.value.Digest()}
 	recipient := RecipientConfiguration{Host: approval.Proposal.Recipients[0].Host, GrantRevision: 1, Domain: &DomainChange{Primary: "new.test", Aliases: domain.value.Policy.Domains()}, DomainExpected: expected}
-	request := ConfigurationPut{mustAutomaticID(t), strings.Repeat("c", 64), approval.Proposal.Membership, c.ID, recipient}
+	request := ConfigurationPut{mustRandomID(t), strings.Repeat("c", 64), approval.Proposal.Membership, c.ID, recipient}
 	domain.fail = errors.New("domain directory barrier failed after rename")
 	if _, err := c.Store.PutConfiguration(t.Context(), actor, actor.id, c.Trusted, feed.writer, request, domain.writer); !errors.Is(err, domain.fail) {
 		t.Fatal(err)
@@ -419,7 +419,7 @@ func TestConfigurationDomainReceiptRecoveryPartialAndFeedHistory(t *testing.T) {
 		t.Fatal(snapshot, err)
 	}
 	// A later combined change retains the saved domain even when the feed CAS conflicts.
-	request.ChangeID = mustAutomaticID(t)
+	request.ChangeID = mustRandomID(t)
 	request.Recipient.DomainExpected = snapshot.Domain
 	request.Recipient.Domain = &DomainChange{Primary: "next.test", Aliases: domain.value.Policy.Domains()}
 	request.Recipient.Expected, request.Recipient.Feed = &snapshot.Feed, &FeedChange{}
@@ -435,7 +435,7 @@ func TestConfigurationDomainConsumerUsesActualProcessObservations(t *testing.T) 
 	desired := domainDesired(DomainChange{Primary: "new.test", Aliases: before.Policy.Domains()}, before)
 	token := domainpolicy.CatalogToken{Digest: desired.Digest(), Generation: 3}
 	recipient := RecipientConfiguration{Domain: &DomainChange{Primary: desired.Policy.Primary, Aliases: desired.Policy.Aliases}}
-	target := ConfigurationTarget{State: configurationSaved, Receipt: &ConfigurationReceipt{Domain: &DomainReceipt{State: configurationSaved, Desired: desired, Generation: token}}, Daemon: &DomainObservation{Digest: before.Digest(), InstanceID: mustAutomaticID(t), ObservedAt: time.Now()}}
+	target := ConfigurationTarget{State: configurationSaved, Receipt: &ConfigurationReceipt{Domain: &DomainReceipt{State: configurationSaved, Desired: desired, Generation: token}}, Daemon: &DomainObservation{Digest: before.Digest(), InstanceID: mustRandomID(t), ObservedAt: time.Now()}}
 	if got := configurationDomainConsumer(target, recipient); got != "saved; daemon restart required" {
 		t.Fatal(got)
 	}
