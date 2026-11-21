@@ -34,6 +34,8 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
     origin.head(releases.directory, first)
     try:
         record["initial"] = case.prepare()
+        if previous is None:
+            case.require_unadopted()
         case.seed_prior()
         case.seed()
         start = case.start_adoption(first)

@@ -10,7 +10,7 @@ import sys
 CORE = frozenset({"code"})
 BROWSER = CORE | {"browser"}
 PACKAGING = CORE | {"packaging"}
-UPDATE = PACKAGING | {"update_proofs"}
+UPDATE = PACKAGING | {"installed"}
 ALL = UPDATE | BROWSER
 
 # First match wins. Paths without a rule require the full PR suite.

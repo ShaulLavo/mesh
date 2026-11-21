@@ -66,13 +66,26 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertNotIn("always()", source)
         self.assertNotIn("43151893803", source)
 
-    def test_normal_proofs_run_once_after_successful_preparation(self):
-        installed = GATE.job(CI, "installed-catchup")
-        self.assert_consumer(installed, "update-proofs")
-        self.assertEqual(field(installed, "needs"), "[changes, update-proofs]")
-        self.assertEqual(field(installed, "if"), field(GATE.job(CI, "update-proofs"), "if"))
-        self.assertEqual(CI.count(f"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{PIN}"), 1)
+    def test_pr_proofs_start_on_each_hosted_platform_after_classification(self):
+        installed = GATE.job(CI, "installed")
+        self.assertEqual(field(installed, "if"), "needs.changes.outputs.installed == 'true'")
+        self.assertEqual(field(installed, "needs"), "changes")
+        self.assertEqual(field(installed, "runs-on"), "${{ matrix.runner }}")
+        self.assertEqual(re.findall(r"^          - platform: (\S+)\n            runner: (\S+)$", installed, re.M),
+                         [("linux/amd64", "ubuntu-24.04"), ("linux/arm64", "ubuntu-24.04-arm"), ("darwin/arm64", "macos-15")])
+        self.assertIn("persist-credentials: false", installed)
+        self.assertIn("permissions:\n      contents: read", installed)
+        self.assertIn("MESH_HARNESS_SOURCE: ${{ github.sha }}", installed)
+        proof = GATE.step(installed, "Exercise signed updates and preserved sessions with the native manager")
+        self.assertIn("scripts/prove-installed-catchup.py", proof)
+        self.assertIn("--native-preflight --pull-request", proof)
+        self.assertNotIn("if:", proof)
+        for setting in ("continue-on-error", "secrets.", "download-artifact", "actions: write", "contents: write"):
+            self.assertNotIn(setting, installed)
+        self.assertNotIn("installed-catchup.yml@", CI)
         self.assertNotIn("installed-catchup.yml@", PROOFS)
+        catchup = (WORKFLOWS / "installed-catchup.yml").read_text()
+        self.assertNotIn("  pull_request:", catchup.split("\npermissions:", 1)[0])
 
     def test_update_paths_include_installed_and_release_dependencies(self):
         classifier = (ROOT / "scripts/ci-changes.py").read_text()
@@ -83,7 +96,7 @@ class InstalledGateWiringTests(unittest.TestCase):
                  "scripts/prepare-rollback-context.py", "scripts/fixtures/installed_artifacts.py",
                  "scripts/test-installed-catchup.py", ".github/workflows/installed-catchup.yml")
         for path in paths:
-            self.assertIn("update_proofs", classify["checks_for"](path), path)
+            self.assertIn("installed", classify["checks_for"](path), path)
 
     def test_producer_outputs_bind_source_input_and_current_run_after_all_preparations(self):
         context = GATE.job(PROOFS, "context")

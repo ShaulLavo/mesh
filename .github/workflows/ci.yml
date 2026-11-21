@@ -67,7 +67,7 @@ jobs:
       code: ${{ steps.paths.outputs.code }}
       browser: ${{ steps.paths.outputs.browser }}
       packaging: ${{ steps.paths.outputs.packaging }}
-      update_proofs: ${{ steps.paths.outputs.update_proofs }}
+      installed: ${{ steps.paths.outputs.installed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -356,10 +356,17 @@ jobs:
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
       - name: Verify installed release gate wiring
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
         run: |
           python3 scripts/test-installed-gate-wiring.py
+          python3 scripts/test-installed-catchup.py
+          python3 scripts/test-installed-clock.py
           python3 scripts/test-installed-prepared.py
           python3 scripts/test-installed-workflow.py
+          python3 scripts/test-native-eperm-policy.py
+          python3 scripts/test-release-worker-eperm.py
+          python3 scripts/test-update-reader-publication.py
           python3 scripts/test-publication-jobs.py
           python3 scripts/test-publication-workflow.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
@@ -415,34 +422,53 @@ jobs:
         if: needs.changes.outputs.packaging == 'true'
         run: ./scripts/check-packaging.sh dist
 
-  update-proofs:
-    name: Required native update proofs
+  installed:
     needs: changes
-    if: needs.changes.outputs.update_proofs == 'true'
-    uses: ./.github/workflows/update-proofs.yml
-    with:
-      source_sha: ${{ github.sha }}
-
-  installed-catchup:
-    name: Required installed update proofs
-    needs: [changes, update-proofs]
-    if: needs.changes.outputs.update_proofs == 'true'
+    if: needs.changes.outputs.installed == 'true'
+    name: Installed updates (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     permissions:
       contents: read
-      actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
-    with:
-      harness_source: 512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
-      worker_artifact_prefix: update-native
-      worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
-      worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            runner: macos-15
+    env:
+      INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+      MESH_HARNESS_SOURCE: ${{ github.sha }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/installed-go
+      - name: Exercise signed updates and preserved sessions with the native manager
+        run: python3 -B scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-pr" --native-preflight --pull-request
+      - name: Verify an exception still cleans up the native service
+        if: matrix.platform != 'linux/arm64'
+        env:
+          MESH_TEST_NATIVE_MANAGER: '1'
+        run: python3 -B scripts/test-installed-catchup.py NativeServiceTest.test_exception_after_launch_stops_real_service
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: installed-pr-${{ matrix.runner }}
+          path: ${{ runner.temp }}/installed-pr
+          retention-days: 7
 
   gate:
     name: Complete CI gate
     permissions:
       statuses: write
     if: ${{ always() && !inputs.client_interrupt }}
-    needs: [changes, quality, race, integration, native, app-pill, update-proofs, installed-catchup]
+    needs: [changes, quality, race, integration, native, app-pill, installed]
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -462,15 +488,14 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           BROWSER: ${{ needs.changes.outputs.browser }}
           PACKAGING: ${{ needs.changes.outputs.packaging }}
-          UPDATE_PROOFS_REQUIRED: ${{ needs.changes.outputs.update_proofs }}
+          INSTALLED_REQUIRED: ${{ needs.changes.outputs.installed }}
           RACE: ${{ needs.race.result }}
           INTEGRATION: ${{ needs.integration.result }}
           NATIVE: ${{ needs.native.result }}
           APP_PILL: ${{ needs.app-pill.result }}
           SNAPSHOT: ${{ needs.quality.outputs.snapshot }}
           SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}
-          UPDATE_PROOFS: ${{ needs.update-proofs.result }}
-          INSTALLED_CATCHUP: ${{ needs.installed-catchup.result }}
+          INSTALLED: ${{ needs.installed.result }}
         run: |
           require() {
             local decision=$1 name=$2 actual=$3 expected
@@ -487,7 +512,7 @@ jobs:
 
           require true changes "$CHANGES"
           require true quality "$QUALITY"
-          if [[ $CODE == false && ( $BROWSER != false || $PACKAGING != false || $UPDATE_PROOFS_REQUIRED != false ) ]]; then
+          if [[ $CODE == false && ( $BROWSER != false || $PACKAGING != false || $INSTALLED_REQUIRED != false ) ]]; then
             echo '::error::A documentation-only change cannot select product checks.'
             exit 1
           fi
@@ -497,8 +522,7 @@ jobs:
           require "$BROWSER" app-pill "$APP_PILL"
           require "$PACKAGING" snapshot "$SNAPSHOT"
           require "$PACKAGING" snapshot-contract "$SNAPSHOT_CONTRACT"
-          require "$UPDATE_PROOFS_REQUIRED" update-proofs "$UPDATE_PROOFS"
-          require "$UPDATE_PROOFS_REQUIRED" installed-catchup "$INSTALLED_CATCHUP"
+          require "$INSTALLED_REQUIRED" installed "$INSTALLED"
 
       # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
       - name: Report the real CI verdict on the tested commit

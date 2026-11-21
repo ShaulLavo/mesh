@@ -279,8 +279,8 @@ PROVE_MATRIX_STEP = ("          printf 'prove=%s\\n' \"$(python3 scripts/prepare
                      "--prove-matrix \"$shards\" \"$DRAFT\")\" >> \"$GITHUB_OUTPUT\"\n")
 
 
-def check_darwin_smoke(workflows):
-    """A PR proves one Darwin shard; the release path still proves all of them."""
+def check_release_proof_matrix(workflows):
+    """The release path still proves every selected shard, including Darwin."""
     proofs, release = workflows["update-proofs.yml"], workflows["release.yml"]
     policy = JOB(proofs, "policy")
     assert "      prove: ${{ steps.select.outputs.prove }}\n" in policy
@@ -293,10 +293,10 @@ def check_darwin_smoke(workflows):
     caller = JOB(release, "prove-transition")
     assert "    uses: ./.github/workflows/update-proofs.yml\n" in caller and "      draft: true\n" in caller, \
         "the release path must prove every Darwin shard"
-    assert not re.search(r"^      draft:", JOB(workflows["ci.yml"], "update-proofs"), re.M), "PR proofs must not claim the release matrix"
+    assert "uses: ./.github/workflows/update-proofs.yml" not in workflows["ci.yml"], "PRs must not run the release proof matrix"
 
 
-def reject_darwin_smoke(workflows):
+def reject_release_proof_mutations(workflows):
     mutations = (
         ("release.yml", lambda text: text.replace("      draft: true\n", "      draft: false\n", 1)),
         ("update-proofs.yml", lambda text: text.replace("one Darwin shard.\n    if: inputs.draft\n", "one Darwin shard.\n", 1)),
@@ -307,7 +307,7 @@ def reject_darwin_smoke(workflows):
         mutated = dict(workflows, **{name: mutate(workflows[name])})
         assert mutated[name] != workflows[name], f"Darwin smoke mutation did not apply to {name}"
         try:
-            check_darwin_smoke(mutated)
+            check_release_proof_matrix(mutated)
         except AssertionError:
             continue
         raise AssertionError(f"Darwin smoke wiring accepted a mutation of {name}")
@@ -350,8 +350,8 @@ def main():
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
-    check_darwin_smoke(workflows)
-    reject_darwin_smoke(workflows)
+    check_release_proof_matrix(workflows)
+    reject_release_proof_mutations(workflows)
     sources = mktemp_sources()
     check_mktemp_templates(sources)
     reject_mktemp_templates(sources)
@@ -359,7 +359,7 @@ def main():
     check_apt_workflows(workflows, action)
     reject_apt_mutations(workflows, action)
     check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, one Darwin proof shard on PRs and all on releases, hosted PR Mac legs, offline apt cache and mutation controls")
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, all Darwin proof shards on release, hosted PR Mac legs, offline apt cache and mutation controls")
 
 
 if __name__ == "__main__":

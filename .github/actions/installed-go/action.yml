@@ -15,6 +15,7 @@ runs:
           **/go.sum
           **/*.go
           scripts/fixtures/installed_fresh.py
+          scripts/fixtures/installed_pr.py
           scripts/fixtures/installed_releases.py
           scripts/fixtures/release_transition.py
           .github/actions/installed-go/action.yml

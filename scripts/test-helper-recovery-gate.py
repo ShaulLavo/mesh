@@ -12,7 +12,7 @@ SCOPED = {
     "CODE": ("race", "integration", "native"),
     "BROWSER": ("app-pill",),
     "PACKAGING": (),
-    "UPDATE_PROOFS_REQUIRED": ("update-proofs", "installed-catchup"),
+    "INSTALLED_REQUIRED": ("installed",),
 }
 PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
@@ -66,7 +66,7 @@ def reject_outcomes(command, environment, variable):
 
 def check_outcomes(command, results):
     for flags in ((False, False, False, False), (True, False, False, False), (True, True, False, False),
-                  (True, False, True, True), (True, True, True, True)):
+                  (True, True, True, False), (True, False, True, True), (True, True, True, True)):
         decisions = dict(zip(SCOPED, flags, strict=True))
         required = {"changes", "quality"}
         for flag, dependencies in SCOPED.items():
@@ -98,7 +98,7 @@ def check_gate(ci):
     aggregate = step(gate, "Require every CI job")
     assert "if: ${{ success() && !cancelled() }}" in aggregate
     for check in SCOPED:
-        output = {"UPDATE_PROOFS_REQUIRED": "update_proofs"}.get(check, check.lower())
+        output = {"INSTALLED_REQUIRED": "installed"}.get(check, check.lower())
         assert f"{check}: ${{{{ needs.changes.outputs.{output} }}}}" in aggregate
     assert "SNAPSHOT: ${{ needs.quality.outputs.snapshot }}" in aggregate
     assert "SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}" in aggregate
@@ -141,7 +141,9 @@ def without_gate_dependency(ci, dependency):
 def check_mutations(ci):
     mutations = (
         without_gate_dependency(ci, "native"),
+        without_gate_dependency(ci, "installed"),
         ci.replace('          require "$CODE" native "$NATIVE"\n', "", 1),
+        ci.replace('          require "$INSTALLED_REQUIRED" installed "$INSTALLED"\n', "", 1),
         ci.replace("          bash scripts/prove-helper-recovery.sh", "          echo skipped instead of", 1),
         ci.replace("CODE: ${{ needs.changes.outputs.code }}", "CODE: false", 1),
         ci.replace('          require true changes "$CHANGES"\n', "", 1),

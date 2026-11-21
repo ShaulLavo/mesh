@@ -19,6 +19,7 @@ import textwrap
 import unittest
 import threading
 import subprocess
+import sys
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, Mock, patch
@@ -27,7 +28,7 @@ from fixtures import fleet_baselines, installed_paths as paths, native_services,
 from fixtures import installed_review_controls, installed_listener_controls, installed_catalog_controls, installed_order_trace_controls
 from fixtures import installed_attachment_controls, installed_publication_controls
 from fixtures import installed_releases, release_transition
-from fixtures import installed_adoption, installed_clock
+from fixtures import installed_adoption, installed_clock, installed_pr
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -299,7 +300,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), scripts / "test-installed-clock.py", *(scripts / "fixtures" / name for name in
             ("release_worker_groups.py", "release_worker_index.py", "release_worker_completion.py", "noindex_paths.py", "installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_attachment_evidence.py", "installed_attachment_controls.py", "installed_continuity.py", "installed_native.py", "fleet_baselines.py",
-             "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_catalog_evidence.py", "installed_catalog_controls.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_order_trace.py", "installed_order_trace_controls.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py", "installed_publication_controls.py")))
+             "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_catalog_evidence.py", "installed_catalog_controls.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_order_trace.py", "installed_order_trace_controls.py", "installed_fresh.py", "installed_pr.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py", "installed_publication_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -379,6 +380,41 @@ class FleetBaselinesTest(unittest.TestCase):
         self.manifest["version"] = "v0.1.196"
         with self.assertRaisesRegex(RuntimeError, "schema or version differs"):
             fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+
+
+class InstalledPRTest(unittest.TestCase):
+    def test_cli_rejects_other_proof_modes_and_non_hosted_runners(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-installed-pr-") as scratch:
+            root = Path(scratch)
+            self.assert_cli_rejects(root, ["--fresh-managed"], "cannot be combined with another proof mode")
+            self.assert_cli_rejects(root, [], "require a disposable GitHub-hosted runner")
+            self.assertFalse((root / "output/native-manager.json").exists())
+
+    def assert_cli_rejects(self, root, extra, message):
+        environment = dict(os.environ, GITHUB_ACTIONS="false", RUNNER_ENVIRONMENT="self-hosted", MESH_HARNESS_SOURCE="")
+        environment.pop("INSTALLED_CATCHUP_PLATFORM", None)
+        result = subprocess.run([sys.executable, "-B", str(PROOF_PATH), str(root / "output"), "--native-preflight",
+                                 "--pull-request", *extra], env=environment, check=False, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+
+    def test_native_only_manifest_slot_never_compiles_another_platform(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-installed-pr-") as scratch:
+            root = Path(scratch)
+            releases = installed_releases.Releases(root, "linux/amd64", root, native_only=True)
+            version = installed_releases.VERSIONS[0]
+            with patch.object(installed_releases.subprocess, "run") as go:
+                artifact = releases.build_platform(version, "darwin/arm64", None)
+            go.assert_not_called()
+            archive = releases.directory / version / artifact["archive"]
+            self.assertEqual(artifact["sha256"], installed_releases.digest(archive.read_bytes()))
+            with self.assertRaises(tarfile.ReadError):
+                tarfile.open(archive, "r:gz")
+
+    def test_every_native_fixture_selects_a_real_happy_chain_and_fault(self):
+        self.assertEqual(installed_pr.chain_profiles("linux/amd64"), ("none", "first"))
+        self.assertEqual(installed_pr.chain_profiles("linux/arm64"), ("none", "final"))
+        self.assertEqual(installed_pr.chain_profiles("darwin/arm64"), ("none", "final"))
 
 
 class InstalledModeShellTest(unittest.TestCase):

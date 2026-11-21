@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github/workflows"
 PREPARED = (WORKFLOWS / "installed-prepared.yml").read_text()
 CATCHUP = (WORKFLOWS / "installed-catchup.yml").read_text()
+CI = (WORKFLOWS / "ci.yml").read_text()
 CACHE = (ROOT / ".github/actions/installed-go/action.yml").read_text()
 
 
@@ -84,12 +85,13 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(output.read_text().splitlines(), ["scripts/prove-installed-catchup.py",
                          str(self.root / "fresh-proof"), "--native-preflight", "--fresh-managed"])
-        self.assertIn("'scripts/fixtures/installed_continuity.py'", CATCHUP)
+        changes = runpy.run_path(str(ROOT / "scripts/ci-changes.py"))
+        self.assertIn("installed", changes["checks_for"]("scripts/fixtures/installed_continuity.py"))
 
     def test_fixture_cache_domain_covers_lockfiles_source_imports_and_recipe(self):
         self.assertIn("go-version-file: go.mod", CACHE)
         self.assertIn("cache: true", CACHE)
-        for pattern in ("**/go.mod", "**/go.sum", "**/*.go", "scripts/fixtures/installed_fresh.py", "scripts/fixtures/installed_releases.py",
+        for pattern in ("**/go.mod", "**/go.sum", "**/*.go", "scripts/fixtures/installed_fresh.py", "scripts/fixtures/installed_pr.py", "scripts/fixtures/installed_releases.py",
                         "scripts/fixtures/release_transition.py", ".github/actions/installed-go/action.yml"):
             self.assertIn("          " + pattern + "\n", CACHE)
         self.assertEqual(CACHE.count("uses: actions/setup-go@"), 1)
@@ -107,9 +109,9 @@ class WorkflowControls(unittest.TestCase):
         self.assertNotIn("installed-go", job(CATCHUP, "publication-native"))
         self.assertEqual(job(PREPARED, "prepare").count("uses: ./.github/actions/installed-go"), 1)
         self.assertNotIn("installed-go", job(PREPARED, "consume"))
-        self.assertIn("'.github/actions/installed-go/**'", CATCHUP)
+        self.assertEqual(job(CI, "installed").count("uses: ./.github/actions/installed-go"), 1)
         changes = runpy.run_path(str(ROOT / "scripts/ci-changes.py"))
-        self.assertIn("update_proofs", changes["checks_for"](".github/actions/installed-go/action.yml"))
+        self.assertIn("installed", changes["checks_for"](".github/actions/installed-go/action.yml"))
 
     def test_actual_seed_command_matches_pinned_setup_go_identity_on_three_hosts(self):
         body = CACHE.split("      run: |\n", 1)[1].split("    - name:", 1)[0]

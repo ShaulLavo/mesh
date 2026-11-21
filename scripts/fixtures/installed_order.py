@@ -156,7 +156,7 @@ def run(root, output, descriptor, operation):
             value = descriptor | {"root": account["home"], "previous": None,
                 "host": descriptor["host"] | {"name": account["role"]}}
             drivers.append(Driver(accounts, account, value))
-        bootstrap(drivers, record)
+        bootstrap(drivers, record, descriptor["versions"][0])
         scenarios(root, drivers, descriptor, record)
         record["passed"] = True
     except BaseException as error:
@@ -189,7 +189,7 @@ def share_inputs(accounts, descriptor):
     descriptor["preparer"] = str(preparer)
 
 
-def bootstrap(drivers, record):
+def bootstrap(drivers, record, version):
     peers = [driver.call("prepare") for driver in drivers]
     for driver, peer in zip(drivers, peers, strict=True):
         driver.account["id"] = peer["id"]
@@ -202,13 +202,13 @@ def bootstrap(drivers, record):
         configured = driver.call("configure", peers=members, after=after, soak=5_000_000_000)
         record.setdefault("baselineInitialization", {})[driver.account["role"]] = configured["baselineInitialization"]
     for driver in drivers:
-        result = driver.call("adopt", timeout=installed_clock.timeout(), version=installed_releases.VERSIONS[0])
+        result = driver.call("adopt", timeout=installed_clock.timeout(), version=version)
         record.setdefault("adopted", {})[driver.account["role"]] = result
     record["peers"] = members
 
 
 def scenarios(root, drivers, descriptor, record):
-    first, failed, latest = installed_releases.VERSIONS
+    first, failed, latest = descriptor["versions"]
     canary, sleeping, direct = drivers
     origin = installed_origin.Origin(root)
     directory = Path(descriptor["releases"]["directory"])
@@ -223,7 +223,7 @@ def scenarios(root, drivers, descriptor, record):
     held = await_opportunity(direct, first, failed, started)
     require_failed_canary_read(held, failed_state, canary.account["id"])
     record["observations"].append({"canaryFailure": bounded(failed_state), "awakeDirectHold": bounded(held)})
-    canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold = release_latest(origin, directory, drivers, record)
+    canary_latest, direct_latest, direct_hold, sleeper_latest, sleeper_hold = release_latest(origin, directory, drivers, record, first, latest)
     # A successor can authenticate after its predecessor's commit snapshot.
     # Both controller streams have drained before these final ledger reads.
     canary_latest = canary.call("inspect", active=False)
@@ -233,17 +233,16 @@ def scenarios(root, drivers, descriptor, record):
         "directLatest": bounded(direct_latest), "sleepBeforeSoak": bounded(sleeper_hold), "sleepLatest": bounded(sleeper_latest)})
 
 
-def release_latest(origin, directory, drivers, record):
+def release_latest(origin, directory, drivers, record, first, latest):
     for driver in drivers:
         order_trace.attach(driver)
     try:
-        return release_latest_owned(origin, directory, drivers, record)
+        return release_latest_owned(origin, directory, drivers, record, first, latest)
     finally:
         order_trace.summaries(drivers, record)
 
 
-def release_latest_owned(origin, directory, drivers, record):
-    first, _, latest = installed_releases.VERSIONS
+def release_latest_owned(origin, directory, drivers, record, first, latest):
     canary, sleeping, direct = drivers
     canary_commit, direct_commit = Future(), Future()
     direct_armed, sleeper_armed = Future(), Future()

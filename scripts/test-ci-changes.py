@@ -26,11 +26,11 @@ class ClassifyTests(unittest.TestCase):
             "internal/apppill/assets/pill.js": ("code", "browser", "packaging"),
             "internal/apps/render.go": ("code", "browser", "packaging"),
             "internal/htmlrender/page.go": ("code", "browser", "packaging"),
-            "scripts/install/assets/mesh.service": ("code", "packaging", "update_proofs"),
-            "scripts/install/assets/dev.shaulavo.mesh.plist": ("code", "packaging", "update_proofs"),
-            "scripts/fixtures/fixture_tls.py": ("code", "packaging", "update_proofs"),
-            "internal/protocol/frame.go": ("code", "packaging", "update_proofs"),
-            "Casks/mesh.rb": ("code", "packaging", "update_proofs"),
+            "scripts/install/assets/mesh.service": ("code", "packaging", "installed"),
+            "scripts/install/assets/dev.shaulavo.mesh.plist": ("code", "packaging", "installed"),
+            "scripts/fixtures/fixture_tls.py": ("code", "packaging", "installed"),
+            "internal/protocol/frame.go": ("code", "packaging", "installed"),
+            "Casks/mesh.rb": ("code", "packaging", "installed"),
             "go.mod": CLASSIFIER["ALL"],
             ".github/actions/apt-packages/install.sh": CLASSIFIER["ALL"],
             ".github/workflows/installed-catchup.yml": CLASSIFIER["ALL"],
@@ -90,7 +90,10 @@ class ClassifyTests(unittest.TestCase):
         (repo / "go.mod").unlink()
         deleted = commit("delete")
         self.assertEqual(decisions(renamed, deleted), CLASSIFIER["ALL"])
-
+        (repo / "scripts/fixtures").mkdir(parents=True)
+        (repo / "scripts/fixtures/installed_pr.py").write_text("# Shared native fixture change\n")
+        fixture_only = commit("installed fixture only")
+        self.assertEqual(decisions(deleted, fixture_only), {"code", "packaging", "installed"})
 
 
 if __name__ == "__main__":

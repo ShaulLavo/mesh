@@ -60,12 +60,13 @@ def rollback_context(manifest, source):
 
 
 class Releases:
-    def __init__(self, root, native, output, *, manifest_schemas=(1,), prepared=False):
+    def __init__(self, root, native, output, *, manifest_schemas=(1,), prepared=False, native_only=False):
         if manifest_schemas not in ((1,), (1, 2)):
             raise ValueError("unsupported fixture exporter manifest capability")
         self.manifest_schemas = manifest_schemas
         self.clock = installed_clock.current()
         self.root, self.native, self.output = Path(root), native, Path(output)
+        self.native_only = native_only
         self.directory = self.root / "releases"
         self.directory.mkdir(exist_ok=prepared)
         self.signer = None
@@ -209,6 +210,17 @@ class Releases:
         self.registry = path
 
     def build_platform(self, version, platform, overlay):
+        if self.native_only and platform != self.native:
+            # The signed manifest still needs all platform slots. Only the job's
+            # native slot is installable or eligible for a transition proof.
+            directory = self.directory / version
+            directory.mkdir(exist_ok=True)
+            system, architecture = platform.split("/")
+            name = f"mesh_{system}_{architecture}.tar.gz"
+            marker = f"unavailable on this native fixture: {version} {platform}\n".encode()
+            (directory / name).write_bytes(marker)
+            return {"platform": {"os": system, "arch": architecture}, "archive": name,
+                    "sha256": digest(marker), "binarySha256": digest(b"non-executable\n" + marker)}
         system, architecture = platform.split("/")
         binary = self.root / "build" / version / platform.replace("/", "-") / "mesh"
         binary.parent.mkdir(parents=True, exist_ok=True)

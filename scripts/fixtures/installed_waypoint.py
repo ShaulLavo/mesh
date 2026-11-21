@@ -14,6 +14,13 @@ def prepare(releases, origin, source):
     releases.build(waypoint, epoch=2)
     releases.publish(waypoint, 1, [releases.prove(releases.builds[first]["path"], waypoint)], reader_epoch=2)
     releases.retain_custom_source(first)
+    publish_future(releases)
+    origin.serve_tree(releases.directory)
+    origin.head(releases.directory, installed_releases.VERSIONS[-1])
+
+
+def publish_future(releases):
+    _, waypoint, future = installed_releases.VERSIONS
     releases.build(future, epoch=2)
     proof = releases.prove(releases.builds[waypoint]["path"], future)
     releases.manifests[future]["schema"] = 2
@@ -26,8 +33,6 @@ def prepare(releases, origin, source):
     value = json.loads(root.read_text())
     value["previous"] = {"tag": waypoint, "name": previous.name, "sha256": installed_releases.digest(previous.read_bytes())}
     installed_releases.write_json(root, value)
-    origin.serve_tree(releases.directory)
-    origin.head(releases.directory, future)
 
 
 def documents(releases, version):

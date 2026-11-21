@@ -408,7 +408,8 @@ class OrderTraceTest(unittest.TestCase):
         record = {}
         with patch.object(installed_order, "fail_pending", side_effect=propagate):
             with self.assertRaises(ValueError) as caught:
-                installed_order.release_latest(type("Origin", (), {"head": lambda *_: None})(), Path("/unused"), drivers, record)
+                first, _, latest = installed_releases.VERSIONS
+                installed_order.release_latest(type("Origin", (), {"head": lambda *_: None})(), Path("/unused"), drivers, record, first, latest)
         self.assertIs(caught.exception, parent_error)
         self.assertIn("orderDiagnostics", record)
         direct = record["orderDiagnostics"]["burst"]["failures"]

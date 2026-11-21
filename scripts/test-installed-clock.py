@@ -560,7 +560,7 @@ class ClockTest(unittest.TestCase):
             events.append(("latched", args[1]))
             return self.now() + 60 * clocks.SECOND
         accounts.close.side_effect = lambda: installed_native.cleanup_all([fail, lambda: events.append("next")])
-        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND}
+        descriptor = {"fixtureEmergencyNs": 60 * clocks.SECOND, "versions": installed_releases.VERSIONS}
         with patch.object(installed_accounts, "require_hosted_root"), patch.object(installed_paths, "validate"), patch.object(installed_account_run, "claim"), patch.object(installed_accounts, "Accounts", return_value=accounts), patch.object(installed_order, "share_inputs"), patch.object(installed_order, "bootstrap"), patch.object(installed_order, "scenarios"), patch.object(installed_account_run, "owner_failure", side_effect=latch), patch.object(clocks, "failure_cleanup_handoff"):
             with self.assertRaisesRegex(RuntimeError, "first nested cleanup failure"):
                 installed_order.run(self.root, self.root, descriptor, "control")
