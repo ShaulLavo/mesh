@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/bootstrap"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 )
 
@@ -119,15 +120,8 @@ chmod 700 "$work/mesh"
 	return "sh -c " + adoptionShellQuote(script), nil
 }
 
-// adoptionCacheScript selects the daemon's update cache with the same rule as
-// updatebootstrap.invocationSettings: MESH_UPDATE_CACHE_DIR, then
-// XDG_CACHE_HOME, then ~/Library/Caches on macOS or ~/.cache elsewhere.
-const adoptionCacheScript = `case "$(uname -s)" in
-  Darwin) cache_home=$HOME/Library/Caches ;;
-  *) cache_home=$HOME/.cache ;;
-esac
-cache=${MESH_UPDATE_CACHE_DIR:-${XDG_CACHE_HOME:-$cache_home}/mesh/updates}
-test -d "$cache" || { printf 'existing daemon update cache %s is unavailable\n' "$cache" >&2; exit 1; }
+// adoptionCacheScript requires the daemon's existing update cache.
+const adoptionCacheScript = paths.UpdateCacheShell + `test -d "$cache" || { printf 'existing daemon update cache %s is unavailable\n' "$cache" >&2; exit 1; }
 `
 
 // adoptionProbeScript prints the platform, then checks everything the deploy
