@@ -661,12 +661,12 @@ class NativeOwnership:
 
     def read_record(self, path, final):
         try:
-            text = path.read_text()
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                raise ValueError("expected a JSON object")
         except FileNotFoundError:
             self.record_vanished(path)
             return None
-        try:
-            return json.loads(text)
         except ValueError as error:
             # The writer may still be filling the file: read it again at the next
             # observation. The final read runs after the writers have stopped.
@@ -674,6 +674,7 @@ class NativeOwnership:
             if final:
                 self.unresolved.append(f"native record stayed malformed: {path}: {error}")
             return None
+        return value
 
     def record_vanished(self, path):
         self.vanished_record_reads += 1

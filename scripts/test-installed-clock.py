@@ -1347,12 +1347,18 @@ class NativeOwnershipTest(unittest.TestCase):
         shutil.rmtree(state)
 
     def test_native_record_that_stays_malformed_fails_verification(self):
+        self.check_malformed_native_record('{"pid": ')
+
+    def test_persisted_null_native_record_fails_despite_other_coverage(self):
+        self.check_malformed_native_record("null")
+
+    def check_malformed_native_record(self, contents):
         state = self.root / "mesh-transition.malformed"
         state.mkdir()
         (state / "cohort.json").write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
         broken = state / "state/s/W000/meta.json"
         broken.parent.mkdir(parents=True)
-        broken.write_text('{"pid": ')
+        broken.write_text(contents)
         deadline = clocks.time.monotonic_ns() + clocks.SECOND
         with patch.object(clocks, "process_snapshot", return_value=self.rows()):
             ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
