@@ -123,6 +123,25 @@ def proof_shards(selection, frozen):
     return list(range(max([1] + sizes)))
 
 
+PROOF_PLATFORMS = (("linux/amd64", "linux-amd64", "ubuntu-24.04"), ("linux/arm64", "linux-arm64", "ubuntu-24.04-arm"),
+                   ("darwin/arm64", "darwin-arm64", "macos-15"))
+
+
+def prove_matrix(shards, release):
+    """The proof job matrix: every shard on every platform for a release.
+
+    A pull request runs every Linux shard but only the first Darwin shard, a
+    smoke run of the Darwin transition path; the release path proves every
+    Darwin source before anything is published."""
+    if not isinstance(shards, list) or not shards or shards != list(range(len(shards))):
+        raise ValueError("proof shards must be 0 through N-1")
+    include = []
+    for platform, key, runner in PROOF_PLATFORMS:
+        selected = shards if release or not platform.startswith("darwin/") else shards[:1]
+        include.extend({"platform": platform, "key": key, "runner": runner, "shard": shard} for shard in selected)
+    return {"include": include}
+
+
 def main(args):
     candidate, previous, platform, frozen, directory, output_list = args
     selection = json.loads(Path(os.environ["MESH_RELEASE_SELECTION"]).read_bytes())
@@ -161,5 +180,7 @@ if __name__ == "__main__":
         freeze_pins(*sys.argv[2:])
     elif len(sys.argv) == 4 and sys.argv[1] == "--shards":
         print(json.dumps(proof_shards(json.loads(Path(sys.argv[2]).read_bytes()), sys.argv[3])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "--prove-matrix" and sys.argv[3] in ("true", "false"):
+        print(json.dumps(prove_matrix(json.loads(sys.argv[2]), sys.argv[3] == "true"), separators=(",", ":")))
     else:
         main(sys.argv[1:])

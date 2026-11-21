@@ -28,6 +28,7 @@ def module(name, filename):
 policy = module("native_eperm", "native-eperm-policy.py")
 runner = module("ordinary_proofs", "run-update-proofs.py")
 summary = module("native_eperm_summary", "summarize-native-eperm.py")
+BASELINES = module("release_baselines", "prepare-release-baselines.py")
 REPO = Path(__file__).resolve().parents[1]
 INVALID_SHARDS = (None, "", "[0,1,2]", 3, {}, [], [0, 0], [0, 1, 2, 2], [-1, 0], [False, 1], [0, 1.0], [0, "1"], [None],
                   [1], [0, 2], [0, 1, 2, 4], [2, 4, 7])
@@ -743,9 +744,13 @@ class WiringTests(unittest.TestCase):
         initialize = self.prove.split("Initialize this AMD64", 1)[1].split("- name: Create", 1)[0]
         self.assertIn("SHARDS: ${{ needs.policy.outputs.shards }}", initialize)
         self.assertIn('--shard "$SHARD" --shards "$SHARDS"', initialize)
-        self.assertIn("shard: ${{ fromJSON(needs.policy.outputs.shards) }}", self.prove)
+        # The matrix comes from prepare-release-baselines.py --prove-matrix, which
+        # keeps every declared AMD64 shard on pull requests and releases alike.
+        self.assertIn("matrix: ${{ fromJSON(needs.policy.outputs.prove) }}", self.prove)
         self.assertNotIn("max-parallel:", self.prove)
-        self.assertIn("platform: [linux/amd64, linux/arm64, darwin/arm64]", self.prove)
+        for release in (True, False):
+            rows = BASELINES.prove_matrix([0, 1, 2], release)["include"]
+            self.assertEqual([row["shard"] for row in rows if row["platform"] == "linux/amd64"], [0, 1, 2])
         self.assertIn("fail-fast: false", self.prove)
         self.assertIn("name: update-proofs-${{ matrix.key }}-${{ matrix.shard }}", self.prove)
         self.assertIn("path: ${{ runner.temp }}/update-proof", self.prove)
@@ -839,7 +844,7 @@ class WiringTests(unittest.TestCase):
         scratch = root / "owned-scratch"
         scratch.mkdir()
         calls = root / "calls"
-        snippet = self.prove.split('          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)', 1)[1].split('          root="$RUNNER_TEMP/mesh-native.noindex"', 1)[0]
+        snippet = self.prove.split('          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"', 1)[1].split('          root="$RUNNER_TEMP/mesh-native.noindex"', 1)[0]
         # Execute the actual workflow branch with a mock Python boundary and owned files.
         script = 'set -euo pipefail\nscratch="$OWNED_SCRATCH"\npython3() { printf "%s\\n" "$*" >> "$CALLS"; }\n' + snippet
         script += "\ntrue\n" if status == 0 else "\nfalse\n"
