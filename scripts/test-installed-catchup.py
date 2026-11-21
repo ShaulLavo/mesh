@@ -933,6 +933,25 @@ class ChainObservationTest(unittest.TestCase):
     def observe(self):
         return installed_chain.observe_hop(self.case, self.record, self.middle)
 
+    def test_rollback_helper_restart_records_new_mapped_source_process(self):
+        helper = SimpleNamespace(manager_pid=Mock(return_value=100))
+        self.case.units = Mock()
+        self.case.units.managers = {"helper": helper}
+        mapped = {"pid": 101, "sha256": self.builds[self.source]["digest"]}
+        self.helper_reader.return_value = mapped
+        self.assertEqual(installed_chain.restart_rollback_helper(self.case, self.source),
+                         {"previousPID": 100, "image": mapped})
+        self.case.units.stop.assert_called_once_with("helper")
+        self.case.units.start.assert_called_once_with("helper")
+        self.helper_reader.assert_called_once_with(self.case, self.source)
+
+    def test_rollback_helper_restart_rejects_the_old_process(self):
+        self.case.units = Mock()
+        self.case.units.managers = {"helper": SimpleNamespace(manager_pid=Mock(return_value=100))}
+        self.helper_reader.return_value = {"pid": 100, "sha256": self.builds[self.source]["digest"]}
+        with self.assertRaisesRegex(RuntimeError, "did not replace"):
+            installed_chain.restart_rollback_helper(self.case, self.source)
+
     def assert_unobserved(self):
         self.assertEqual(self.record, {"hops": []})
         self.case.inspect_retained.assert_not_called()

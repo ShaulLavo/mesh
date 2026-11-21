@@ -51,11 +51,11 @@ def run_case(root, output, host, pair, preparer, origin, releases, previous, fai
         case.units.start("daemon")
         if failure == "first":
             await_first_rollback(case, record, first, intermediate)
-            verify_failed_restart(case, record, first, intermediate)
+            verify_failed_restart(case, record, first, intermediate, restart_helper=releases.native_only)
         else:
             await_chain(case, record, intermediate, final, failure == "final")
         if failure == "final":
-            verify_failed_restart(case, record, intermediate, final)
+            verify_failed_restart(case, record, intermediate, final, restart_helper=releases.native_only)
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
@@ -246,12 +246,27 @@ def matching_failure(case, ledger, source, target):
     return [item for item in ledger["failed"] if item["edge"] == edge and item["phase"] == "rolled_back" and item["version"] == target]
 
 
-def verify_failed_restart(case, record, source, target):
+def restart_rollback_helper(case, source):
+    manager = case.units.managers["helper"]
+    previous_pid = manager.manager_pid()
+    if not previous_pid:
+        raise RuntimeError("the restored native helper was not running before restart")
+    case.units.stop("helper")
+    case.units.start("helper")
+    image = installed_native.native_services.wait_for(
+        lambda: ready_helper(case, source), "the restarted helper did not load its restored source image")
+    if image["pid"] == previous_pid:
+        raise RuntimeError("native helper restart did not replace the restored process")
+    return {"previousPID": previous_pid, "image": image}
+
+
+def verify_failed_restart(case, record, source, target, *, restart_helper=False):
     before = read_journal(case)["request"]
     failure = matching_failure(case, read_ledger(case), source, target)
     state_file = case.state / "updates/host-update.json"
     modified = state_file.stat().st_mtime_ns
     case.units.stop("daemon")
+    evidence = {"helperRestart": restart_rollback_helper(case, source)} if restart_helper else {}
     case.units.start("daemon")
     deadline = time.monotonic() + installed_clock.timeout()
     while time.monotonic() < deadline:
@@ -259,7 +274,7 @@ def verify_failed_restart(case, record, source, target):
         reconciled = state_file.stat().st_mtime_ns != modified and not ledger["state"].get("owned")
         if case.ready() and reconciled and ledger["state"]["phase"] in ("waiting", "discovering"):
             verify_quarantine(case, before, failure, ledger, source, target)
-            record["failedRestart"] = {"failed": failure, "state": ledger["state"],
+            record["failedRestart"] = evidence | {"failed": failure, "state": ledger["state"],
                 "workers": case.cohort.verify("native-failed-edge-restart")}
             return
         time.sleep(0.05)

@@ -26,6 +26,7 @@ class ClassifyTests(unittest.TestCase):
             "internal/apppill/assets/pill.js": ("code", "browser", "packaging"),
             "internal/apps/render.go": ("code", "browser", "packaging"),
             "internal/htmlrender/page.go": ("code", "browser", "packaging"),
+            "internal/serve/service.go": CLASSIFIER["ALL"],
             "scripts/install/assets/mesh.service": ("code", "packaging", "installed"),
             "scripts/install/assets/dev.shaulavo.mesh.plist": ("code", "packaging", "installed"),
             "scripts/fixtures/fixture_tls.py": ("code", "packaging", "installed"),

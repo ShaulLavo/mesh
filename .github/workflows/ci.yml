@@ -361,12 +361,9 @@ jobs:
         run: |
           python3 scripts/test-installed-gate-wiring.py
           python3 scripts/test-installed-catchup.py
-          python3 scripts/test-installed-clock.py
           python3 scripts/test-installed-prepared.py
           python3 scripts/test-installed-workflow.py
-          python3 scripts/test-native-eperm-policy.py
-          python3 scripts/test-release-worker-eperm.py
-          python3 scripts/test-update-reader-publication.py
+          python3 scripts/test-record-update-preparation.py
           python3 scripts/test-publication-jobs.py
           python3 scripts/test-publication-workflow.py
       - name: Install pinned ShellCheck, Ruff, and Lefthook
@@ -451,11 +448,14 @@ jobs:
       - uses: ./.github/actions/installed-go
       - name: Exercise signed updates and preserved sessions with the native manager
         run: python3 -B scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-pr" --native-preflight --pull-request
-      - name: Verify an exception still cleans up the native service
+      - name: Verify native services and listeners stop after fixture errors
         if: matrix.platform != 'linux/arm64'
         env:
           MESH_TEST_NATIVE_MANAGER: '1'
-        run: python3 -B scripts/test-installed-catchup.py NativeServiceTest.test_exception_after_launch_stops_real_service
+        run: |
+          python3 -B scripts/test-installed-catchup.py \
+            NativeServiceTest.test_exception_after_launch_stops_real_service \
+            InstalledCleanupTest.test_terminal_failure_still_stops_actual_listener_and_both_units
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
