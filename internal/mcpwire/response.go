@@ -161,6 +161,9 @@ func validPromptMessage(message object) bool {
 }
 
 func validContent(content object) bool {
+	if !optionalObject(content["_meta"]) {
+		return false
+	}
 	kind, _ := decodeString(content["type"])
 	switch kind {
 	case "text":

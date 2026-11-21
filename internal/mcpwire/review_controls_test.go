@@ -1,6 +1,7 @@
 package mcpwire
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,11 @@ func TestMRTRPinnedRequestShapes(t *testing.T) {
 		{"nested form property", `{"elicitation":{}}`, elicitationMethod, `{"message":"Open","requestedSchema":{"type":"object","properties":{"nested":{"type":"object","properties":{}}}}}`, false},
 		{"invalid form option", `{"elicitation":{}}`, elicitationMethod, strings.Replace(form, `,"title":"Yes"`, "", 1), false},
 		{"sampling block and vendor field", `{"sampling":{}}`, samplingMethod, sampling, true},
+		{"sampling text vendor metadata", `{"sampling":{}}`, samplingMethod, strings.Replace(sampling, `"type":"text"`, `"type":"text","_meta":{"vendor":true}`, 1), true},
+		{"sampling text scalar metadata", `{"sampling":{}}`, samplingMethod, strings.Replace(sampling, `"type":"text"`, `"type":"text","_meta":false`, 1), false},
+		{"sampling tool use scalar metadata", `{"sampling":{"tools":{}}}`, samplingMethod, strings.Replace(tools, `"type":"tool_use"`, `"type":"tool_use","_meta":null`, 1), false},
+		{"sampling tool result scalar metadata", `{"sampling":{"tools":{}}}`, samplingMethod, strings.Replace(tools, `"type":"tool_result"`, `"type":"tool_result","_meta":"invalid"`, 1), false},
+		{"sampling tool result child scalar metadata", `{"sampling":{"tools":{}}}`, samplingMethod, strings.Replace(tools, `"type":"text"`, `"type":"text","_meta":[]`, 1), false},
 		{"sampling content object empty", `{"sampling":{}}`, samplingMethod, `{"messages":[{"role":"user","content":{}}],"maxTokens":64}`, false},
 		{"sampling content array has invalid member", `{"sampling":{}}`, samplingMethod, `{"messages":[{"role":"user","content":[{"type":"text","text":"ok"},{"type":"image","data":"AA=="}]}],"maxTokens":64}`, false},
 		{"sampling content unknown discriminator", `{"sampling":{}}`, samplingMethod, `{"messages":[{"role":"user","content":{"type":"vendor","text":"ok"}}],"maxTokens":64}`, false},
@@ -104,6 +110,14 @@ func assertOversizeReply(t *testing.T, reader *StdioReader, next []byte, wantID 
 	}
 }
 
+func TestOversizedStdioReplyFromPrebufferedInput(t *testing.T) {
+	line := `{"jsonrpc":"2.0","result":{"text":"` + strings.Repeat("x", MaxMessage+64) + `"},"id":"match"}`
+	next := envResult("1", `{"resultType":"complete","content":[]}`)
+	source := io.MultiReader(strings.NewReader(line+"\r\n"), bytes.NewReader(append(next, '\n')))
+	reader := NewStdioReader(bufio.NewReaderSize(source, len(line)+2))
+	assertOversizeReply(t, reader, next, `"match"`, false)
+}
+
 func TestSSEReadFailureClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name, tail string
@@ -154,8 +168,16 @@ func TestCapabilityErrorOnlyReportsMissingLeaves(t *testing.T) {
 		"elicitation": map[string]any{"form": map[string]any{}, "url": map[string]any{}},
 		"extensions":  map[string]any{"vendor.test/capability": map[string]any{"nested": map[string]any{"first": "supported", "second": map[string]any{}}}},
 	}}
-	raw := requestBytes("1", MethodCallTool, Version, `{"roots":{"listChanged":true},"elicitation":{"form":{}},"extensions":{"vendor.test/capability":{"nested":{"first":"supported"}}}}`, `,"name":"echo"`)
 	const want = `{"elicitation":{"url":{}},"extensions":{"vendor.test/capability":{"nested":{"second":{}}}}}`
+	for _, modes := range []string{`{"form":{}}`, `{}`} {
+		caps := `{"roots":{"listChanged":true},"elicitation":` + modes + `,"extensions":{"vendor.test/capability":{"nested":{"first":"supported"}}}}`
+		raw := requestBytes("1", MethodCallTool, Version, caps, `,"name":"echo"`)
+		t.Run(modes, func(t *testing.T) { assertCapabilityErrorOnBothTransports(t, raw, methods, want) })
+	}
+}
+
+func assertCapabilityErrorOnBothTransports(t *testing.T, raw []byte, methods Methods, want string) {
+	t.Helper()
 	assertMissingSubset(t, StdioInput(raw, methods).Fault, want)
 	m := mustParse(t, raw)
 	headers, err := BuildHTTPHeaders(m, ParameterHeaders{})

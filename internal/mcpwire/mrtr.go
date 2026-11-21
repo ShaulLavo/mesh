@@ -57,7 +57,7 @@ func validElicitation(params, caps object) bool {
 	mode, _ := decodeString(params["mode"])
 	switch {
 	case mode == "form" || params["mode"] == nil:
-		return (isObject(capability["form"]) || len(capability) == 0) && validElicitationForm(params["requestedSchema"])
+		return (isObject(capability["form"]) || implicitFormElicitation(capability)) && validElicitationForm(params["requestedSchema"])
 	case mode == "url":
 		address, _ := decodeString(params["url"])
 		target, err := url.Parse(address)
@@ -181,10 +181,10 @@ func validSamplingBlock(content object) bool {
 	case "text", "image", "audio":
 		return validContent(content)
 	case "tool_use":
-		return hasStrings(content, "id", "name") && isObject(content["input"])
+		return hasStrings(content, "id", "name") && isObject(content["input"]) && optionalObject(content["_meta"])
 	case "tool_result":
 		return hasStrings(content, "toolUseId") && validObjectArray(content["content"], validContent) &&
-			optionalBool(content["isError"])
+			optionalBool(content["isError"]) && optionalObject(content["_meta"])
 	default:
 		return false
 	}

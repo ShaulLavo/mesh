@@ -69,6 +69,9 @@ func validateRequest(m Message, methods Methods) *Fault {
 	if !implemented || !coreMethod(m.method) {
 		return m.fault(MethodNotFound, "MCP method not found")
 	}
+	if modes, _ := decodeObject(caps["elicitation"]); implicitFormElicitation(modes) {
+		caps["elicitation"] = json.RawMessage(`{"form":{}}`)
+	}
 	if missing := missingCapabilities(caps, required); len(missing) != 0 {
 		fault := m.fault(MissingCapability, "Required MCP client capability is missing")
 		fault.Data = map[string]any{"requiredCapabilities": missing}
@@ -133,6 +136,10 @@ func validCapabilityEntries(fields object) bool {
 		}
 	}
 	return true
+}
+
+func implicitFormElicitation(modes object) bool {
+	return modes != nil && len(modes) == 0
 }
 
 func missingCapabilities(caps object, required map[string]any) map[string]any {

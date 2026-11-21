@@ -13,7 +13,11 @@ type StdioReader struct {
 	r *bufio.Reader
 }
 
-func NewStdioReader(r io.Reader) *StdioReader { return &StdioReader{r: bufio.NewReader(r)} }
+func NewStdioReader(r io.Reader) *StdioReader {
+	reader := new(bufio.Reader)
+	reader.Reset(r)
+	return &StdioReader{r: reader}
+}
 
 // Read returns ErrTooLarge after draining an oversized client line.
 func (s *StdioReader) Read() ([]byte, error) { return s.read(false) }
