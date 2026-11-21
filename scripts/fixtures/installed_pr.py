@@ -56,6 +56,9 @@ def prepare(releases, origin, pair, ordered):
     releases.build(first)
     releases.publish(first, 0, [releases.prove(retained["executable"], first)])
     bind_retained_worker(releases, retained)
+    # The original legacy worker and the first current worker both survive the
+    # later hops. Every subsequent proof must cover both executing digests.
+    releases.retain_custom_source(first)
 
     epoch = 2 if ordered else 1
     releases.build(intermediate, epoch=epoch)

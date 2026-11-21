@@ -427,7 +427,7 @@ jobs:
     if: needs.changes.outputs.installed == 'true'
     name: Installed updates (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 40
     permissions:
       contents: read
     strategy:

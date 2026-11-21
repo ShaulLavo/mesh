@@ -416,6 +416,20 @@ class InstalledPRTest(unittest.TestCase):
         self.assertEqual(installed_pr.chain_profiles("linux/arm64"), ("none", "final"))
         self.assertEqual(installed_pr.chain_profiles("darwin/arm64"), ("none", "final"))
 
+    def test_every_current_edge_proves_rollback_for_both_live_worker_images(self):
+        first, intermediate, final = installed_releases.VERSIONS
+        releases = Mock(root=Path("unused"), directory=Path("unused/releases"),
+                        builds={first: {"path": "current-first"}, intermediate: {"path": "current-intermediate"}})
+        pair = {"daemon": {"executable": "legacy-daemon"}}
+        with patch.object(installed_pr, "bind_retained_worker") as bind:
+            installed_pr.prepare(releases, Mock(), pair, ordered=False)
+        bind.assert_called_once_with(releases, pair["daemon"])
+        history = releases.mock_calls
+        retained = history.index(unittest.mock.call.retain_custom_source(first))
+        self.assertLess(history.index(unittest.mock.call.prove("legacy-daemon", first)), retained)
+        self.assertLess(retained, history.index(unittest.mock.call.prove("current-first", intermediate)))
+        self.assertLess(retained, history.index(unittest.mock.call.prove("current-intermediate", final)))
+
 
 class InstalledModeShellTest(unittest.TestCase):
     def test_workflow_modes_pass_exact_arguments_under_nounset(self):

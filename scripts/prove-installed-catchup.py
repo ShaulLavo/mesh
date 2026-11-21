@@ -81,7 +81,7 @@ def validate_invocation(parser, arguments, output):
     if getattr(arguments, "pull_request", False):
         if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
             raise RuntimeError("pull request cases require a disposable GitHub-hosted runner")
-        return native, installed_clock.Clock({"platform": native, "mode": "pull-request"})
+        return native, installed_clock.Clock({"platform": native, "mode": "pull-request"}, hang_seconds=30 * 60)
     clocked = arguments.installed_adoption or arguments.fresh_managed or arguments.export_prepared or arguments.prepared_releases
     clock = installed_clock.from_arguments(arguments, native) if clocked else None
     return native, clock

@@ -38,10 +38,11 @@ class ClockExpired(RuntimeError):
 
 
 class Clock:
-    def __init__(self, workload, *, now=None):
+    def __init__(self, workload, *, now=None, hang_seconds=HANG_SECONDS):
         self.workload, self.now = workload, now or time.monotonic_ns
         self.origin_ns = self.now()
-        self.deadline_ns = self.origin_ns + HANG_SECONDS * SECOND
+        self.hang_seconds = hang_seconds
+        self.deadline_ns = self.origin_ns + hang_seconds * SECOND
         self.rows, self.samples, self.failures, self.stack = [], [], [], []
         self.expected_samples, self.provenance = set(), {}
         self.unresolved = {"installed-partition-and-scenarios"} if workload.get("grouped") and workload.get("mode") != "order" else set()
@@ -183,7 +184,7 @@ class Clock:
         value = {"accepted": complete and not self.workload.get("transportLifecycle"),
                  "measurement_completed": complete, "origin_ns": self.origin_ns, "end_ns": now,
                  "command_ns": now - self.origin_ns, "disjoint_ns": sum(row["elapsed_ns"] for row in self.rows),
-                 "hang_cap_seconds": HANG_SECONDS, "cleanup_cap_seconds": CLEANUP_SECONDS,
+                 "hang_cap_seconds": self.hang_seconds, "cleanup_cap_seconds": CLEANUP_SECONDS,
                  "deadline_ns": self.deadline_ns,
                  "cleanup_deadline_ns": self.cleanup_deadline_ns, "workload": self.workload,
                  "provenance": self.provenance | provenance, "leaves": leaves, "samples": samples, "failures": self.failures,
