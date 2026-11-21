@@ -195,9 +195,9 @@ async def prepare(repo, binaries, env, packages, runtime_root=None, tests=None):
                                 isolated_environment(env, runtime_root / f"{name}-inventory"))
         selected_names = selected_tests(name, inventory(listing), tests)
         groups = partition(selected_names, CLI_PARTITIONS if name == "cli" else 1)
-        for index, tests in enumerate(groups):
+        for index, group in enumerate(groups):
             shards.append({"id": f"{name}-{index + 1}", "package": package, "cwd": cwd,
-                           "binary": str(binary), "tests": tests, "status": "pending",
+                           "binary": str(binary), "tests": group, "status": "pending",
                            "test2json": test2json,
                            "environmentRoot": str(runtime_root / f"{name}-{index + 1}")})
     return shards

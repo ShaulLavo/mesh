@@ -64,26 +64,33 @@ class ClassifyTests(unittest.TestCase):
         def git(*args):
             return subprocess.check_output(["git", *args], cwd=repo, env=env, text=True).strip()
 
+        def commit(message):
+            git("add", "-A")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+
+        def decisions(base, head):
+            result = subprocess.check_output(["python3", str(ROOT / "ci-changes.py"), "pull_request", "", base, head],
+                                             cwd=repo, text=True)
+            return {name for name, value in (line.split("=") for line in result.splitlines()) if value == "true"}
+
         git("init", "-q", "-b", "main")
         (repo / "docs").mkdir()
         (repo / "web/app-pill").mkdir(parents=True)
         source = repo / "web/app-pill/old\nname.txt"
         source.write_text("original content\n")
         (repo / "go.mod").write_text("module mesh.test\n")
-        git("add", ".")
-        git("commit", "-qm", "base")
-        base = git("rev-parse", "HEAD")
+        base = commit("base")
+        (repo / "docs/usage.md").write_text("Documentation only\n")
+        docs = commit("documentation")
+        self.assertEqual(decisions(base, docs), set())
         source.rename(repo / "docs/renamed.md")
+        renamed = commit("rename")
+        self.assertEqual(decisions(base, renamed), {"code", "browser"})
         (repo / "go.mod").unlink()
-        git("add", "-A")
-        git("commit", "-qm", "head")
-        head = git("rev-parse", "HEAD")
-        result = subprocess.check_output(["python3", str(ROOT / "ci-changes.py"), "pull_request", "", base, head],
-                                         cwd=repo, text=True)
-        self.assertEqual(dict(line.split("=") for line in result.splitlines()),
-                         {name: "true" for name in CLASSIFIER["ALL"]})
-        paths = subprocess.check_output(["git", "diff", "--name-only", "-z", "--no-renames", base, head], cwd=repo)
-        self.assertEqual(set(paths.split(b"\0")[:-1]), {b"docs/renamed.md", b"go.mod", b"web/app-pill/old\nname.txt"})
+        deleted = commit("delete")
+        self.assertEqual(decisions(renamed, deleted), CLASSIFIER["ALL"])
+
 
 
 if __name__ == "__main__":

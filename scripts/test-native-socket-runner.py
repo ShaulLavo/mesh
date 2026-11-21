@@ -349,6 +349,18 @@ func BenchmarkSocket(b *testing.B) { panic("benchmarks must not run") }
 '''
 
 
+class SelectionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_focused_selection_reaches_each_package(self):
+        with tempfile.TemporaryDirectory(prefix="native-selection-") as directory:
+            root = Path(directory)
+            inventory = b"fixture/daemon\t/daemon\tdaemon\nfixture/worker\t/worker\tworker\n"
+            responses = [inventory, b"", b"/go/test2json", b"TestDaemon\nTestOther\n", b"TestWorker\n"]
+            tests = {"daemon": ("TestDaemon",), "worker": ("TestWorker",)}
+            with patch.object(runner, "command", AsyncMock(side_effect=responses)):
+                result = await runner.prepare(root, root / "binaries", {}, tuple(tests), tests=tests)
+        self.assertEqual([shard["tests"] for shard in result], [["TestDaemon"], ["TestWorker"]])
+
+
 class BinaryTest(unittest.TestCase):
     def test_actual_race_binary_discovery_execution_and_testmain_errors(self):
         with tempfile.TemporaryDirectory(prefix="native-binary-") as directory:
