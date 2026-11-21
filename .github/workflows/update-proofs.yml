@@ -42,6 +42,7 @@ jobs:
       version: ${{ steps.select.outputs.version }}
       previous: ${{ steps.select.outputs.previous }}
       shards: ${{ steps.select.outputs.shards }}
+      prove: ${{ steps.select.outputs.prove }}
       cache_identity: ${{ steps.select.outputs.cache_identity }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -104,6 +105,9 @@ jobs:
           printf 'version=%s\nprevious=%s\n' "$VERSION" "$PREVIOUS" >> "$GITHUB_OUTPUT"
           shards=$(python3 scripts/prepare-release-baselines.py --shards "$root/selection.json" "$BASELINE_ASSETS")
           printf 'shards=%s\n' "$shards" >> "$GITHUB_OUTPUT"
+          # The release path (draft) proves every shard everywhere; a pull request
+          # runs one Darwin smoke shard beside every Linux shard.
+          printf 'prove=%s\n' "$(python3 scripts/prepare-release-baselines.py --prove-matrix "$shards" "$DRAFT")" >> "$GITHUB_OUTPUT"
           identity=$(python3 -c 'import hashlib,json,os,sys; value=[json.loads(os.environ["NATIVE_CACHE_INPUTS"]),json.load(open(sys.argv[1])),sys.argv[2:]]; print(hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":")).encode()).hexdigest())' "$root/selection.json" "$VERSION" "$PREVIOUS")
           printf 'cache_identity=%s\n' "$identity" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -135,7 +139,10 @@ jobs:
             runner: macos-15
     # Trusted Darwin legs (the caller's main pushes, manual runs and
     # same-repository PRs) run on the owner's Mac runner; fork PRs stay hosted.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    # Preparation and proofs keep everything in their own work tree, home,
+    # temporary root and ephemeral ports, so they take the shared Mac runners,
+    # which run up to three such jobs at once.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,7 +197,9 @@ jobs:
           if [[ $DRAFT == true ]]; then
             python3 scripts/prepare-draft-intake.py native "$intake" "$VERSION" "$SOURCE" --platform "$PLATFORM" --report "$root/tools/candidate-reader.json" --run "$GITHUB_RUN_ID"
           fi
-          short=$(mktemp -d /tmp/mw-XXXXXX.noindex)
+          # macOS mktemp fills only trailing X's, so the .noindex suffix (Spotlight
+          # exclusion) goes on a unique name that mkdir then creates exclusively.
+          short=$(mktemp -u /tmp/mw-XXXXXX).noindex && mkdir -m 700 "$short"
           trap 'rm -rf -- "$short"' EXIT
           TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
           grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
@@ -257,24 +266,15 @@ jobs:
         run: rm -rf -- "$RUNNER_TEMP/rollback-context"
 
   prove:
+    name: prove (${{ matrix.platform }}, ${{ matrix.shard }})
     needs: [policy, prepare, context]
     strategy:
       fail-fast: false
-      matrix:
-        platform: [linux/amd64, linux/arm64, darwin/arm64]
-        shard: ${{ fromJSON(needs.policy.outputs.shards) }}
-        include:
-          - platform: linux/amd64
-            key: linux-amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            key: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            key: darwin-arm64
-            runner: macos-15
-    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+      # Platform, key, runner and shard rows from prepare-release-baselines.py
+      # --prove-matrix: all of them for a release, one Darwin shard on a PR.
+      matrix: ${{ fromJSON(needs.policy.outputs.prove) }}
+    # Trusted Darwin legs run on the shared Mac runners after a Mac FIFO wait.
+    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
     timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 105 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -342,7 +342,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           if [[ -n ${MESH_WORKER_EPERM_LEDGER:-} ]]; then
@@ -412,6 +412,9 @@ jobs:
   reader:
     name: Original schema 1 release reader
     needs: [policy, prepare, prove]
+    # It needs the complete proof matrix, which only the release path (draft)
+    # produces; a pull request proves one Darwin shard.
+    if: inputs.draft
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -440,7 +443,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/reader"
