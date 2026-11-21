@@ -844,7 +844,7 @@ class WiringTests(unittest.TestCase):
         scratch = root / "owned-scratch"
         scratch.mkdir()
         calls = root / "calls"
-        snippet = self.prove.split('          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)', 1)[1].split('          root="$RUNNER_TEMP/mesh-native.noindex"', 1)[0]
+        snippet = self.prove.split('          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"', 1)[1].split('          root="$RUNNER_TEMP/mesh-native.noindex"', 1)[0]
         # Execute the actual workflow branch with a mock Python boundary and owned files.
         script = 'set -euo pipefail\nscratch="$OWNED_SCRATCH"\npython3() { printf "%s\\n" "$*" >> "$CALLS"; }\n' + snippet
         script += "\ntrue\n" if status == 0 else "\nfalse\n"

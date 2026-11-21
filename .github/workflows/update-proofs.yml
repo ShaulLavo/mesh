@@ -197,7 +197,9 @@ jobs:
           if [[ $DRAFT == true ]]; then
             python3 scripts/prepare-draft-intake.py native "$intake" "$VERSION" "$SOURCE" --platform "$PLATFORM" --report "$root/tools/candidate-reader.json" --run "$GITHUB_RUN_ID"
           fi
-          short=$(mktemp -d /tmp/mw-XXXXXX.noindex)
+          # macOS mktemp fills only trailing X's, so the .noindex suffix (Spotlight
+          # exclusion) goes on a unique name that mkdir then creates exclusively.
+          short=$(mktemp -u /tmp/mw-XXXXXX).noindex && mkdir -m 700 "$short"
           trap 'rm -rf -- "$short"' EXIT
           TMPDIR="$short" MESH_SHORT_TMP="$short" MESH_LEGACY_BINARY="$root/tools/candidate" "$root/tools/worker-probe" -test.v -test.run=^TestLegacyWorkerProcessProtocolAndVersion$ | tee "$root/tools/candidate-worker.log"
           grep -Fq -- '--- PASS: TestLegacyWorkerProcessProtocolAndVersion' "$root/tools/candidate-worker.log"
@@ -340,7 +342,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           if [[ -n ${MESH_WORKER_EPERM_LEDGER:-} ]]; then
@@ -441,7 +443,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX.noindex)
+          scratch=$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"
           trap 'rm -rf -- "$scratch"' EXIT
           export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/reader"

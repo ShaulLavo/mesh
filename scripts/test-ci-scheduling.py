@@ -479,6 +479,36 @@ def reject_darwin_smoke(workflows):
         raise AssertionError(f"Darwin smoke wiring accepted a mutation of {name}")
 
 
+# macOS mktemp replaces only trailing X's: /tmp/ms-XXXXXX.noindex is one fixed
+# path, so parallel Mac jobs collide on it and a leftover blocks every later job.
+MKTEMP_TEMPLATE = re.compile(r"\bmktemp\b[^\n|;)]*?([^\s\"'()]*X{3,}[^\s\"'()]*)")
+
+
+def mktemp_sources():
+    paths = sorted((ROOT / ".github").rglob("*.yml")) + sorted((ROOT / "scripts").rglob("*.sh")) + sorted((ROOT / "integration").rglob("*.sh"))
+    return {str(path.relative_to(ROOT)): path.read_text() for path in paths}
+
+
+def check_mktemp_templates(sources):
+    found = 0
+    for name, text in sources.items():
+        for template in MKTEMP_TEMPLATE.findall(text):
+            found += 1
+            assert re.search(r"X{3,}$", template), f"{name}: mktemp template {template} must end in its X's; macOS fills only trailing X's"
+    assert found, "no mktemp templates found; the scan is broken"
+
+
+def reject_mktemp_templates(sources):
+    name = ".github/workflows/update-proofs.yml"
+    mutated = sources[name].replace('$(mktemp -u /tmp/ms-XXXXXX).noindex && mkdir -m 700 "$scratch"', "$(mktemp -d /tmp/ms-XXXXXX.noindex)", 1)
+    assert mutated != sources[name], "mktemp mutation did not apply"
+    try:
+        check_mktemp_templates(dict(sources, **{name: mutated}))
+    except AssertionError:
+        return
+    raise AssertionError("a mktemp template with a suffix after its X's was accepted")
+
+
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     script = WAIT_SCRIPT.read_text()
@@ -494,6 +524,9 @@ def main():
     reject_mac_routing(workflows)
     check_darwin_smoke(workflows)
     reject_darwin_smoke(workflows)
+    sources = mktemp_sources()
+    check_mktemp_templates(sources)
+    reject_mktemp_templates(sources)
     action = (ROOT / ".github/actions/apt-packages/action.yml").read_text()
     check_apt_workflows(workflows, action)
     reject_apt_mutations(workflows, action)
