@@ -107,8 +107,9 @@ jobs:
               - '.github/actions/installed-go/**'
 
   mac-turn:
-    # One mesh-mac runner serves every trusted Darwin leg, and GitHub gives it
-    # whichever queued job it picks. A same-repository PR's Mac legs wait here,
+    # The owner's Mac runners (mesh-mac alone, mesh-mac-shared up to three at
+    # once) serve every trusted Darwin leg, and GitHub gives them whichever
+    # queued job it picks. A same-repository PR's Mac legs wait here,
     # on a hosted runner, until no main CI run (the publish path) is queued or
     # running. Main, manual, fork and draft runs pass at once.
     if: ${{ !inputs.client_interrupt }}
