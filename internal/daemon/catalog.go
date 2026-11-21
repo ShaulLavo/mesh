@@ -193,6 +193,9 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			return nil, fmt.Errorf("daemon: inspect launching session %s: %w", entry.Name(), err)
 		}
 		meta, err := worker.ReadMeta(dir)
+		if err != nil && worker.ReservedPurpose(dir).IsPipe() {
+			continue
+		}
 		if err != nil {
 			// A directory with no metadata at all is a reservation whose marker
 			// has not landed yet. It belongs to a create still in flight, so it
@@ -221,6 +224,9 @@ func (c *Catalog) scan(ctx context.Context) ([]storage.Session, error) {
 			}
 			log.Printf("daemon: session %s has unreadable metadata, recording it as interrupted: %v", entry.Name(), err)
 			observed = append(observed, quarantined)
+			continue
+		}
+		if meta.Reservation != nil && meta.Reservation.Purpose.IsPipe() {
 			continue
 		}
 		// A record that decodes but contradicts itself is not a torn write; it
@@ -687,7 +693,8 @@ func (c *Catalog) Remove(ctx context.Context, id storage.SessionID) error {
 	case <-ctx.Done():
 		return fmt.Errorf("daemon: remove session %s: %w", id, ctx.Err())
 	}
-	if ownerPinned(filepath.Join(c.sessionsDir, string(id))) {
+	dir := filepath.Join(c.sessionsDir, string(id))
+	if ownerPinned(dir) || worker.ReservedPurpose(dir) == session.LineExecution {
 		return fmt.Errorf("daemon: session %s remains reserved by its app", id)
 	}
 	if execution.ProtectedSession(c.sessionsDir, string(id)) {

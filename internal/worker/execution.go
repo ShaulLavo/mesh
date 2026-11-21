@@ -35,7 +35,7 @@ func prepareExecution(cfg Config) (*execution.Attempt, error) {
 		return nil, fmt.Errorf("worker: reservation ID mismatch")
 	}
 	if cfg.Execution == nil {
-		if cfg.Reservation.Purpose == session.Execution {
+		if cfg.Reservation.Purpose.IsExecution() {
 			return nil, fmt.Errorf("worker: missing execution binding")
 		}
 		return nil, validateReservation(filepath.Dir(cfg.Dir), *cfg.Reservation)
@@ -43,7 +43,11 @@ func prepareExecution(cfg Config) (*execution.Attempt, error) {
 	if cfg.Label != "agent request "+cfg.Execution.Reservation.Instance || cfg.HostID != cfg.Execution.Host || *cfg.Reservation != cfg.Execution.Reservation {
 		return nil, fmt.Errorf("worker: execution identity mismatch")
 	}
-	intent, err := execution.Normalize(execution.Intent{Kind: "pty", Command: cfg.Command, Cwd: cfg.Cwd, Cols: cfg.Cols, Rows: cfg.Rows, Term: executionTerminal(cfg.Env)})
+	intent := execution.Intent{Kind: cfg.Execution.Mode(), Command: cfg.Command, Cwd: cfg.Cwd, Stdin: cfg.Execution.Stdin}
+	if intent.Kind == execution.KindPTY {
+		intent.Cols, intent.Rows, intent.Term = cfg.Cols, cfg.Rows, executionTerminal(cfg.Env)
+	}
+	intent, err := execution.Normalize(intent)
 	if err != nil {
 		return nil, workerExecutionError("normalize worker execution", err)
 	}

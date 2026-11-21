@@ -660,6 +660,12 @@ func denyScopedExecutionRequests(t *testing.T, loose bool) {
 	for _, kind := range []string{protocol.TypeExecutionWait, protocol.TypeExecutionLogs, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove} {
 		requests = append(requests, protocol.Control{Type: kind, RequestID: "bound-denied", SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"})
 	}
+	instance := "0123456789abcdef0123456789abcdef"
+	requests = append(requests,
+		protocol.Control{Type: protocol.TypeExecutionInput, RequestID: "input-denied", SessionID: "7K3D", Instance: instance, WriteKey: "lookup"},
+		protocol.Control{Type: protocol.TypeExecutionInspect, RequestID: "inspect-denied", SessionID: "7K3D", Instance: instance},
+		protocol.Control{Type: protocol.TypeWorkerLineAttach, RequestID: "line-denied", SessionID: "7K3D", Instance: instance},
+	)
 	for _, request := range requests {
 		data, err := request.Encode()
 		if err != nil {

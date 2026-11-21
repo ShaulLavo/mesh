@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -22,21 +23,25 @@ type Capture struct {
 	closed            bool
 	reason            string
 	wake              chan struct{}
+	space             chan struct{}
 	done              chan struct{}
 	summary           StreamResult
 	err               error
 }
 
-func OpenCapture(state string, b Binding) (*Capture, error) {
+func OpenCapture(state string, b Binding, stream string) (*Capture, error) {
 	if err := b.Validate(); err != nil {
 		return nil, executionBoundaryError("capture", err)
+	}
+	if !slices.Contains(b.Streams(), stream) {
+		return nil, fmt.Errorf("execution: invalid capture stream")
 	}
 	f, err := OpenFiles(state)
 	if err != nil {
 		return nil, executionBoundaryError("capture", err)
 	}
-	s := newStreamStore(f, b)
-	c := &Capture{store: s, wake: make(chan struct{}, 1), done: make(chan struct{})}
+	s := newStreamStore(f, b, stream)
+	c := &Capture{store: s, wake: make(chan struct{}, 1), space: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := c.initialize(); err != nil {
 		return nil, errors.Join(err, f.Close())
 	}
@@ -45,15 +50,15 @@ func OpenCapture(state string, b Binding) (*Capture, error) {
 }
 func (c *Capture) initialize() error {
 	s := c.store
-	if err := s.files.Ensure(streamPath(s.binding, ".")); err != nil {
+	if err := s.files.Ensure(s.path(".")); err != nil {
 		return executionBoundaryError("capture", err)
 	}
-	gate, err := s.files.Lock(context.Background(), streamPath(s.binding, "stream.lock"))
+	gate, err := s.files.Lock(context.Background(), s.path("stream.lock"))
 	if err != nil {
 		return executionBoundaryError("capture", err)
 	}
 	defer func() { _ = gate.Close() }()
-	if err := s.files.Confirm(streamPath(s.binding, "stream.lock")); err != nil {
+	if err := s.files.Confirm(s.path("stream.lock")); err != nil {
 		return executionBoundaryError("capture", err)
 	}
 	generation, err := freshToken()
@@ -61,7 +66,10 @@ func (c *Capture) initialize() error {
 		return executionBoundaryError("capture", err)
 	}
 	m := manifest{Binding: s.binding, Generation: generation, Segments: []segment{}}
-	if _, err := s.files.Publish(streamPath(s.binding, "manifest.json"), m, true); err != nil {
+	if s.stream != KindPTY {
+		m.Stream = s.stream
+	}
+	if _, err := s.files.Publish(s.path("manifest.json"), m, true); err != nil {
 		return executionBoundaryError("capture", err)
 	}
 	return s.settle(context.Background(), m)
@@ -83,6 +91,33 @@ func (c *Capture) Offer(data []byte) {
 	if c.size+len(data) > captureQueue {
 		c.loseQueue()
 	}
+	c.enqueue(data, offset)
+}
+
+// OfferExact waits only for the independent disk writer's bounded queue.
+func (c *Capture) OfferExact(data []byte) {
+	for chunk := range slices.Chunk(data, captureQueue) {
+		c.offerExactChunk(chunk)
+	}
+}
+
+func (c *Capture) offerExactChunk(data []byte) {
+	for {
+		c.mu.Lock()
+		if c.size+len(data) <= captureQueue {
+			offset := c.observed
+			c.observed += uint64(len(data))
+			c.enqueue(data, offset)
+			c.mu.Unlock()
+			return
+		}
+		c.notify()
+		c.mu.Unlock()
+		<-c.space
+	}
+}
+
+func (c *Capture) enqueue(data []byte, offset uint64) {
 	if c.queue == nil {
 		c.queue = make([]byte, captureQueue)
 	}
@@ -93,7 +128,7 @@ func (c *Capture) Offer(data []byte) {
 	n := copy(c.queue[tail:], data)
 	copy(c.queue, data[n:])
 	c.size += len(data)
-	if c.size >= captureSegment {
+	if c.size >= int(segmentCapacity(c.store.binding)) {
 		c.notify()
 	}
 }
@@ -137,7 +172,11 @@ type captureBatch struct {
 func (c *Capture) take() captureBatch {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	n := min(c.size, captureSegment)
+	batchSize := captureSegment
+	if c.store.binding.Mode() != KindPTY {
+		batchSize = captureQueue
+	}
+	n := min(c.size, batchSize)
 	b := captureBatch{data: make([]byte, n), start: c.start, observed: c.observed, loss: c.loss, final: c.closed && n == c.size, reason: c.reason}
 	if n == 0 {
 		return b
@@ -147,6 +186,10 @@ func (c *Capture) take() captureBatch {
 	c.head = (c.head + n) % len(c.queue)
 	c.size -= n
 	c.start += uint64(len(b.data))
+	select {
+	case c.space <- struct{}{}:
+	default:
+	}
 	return b
 }
 func (c *Capture) writeLoop() {
@@ -185,7 +228,7 @@ func (c *Capture) flush() bool {
 			return true
 		}
 		c.mu.Lock()
-		full := c.size >= captureSegment
+		full := c.size >= int(segmentCapacity(c.store.binding))
 		c.mu.Unlock()
 		if !full {
 			return false
@@ -196,7 +239,7 @@ func (c *Capture) storageLoss() { c.mu.Lock(); c.loss = captureStorageLoss; c.mu
 func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	s := c.store
 	ctx := context.Background()
-	gate, err := s.files.LockExisting(ctx, streamPath(s.binding, "stream.lock"))
+	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
 	if err != nil {
 		return StreamResult{}, err
 	}
@@ -205,7 +248,7 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	if err != nil {
 		return StreamResult{}, err
 	}
-	if err := s.prune(ctx, m); err != nil {
+	if err := s.settlePrevious(ctx, m); err != nil {
 		return StreamResult{}, err
 	}
 	if m.Closed {
@@ -214,14 +257,23 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	if err := c.appendBatch(&m, b); err != nil {
 		return StreamResult{}, err
 	}
-	if _, err := s.files.Publish(streamPath(s.binding, "manifest.json"), m, false); err != nil {
+	name := s.path("manifest.json")
+	if _, err := s.files.Publish(name, m, false); err != nil {
 		return StreamResult{}, err
 	}
+	s.rememberPublished(name)
 	if err := s.prune(ctx, m); err != nil {
 		return StreamResult{}, err
 	}
 	return m.summary(), nil
 }
+func (s *streamStore) settlePrevious(ctx context.Context, m manifest) error {
+	if s.binding.Mode() != KindPTY && s.confirmedManifest(m) {
+		return nil
+	}
+	return s.prune(ctx, m)
+}
+
 func (c *Capture) appendBatch(m *manifest, b captureBatch) error {
 	if len(b.data) == 0 && b.start < b.observed {
 		b.start = b.observed
@@ -253,7 +305,8 @@ func (c *Capture) appendData(m *manifest, start uint64, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if len(m.Segments) > 0 && m.Segments[len(m.Segments)-1].Size < captureSegment {
+	capacity := int(segmentCapacity(c.store.binding))
+	if len(m.Segments) > 0 && int(m.Segments[len(m.Segments)-1].Size) < capacity {
 		last := m.Segments[len(m.Segments)-1]
 		prefix, err := c.store.segmentBytes(last)
 		if err != nil {
@@ -264,7 +317,7 @@ func (c *Capture) appendData(m *manifest, start uint64, data []byte) error {
 		m.Segments = m.Segments[:len(m.Segments)-1]
 	}
 	for len(data) > 0 {
-		n := min(len(data), captureSegment)
+		n := min(len(data), capacity)
 		seg, err := c.writeSegment(start, data[:n])
 		if err != nil {
 			return executionBoundaryError("capture", err)
@@ -274,19 +327,39 @@ func (c *Capture) appendData(m *manifest, start uint64, data []byte) error {
 		data = data[n:]
 	}
 	m.End = start
-	for m.End-m.Earliest > captureSuffix {
+	c.trimSegments(m)
+	return nil
+}
+
+func (c *Capture) trimSegments(m *manifest) {
+	limit := retentionBytes(c.store.binding)
+	if m.End-m.Earliest <= limit {
+		return
+	}
+	if c.store.binding.Mode() == KindPTY {
+		c.trimPTYSuffix(m, limit)
+	} else {
+		m.Earliest = m.End - limit
+		for m.Segments[0].Start+uint64(m.Segments[0].Size) <= m.Earliest {
+			m.Segments = m.Segments[1:]
+		}
+	}
+	if m.Loss == "" {
+		m.Loss = captureRetention
+	}
+}
+
+func (c *Capture) trimPTYSuffix(m *manifest, limit uint64) {
+	for m.End-m.Earliest > limit {
 		first := m.Segments[0]
 		m.Segments = m.Segments[1:]
 		m.Earliest = first.Start + uint64(first.Size)
-		if m.Loss == "" {
-			m.Loss = captureRetention
-		}
 	}
-	return nil
 }
+
 func (c *Capture) writeSegment(start uint64, data []byte) (segment, error) {
 	size := len(data)
-	if size < 1 || size > captureSegment {
+	if size < 1 || size > int(segmentCapacity(c.store.binding)) {
 		return segment{}, fmt.Errorf("execution: invalid segment length")
 	}
 	name, err := freshToken()
@@ -294,7 +367,11 @@ func (c *Capture) writeSegment(start uint64, data []byte) (segment, error) {
 		return segment{}, err
 	}
 	sum := sha256.Sum256(data)
-	seg := segment{Name: name, Start: start, Size: uint32(size), Hash: hex.EncodeToString(sum[:])}
-	_, err = c.store.files.publishBytes(streamPath(c.store.binding, name), data, true)
+	seg := segment{Name: name, Start: start, Size: uint32(size), Hash: hex.EncodeToString(sum[:])} //nolint:gosec // the segment capacity bounds size
+	path := c.store.path(name)
+	_, err = c.store.files.publishBytes(path, data, true)
+	if err == nil {
+		c.store.rememberPublished(path)
+	}
 	return seg, err
 }

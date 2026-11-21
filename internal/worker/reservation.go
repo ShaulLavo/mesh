@@ -40,7 +40,7 @@ func Reserve(root string, purpose session.Purpose) (session.Reservation, error) 
 	return session.Reservation{}, fmt.Errorf("launch worker: exhausted session IDs")
 }
 func publishReservation(root string, ref session.Reservation) error {
-	if ref.Purpose == session.Managed || ref.Purpose == session.Execution || ref.Purpose == session.Recovery {
+	if ref.Purpose == session.Managed || ref.Purpose.IsExecution() || ref.Purpose == session.Recovery {
 		return strictReservation(root, ref)
 	}
 	data, err := json.Marshal(ref)
@@ -86,7 +86,7 @@ func validateReservation(root string, ref session.Reservation) error {
 		if saved != ref {
 			return fmt.Errorf("launch worker: reservation identity mismatch")
 		}
-		if ref.Purpose != session.Managed && ref.Purpose != session.Execution && ref.Purpose != session.Recovery {
+		if ref.Purpose != session.Managed && !ref.Purpose.IsExecution() && ref.Purpose != session.Recovery {
 			continue
 		}
 		if err := f.Confirm(filepath.Join(ref.ID, name)); err != nil {
@@ -127,4 +127,19 @@ func RenewRecovery(root string, ref session.Reservation) (session.Reservation, e
 	}
 	_, err = f.Publish(filepath.Join(filepath.Base(root), ref.ID, ".launching"), next, false)
 	return next, workerExecutionError("reservation.go RenewRecovery", err)
+}
+
+// ReservedPurpose reads the durable allocation, which exists even if the worker
+// has yet to write metadata or its metadata is damaged.
+func ReservedPurpose(dir string) session.Purpose {
+	f, err := execution.OpenFiles(dir)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	var ref session.Reservation
+	if err := f.Read(".reservation", &ref); err != nil || ref.ID != filepath.Base(dir) || ref.Validate() != nil {
+		return ""
+	}
+	return ref.Purpose
 }

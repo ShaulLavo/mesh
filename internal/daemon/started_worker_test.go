@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,6 +22,13 @@ import (
 const startedWorkerVariable = "MESH_DAEMON_TEST_WORKER"
 
 func TestMain(m *testing.M) {
+	if role := os.Getenv(pipeNativeFixture); role != "" {
+		if err := runNativePipeDaemon(role, os.Args[1:]); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv(startedWorkerVariable) == "started" {
 		runStartedWorkerFixture(os.Args[1:])
 		return

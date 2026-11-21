@@ -11,7 +11,7 @@ import (
 func TestCaptureExactIndependentPages(t *testing.T) {
 	ctx := context.Background()
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}

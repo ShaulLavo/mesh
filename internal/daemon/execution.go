@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/protocol"
-	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updategate"
@@ -60,6 +60,9 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 	}
 	if request.Type == protocol.TypeExecutionRequest {
 		r, err := l.lookupExecution(ctx, journal, key)
+		if r.Binding.Mode() == execution.KindLine {
+			return executionResponse(request, execution.Receipt{}, execution.ErrNotFound)
+		}
 		return executionResponse(request, r, err)
 	}
 	return l.executionCreateControl(ctx, request, journal, key)
@@ -68,9 +71,12 @@ func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol
 	if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
 		return protocol.Control{}, executionBoundaryError("execution.go executionControl", err)
 	}
-	intent, err := execution.Normalize(execution.Intent{Kind: request.ExecutionKind, Command: request.Command, Cwd: request.Cwd, Cols: request.Cols, Rows: request.Rows, Term: request.Term})
+	if request.ExecutionKind != execution.KindPTY && request.ExecutionKind != execution.KindPipe {
+		return protocol.Control{}, &protocol.ExecutionValidationError{Err: fmt.Errorf("execution: choose kind pty or pipe")}
+	}
+	intent, err := execution.Normalize(execution.Intent{Kind: request.ExecutionKind, Command: request.Command, Cwd: request.Cwd, Cols: request.Cols, Rows: request.Rows, Term: request.Term, Stdin: request.Stdin})
 	if err != nil {
-		return protocol.Control{}, executionBoundaryError("execution.go executionControl", err)
+		return protocol.Control{}, &protocol.ExecutionValidationError{Err: err}
 	}
 	return l.createExecution(ctx, request, journal, key, intent)
 }
@@ -94,6 +100,11 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	if err := owned.Err(); err != nil {
 		return executionResponse(request, r, err)
 	}
+	if err := workerExecutionAdmission(owned); err != nil {
+		next, saveErr := journal.NotStarted(owned, r.Binding, "authorization_revoked")
+		return executionResponse(request, next, errors.Join(err, saveErr))
+	}
+	executionDaemonBoundary(l.sessionsDir, "before_worker_launch", r)
 	ref := r.Binding.Reservation
 	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance})
 	if err != nil {
@@ -104,6 +115,7 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	}
 	r.Phase = executionLivePhase
 	r.LaunchOutcome = "started"
+	executionDaemonBoundary(l.sessionsDir, "before_catalog_publication", r)
 	publishCtx, cancel := context.WithTimeout(owned, l.publishTimeout)
 	defer cancel()
 	if err := l.catalog.Reconcile(publishCtx); err != nil {
@@ -115,10 +127,13 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	}
 	return executionResponse(request, r, err)
 }
+
+var executionDaemonBoundary = func(string, string, execution.Receipt) {}
+
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
 	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
-		ref, err := worker.Reserve(l.sessionsDir, session.Execution)
+		ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(intent.Kind))
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
 		}
@@ -133,6 +148,9 @@ func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Jou
 }
 func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.Key, error) {
 	key := execution.Key{Host: string(l.host.ID), Opaque: opaque}
+	if err := workerExecutionAdmission(ctx); err != nil {
+		return key, err
+	}
 	if local, _ := ctx.Value(localClientKey{}).(bool); local {
 		key.Class = "local-account"
 		key.Principal = "daemon-account"
@@ -145,6 +163,20 @@ func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.
 	key.Class = "device"
 	key.Principal = peer.Identity
 	return key, executionBoundaryError("execution.go executionKey", key.Validate())
+}
+
+func workerExecutionAdmission(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return executionBoundaryError("execution admission", err)
+	}
+	if ctx.Value(localClientKey{}) == true {
+		return nil
+	}
+	peer, ok := transport.Peer(ctx)
+	if !ok || peer.Class() != access.FullDevice || !peer.Current() {
+		return access.ErrDenied
+	}
+	return nil
 }
 func (l *lifecycle) executionLaunchFailure(request protocol.Control, journal *execution.Journal, r execution.Receipt, err error) (protocol.Control, error) {
 	var started *worker.StartedError
@@ -165,7 +197,7 @@ func executionResponse(request protocol.Control, r execution.Receipt, err error)
 	return response, nil
 }
 func executionWireReceipt(r execution.Receipt) *protocol.ExecutionReceipt {
-	out := &protocol.ExecutionReceipt{HostID: r.Binding.Host, SessionID: r.Binding.Reservation.ID, Instance: r.Binding.Reservation.Instance, RequestKey: r.Key.Opaque, KeyScope: r.Key.Class, Kind: "pty", Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.RetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
+	out := &protocol.ExecutionReceipt{HostID: r.Binding.Host, SessionID: r.Binding.Reservation.ID, Instance: r.Binding.Reservation.Instance, RequestKey: r.Key.Opaque, KeyScope: r.Key.Class, Kind: r.Binding.Mode(), Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.RetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
 	if r.Result != nil {
 		t := r.Result.Termination
 		out.Result = &protocol.ExecutionResult{Termination: protocol.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: wireExecutionStreams(r.Result.Streams)}
@@ -227,6 +259,16 @@ func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Jour
 	}
 	if r.Binding.Reservation.BootID != worker.BootID() {
 		return uncertainExecution(r)
+	}
+	if r.Binding.Mode() != execution.KindPTY {
+		if err := worker.ProbePipe(ctx, l.sessionsDir, r.Binding); err != nil {
+			// Finalization may close the socket after the preceding journal read.
+			if settled, err := journal.Lookup(ctx, key); err == nil && settled.Phase == executionTerminalPhase {
+				return settled, nil
+			}
+			return uncertainExecution(r)
+		}
+		return l.confirmExecutionPublication(ctx, journal, key, r)
 	}
 	source, observeErr := (worker.RecoveryRuntime{SessionsDir: l.sessionsDir, HostID: string(l.host.ID)}).Inspect(ctx, r.Binding.Reservation.ID)
 	if observeErr != nil || !source.Published || source.Reservation == nil || *source.Reservation != r.Binding.Reservation {

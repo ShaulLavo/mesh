@@ -96,6 +96,7 @@ type AuthenticatedPeer struct {
 
 func (p AuthenticatedPeer) Class() access.Class     { return p.grant.Class }
 func (p AuthenticatedPeer) Binding() access.Binding { return p.grant.Scoped }
+func (p AuthenticatedPeer) Current() bool           { return p.grant.Current != nil && p.grant.Current() }
 
 type peerKey struct{}
 

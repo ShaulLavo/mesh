@@ -14,7 +14,7 @@ import (
 
 func TestCaptureQueueLossAdvancesOffsetsWithoutStitching(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestCaptureQueueLossAdvancesOffsetsWithoutStitching(t *testing.T) {
 }
 func TestCaptureCursorCasesAndDamagedStorage(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,21 +74,21 @@ func TestCaptureCursorCasesAndDamagedStorage(t *testing.T) {
 	for _, test := range []struct {
 		value string
 		want  error
-	}{{"bad", ErrCursorFormat}, {makeCursor(b, summary.Generation, 6), ErrCursorInvalid}, {makeCursor(Binding{Host: "wrong"}, summary.Generation, 0), ErrCursorExpired}} {
+	}{{"bad", ErrCursorFormat}, {makeCursor(b, KindPTY, summary.Generation, 6), ErrCursorInvalid}, {makeCursor(Binding{Host: "wrong"}, KindPTY, summary.Generation, 0), ErrCursorExpired}} {
 		if _, err := reader.Page(t.Context(), b, "pty", test.value, 1); !errors.Is(err, test.want) {
 			t.Fatalf("cursor: %v want %v", err, test.want)
 		}
 	}
-	page, err := reader.Page(t.Context(), b, "pty", makeCursor(b, summary.Generation, 5), 1)
+	page, err := reader.Page(t.Context(), b, "pty", makeCursor(b, KindPTY, summary.Generation, 5), 1)
 	if err != nil || !page.EOF || len(page.Bytes) != 0 {
 		t.Fatalf("empty end: %+v %v", page, err)
 	}
-	store, _ := reader.stream(b)
+	store, _ := reader.stream(b, KindPTY)
 	m, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Truncate(filepath.Join(root, streamPath(b, m.Segments[0].Name)), 1); err != nil {
+	if err := os.Truncate(filepath.Join(root, streamPath(b, KindPTY, m.Segments[0].Name)), 1); err != nil {
 		t.Fatal(err)
 	}
 	if page, err := reader.Page(t.Context(), b, "pty", "", DefaultPage); err == nil || len(page.Bytes) != 0 {
@@ -97,7 +97,7 @@ func TestCaptureCursorCasesAndDamagedStorage(t *testing.T) {
 }
 func TestCaptureOpenEmptyPageIsNotEOF(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestCaptureOpenEmptyPageIsNotEOF(t *testing.T) {
 }
 func TestCaptureNewReaderProcessConfirmsDependencies(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestCaptureReaderProcess(t *testing.T) {
 
 func TestCaptureUnconfirmedManifestCannotAuthorizePruning(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestCaptureUnconfirmedManifestCannotAuthorizePruning(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	s := newStreamStore(f, b)
+	s := newStreamStore(f, b, KindPTY)
 	old, err := s.load()
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestCaptureUnconfirmedManifestCannotAuthorizePruning(t *testing.T) {
 		}
 		return nil
 	}
-	gate, err := f.LockExisting(t.Context(), streamPath(b, "stream.lock"))
+	gate, err := f.LockExisting(t.Context(), streamPath(b, KindPTY, "stream.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,11 +229,11 @@ func TestCaptureUnconfirmedManifestCannotAuthorizePruning(t *testing.T) {
 	if err == nil {
 		t.Fatal("pruned an unconfirmed manifest")
 	}
-	if _, err := f.root.Stat(streamPath(b, old.Segments[0].Name)); err != nil {
+	if _, err := f.root.Stat(streamPath(b, KindPTY, old.Segments[0].Name)); err != nil {
 		t.Fatal("predecessor was deleted before acknowledgement")
 	}
 	f.fault = nil
-	gate, err = f.LockExisting(t.Context(), streamPath(b, "stream.lock"))
+	gate, err = f.LockExisting(t.Context(), streamPath(b, KindPTY, "stream.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestCaptureUnconfirmedManifestCannotAuthorizePruning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.root.Stat(streamPath(b, old.Segments[0].Name)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := f.root.Stat(streamPath(b, KindPTY, old.Segments[0].Name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("confirmed orphan was not pruned")
 	}
 }
@@ -259,8 +259,8 @@ func TestCapturePublisherProcess(t *testing.T) {
 	if err := f.Read("binding.json", &b); err != nil {
 		t.Fatal(err)
 	}
-	s := newStreamStore(f, b)
-	gate, err := f.LockExisting(t.Context(), streamPath(b, "stream.lock"))
+	s := newStreamStore(f, b, KindPTY)
+	gate, err := f.LockExisting(t.Context(), streamPath(b, KindPTY, "stream.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestCapturePublisherProcess(t *testing.T) {
 		}
 		return nil
 	}
-	stage, err := f.Publish(streamPath(b, "manifest.json"), m, false)
+	stage, err := f.Publish(streamPath(b, KindPTY, "manifest.json"), m, false)
 	if err == nil || stage != Unconfirmed {
 		t.Fatal("missing visible-unconfirmed boundary")
 	}
@@ -293,7 +293,7 @@ func TestCapturePublisherProcess(t *testing.T) {
 }
 func TestCaptureConfirmedPollingDoesNotResyncSuffix(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestCaptureDecimalOffsetsBeyondJavaScriptInteger(t *testing.T) {
 	_, b := captureTestBinding(t)
 	generation, _ := freshToken()
 	offset := uint64(1<<53) + 17
-	token := makeCursor(b, generation, offset)
+	token := makeCursor(b, KindPTY, generation, offset)
 	decoded, n, err := readCursor(token)
 	if err != nil || n != offset || decoded.Offset != "9007199254741009" {
 		t.Fatalf("offset rounded: %+v %d %v", decoded, n, err)
@@ -334,7 +334,7 @@ func TestCaptureDecimalOffsetsBeyondJavaScriptInteger(t *testing.T) {
 
 func TestCaptureRecoveredStorageFailureRemainsIncomplete(t *testing.T) {
 	root, b := captureTestBinding(t)
-	capture, err := OpenCapture(root, b)
+	capture, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}

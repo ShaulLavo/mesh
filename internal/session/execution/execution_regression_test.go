@@ -24,7 +24,7 @@ func pendingCaptureFixture(t *testing.T) (*Journal, Key, Receipt) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	c, err := OpenCapture(j.files.root.Name(), r.Binding)
+	c, err := OpenCapture(j.files.root.Name(), r.Binding, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,12 @@ func TestExecutionRegressionReceiptMustSettleFinalCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = output.Close() })
-	store := newStreamStore(j.files, r.Binding)
+	store := newStreamStore(j.files, r.Binding, KindPTY)
 	m, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.files.root.Remove(streamPath(r.Binding, m.Segments[0].Name)); err != nil {
+	if err := j.files.root.Remove(streamPath(r.Binding, KindPTY, m.Segments[0].Name)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := output.Result(t.Context(), r.Binding); !errors.Is(err, os.ErrNotExist) {
@@ -75,12 +75,12 @@ func TestExecutionRegressionDamagedFinalDependencyIsNotPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = output.Close() })
-	store := newStreamStore(j.files, r.Binding)
+	store := newStreamStore(j.files, r.Binding, KindPTY)
 	m, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.files.root.Remove(streamPath(r.Binding, m.Segments[0].Name)); err != nil {
+	if err := j.files.root.Remove(streamPath(r.Binding, KindPTY, m.Segments[0].Name)); err != nil {
 		t.Fatal(err)
 	}
 	_, err = output.Result(context.Background(), r.Binding)
@@ -102,12 +102,12 @@ func TestExecutionRegressionExactRemovalRetryConverges(t *testing.T) {
 
 func TestExecutionRegressionMissingDependencyCannotAuthorizeRetirement(t *testing.T) {
 	j, _, r := pendingCaptureFixture(t)
-	store := newStreamStore(j.files, r.Binding)
+	store := newStreamStore(j.files, r.Binding, KindPTY)
 	m, err := store.load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.files.root.Remove(streamPath(r.Binding, m.Segments[0].Name)); err != nil {
+	if err := j.files.root.Remove(streamPath(r.Binding, KindPTY, m.Segments[0].Name)); err != nil {
 		t.Fatal(err)
 	}
 	err = j.RetireExact(t.Context(), filepath.Join(j.files.root.Name(), "s"), r.Binding, func() error { return nil })
@@ -119,7 +119,7 @@ func TestExecutionRegressionMissingDependencyCannotAuthorizeRetirement(t *testin
 }
 func TestExecutionRegressionNewReceiptReaderCannotSkipStreamFence(t *testing.T) {
 	j, k, r := pendingCaptureFixture(t)
-	held, err := j.files.LockExisting(t.Context(), streamPath(r.Binding, "stream.lock"))
+	held, err := j.files.LockExisting(t.Context(), streamPath(r.Binding, KindPTY, "stream.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestExecutionRegressionNewReceiptReaderCannotSkipStreamFence(t *testing.T) 
 }
 func TestExecutionRegressionIndependentPageDeadline(t *testing.T) {
 	root, b := captureTestBinding(t)
-	c, err := OpenCapture(root, b)
+	c, err := OpenCapture(root, b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,11 +145,11 @@ func TestExecutionRegressionIndependentPageDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = o.Close() }()
-	s, err := o.stream(b)
+	s, err := o.stream(b, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
-	held, err := o.files.LockExisting(t.Context(), streamPath(b, "stream.lock"))
+	held, err := o.files.LockExisting(t.Context(), streamPath(b, KindPTY, "stream.lock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestExecutionRegressionMissingAttemptIsNotPending(t *testing.T) {
 	if err := j.files.root.RemoveAll(filepath.Dir(attempt(r.Binding, "result.json"))); err != nil {
 		t.Fatal(err)
 	}
-	output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+	output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
 	_, err := output.Result(t.Context(), r.Binding)
 	if err == nil || IsResultPending(err) {
 		t.Fatal("missing attempt treated as pending result", err)

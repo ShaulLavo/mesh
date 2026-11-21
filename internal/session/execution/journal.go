@@ -131,7 +131,10 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 		return Receipt{}, false, err
 	}
 	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent}
-	if binding.RequestHash != k.Hash() {
+	if (binding.Mode() == KindLine) != (k.Class == InternalServiceClass) {
+		return r, false, fmt.Errorf("execution: invalid internal request namespace")
+	}
+	if binding.RequestHash != k.Hash() || binding.Mode() != i.Kind || binding.Stdin != i.Stdin {
 		return r, false, fmt.Errorf("execution: reservation namespace mismatch")
 	}
 	if err := j.files.Ensure(filepath.Dir(attempt(binding, "reference.json"))); err != nil {
@@ -287,9 +290,15 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 	var result Result
 	resultErr := errResultPending
 	if snapshot.Phase != phaseTerminal {
-		output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+		output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
 		result, resultErr = output.Result(ctx, snapshot.Binding)
 		if resultErr != nil && !IsResultPending(resultErr) {
+			return snapshot, resultErr
+		}
+	}
+	if IsResultPending(resultErr) && snapshot.Binding.Mode() != KindPTY && snapshot.Binding.Reservation.BootID != j.boot && j.startedBeforeReboot(snapshot) {
+		result, resultErr = j.interruptedPipe(ctx, snapshot.Binding)
+		if resultErr != nil {
 			return snapshot, resultErr
 		}
 	}
@@ -319,6 +328,14 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 		return j.abandonReserved(r)
 	}
 	return r, nil
+}
+func (j *Journal) startedBeforeReboot(r Receipt) bool {
+	if r.LaunchOutcome == outcomeStarted {
+		return true
+	}
+	name := attempt(r.Binding, "started.json")
+	var started Binding
+	return j.files.Read(name, &started) == nil && started == r.Binding && j.files.Confirm(name) == nil
 }
 func (j *Journal) abandonReserved(r Receipt) (Receipt, error) {
 	var d dispatch

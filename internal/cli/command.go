@@ -1837,7 +1837,7 @@ func (a *application) daemonCommand() *cobra.Command {
 }
 
 func (a *application) workerCommand() *cobra.Command {
-	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest, requestCwd string
+	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest, requestCwd, executionKind, executionStdin string
 	var (
 		id   string
 		dir  string
@@ -1858,7 +1858,7 @@ func (a *application) workerCommand() *cobra.Command {
 			}
 			var binding *execution.Binding
 			if requestHash != "" || launchDigest != "" {
-				binding = &execution.Binding{Host: os.Getenv(worker.MeshHostIDVariable), Reservation: ref, RequestHash: requestHash, LaunchDigest: launchDigest}
+				binding = &execution.Binding{Host: os.Getenv(worker.MeshHostIDVariable), Reservation: ref, RequestHash: requestHash, LaunchDigest: launchDigest, Kind: executionKind, Stdin: executionStdin}
 			}
 			worker.HoldTerminationSignals()
 			// Before the emulator and ring allocate.
@@ -1890,6 +1890,8 @@ func (a *application) workerCommand() *cobra.Command {
 	command.Flags().StringVar(&purpose, "purpose", "", "reservation purpose")
 	command.Flags().StringVar(&requestHash, "request-hash", "", "durable request reference")
 	command.Flags().StringVar(&launchDigest, "launch-digest", "", "normalized launch digest")
+	command.Flags().StringVar(&executionKind, "execution-kind", "", "accepted execution kind")
+	command.Flags().StringVar(&executionStdin, "execution-stdin", "", "accepted stdin mode")
 	command.Flags().StringVar(&requestCwd, "request-cwd", "", "accepted lexical execution directory")
 	command.Flags().StringVar(&recoveredFrom, "recovered-from", "", "previous recovery attempt")
 	command.Flags().StringVar(&label, "label", "", "why the daemon started this session")

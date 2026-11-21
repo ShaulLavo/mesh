@@ -483,11 +483,12 @@ USAGE
 
 COMMANDS
 
-  create -- command [args...] [--flags]  Start a keyed detached PTY command on an online host
+  create -- command [args...] [--flags]  Start a keyed detached command on an online host
+  input SESSION_ID [--flags]             Write pipe stdin once or look up a write receipt
   inspect SESSION_ID [--flags]           Read live or saved session details without attaching
   kill SESSION_ID [--flags]              Stop the exact keyed command instance
   list [--flags]                         List one host's sessions with bounded pages
-  logs SESSION_ID [--flags]              Read exact bounded PTY bytes with an independent cursor
+  logs SESSION_ID [--flags]              Read exact bounded output bytes with an independent cursor
   request [--flags]                      Look up a retained creation receipt without launching work
   rm SESSION_ID [--flags]                Remove a finished keyed command payload while retaining its receipt
   signal SESSION_ID [--flags]            Signal the exact keyed command instance
@@ -504,7 +505,7 @@ FLAGS
 ## mesh session create
 
 ```text
-Start a keyed detached PTY command on an online host
+Start a keyed detached command on an online host
 
 USAGE
 
@@ -517,13 +518,40 @@ FLAGS
   -h --help      Help for create
   --host         Machine name or exact host ID, required
   --json         Write one agent result, required
-  --kind         Explicit session kind, currently pty
+  --kind         Explicit session kind, pty or pipe
   --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
   --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
   --request-key  Saved logical request key, required
   --rows         Initial terminal height (24)
+  --stdin        Pipe stdin mode, closed by default or open for keyed writes
   --term         Target terminal type (dumb)
   --timeout      Hard deadline from 100ms to 60s (40s)
+```
+
+## mesh session input
+
+```text
+Write pipe stdin once or look up a write receipt
+
+USAGE
+
+  mesh session input SESSION_ID [--flags]
+
+FLAGS
+
+  --base64     Write Base64-decoded bytes
+  --eof        Close pipe stdin after these bytes
+  --file       Write up to 1 MiB from a local file, or - for stdin
+  -h --help    Help for input
+  --host       Online machine name or exact host ID, required
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --offset     Expected byte offset, omitted to look up the write key
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --text       Write exact text bytes
+  --timeout    Finite deadline from 100ms to 60s (5s)
+  --write-key  Saved key for one logical write, required
 ```
 
 ## mesh session inspect
@@ -542,6 +570,7 @@ FLAGS
 
   -h --help    Help for inspect
   --host       Machine name or exact host ID, required
+  --instance   Read the exact keyed command receipt
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --preview    Include a control-free preview, at most 80 by 24
@@ -595,7 +624,7 @@ FLAGS
 ## mesh session logs
 
 ```text
-Read exact bounded PTY bytes with an independent cursor
+Read exact bounded output bytes with an independent cursor
 
 USAGE
 
@@ -611,7 +640,7 @@ FLAGS
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --max-bytes  Decoded page size from 1 to 1048576 bytes (65536)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
-  --stream     Exact stream, currently pty (pty)
+  --stream     Exact stream, pty, stdout or stderr (pty)
   --timeout    Finite deadline from 100ms to 60s (5s)
 ```
 
