@@ -451,8 +451,11 @@ jobs:
         id: counter-upload
         if: always() && matrix.platform == 'linux/amd64'
         with:
-          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}${{ inputs.draft && format('-attempt-{0}', github.run_attempt) || '' }}
+          # The attempt-specific proof upload keeps every counter for diagnosis.
+          # The summary consumes the latest counter for each scheduled batch.
+          name: native-eperm-counter-linux-amd64-${{ matrix.shard }}
           path: ${{ runner.temp }}/update-proof/eperm-counter.json
+          overwrite: ${{ inputs.draft }}
           retention-days: 7
       - name: Remove proof staging
         if: always() && matrix.platform != 'linux/amd64'
