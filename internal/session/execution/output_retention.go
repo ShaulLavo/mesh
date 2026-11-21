@@ -47,7 +47,7 @@ func (j *Journal) outputCandidate(ctx context.Context, entries []os.DirEntry) (R
 			slots++
 			continue
 		}
-		if len(r.Result.Streams) == 0 || r.OutputExpired {
+		if r.OutputRetainUntil == nil || r.OutputExpired {
 			continue
 		}
 		slots++
@@ -112,7 +112,10 @@ func (j *Journal) deleteStreamBytes(ctx context.Context, b Binding, stream strin
 		return err
 	}
 	if !m.Closed {
-		return ErrProtected
+		if b.Mode() == KindPTY {
+			return ErrProtected
+		}
+		m.Closed, m.CloseReason = true, interrupted
 	}
 	m.Expired = true
 	m.Earliest = m.End
@@ -129,7 +132,7 @@ func (j *Journal) retireOutputPayload(ctx context.Context, b Binding) error {
 	return j.files.Remove(attempt(b, "result.json"), "execution/.barrier")
 }
 func outputDue(r Receipt, now time.Time) bool {
-	return r.Phase == phaseTerminal && r.Result != nil && len(r.Result.Streams) > 0 && (r.OutputExpired || (r.OutputRetainUntil != nil && !now.Before(*r.OutputRetainUntil)))
+	return r.Phase == phaseTerminal && r.OutputRetainUntil != nil && (r.OutputExpired || !now.Before(*r.OutputRetainUntil))
 }
 
 func (j *Journal) interruptedPipe(ctx context.Context, b Binding) (Result, error) {

@@ -466,6 +466,10 @@ type authorizedConn struct {
 	grant Authorization
 }
 
+func (c *authorizedConn) writeAdmittedControl(frame protocol.Frame, admit func() error) error {
+	return WriteAdmittedControl(c.Conn, frame, admit)
+}
+
 func (c *authorizedConn) ReadFrame() (protocol.Frame, error) {
 	frame, err := c.Conn.ReadFrame()
 	if err != nil {

@@ -10,9 +10,12 @@ import (
 )
 
 type lineAttachment struct {
-	conn   net.Conn
-	writer *protocol.Writer
-	mu     sync.Mutex
+	conn      net.Conn
+	writer    *protocol.Writer
+	mu        sync.Mutex
+	admission sync.Mutex
+	next      uint64
+	fault     string
 }
 
 func (a *lineAttachment) write(send func(*protocol.Writer) error) error {
@@ -34,8 +37,8 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 		_ = a.control(reply)
 		return
 	}
-	next := *req.LastSeq
-	detach, fault := w.pipe.lines.attach(next)
+	a.next = *req.LastSeq
+	detach, fault := w.pipe.lines.attach(a.next)
 	if fault != "" {
 		reply.Type, reply.ErrorCode = protocol.TypeError, fault
 		_ = a.control(reply)
@@ -52,28 +55,54 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 		defer cancel()
 		w.readLineRequests(a, reader, reply)
 	}()
-	w.sendLines(ctx, a, reply, next)
+	w.sendLines(ctx, a, reply)
 	_ = conn.Close()
 	<-done
 }
 
-func (w *Worker) sendLines(ctx context.Context, a *lineAttachment, reply protocol.Control, next uint64) {
+func (w *Worker) sendLines(ctx context.Context, a *lineAttachment, reply protocol.Control) {
 	for ctx.Err() == nil {
-		line, fault := w.pipe.lines.receive(ctx, next)
-		if line == nil {
-			reply.Type, reply.ErrorCode = protocol.TypeExit, fault
-			if fault != "" {
-				reply.Type = protocol.TypeError
+		seq, line, fault, changed := a.takeLine(w.pipe.lines)
+		if changed != nil {
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return
 			}
-			_ = a.control(reply)
+		}
+		if line == nil {
+			_ = a.control(lineEnd(reply, fault))
 			return
 		}
-		err := a.write(func(writer *protocol.Writer) error { return writer.WriteData(w.sid, next, line) })
-		if err != nil {
+		if err := a.write(func(writer *protocol.Writer) error { return writer.WriteData(w.sid, seq, line) }); err != nil {
 			return
 		}
-		next++
 	}
+}
+
+func lineEnd(reply protocol.Control, fault string) protocol.Control {
+	reply.Type, reply.ErrorCode = protocol.TypeExit, fault
+	if fault != "" {
+		reply.Type = protocol.TypeError
+	}
+	return reply
+}
+
+func (a *lineAttachment) takeLine(output *lineOutput) (uint64, []byte, string, <-chan struct{}) {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	seq := a.next
+	line, fault, changed := output.readFrame(seq)
+	if fault != "" {
+		a.fault = fault
+	}
+	if line != nil {
+		// The attachment holds this frame while writing it. Only subsequent
+		// frames can fall out of the ring.
+		a.next++
+	}
+	return seq, line, fault, changed
 }
 
 func (w *Worker) readLineRequests(a *lineAttachment, reader *protocol.Reader, reply protocol.Control) {
@@ -82,41 +111,56 @@ func (w *Worker) readLineRequests(a *lineAttachment, reader *protocol.Reader, re
 		if err != nil {
 			return
 		}
-		response, continueReading := w.handleLineRequest(f, reply)
+		response, continueReading := w.handleLineRequest(a, f, reply)
 		if err := a.control(response); err != nil || !continueReading {
 			return
 		}
 	}
 }
 
-func (w *Worker) handleLineRequest(f protocol.Frame, reply protocol.Control) (protocol.Control, bool) {
+func (w *Worker) handleLineRequest(a *lineAttachment, f protocol.Frame, reply protocol.Control) (protocol.Control, bool) {
 	if f.Kind == protocol.KindInput && f.Session == w.sid {
-		if fault := w.pipe.lines.inputFault(); fault != "" {
-			reply.Type, reply.ErrorCode = protocol.TypeError, fault
-			return reply, false
-		}
-		intent, data, err := protocol.DecodeLineInput(f.Payload)
-		if err != nil {
-			return lineInputFault(reply)
-		}
-		reply.RequestID = intent.WriteKey
-		reply.InputReceipt, err = w.pipe.input.admit(intent, data)
-		inputReplyError(&reply, err)
-		if reply.ErrorCode == "input.outcome_unknown" {
-			w.pipe.lines.finish("input_uncertain")
-		}
-		return reply, true
+		return w.admitLine(a, f.Payload, reply)
 	}
 	if f.Kind != protocol.KindControl {
 		return lineInputFault(reply)
 	}
 	req, err := protocol.DecodeControl(f.Payload)
-	if err != nil || req.Type != protocol.TypeWorkerLineInput || !w.exactExecution(req) || req.InputOffset != nil {
+	if err != nil || !w.exactExecution(req) || req.InputOffset != nil {
 		return lineInputFault(reply)
 	}
 	reply.RequestID = req.RequestID
-	reply.InputReceipt, err = w.pipeInputRequest(req)
+	switch req.Type {
+	case protocol.TypeWorkerLineInput:
+		reply.InputReceipt, err = w.pipeInputRequest(req)
+	case protocol.TypeWorkerLineRetire:
+		err = w.pipe.input.retireLine(req.WriteKey)
+	default:
+		return lineInputFault(reply)
+	}
 	inputReplyError(&reply, err)
+	return reply, true
+}
+
+func (w *Worker) admitLine(a *lineAttachment, payload []byte, reply protocol.Control) (protocol.Control, bool) {
+	intent, data, err := protocol.DecodeLineInput(payload)
+	if err != nil {
+		return lineInputFault(reply)
+	}
+	reply.RequestID = intent.WriteKey
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	if a.fault == "" {
+		a.fault = w.pipe.lines.inputFault(a.next)
+	}
+	if a.fault != "" {
+		return lineEnd(reply, a.fault), false
+	}
+	reply.InputReceipt, err = w.pipe.input.admit(intent, data)
+	inputReplyError(&reply, err)
+	if w.pipe.input.admissionUncertain() {
+		w.pipe.lines.finish("input_uncertain")
+	}
 	return reply, true
 }
 

@@ -27,6 +27,7 @@ const (
 	TypeWorkerPipeProbe  = "worker.pipe.probe"
 	TypeWorkerLineAttach = "worker.line.attach"
 	TypeWorkerLineInput  = "worker.line.input"
+	TypeWorkerLineRetire = "worker.line.retire"
 )
 
 type ExecutionTermination struct {
@@ -301,14 +302,21 @@ type ExecutionPage struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
-func isExecutionRequest(kind string) bool {
+// IsExecutionControl identifies host execution requests. Local worker-only
+// controls are admitted by the worker socket.
+func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeWorkerLineInput:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect:
 		return true
 	default:
 		return false
 	}
 }
+
+func isExecutionRequest(kind string) bool {
+	return IsExecutionControl(kind) || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire
+}
+
 func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	if kind == TypeExecutionRequest {
 		return fmt.Errorf("execution: unexpected field %s", name)
@@ -319,6 +327,10 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	switch name {
 	case sessionIDField, "instance":
 		return executionString(raw)
+	case "writeKey":
+		if kind == TypeWorkerLineRetire {
+			return executionString(raw)
+		}
 	case "stream", "cursor":
 		if kind == TypeExecutionLogs {
 			return executionString(raw)
@@ -361,7 +373,7 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 	if kind == TypeExecutionCreate {
 		required = append(required, "kind", "command", "cwd")
 	}
-	if kind == TypeExecutionInput || kind == TypeWorkerLineInput {
+	if kind == TypeExecutionInput || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire {
 		required = append(required, "writeKey")
 		if fields["inputOffset"] == nil && (fields["inputBytes"] != nil || fields["inputEOF"] != nil) {
 			return fmt.Errorf("execution: input writes require an offset")

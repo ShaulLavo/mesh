@@ -188,7 +188,7 @@ func (j *Journal) activeEntry(name string) int {
 	if r.Phase != phaseTerminal {
 		return 1
 	}
-	if len(r.Result.Streams) > 0 && !r.OutputExpired {
+	if r.OutputRetainUntil != nil && !r.OutputExpired {
 		return 1
 	}
 	return 0
@@ -269,7 +269,7 @@ func (j *Journal) NotStarted(ctx context.Context, b Binding, reason string) (Rec
 		return Receipt{}, ErrUnknown
 	}
 	// The launcher can use this only when exec.Start proved no worker was created.
-	return j.terminal(r, Result{Binding: b, Termination: Termination{Kind: notStarted, Reason: reason}, Capture: captureNotRecorded})
+	return j.terminal(r, Result{Binding: b, Termination: Termination{Kind: notStarted, Reason: reason}, Capture: CaptureNotRecorded})
 }
 func (j *Journal) snapshot(ctx context.Context, hash string) (Receipt, error) {
 	gate, err := j.lock(ctx)
@@ -348,7 +348,7 @@ func (j *Journal) abandonReserved(r Receipt) (Receipt, error) {
 	if r.Owner == j.owner {
 		return r, nil
 	}
-	return j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "coordinator_replaced"}, Capture: captureNotRecorded})
+	return j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "coordinator_replaced"}, Capture: CaptureNotRecorded})
 }
 func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	if r.Phase == phaseTerminal {
@@ -364,7 +364,7 @@ func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	r.Phase = phaseTerminal
 	r.Result = &result
 	r.TerminalAt = &now
-	if len(result.Streams) > 0 {
+	if len(result.Streams) > 0 || (r.Binding.Mode() != KindPTY && result.EndedAt != nil) {
 		outputUntil := now.Add(7 * 24 * time.Hour)
 		r.OutputRetainUntil = &outputUntil
 	}

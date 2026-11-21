@@ -130,3 +130,7 @@ acknowledgment. An exact retry returns the same acknowledgment. If the worker
 cannot confirm acceptance, Mesh reports `input.outcome_unknown`. Keep the
 original key. If Mesh reports `input.backpressure`, the buffer had no room for
 that write and you can retry it with the same key and offset.
+
+
+Each pipe job retains up to 4,096 ordinary write receipts and reserves space
+for an empty EOF. A write beyond that limit returns `resource.limit`.

@@ -1,5 +1,6 @@
 """Exercise the real detached pipe worker over isolated daemon sockets."""
 import base64
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -356,6 +357,102 @@ def launch_crash(fixture, stage, did_start):
         assert not (fixture.local / "s" / sid / "sock").exists()
 
 
+def crash_after_spawn(fixture):
+    key = "after_spawn"
+    count = fixture.root / "after_spawn.count"
+    request = creation(fixture, key, ["/bin/sh", "-c",
+                       'echo "$$" >> "$1"; exec /bin/cat', "fixture", str(count)], "open")
+    before = fixture.local / ".pipe-hold-before_worker_launch"
+    reached = before.with_name(before.name + ".reached")
+    reached.unlink(missing_ok=True)
+    before.write_text(key)
+    drop_reply(fixture, request)
+    sid = eventually(lambda: reached.read_text() if reached.exists() else None, "launch boundary not reached")
+    directory = fixture.local / "s" / sid
+    hold = directory / ".execution-hold-after_spawn"
+    hold.touch()
+    before.unlink()
+    try:
+        marker = hold.with_name(hold.name + ".reached")
+        eventually(marker.exists, "worker did not reach its after_spawn boundary")
+        pid = int(eventually(lambda: count.read_text().strip() if count.exists() else None, "child did not run"))
+        assert (directory / ".launching").exists() and not (directory / "sock").exists()
+        reservation = json.loads((directory / ".reservation").read_text())
+        fixture.crash_daemon()
+        fixture.start_local_daemon()
+        assert (directory / ".launching").exists()
+        uncertain = exchange(fixture, request)
+        assert uncertain["errorCode"] == "request.outcome_unknown", uncertain
+        assert uncertain["executionReceipt"]["instance"] == reservation["instance"], uncertain
+    finally:
+        hold.unlink(missing_ok=True)
+    job = eventually(lambda: adopted_pipe(fixture, key), "daemon did not rediscover the released worker")
+    assert job["sessionId"] == sid and job["instance"] == reservation["instance"], job
+    assert fixture.metadata(sid)["pid"] == pid
+    assert exchange(fixture, bound("input", job, writeKey="eof", inputOffset="0", inputEOF=True))["inputReceipt"]["closed"]
+    assert wait(fixture, job)["termination"]["code"] == 0
+    assert count.read_text().splitlines() == [str(pid)]
+
+
+def adopted_pipe(fixture, key):
+    reply = exchange(fixture, dict(type="execution.request", requestId="adopt", requestKey=key))
+    if reply.get("errorCode") == "request.outcome_unknown":
+        return None
+    result = receipt(reply)
+    return result if result["publication"] == "published" else None
+
+
+def held_stream_backpressure(fixture):
+    ready = fixture.root / "held-stream-writer"
+    gate = fixture.root / "held-stream-gate"
+    program = """
+import os, pathlib, sys, time
+child = os.fork()
+if child:
+    pathlib.Path(sys.argv[1]).write_text(str(child))
+    os.read(0, 1)
+    os._exit(0)
+while not pathlib.Path(sys.argv[2]).exists():
+    time.sleep(.005)
+while True:
+    os.write(1, b'x' * 32768)
+"""
+    fixture.capture_tree()
+    job = create(fixture, "held-stream", [sys.executable, "-B", "-c", program, str(ready), str(gate)], "open")
+    worker, leader = fixture.session_processes(job["sessionId"])
+    descendant = int(eventually(lambda: ready.read_text() if ready.exists() else None, "pipe producer did not fork"))
+    assert fixture.tree.edge(descendant, leader)
+    attempt = fixture.local / "execution" / "attempts" / job["instance"]
+    try:
+        with (attempt / "stdout" / "stream.lock").open("rb") as stream:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            gate.touch()
+            eventually(lambda: blocked_pipe_writer(descendant), "producer never met pipe backpressure")
+            eof = bound("input", job, writeKey="eof", inputOffset="0", inputEOF=True)
+            assert exchange(fixture, eof)["inputReceipt"]["closed"]
+            eventually(lambda: fixture.kernel.stat(leader) is None, "pipe leader was not reaped")
+            result = wait(fixture, job)
+            assert result["termination"]["code"] == 0 and result["capture"] == "not_recorded", result
+            eventually(lambda: not fixture.alive(worker), "capture lock kept the worker alive")
+            with (attempt / "lifetime.lock").open("rb") as lifetime:
+                fcntl.flock(lifetime, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert receipt(exchange(fixture, bound("remove", job)))["removal"] == "removed"
+    finally:
+        for pid in (worker, leader, descendant):
+            if fixture.alive(pid):
+                fixture.kernel.send(fixture.tree.proved[pid].fd, signal.SIGKILL)
+                eventually(lambda: not fixture.alive(pid), "held capture fixture did not stop")
+        fixture.tree.close()
+        fixture.tree = None
+
+
+def blocked_pipe_writer(pid):
+    try:
+        return "pipe_write" in Path(f"/proc/{pid}/wchan").read_text()
+    except FileNotFoundError:
+        return False
+
+
 def main():
     root = Path(os.environ["HOME"]).parent / "pipe-jobs"
     root.mkdir()
@@ -369,11 +466,15 @@ def main():
         worker_crash(fixture)
         launch_crash(fixture, "before_worker_launch", False)
         launch_crash(fixture, "before_catalog_publication", True)
+        crash_after_spawn(fixture)
+        held_stream_backpressure(fixture)
         bulk(fixture, False)
         bulk(fixture, True)
     except BaseException:
         print_diagnostics(fixture)
         for directory in (fixture.local / "s").glob("*"):
+            if not directory.is_dir():
+                continue
             print(f"{directory.name}: {sorted(entry.name for entry in directory.iterdir())}", file=sys.stderr)
             for name in ("meta.json", "worker.log"):
                 file = directory / name

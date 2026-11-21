@@ -39,7 +39,7 @@ func TestLineSlowReaderGetsGap(t *testing.T) {
 	if _, fault := output.attach(lineOutputFrames + 2); fault != "future_frame" {
 		t.Fatalf("future cursor fault: %s", fault)
 	}
-	if line, fault := output.receive(t.Context(), 1); fault != "" || string(line) != "whole line\n" {
+	if line, fault, _ := output.readFrame(1); fault != "" || string(line) != "whole line\n" {
 		t.Fatalf("first retained frame: %q, %s", line, fault)
 	}
 }

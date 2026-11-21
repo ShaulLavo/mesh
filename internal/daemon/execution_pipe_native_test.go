@@ -297,7 +297,7 @@ exec 1>&-
 IFS= read -r keep_alive
 `})
 	attached := openFixtureLines(t, f.sessions, b, 0)
-	writeFixtureLine(t, attached, b, 0, "first", "one\n")
+	writeFixtureLine(t, attached, b, 0, "0:first", "one\n")
 	// Drop the acknowledgement while the child has written half its reply.
 	_ = attached.Close()
 	pipeEventually(t, func() bool {
@@ -325,13 +325,14 @@ IFS= read -r keep_alive
 	}
 	reader := protocol.NewReader(attached)
 	checkFixtureLineReceipt(t, attached, reader, b)
-	writeFixtureLine(t, attached, b, 4, "second", "two\n")
+	retireFixtureLine(t, attached, reader, b)
+	writeFixtureLine(t, attached, b, 4, "4:second", "two\n")
 	receiveFixtureLines(t, reader, b, "late:one:two\n", "next\n")
 	_ = attached.Close()
 
 	attached = openFixtureLines(t, f.sessions, b, 2)
 	reader = protocol.NewReader(attached)
-	writeFixtureLine(t, attached, b, 8, "third", "three\n")
+	writeFixtureLine(t, attached, b, 8, "8:third", "three\n")
 	assertFixtureLineFault(t, reader, "partial_line")
 	assertLineWorkerPrivate(t, f, b)
 }
@@ -388,12 +389,12 @@ func writeFixtureLine(t *testing.T, conn net.Conn, b execution.Binding, offset u
 
 func checkFixtureLineReceipt(t *testing.T, conn net.Conn, reader *protocol.Reader, b execution.Binding) {
 	t.Helper()
-	req := protocol.Control{Type: protocol.TypeWorkerLineInput, RequestID: "recover-first", SessionID: b.Reservation.ID, Instance: b.Reservation.Instance, WriteKey: "first"}
+	req := protocol.Control{Type: protocol.TypeWorkerLineInput, RequestID: "recover-first", SessionID: b.Reservation.ID, Instance: b.Reservation.Instance, WriteKey: "0:first"}
 	if err := protocol.NewWriter(conn).WriteControlMsg(req); err != nil {
 		t.Fatal(err)
 	}
 	reply, err := readPipeControl(reader)
-	if err != nil || reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "first" || reply.InputReceipt.Offset != 0 || reply.InputReceipt.Length != 4 {
+	if err != nil || reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "0:first" || reply.InputReceipt.Offset != 0 || reply.InputReceipt.Length != 4 {
 		t.Fatalf("lost first line receipt: %+v %v", reply, err)
 	}
 }
@@ -408,7 +409,7 @@ func receiveFixtureLines(t *testing.T, reader *protocol.Reader, b execution.Bind
 		}
 		if frame.Kind == protocol.KindControl {
 			reply, err := protocol.DecodeControl(frame.Payload)
-			if err != nil || reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "second" {
+			if err != nil || reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "4:second" {
 				t.Fatalf("second line receipt: %+v %v", reply, err)
 			}
 			acknowledged = true
@@ -431,7 +432,7 @@ func assertFixtureLineFault(t *testing.T, reader *protocol.Reader, fault string)
 		if reply.ErrorCode == fault {
 			return
 		}
-		if reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "third" {
+		if reply.InputReceipt == nil || reply.InputReceipt.WriteKey != "8:third" {
 			t.Fatalf("unexpected framing reply: %+v", reply)
 		}
 	}
@@ -450,5 +451,26 @@ func assertLineWorkerPrivate(t *testing.T, f *nativePipeDaemon, b execution.Bind
 		if row.ID == b.Reservation.ID {
 			t.Fatal("line worker entered the terminal catalog")
 		}
+	}
+}
+
+func retireFixtureLine(t *testing.T, conn net.Conn, reader *protocol.Reader, b execution.Binding) {
+	t.Helper()
+	req := protocol.Control{Type: protocol.TypeWorkerLineRetire, RequestID: "retire-first", SessionID: b.Reservation.ID, Instance: b.Reservation.Instance, WriteKey: "0:first"}
+	writer := protocol.NewWriter(conn)
+	if err := writer.WriteControlMsg(req); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := readPipeControl(reader)
+	if err != nil || reply.Type != protocol.TypeOK {
+		t.Fatalf("retire line receipt: %+v %v", reply, err)
+	}
+	req.Type, req.RequestID = protocol.TypeWorkerLineInput, "lookup-retired"
+	if err := writer.WriteControlMsg(req); err != nil {
+		t.Fatal(err)
+	}
+	reply, err = readPipeControl(reader)
+	if err != nil || reply.InputReceipt != nil || reply.ErrorCode != "input.outcome_unknown" {
+		t.Fatalf("retired line receipt: %+v %v", reply, err)
 	}
 }

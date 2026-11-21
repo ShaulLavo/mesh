@@ -340,6 +340,10 @@ func (r *clientRelay) publishCandidate(candidate *relayCandidate, id protocol.Se
 // enqueueResponse orders daemon replies behind any worker response already
 // queued, including a rejected attach followed immediately by a resize.
 func (r *clientRelay) enqueueResponse(frame protocol.Frame) error {
+	return r.enqueueAdmittedResponse(frame, nil)
+}
+
+func (r *clientRelay) enqueueAdmittedResponse(frame protocol.Frame, admit func() error) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 
@@ -349,7 +353,7 @@ func (r *clientRelay) enqueueResponse(frame protocol.Frame) error {
 	if closed {
 		return errRelayClosed
 	}
-	if err := r.enqueueOutput(frame); err != nil {
+	if err := r.enqueueReply(relayOutput{frame: frame, admit: admit}); err != nil {
 		go func() { _ = r.Close() }()
 		return fmt.Errorf("daemon: queue client response: %w", err)
 	}
@@ -499,11 +503,12 @@ func (r *clientRelay) forward(lane *relayLane, frame protocol.Frame) error {
 }
 
 func (r *clientRelay) enqueueOutput(frame protocol.Frame) error {
-	return r.enqueueOutputWritten(frame, nil)
+	return r.enqueueReply(relayOutput{frame: frame})
 }
 
-func (r *clientRelay) enqueueOutputWritten(frame protocol.Frame, written chan error) error {
-	queued := cloneFrame(frame)
+func (r *clientRelay) enqueueReply(reply relayOutput) error {
+	queued := cloneFrame(reply.frame)
+	reply.frame = queued
 	payload := queued.Kind == protocol.KindData || queued.Kind == protocol.KindSnapshot
 	bytes := len(queued.Payload)
 
@@ -525,7 +530,7 @@ func (r *clientRelay) enqueueOutputWritten(frame protocol.Frame, written chan er
 		return errRelayOutputQueueFull
 	}
 	select {
-	case r.output <- relayOutput{frame: queued, written: written}:
+	case r.output <- reply:
 		r.outputBytes += bytes
 		if payload {
 			r.outputFrames++
@@ -555,7 +560,7 @@ func (r *clientRelay) writeClientLoop() {
 				return
 			}
 			frame := queued.frame
-			err := r.client.WriteFrame(frame)
+			err := r.deliverReply(queued)
 			r.releaseOutput(frame)
 			if queued.written != nil {
 				queued.written <- err
@@ -569,6 +574,13 @@ func (r *clientRelay) writeClientLoop() {
 			return
 		}
 	}
+}
+
+func (r *clientRelay) deliverReply(reply relayOutput) error {
+	if reply.admit != nil {
+		return executionBoundaryError("deliver admitted control", transport.WriteAdmittedControl(r.client, reply.frame, reply.admit))
+	}
+	return executionBoundaryError("write relay reply", r.client.WriteFrame(reply.frame))
 }
 
 func (r *clientRelay) unpublish(lane *relayLane) {
@@ -734,12 +746,13 @@ type relayOutput struct {
 	frame   protocol.Frame
 	drained chan struct{}
 	written chan error
+	admit   func() error
 }
 
 func (r *clientRelay) writeResponse(ctx context.Context, frame protocol.Frame) error {
 	written := make(chan error, 1)
 	r.sendMu.Lock()
-	err := r.enqueueOutputWritten(frame, written)
+	err := r.enqueueReply(relayOutput{frame: frame, written: written})
 	r.sendMu.Unlock()
 	if err != nil {
 		return err

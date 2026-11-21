@@ -3,7 +3,6 @@ package worker
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"os"
@@ -14,6 +13,7 @@ import (
 
 const lineOutputBytes = 8 << 20
 const lineOutputFrames = 4096
+const lineFrameGap = "frame_gap"
 
 type lineOutput struct {
 	mu       sync.Mutex
@@ -126,7 +126,7 @@ func (o *lineOutput) finish(fault string) {
 
 func (o *lineOutput) positionError(seq uint64) string {
 	if seq < o.earliest {
-		return "frame_gap"
+		return lineFrameGap
 	}
 	if seq > o.next {
 		return "future_frame"
@@ -160,9 +160,12 @@ func (o *lineOutput) attachmentDone() <-chan struct{} {
 	return o.attached
 }
 
-func (o *lineOutput) inputFault() string {
+func (o *lineOutput) inputFault(next uint64) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if fault := o.positionError(next); fault != "" {
+		return fault
+	}
 	if !o.closed {
 		return ""
 	}
@@ -170,20 +173,6 @@ func (o *lineOutput) inputFault() string {
 		return "stdout_closed"
 	}
 	return o.fault
-}
-
-func (o *lineOutput) receive(ctx context.Context, seq uint64) ([]byte, string) {
-	for {
-		line, fault, changed := o.readFrame(seq)
-		if changed == nil {
-			return line, fault
-		}
-		select {
-		case <-ctx.Done():
-			return nil, "disconnected"
-		case <-changed:
-		}
-	}
 }
 
 func (o *lineOutput) readFrame(seq uint64) ([]byte, string, <-chan struct{}) {

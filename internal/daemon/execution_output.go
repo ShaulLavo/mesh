@@ -93,6 +93,9 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 func (l *lifecycle) executionLogs(ctx context.Context, req protocol.Control, r execution.Receipt, response protocol.Control) (protocol.Control, error) {
 	page, err := l.executionLogPage(ctx, req, r)
 	if page.Generation != "" {
+		if r.Binding.Mode() == execution.KindPipe && r.Result != nil && r.Result.Capture == execution.CaptureNotRecorded && !page.StreamClosed {
+			page.StreamClosed, page.CloseReason = true, "interrupted"
+		}
 		response.ExecutionPage = wireExecutionPage(page)
 		if r.Binding.Mode() == execution.KindPipe && !page.Available && errors.Is(err, execution.ErrCursorExpired) {
 			err = execution.ErrResultExpired

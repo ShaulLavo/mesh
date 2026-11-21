@@ -15,6 +15,8 @@ type Capture struct {
 	publishedObserved uint64
 	publishedLoss     string
 	store             *streamStore
+	writeCtx          context.Context
+	cancelWrite       context.CancelFunc
 	mu                sync.Mutex
 	queue             []byte
 	head, size        int
@@ -41,8 +43,10 @@ func OpenCapture(state string, b Binding, stream string) (*Capture, error) {
 		return nil, executionBoundaryError("capture", err)
 	}
 	s := newStreamStore(f, b, stream)
-	c := &Capture{store: s, wake: make(chan struct{}, 1), space: make(chan struct{}, 1), done: make(chan struct{})}
+	writeCtx, cancel := context.WithCancel(context.Background())
+	c := &Capture{store: s, writeCtx: writeCtx, cancelWrite: cancel, wake: make(chan struct{}, 1), space: make(chan struct{}, 1), done: make(chan struct{})}
 	if err := c.initialize(); err != nil {
+		cancel()
 		return nil, errors.Join(err, f.Close())
 	}
 	go c.writeLoop()
@@ -94,28 +98,45 @@ func (c *Capture) Offer(data []byte) {
 	c.enqueue(data, offset)
 }
 
-// OfferExact waits only for the independent disk writer's bounded queue.
-func (c *Capture) OfferExact(data []byte) {
+// OfferExact waits for the bounded disk queue until the reader is stopped.
+func (c *Capture) OfferExact(ctx context.Context, data []byte) bool {
 	for chunk := range slices.Chunk(data, captureQueue) {
-		c.offerExactChunk(chunk)
+		if !c.offerExactChunk(ctx, chunk) {
+			return false
+		}
 	}
+	return true
 }
 
-func (c *Capture) offerExactChunk(data []byte) {
+func (c *Capture) offerExactChunk(ctx context.Context, data []byte) bool {
 	for {
 		c.mu.Lock()
+		if c.closed || ctx.Err() != nil || c.writeCtx.Err() != nil {
+			c.mu.Unlock()
+			return false
+		}
 		if c.size+len(data) <= captureQueue {
 			offset := c.observed
 			c.observed += uint64(len(data))
 			c.enqueue(data, offset)
 			c.mu.Unlock()
-			return
+			return true
 		}
 		c.notify()
 		c.mu.Unlock()
-		<-c.space
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.writeCtx.Done():
+			return false
+		case <-c.space:
+		}
 	}
 }
+
+// Abort stops future capture commits. An in-progress filesystem operation
+// remains fenced by the stream lock until that operation returns.
+func (c *Capture) Abort() { c.cancelWrite() }
 
 func (c *Capture) enqueue(data []byte, offset uint64) {
 	if c.queue == nil {
@@ -194,11 +215,14 @@ func (c *Capture) take() captureBatch {
 }
 func (c *Capture) writeLoop() {
 	defer close(c.done)
+	defer c.cancelWrite()
 	defer func() { c.err = errors.Join(c.err, c.store.files.Close()) }()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
+		case <-c.writeCtx.Done():
+			return
 		case <-ticker.C:
 		case <-c.wake:
 		}
@@ -208,7 +232,7 @@ func (c *Capture) writeLoop() {
 	}
 }
 func (c *Capture) flush() bool {
-	for {
+	for c.writeCtx.Err() == nil {
 		b := c.take()
 		if len(b.data) == 0 && !b.final && b.observed == c.publishedObserved && b.loss == c.publishedLoss {
 			return false
@@ -234,11 +258,15 @@ func (c *Capture) flush() bool {
 			return false
 		}
 	}
+	return true
 }
 func (c *Capture) storageLoss() { c.mu.Lock(); c.loss = captureStorageLoss; c.mu.Unlock() }
 func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	s := c.store
-	ctx := context.Background()
+	ctx := c.writeCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
 	if err != nil {
 		return StreamResult{}, err
@@ -256,6 +284,9 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	}
 	if err := c.appendBatch(&m, b); err != nil {
 		return StreamResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return StreamResult{}, executionBoundaryError("publish capture", err)
 	}
 	name := s.path("manifest.json")
 	if _, err := s.files.Publish(name, m, false); err != nil {

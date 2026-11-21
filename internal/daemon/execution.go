@@ -323,3 +323,17 @@ func wireExecutionStreams(streams []execution.StreamResult) []protocol.Execution
 	}
 	return out
 }
+
+// The relay carries the grant of the requesting connection until the frame
+// leaves its queue. This also covers partial receipts in error replies.
+func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, request protocol.Control) error {
+	reply, _, err := s.lifecycle.HandleControl(ctx, request)
+	if err != nil {
+		reply = clientRequestError(request, err)
+	}
+	frame, err := encodeClientControl(reply)
+	if err != nil {
+		return executionBoundaryError("encode execution reply", err)
+	}
+	return relay.enqueueAdmittedResponse(frame, func() error { return workerExecutionAdmission(ctx) })
+}

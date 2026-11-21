@@ -287,7 +287,7 @@ const (
 	phaseLive            = "live"
 	phaseUncertain       = "uncertain"
 	phaseTerminal        = "terminal"
-	captureNotRecorded   = "not_recorded"
+	CaptureNotRecorded   = "not_recorded"
 	notStarted           = "not_started"
 	interrupted          = "interrupted"
 	outcomeUnknown       = "unknown"
@@ -361,7 +361,7 @@ func validateStdin(kind, mode string) error {
 }
 
 func (r Result) validateCapture() error {
-	if r.Capture == captureNotRecorded && len(r.Streams) == 0 {
+	if r.Capture == CaptureNotRecorded && len(r.Streams) == 0 {
 		return nil
 	}
 	if r.Capture != "complete" && r.Capture != "incomplete" {

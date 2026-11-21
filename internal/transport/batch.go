@@ -77,6 +77,14 @@ func (c *BatchingConn) ReadFrame() (protocol.Frame, error) {
 // WriteFrame copies buffered data before returning. A later Flush, control
 // write, or Close reports an asynchronous data-write failure.
 func (c *BatchingConn) WriteFrame(frame protocol.Frame) error {
+	return c.write(frame, nil)
+}
+
+func (c *BatchingConn) writeAdmittedControl(frame protocol.Frame, admit func() error) error {
+	return c.write(frame, admit)
+}
+
+func (c *BatchingConn) write(frame protocol.Frame, admit func() error) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
@@ -92,7 +100,13 @@ func (c *BatchingConn) WriteFrame(frame protocol.Frame) error {
 	}
 	frames := c.queueLocked(frame)
 	c.stateMu.Unlock()
-	return c.writeFrames(frames)
+	if admit == nil {
+		return c.writeFrames(frames)
+	}
+	if err := c.writeFrames(frames[:len(frames)-1]); err != nil {
+		return err
+	}
+	return WriteAdmittedControl(c.dst, frame, admit)
 }
 
 // Flush writes pending output now.

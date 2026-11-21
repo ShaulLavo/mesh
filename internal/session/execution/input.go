@@ -49,6 +49,15 @@ func InputDigest(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// RetireLineInput removes an acknowledged receipt. The framed worker checks
+// the key's immutable offset before admitting any later input.
+func (a *Attempt) RetireLineInput(key string) error {
+	if a.binding.Mode() != KindLine {
+		return ErrInstance
+	}
+	return executionBoundaryError("retire line input", a.files.Remove(inputPath(a.binding, key), attempt(a.binding, "reference.json")))
+}
+
 // Input recovers a durable acceptance even when the worker has retired. A
 // missing record after loss of the worker is not proof of non-acceptance.
 func (o *Output) Input(b Binding, key string, expected *session.InputReceipt, data []byte) (*session.InputReceipt, error) {
