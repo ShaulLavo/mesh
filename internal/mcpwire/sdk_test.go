@@ -23,18 +23,21 @@ type wireRoundTrip func(raw []byte) Event
 func TestSDKPositivePeers(t *testing.T) {
 	t.Setenv("MCPGODEBUG", "")
 	for _, mode := range []string{"stdio", "HTTP JSON", "HTTP SSE"} {
-		t.Run(mode, func(t *testing.T) {
-			sdk := newSDKFixture()
-			if mode == "stdio" {
-				testSDKConversation(t, sdkStdio(t, sdk))
-				return
-			}
-			url, client := sdkHTTP(t, sdk, mode == "HTTP JSON", true)
-			testSDKConversation(t, func(raw []byte) Event {
-				return sdkHTTPRoundTrip(t, url, client, raw)
-			})
-		})
+		t.Run(mode, func(t *testing.T) { testSDKPositivePeer(t, mode) })
 	}
+}
+
+func testSDKPositivePeer(t *testing.T, mode string) {
+	t.Helper()
+	sdk := newSDKFixture()
+	if mode == "stdio" {
+		testSDKConversation(t, sdkStdio(t, sdk))
+		return
+	}
+	url, client := sdkHTTP(t, sdk, mode == "HTTP JSON", true)
+	testSDKConversation(t, func(raw []byte) Event {
+		return sdkHTTPRoundTrip(t, url, client, raw)
+	})
 }
 
 func newSDKFixture() *mcp.Server {
@@ -42,7 +45,7 @@ func newSDKFixture() *mcp.Server {
 		&mcp.ServerOptions{SupportedProtocolVersions: []string{Version}})
 	server.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if len(req.Params.InputResponses) == 0 && req.Params.RequestState != "plain" {
+			if len(req.Params.InputResponses) == 0 && !sdkPlainCall(req.Params.Arguments) {
 				return &mcp.CallToolResult{RequestState: "opaque", InputRequests: mcp.InputRequestMap{
 					"confirm": &mcp.ElicitParams{Message: "Confirm fixture", RequestedSchema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}}}`)},
 				}}, nil
@@ -52,6 +55,13 @@ func newSDKFixture() *mcp.Server {
 	return server
 }
 
+func sdkPlainCall(raw json.RawMessage) bool {
+	var args struct {
+		Plain bool `json:"plain"`
+	}
+	return json.Unmarshal(raw, &args) == nil && args.Plain
+}
+
 func testSDKConversation(t *testing.T, trip wireRoundTrip) {
 	t.Helper()
 	for _, tc := range []struct {
@@ -59,7 +69,7 @@ func testSDKConversation(t *testing.T, trip wireRoundTrip) {
 	}{
 		{"1", "server/discover", "{}", "", "complete"},
 		{"2", "tools/list", "{}", "", "complete"},
-		{"3", "tools/call", "{}", `,"name":"echo","requestState":"plain"`, "complete"},
+		{"3", "tools/call", "{}", `,"name":"echo","arguments":{"plain":true}`, "complete"},
 		{"4", "tools/call", `{"elicitation":{"form":{}}}`, `,"name":"echo"`, "input_required"},
 		{"5", "tools/call", `{"elicitation":{"form":{}}}`, `,"name":"echo","requestState":"opaque","inputResponses":{"confirm":{"action":"accept","content":{"ok":true}}}`, "complete"},
 	} {

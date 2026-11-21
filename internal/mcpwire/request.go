@@ -112,17 +112,24 @@ func validCapability(key string, raw []byte) bool {
 	}
 	switch key {
 	case keyExperimental, keyExtensions:
-		for _, extension := range fields {
-			if !isObject(extension) {
-				return false
-			}
-		}
-	case keyTools, keyPrompts, keyResources, "roots":
+		return validCapabilityEntries(fields)
+	case keyTools, keyPrompts, "roots":
+		return optionalBool(fields["listChanged"])
+	case keyResources:
 		return optionalBool(fields["listChanged"]) && optionalBool(fields["subscribe"])
 	case "sampling":
 		return optionalObject(fields["context"]) && optionalObject(fields[keyTools])
 	case "elicitation":
 		return optionalObject(fields["form"]) && optionalObject(fields["url"])
+	}
+	return true
+}
+
+func validCapabilityEntries(fields object) bool {
+	for _, extension := range fields {
+		if !isObject(extension) {
+			return false
+		}
 	}
 	return true
 }

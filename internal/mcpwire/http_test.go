@@ -46,16 +46,16 @@ func TestHTTPRequestMatrix(t *testing.T) {
 		{"resource URI", "resources/read", Version, Version, "{}", `,"uri":"mesh://資源"`, setHeader(NameHeader, EncodeHeaderValue("mesh://資源")), 200, 0},
 		{"prompt name", "prompts/get", Version, Version, "{}", `,"name":"prompt"`, setHeader(NameHeader, "prompt"), 200, 0},
 	} {
+		raw := requestBytes(`"request"`, tc.method, tc.version, tc.caps, tc.params)
+		r := testPOST(raw)
+		r.Header.Set(MethodHeader, tc.method)
+		if tc.headerVersion != "" {
+			r.Header.Set(ProtocolHeader, tc.headerVersion)
+		}
+		if tc.mutate != nil {
+			tc.mutate(r.Header)
+		}
 		t.Run(tc.name, func(t *testing.T) {
-			raw := requestBytes(`"request"`, tc.method, tc.version, tc.caps, tc.params)
-			r := testPOST(raw)
-			r.Header.Set(MethodHeader, tc.method)
-			if tc.headerVersion != "" {
-				r.Header.Set(ProtocolHeader, tc.headerVersion)
-			}
-			if tc.mutate != nil {
-				tc.mutate(r.Header)
-			}
 			in, err := ReadHTTP(r, policy)
 			assertHTTPInput(t, in, err, tc.status, tc.code)
 		})
@@ -239,18 +239,20 @@ func TestSSEFramingAndBounds(t *testing.T) {
 func FuzzSSE(f *testing.F) {
 	f.Add([]byte(": comment\r\ndata: {}\r\n\r\n"))
 	f.Add([]byte("event: endpoint\ndata: /legacy\n\n"))
-	f.Fuzz(func(t *testing.T, raw []byte) {
-		reader := NewSSEReader(bytes.NewReader(raw))
-		for {
-			event, err := reader.Read()
-			if err != nil {
-				return
-			}
-			if len(event) > MaxMessage {
-				t.Fatalf("oversized event len=%d", len(event))
-			}
+	f.Fuzz(checkSSEFrameLengths)
+}
+
+func checkSSEFrameLengths(t *testing.T, raw []byte) {
+	reader := NewSSEReader(bytes.NewReader(raw))
+	for {
+		event, err := reader.Read()
+		if err != nil {
+			return
 		}
-	})
+		if len(event) > MaxMessage {
+			t.Fatalf("oversized event len=%d", len(event))
+		}
+	}
 }
 
 // This loopback fixture supplies auth and routing outside the wire package.

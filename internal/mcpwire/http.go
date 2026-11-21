@@ -180,15 +180,20 @@ func acceptsMCP(headers http.Header) bool {
 	var jsonOK, sseOK bool
 	for _, value := range headerValues(headers, "Accept") {
 		for part := range strings.SplitSeq(value, ",") {
-			media, params, err := mime.ParseMediaType(part)
-			if err != nil || !acceptableQuality(params["q"]) {
-				continue
-			}
+			media := acceptedMedia(part)
 			jsonOK = jsonOK || media == jsonMedia
 			sseOK = sseOK || media == sseMedia
 		}
 	}
 	return jsonOK && sseOK
+}
+
+func acceptedMedia(value string) string {
+	media, params, err := mime.ParseMediaType(value)
+	if err != nil || !acceptableQuality(params["q"]) {
+		return ""
+	}
+	return media
 }
 
 func acceptableQuality(q string) bool {

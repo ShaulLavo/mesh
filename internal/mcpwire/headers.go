@@ -125,14 +125,13 @@ func CompileParameterHeaders(schema json.RawMessage) (ParameterHeaders, error) {
 }
 
 func (h *ParameterHeaders) scanSchema(node any, path []string, reachable bool, seen map[string]bool) error {
-	switch value := node.(type) {
-	case map[string]any:
-		return h.scanSchemaObject(value, path, reachable, seen)
-	case []any:
-		for _, entry := range value {
-			if err := h.scanSchema(entry, nil, false, seen); err != nil {
-				return err
-			}
+	if fields, ok := node.(map[string]any); ok {
+		return h.scanSchemaObject(fields, path, reachable, seen)
+	}
+	entries, _ := node.([]any)
+	for _, entry := range entries {
+		if err := h.scanSchema(entry, nil, false, seen); err != nil {
+			return err
 		}
 	}
 	return nil

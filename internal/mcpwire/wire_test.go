@@ -48,14 +48,16 @@ func envResult(id, result string) []byte {
 	return fmt.Appendf(nil, `{"jsonrpc":"2.0","id":%s,"result":%s}`, id, result)
 }
 
+type stdioCase struct {
+	name, raw, replyID string
+	code               int
+}
+
 func TestStdioRequestMatrix(t *testing.T) {
 	methods := Methods{
 		"server/discover": nil, "tools/call": {"elicitation": map[string]any{"url": map[string]any{}}},
 	}
-	for _, tc := range []struct {
-		name, raw, replyID string
-		code               int
-	}{
+	for _, tc := range []stdioCase{
 		{"malformed", `{"jsonrpc":`, "null", ParseError},
 		{"batch", `[{"jsonrpc":"2.0","id":1,"method":"server/discover"}]`, "null", InvalidRequest},
 		{"ambiguous keys", `{"jsonrpc":"2.0","id":1,"id":2,"method":"server/discover"}`, "null", InvalidRequest},
@@ -74,29 +76,32 @@ func TestStdioRequestMatrix(t *testing.T) {
 		{"discover", string(requestBytes("1", "server/discover", Version, "{}", "")), "", 0},
 		{"capability present", string(requestBytes("1", "tools/call", Version, `{"elicitation":{"url":{}}}`, `,"name":"fixture"`)), "", 0},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			in := StdioInput([]byte(tc.raw), methods)
-			if tc.code == 0 && in.Fault == nil && !in.Ignored {
-				return
-			}
-			if in.Fault == nil || in.Fault.Code != tc.code {
-				t.Fatalf("fault = %+v, want %d", in.Fault, tc.code)
-			}
-			raw, err := in.Fault.Reply()
-			if err != nil {
-				t.Fatal(err)
-			}
-			reply := mustParse(t, raw)
-			if string(reply.fields["id"]) != tc.replyID {
-				t.Fatalf("fault reply = %s", raw)
-			}
-			if _, err := validateRPCError(reply); err != nil {
-				t.Fatal(err)
-			}
-			if tc.name == "legacy initialize" && !bytes.Contains(raw, []byte(Version)) {
-				t.Fatalf("revision missing from %s", raw)
-			}
-		})
+		t.Run(tc.name, func(t *testing.T) { assertStdioRequest(t, tc, methods) })
+	}
+}
+
+func assertStdioRequest(t *testing.T, tc stdioCase, methods Methods) {
+	t.Helper()
+	in := StdioInput([]byte(tc.raw), methods)
+	if tc.code == 0 && in.Fault == nil && !in.Ignored {
+		return
+	}
+	if in.Fault == nil || in.Fault.Code != tc.code {
+		t.Fatalf("fault = %+v, want %d", in.Fault, tc.code)
+	}
+	raw, err := in.Fault.Reply()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := mustParse(t, raw)
+	if string(reply.fields["id"]) != tc.replyID {
+		t.Fatalf("fault reply = %s", raw)
+	}
+	if _, err := validateRPCError(reply); err != nil {
+		t.Fatal(err)
+	}
+	if tc.name == "legacy initialize" && !bytes.Contains(raw, []byte(Version)) {
+		t.Fatalf("revision missing from %s", raw)
 	}
 }
 
@@ -128,13 +133,7 @@ func TestStdioNotificationsAndActiveIDs(t *testing.T) {
 	var entered atomic.Int32
 	var group sync.WaitGroup
 	for range 20 {
-		group.Go(func() {
-			if fault := active.Begin(text); fault == nil {
-				entered.Add(1)
-			} else if fault.Code != InvalidRequest || fault.ID.raw != "" {
-				t.Errorf("duplicate unexpectedly correlates to an active request: %+v", fault)
-			}
-		})
+		group.Go(func() { tryActiveID(t, &active, text, &entered) })
 	}
 	group.Wait()
 	if entered.Load() != 1 || !text.ID().Equal(stringID) || numeric.ID().Equal(stringID) {
@@ -146,6 +145,18 @@ func TestStdioNotificationsAndActiveIDs(t *testing.T) {
 	}
 	if fault := active.Begin(numeric); fault == nil {
 		t.Fatal("ending string ID also removed numeric ID")
+	}
+}
+
+func tryActiveID(t *testing.T, active *ActiveIDs, text Message, entered *atomic.Int32) {
+	t.Helper()
+	fault := active.Begin(text)
+	if fault == nil {
+		entered.Add(1)
+		return
+	}
+	if fault.Code != InvalidRequest || fault.ID.raw != "" {
+		t.Errorf("duplicate unexpectedly correlates to an active request: %+v", fault)
 	}
 }
 
@@ -191,27 +202,30 @@ func TestCompleteCacheHints(t *testing.T) {
 		{"resources/read", `,"uri":"mesh://test","requestState":"opaque"`, `{"contents":[]}`},
 	}
 	for _, tc := range tests {
-		t.Run(tc.method, func(t *testing.T) {
-			m := fixtureRequest(t, `"\u0037"`, tc.method, tc.params)
-			raw, err := Complete(m, json.RawMessage(tc.result), json.RawMessage(fixtureInfo), 30000)
-			if err != nil {
-				t.Fatal(err)
-			}
-			event, err := NewExchange(m, StdioReply).Accept(raw)
-			if err != nil || !event.Terminal || event.Message.ID().raw != `"\u0037"` {
-				t.Fatalf("reply = %s, err=%v", raw, err)
-			}
-			fields, _ := decodeObject(event.Message.Result())
-			ttl := "30000"
-			if m.continuation() {
-				ttl = "0"
-			}
-			meta, _ := resultMeta(fields)
-			if string(fields["ttlMs"]) != ttl || string(fields["cacheScope"]) != `"private"` ||
-				string(meta[ServerInfoKey]) != fixtureInfo {
-				t.Fatalf("cache hints or server identity missing: %s", raw)
-			}
-		})
+		t.Run(tc.method, func(t *testing.T) { assertCacheHints(t, tc.method, tc.params, tc.result) })
+	}
+}
+
+func assertCacheHints(t *testing.T, method, params, result string) {
+	t.Helper()
+	m := fixtureRequest(t, `"\u0037"`, method, params)
+	raw, err := Complete(m, json.RawMessage(result), json.RawMessage(fixtureInfo), 30000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := NewExchange(m, StdioReply).Accept(raw)
+	if err != nil || !event.Terminal || event.Message.ID().raw != `"\u0037"` {
+		t.Fatalf("reply = %s, err=%v", raw, err)
+	}
+	fields, _ := decodeObject(event.Message.Result())
+	ttl := "30000"
+	if m.continuation() {
+		ttl = "0"
+	}
+	meta, _ := resultMeta(fields)
+	if string(fields["ttlMs"]) != ttl || string(fields["cacheScope"]) != `"private"` ||
+		string(meta[ServerInfoKey]) != fixtureInfo {
+		t.Fatalf("cache hints or server identity missing: %s", raw)
 	}
 }
 
@@ -311,19 +325,21 @@ func subNotification(method, id, extra string) []byte {
 func FuzzFraming(f *testing.F) {
 	f.Add([]byte(`{"jsonrpc":"2.0","id":9007199254740993,"method":"server/discover"}` + "\n"))
 	f.Add([]byte("[]\n{\n\x00"))
-	f.Fuzz(func(t *testing.T, raw []byte) {
-		r := NewStdioReader(bytes.NewReader(raw))
-		for {
-			line, err := r.Read()
-			if err != nil {
-				return
-			}
-			message, fault := Parse(line)
-			if fault == nil && (!json.Valid(message.Raw()) || len(line) > MaxMessage) {
-				t.Fatalf("invalid message accepted: %s", line)
-			}
+	f.Fuzz(checkStdioFrameLengths)
+}
+
+func checkStdioFrameLengths(t *testing.T, raw []byte) {
+	r := NewStdioReader(bytes.NewReader(raw))
+	for {
+		line, err := r.Read()
+		if err != nil {
+			return
 		}
-	})
+		message, fault := Parse(line)
+		if fault == nil && (!json.Valid(message.Raw()) || len(line) > MaxMessage) {
+			t.Fatalf("invalid message accepted: %s", line)
+		}
+	}
 }
 
 func TestMRTRRejectsUnnegotiatedAndMalformedResults(t *testing.T) {
