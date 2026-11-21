@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,27 @@ import ssh_command as bench  # noqa: E402 - adjacent benchmark module
 
 SCRATCH_PARENT = os.environ.get("MESH_SHORT_TMP", "/work/tmp")
 # StrictModes checks every key ancestor; /tmp is world-writable on hosted Ubuntu.
-OPENSSH_SCRATCH_PARENT = os.environ.get("RUNNER_TEMP", SCRATCH_PARENT)
+def trusted_ancestors(path):
+    current = path.resolve()
+    while True:
+        mode = current.stat()
+        if not stat.S_ISDIR(mode.st_mode) or mode.st_uid not in (0, os.getuid()) or mode.st_mode & 0o022:
+            return False
+        if current.parent == current:
+            return True
+        current = current.parent
+
+
+def openssh_scratch_parent():
+    candidates = (os.environ.get("RUNNER_TEMP"), "/work/tmp", SCRATCH_PARENT)
+    for candidate in filter(None, candidates):
+        path = Path(candidate)
+        if path.is_dir() and os.access(path, os.W_OK | os.X_OK) and trusted_ancestors(path):
+            return path
+    raise RuntimeError("OpenSSH fixture needs an existing private writable scratch root with trusted ancestors")
+
+
+OPENSSH_SCRATCH_PARENT = openssh_scratch_parent()
 
 
 def pairs(mesh, ssh):

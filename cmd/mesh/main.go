@@ -96,7 +96,7 @@ func plainAgentCommand(arguments []string) bool {
 	switch arguments[0] {
 	// session-worker sets its own signal policy; Fang's NotifyContext would
 	// silently decide which signals end a session.
-	case "session-worker", "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "update-reader":
+	case "ssh-helper", "session-worker", "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "update-reader":
 		return true
 	default:
 		return false

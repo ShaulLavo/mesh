@@ -81,11 +81,12 @@ func (a *application) runAgentServices(cmd *cobra.Command, timeout time.Duration
 	defer cache.Close() //nolint:errcheck // the read result takes precedence
 	adapter := &agentServiceCache{cache: cache, err: cacheErr}
 	deadline, _ := ctx.Deadline()
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
+	if time.Until(deadline) <= 0 {
 		return agentapi.Fail(agentapi.StateUnavailable, "services.list", "", "Service cache read exceeded the deadline.")
 	}
-	rows, diagnostics, err := CollectServiceCatalog(cmd.Context(), hosts, remaining, func(ctx context.Context, host HostRecord) (remoteServiceSnapshot, error) {
+	// The hard deadline covers the cache read and discovery together. The parent
+	// stays cmd.Context so reaching the deadline still returns cached rows.
+	rows, diagnostics, err := collectServiceCatalogBy(cmd.Context(), hosts, deadline, func(ctx context.Context, host HostRecord) (remoteServiceSnapshot, error) {
 		return listAgentServices(ctx, host, a.dependencies.DialPassive)
 	}, adapter)
 	if err != nil {

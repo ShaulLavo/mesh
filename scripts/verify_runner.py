@@ -34,7 +34,7 @@ from process_tree import Kernel, Unsupported  # noqa: E402
 # slow budget independently of ordinary session tests.
 # Release transitions build native fixtures and run complete rollback matrices.
 SLOW_TESTS = frozenset({"packaging_contract.sh", "name_observation.sh", "temporary_app_size.sh", "copy_files.sh",
-                        "release_transition_checkpoint.sh"})
+                        "release_transition_checkpoint.sh", "ssh_pool.sh"})
 GO_PATHS = ("GOROOT", "GOCACHE", "GOMODCACHE")
 # Module downloads need the caller's network policy; loopback fixtures do not.
 GO_POLICY = ("GOPROXY", "GONOSUMDB", "GONOPROXY", "GOPRIVATE", "GOFLAGS", "GOINSECURE", "GOSUMDB")

@@ -40,7 +40,9 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/client-interrupt-diagnostic/source-sha.txt"
           python3 -B scripts/diagnose-client-interrupt.py --check-host > "$RUNNER_TEMP/client-interrupt-diagnostic/host-baseline.json"
       - name: Install the external observer on this disposable runner
-        run: sudo apt-get update && sudo apt-get install -y strace
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: strace
       - uses: ./.github/actions/installed-go
       - name: Prepare the private PC fixture and observe one pc-interrupt
         env:
@@ -104,6 +106,33 @@ jobs:
               - '.github/workflows/*'
               - '.github/actions/installed-go/**'
 
+  mac-turn:
+    # One mesh-mac runner serves every trusted Darwin leg, and GitHub gives it
+    # whichever queued job it picks. A same-repository PR's Mac legs wait here,
+    # on a hosted runner, until no main CI run (the publish path) is queued or
+    # running. Main, manual, fork and draft runs pass at once.
+    if: ${{ !inputs.client_interrupt }}
+    name: Wait for main CI before Mac legs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/wait-for-main-ci.py
+          sparse-checkout-cone-mode: false
+      - name: Wait until no main CI run is queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 -B scripts/wait-for-main-ci.py
+
   app-pill:
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -126,17 +155,35 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Install confirmation browser engines
-        timeout-minutes: 5
+      # Installing browsers together with their system packages always
+      # refreshes apt from the live archive. Record the exact package list
+      # Playwright would install, install it through the cached-apt action
+      # (offline on a warm cache), then fetch only the browsers.
+      - name: Resolve confirmation browser system packages
+        id: browser-packages
+        env:
+          APT_RECORD: ${{ runner.temp }}/playwright-apt-arguments
         run: |
-          # The runner's regional mirror (Azure or AWS, varying by image) can
-          # stall for hours; send apt to the main archive whatever host it is.
-          for file in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/*; do
-            [ -f "$file" ] || continue
-            sudo sed -i -E 's#https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' "$file"
-          done
-          grep -rhoE 'https?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu' /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null | sort -u | sed 's/^/apt archive host: /'
-          pnpm --dir web/app-pill exec playwright install --with-deps chromium webkit
+          PATH="$GITHUB_WORKSPACE/.github/actions/apt-packages/record:$PATH" pnpm --dir web/app-pill exec playwright install-deps --dry-run chromium webkit
+          mapfile -t arguments < "$APT_RECORD"
+          if [ "${arguments[*]:0:3}" != "install -s --no-install-recommends" ] || [ "${#arguments[@]}" -lt 4 ]; then
+            echo "::error::Playwright changed its package simulation call: ${arguments[*]}"
+            exit 1
+          fi
+          echo "packages=${arguments[*]:3}" >> "$GITHUB_OUTPUT"
+      - name: Install confirmation browser system packages
+        # A hang cap, not a speed limit: on a cold cache the main archive can
+        # serve the 126 MB of browser dependencies at under 500 kB/s, which
+        # alone takes 4 to 5 minutes.
+        timeout-minutes: 25
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: ${{ steps.browser-packages.outputs.packages }}
+          options: --no-install-recommends
+      - name: Install confirmation browser engines
+        # A hang cap, not a speed limit.
+        timeout-minutes: 25
+        run: pnpm --dir web/app-pill exec playwright install chromium webkit
       - name: Verify desktop and mobile confirmation guards
         env:
           MESH_CONFIRM_BROWSER_DIR: ${{ runner.temp }}/mesh-confirm
@@ -176,7 +223,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: sudo apt-get update && sudo apt-get install -y zsh
+      - name: Install zsh
+        uses: ./.github/actions/apt-packages
+        with:
+          packages: zsh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -204,7 +254,7 @@ jobs:
           [[ $RACE == success && $INTEGRATION == success ]]
 
   socket-portability:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Native socket and daemon fixtures (${{ matrix.runner }})
     # Trusted Darwin legs (main pushes, manual runs, same-repository PRs) run on
@@ -241,7 +291,7 @@ jobs:
           retention-days: 7
 
   auth-cutover:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Device auth cutover (${{ matrix.platform }})
     # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
@@ -304,6 +354,13 @@ jobs:
           output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
           go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
           grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
+      - name: Verify launch agent inspection skips other applications' stubs
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          output="$RUNNER_TEMP/darwin-launch-agent-test.log"
+          go test -count=1 -run '^TestInspectDaemonService' -v ./internal/updatebootstrap | tee "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceSkipsLaunchAgentsWithoutLabel' "$output"
+          grep -Fq -- '--- PASS: TestInspectDaemonServiceFailsOnMeshAgentWithoutLabel' "$output"
       - name: Exercise old local cutover and authenticated fleet recovery
         env:
           AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
@@ -319,7 +376,7 @@ jobs:
           retention-days: 7
 
   machine-naming:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Destination naming (${{ matrix.platform }})
     # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
@@ -473,14 +530,14 @@ jobs:
         run: ./scripts/check-packaging.sh dist
 
   helper-recovery:
-    needs: changes
+    needs: [changes, mac-turn]
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     name: Required native helper recovery
     uses: ./.github/workflows/helper-recovery.yml
 
   update-proofs:
     name: Required native update proofs
-    needs: changes
+    needs: [changes, mac-turn]
     if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
     uses: ./.github/workflows/update-proofs.yml
     with:
@@ -493,9 +550,9 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@b40b0318cd9dd5487e54229d9d32803139ad1794
+    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
     with:
-      harness_source: b40b0318cd9dd5487e54229d9d32803139ad1794
+      harness_source: 512d714bb8e7a6a3a70f48dd1c4ecb134aabd6e7
       worker_artifact_prefix: update-native
       worker_artifact_run: ${{ fromJSON(needs.update-proofs.outputs.worker_artifact_run) }}
       worker_artifact_source: ${{ needs.update-proofs.outputs.worker_artifact_source }}
