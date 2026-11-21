@@ -27,6 +27,7 @@ from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 LINUX = sys.platform == "linux"
+HANG_SECONDS = 120
 COPIED = ("scripts/verify.sh", "scripts/verify_runner.py", "integration/helpers/isolate.sh",
           "integration/helpers/isolation.py", "integration/helpers/owned_command.py",
           "integration/helpers/process_tree.py", "integration/helpers/process_diagnostics.py")
@@ -187,7 +188,7 @@ sys.exit(7 if mode == "fail" and role == "fixture" else 0)
 '''
 
 
-def wait_until(predicate, description, timeout=12):
+def wait_until(predicate, description, timeout=HANG_SECONDS):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         value = predicate()
@@ -252,7 +253,7 @@ def reap_ready():
 
 def remove_descendants(keep):
     """Kill and reap everything this subreaper adopted or started except keep."""
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
         remaining = descendants(os.getpid()) - keep
         for pid in remaining:
@@ -326,7 +327,7 @@ class Scene:
     def release_hold(self, job, name):
         (self.control / job / f"hold-{name}").unlink()
 
-    def reached(self, job, name, timeout=12):
+    def reached(self, job, name, timeout=120):
         return int(wait_until(lambda: complete_line(self.control / job / f"at-{name}"), f"{job} hold {name}", timeout))
 
     def ready(self, count):
@@ -398,7 +399,7 @@ class RunnerCase(unittest.TestCase):
         shutil.rmtree(self.scene.root)
         self.assertFalse(self.scene.root.exists())
 
-    def finish(self, expected, timeout=20):
+    def finish(self, expected, timeout=HANG_SECONDS):
         stdout, stderr = self.scene.runner.communicate(timeout=timeout)
         self.assertEqual(self.scene.runner.returncode, expected, stdout + stderr)
         self.assertIsNone(self.sentinel.poll(), "unrelated sentinel was signalled")

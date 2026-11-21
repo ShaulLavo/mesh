@@ -1,8 +1,10 @@
 """Pin the complete producer artifact set before consuming native inputs."""
 import hashlib
 import json
+import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -10,6 +12,8 @@ import zipfile
 from pathlib import Path
 
 KEYS = ("linux-amd64", "linux-arm64", "darwin-arm64")
+# Hang cap for one API read, shared by every attempt and retry pause.
+API_SECONDS = 300
 
 
 def verify_harness(expected, output):
@@ -31,13 +35,33 @@ SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
 
 
 def api(endpoint):
-    for delay in SERVER_ERROR_RETRIES + (None,):
-        result = subprocess.run(["gh", "api", endpoint], capture_output=True, timeout=30)
+    deadline = time.monotonic() + API_SECONDS
+    attempts = len(SERVER_ERROR_RETRIES) + 1
+    for attempt, delay in enumerate(SERVER_ERROR_RETRIES + (None,), 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"GitHub API GET {endpoint} exhausted its {API_SECONDS}-second hang cap")
+        result = subprocess.run(["gh", "api", endpoint], capture_output=True, check=False, timeout=remaining)
         if result.returncode == 0:
             return json.loads(result.stdout)
-        if delay is None or not SERVER_ERROR.search(result.stderr):
-            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+        detail = api_error_detail(result.stderr)
+        if delay is None or not SERVER_ERROR.search(result.stderr or b""):
+            raise RuntimeError(f"GitHub API GET {endpoint} failed after {attempt} attempt(s), exit {result.returncode}: {detail}")
+        if deadline - time.monotonic() <= delay:
+            raise TimeoutError(f"GitHub API GET {endpoint} cannot retry within its {API_SECONDS}-second hang cap: {detail}")
+        print(f"GitHub API GET {endpoint} failed with a server error; retry {attempt + 1}/{attempts}", file=sys.stderr)
         time.sleep(delay)
+
+
+def api_error_detail(data):
+    detail = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data or ""
+    for name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        token = os.environ.get(name)
+        if token:
+            detail = detail.replace(token, "[redacted]")
+    detail = re.sub(r"(?im)authorization:[^\r\n]*", "Authorization: [redacted]", detail)
+    detail = re.sub(r"[\x00-\x1f\x7f]", " ", detail).strip()
+    return detail[:4096] or "gh returned no error text"
 
 
 def pages(endpoint, field):
@@ -180,5 +204,4 @@ def main(arguments):
 
 
 if __name__ == "__main__":
-    import sys
     main(sys.argv[1:])

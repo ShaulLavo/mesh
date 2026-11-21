@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"time"
+
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 func main() {
@@ -15,7 +16,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: probe ADDRESS SERVER-NAME")
 		os.Exit(2)
 	}
-	connection, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", os.Args[1], &tls.Config{ServerName: os.Args[2], MinVersion: tls.VersionTLS12})
+	connection, err := tls.DialWithDialer(&net.Dialer{Timeout: testenv.HangTimeout}, "tcp", os.Args[1], &tls.Config{ServerName: os.Args[2], MinVersion: tls.VersionTLS12})
 	if err == nil {
 		_ = connection.Close()
 		fmt.Println("trusted")

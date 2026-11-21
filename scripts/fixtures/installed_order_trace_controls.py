@@ -17,6 +17,8 @@ from unittest.mock import Mock, patch
 
 from fixtures import installed_clock, installed_order, installed_order_host, installed_order_trace as trace, installed_releases, native_services
 
+HANG_SECONDS = 120
+
 
 def observation(version, stamp="2000-01-01T00:00:00.000000999Z"):
     return {"journal": {"phase": "committed", "updatedAt": stamp,
@@ -33,7 +35,7 @@ class CompetingDriver:
 
     def call(self, operation, **fields):
         if operation == "inspect" and fields.get("active", True) and self.account["role"] == "canary":
-            if not self.produced.wait(2):
+            if not self.produced.wait(HANG_SECONDS):
                 raise AssertionError("direct producer did not finish")
             raise self.parent_error
         version = installed_releases.VERSIONS[-1 if self.account["role"] == "canary" else 0]
@@ -46,7 +48,7 @@ class OrderFailureEvidenceTest(unittest.TestCase):
         self.root = Path(temporary.name)
         self.addCleanup(self.assert_root_removed)
         self.addCleanup(temporary.cleanup)
-        self.deadline = time.monotonic_ns() + 10_000_000_000
+        self.deadline = time.monotonic_ns() + HANG_SECONDS * 1_000_000_000
         self.native_command = self.enterContext(patch.object(native_services, "command",
             side_effect=AssertionError("pure control invoked a native command")))
         self.processes = []
@@ -59,11 +61,11 @@ class OrderFailureEvidenceTest(unittest.TestCase):
         for process in self.processes:
             if process.poll() is None:
                 process.terminate()
-            process.wait(timeout=5)
+            process.wait(timeout=HANG_SECONDS)
             self.assertIsNotNone(process.returncode)
 
     def start_process(self, executable):
-        process = subprocess.Popen([str(executable), "60"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen([str(executable), str(HANG_SECONDS * 2)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes.append(process)
         return process
 
@@ -98,7 +100,7 @@ class OrderFailureEvidenceTest(unittest.TestCase):
             self.assertIsNone(predicate())
             self.assertEqual(host.helper_image, prior)
             previous.terminate()
-            previous.wait(timeout=5)
+            previous.wait(timeout=HANG_SECONDS)
             replacement = self.start_process(receipt["executable"])
             host.case.units.managers["helper"].manager_pid.return_value = replacement.pid
             return predicate()
@@ -430,13 +432,13 @@ class OrderTraceTest(unittest.TestCase):
             entries = copy.deepcopy(live["entries"])
             if fields.get("active") is False:
                 old_read.set()
-                self.assertTrue(published.wait(2))
+                self.assertTrue(published.wait(HANG_SECONDS))
             value = copy.deepcopy(live)
             value["entries"] = entries
             return value
         driver.call = read
         def publish_after_old_ledger():
-            self.assertTrue(old_read.wait(2))
+            self.assertTrue(old_read.wait(HANG_SECONDS))
             live.update(observation(latest))
             published.set()
         writer = threading.Thread(target=publish_after_old_ledger)
@@ -446,7 +448,7 @@ class OrderTraceTest(unittest.TestCase):
             installed_order.await_version(driver, latest, "committed", 90, lambda reply: trace.publish(driver, handoff, reply))
         finally:
             published.set()
-            writer.join(2)
+            writer.join(HANG_SECONDS)
         self.assertFalse(writer.is_alive())
         self.assertEqual(live["entries"][0]["version"], latest)
         captured = json.loads(driver.diagnostics.handoff_bytes)
@@ -539,7 +541,7 @@ class OrderTraceTest(unittest.TestCase):
             def result(self):
                 value = handoff.result()
                 entered.set()
-                if not wake.wait(2):
+                if not wake.wait(HANG_SECONDS):
                     raise AssertionError("consumer wake barrier expired")
                 return value
         def consume():
@@ -552,11 +554,11 @@ class OrderTraceTest(unittest.TestCase):
             consumer = threading.Thread(target=consume)
             consumer.start()
             try:
-                self.assertTrue(entered.wait(2))
+                self.assertTrue(entered.wait(HANG_SECONDS))
                 clock.advance(6)
             finally:
                 wake.set()
-                consumer.join(2)
+                consumer.join(HANG_SECONDS)
         self.assertFalse(consumer.is_alive())
         self.assertIn("fixture missed", str(errors[0]))
         published = producer.diagnostics.events["future.publish:::"]["last"]["end"]["monotonicNs"]

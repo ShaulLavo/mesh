@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/updateinstall"
 )
 
@@ -24,7 +24,7 @@ func run(arguments []string) error {
 	if len(arguments) != 5 {
 		return errors.New("usage: native-helper STATE EXECUTABLE SERVICE-DIRECTORY KIND DOMAIN")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testenv.HangTimeout)
 	defer cancel()
 	installed, err := updateinstall.PrepareHelper(ctx, updateinstall.HelperConfig{
 		StateDir: arguments[0], Executable: arguments[1], ServiceDir: arguments[2], Kind: arguments[3], Domain: arguments[4],

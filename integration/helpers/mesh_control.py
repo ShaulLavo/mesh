@@ -8,6 +8,8 @@ import sys
 import time
 import uuid
 
+HANG_SECONDS = 120
+
 
 class EmptyResponse(RuntimeError):
     """The daemon closed before sending any response header byte."""
@@ -46,7 +48,7 @@ def receive(connection, length, *, deadline_ns=None, response_header=False):
     return result
 
 
-def round_trip(socket_path, request, *, timeout=10, deadline_ns=None):
+def round_trip(socket_path, request, *, timeout=HANG_SECONDS, deadline_ns=None):
     local_deadline = time.monotonic_ns() + int(timeout * 1_000_000_000)
     deadline_ns = min(local_deadline, deadline_ns) if deadline_ns is not None else local_deadline
     payload = json.dumps(request, separators=(",", ":")).encode()

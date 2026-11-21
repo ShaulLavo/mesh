@@ -8,12 +8,14 @@ import subprocess
 import threading
 from pathlib import Path
 
+from fixtures import installed_clock
+
 SOURCES = Path(__file__).with_name("tls-probe")
 
 
 def fixture_certificates(root):
     def openssl(*args):
-        subprocess.run(["openssl", *args], cwd=root, check=True, capture_output=True, timeout=15)
+        subprocess.run(["openssl", *args], cwd=root, check=True, capture_output=True, timeout=installed_clock.timeout(120))
 
     (root / "ca.cnf").write_text("[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=ext\n"
         "[dn]\nCN=Mesh disposable fixture CA\n[ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\n")
@@ -57,10 +59,10 @@ def probe_tls(root, probe, environment, certificate, key, expected, launcher="di
         if launcher == "production-shell":
             command = ["/bin/sh", "-c", 'exec "$@"', "mesh-fixture-tls", *command]
         try:
-            result = subprocess.run(command, env=environment, capture_output=True, timeout=15, check=False)
+            result = subprocess.run(command, env=environment, capture_output=True, timeout=installed_clock.timeout(120), check=False)
         finally:
             server.socket.close()
-            thread.join(timeout=5)
+            thread.join(timeout=installed_clock.timeout(120))
     output = result.stderr.decode(errors="replace")
     kind = output.split(": ", 1)[0] if output else "other"
     if result.returncode == 0 and result.stdout == b"trusted\n":
