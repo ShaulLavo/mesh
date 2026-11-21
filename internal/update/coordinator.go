@@ -11,7 +11,6 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/updateinstall"
-	"github.com/shaul/mesh/internal/updatenotice"
 )
 
 type Plan struct {
@@ -19,11 +18,9 @@ type Plan struct {
 	Manifest release.Manifest `json:"manifest"`
 }
 type Operation struct {
-	ID                     string  `json:"id"`
-	ExpectedPolicyRevision *uint64 `json:"expectedPolicyRevision,omitempty"`
-	CommandID              string  `json:"commandId,omitempty"`
-	Generation             uint64  `json:"generation,omitempty"`
-	RetryToken             uint64  `json:"retryToken,omitempty"`
+	ID         string `json:"id"`
+	Generation uint64 `json:"generation,omitempty"`
+	RetryToken uint64 `json:"retryToken,omitempty"`
 }
 type Info struct {
 	Domain               *DomainObservation          `json:"domain,omitempty"`
@@ -41,8 +38,6 @@ type Coordinator struct {
 	configurationCalls configurationCalls
 	SavedFleet         func() (Fleet, error)
 	Trusted            func(string) bool
-	CheckedRelease     func(context.Context) (*updatenotice.CheckedRelease, error)
-	lastAutomaticCheck time.Time
 	execution          sync.Mutex
 	LegacyExchange     func(context.Context, Host, protocol.Control) (protocol.Control, error)
 	ID                 string
@@ -96,51 +91,34 @@ func (c *Coordinator) Step(ctx context.Context) (result error) {
 		c.execution.Unlock()
 		result = errors.Join(result, c.stepConfiguration(ctx))
 	}()
-	admissionErr := c.refreshAutomatic(ctx)
 	runs, err := c.Store.List()
 	if err != nil {
-		return errors.Join(admissionErr, err)
+		return err
 	}
 	for _, run := range runs {
-		if run.statusOnly {
-			continue
-		}
-		if run.Done() && !(run.Origin != nil && !automaticSettled(run)) {
+		if run.Done() {
 			continue
 		}
 		if err := c.stepRun(ctx, run); err != nil {
-			return errors.Join(admissionErr, err)
+			return err
 		}
 	}
 	if time.Since(c.lastCachePrune) >= time.Minute {
 		if err := c.pruneCache(ctx); err != nil {
-			return errors.Join(admissionErr, err)
+			return err
 		}
 		c.lastCachePrune = time.Now()
 	}
-	return admissionErr
+	return nil
 }
 
-func (c *Coordinator) stepRun(ctx context.Context, snapshot Run) (err error) {
-	defer func() {
-		if errors.Is(err, errAutomaticHistory) {
-			err = nil
-		}
-	}()
+func (c *Coordinator) stepRun(ctx context.Context, snapshot Run) error {
 	run, err := c.Store.Read(snapshot.ID)
 	if err != nil {
 		return err
 	}
-	if run.statusOnly {
-		return nil
-	}
 	if run.CoordinatorSetup {
 		return nil
-	}
-	if run.Origin != nil {
-		if err := c.checkAutomaticScope(ctx); err != nil && !stoppedAutomaticError(err) {
-			return err
-		}
 	}
 	if !run.Cached && !run.Cancel && !run.Stopped {
 		if err := c.cache(ctx, run); err != nil {
@@ -152,14 +130,11 @@ func (c *Coordinator) stepRun(ctx context.Context, snapshot Run) (err error) {
 		if err != nil {
 			return err
 		}
-		if current.statusOnly {
-			return nil
-		}
 		target := current.Targets[index]
-		if settled(target.State) && !target.JoinedUnsettled && !target.StageUnsettled && !target.RetryUnsettled || time.Now().Before(target.RetryAt) {
+		if settled(target.State) && !target.JoinedUnsettled || time.Now().Before(target.RetryAt) {
 			continue
 		}
-		if current.Stopped && !target.Grant && !current.Cancel && target.State == Failed && !target.StageUnsettled && !target.RetryUnsettled {
+		if current.Stopped && !target.Grant && !current.Cancel && target.State == Failed {
 			continue
 		}
 		if err := c.reconcile(ctx, current, index); err != nil {
@@ -187,32 +162,20 @@ func settled(state State) bool { return state == Updated || state == Newer || st
 
 func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	target := run.Targets[index]
-	if run.Origin != nil && run.Cancel && target.StageAttempt == 0 && !target.Grant && target.InstallationID == "" {
-		return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.RetryPending = false; t.Problem = "" })
-	}
 	var info Info
 	inspectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	err := c.Remote.Call(inspectCtx, target.Host, "info", nil, &info)
 	cancel()
 	if err != nil {
-		if run.Origin != nil && IsLegacyError(err) {
-			return c.fail(run.ID, index, errors.New("automatic direct transition blocked; review a manual bridge on this host"))
-		}
-		if IsLegacyError(err) && run.Origin == nil {
+		if IsLegacyError(err) {
 			return c.bootstrap(ctx, run, index)
 		}
 		return c.recordError(run.ID, index, err)
 	}
-	if run.Origin != nil && !automaticStableBuild(info.Health.Build) {
-		return c.fail(run.ID, index, errors.New("automatic updates require a stable executing build; review this host manually"))
-	}
-	if run.Origin != nil && info.Health.Build.Platform != target.Host.Platform {
-		return c.fail(run.ID, index, errors.New("automatic target platform differs from enrolled fleet"))
-	}
 	if info.Health.HostID != target.Host.ID {
 		return c.fail(run.ID, index, errors.New("target health identity mismatch"))
 	}
-	if run.Stopped && !target.Grant && !run.Cancel && !target.StageUnsettled && !target.RetryUnsettled {
+	if run.Stopped && !target.Grant && !run.Cancel {
 		if _, err := c.observeBuild(run, index, info); err != nil {
 			return c.fail(run.ID, index, err)
 		}
@@ -228,9 +191,6 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 		return c.fail(run.ID, index, errors.New("authorized installation journal is missing or belongs to another operation"))
 	}
 	if run.Cancel {
-		if target.StageUnsettled || target.RetryUnsettled {
-			return c.recordError(run.ID, index, errors.New("issued installation work is not yet visible; cancellation awaits settlement"))
-		}
 		return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Problem = "" })
 	}
 	if err := c.prepare(run, index, info); err != nil {
@@ -244,19 +204,7 @@ func (c *Coordinator) reconcile(ctx context.Context, run Run, index int) error {
 	if settled(target.State) || current.Cancel || current.Stopped {
 		return nil
 	}
-	request := updateinstall.Request{ID: run.ID, TargetID: target.Host.ID, Generation: target.Generation, Manifest: run.Release, Current: *target.Build, Automatic: automaticRequest(current, target)}
-	if run.Origin != nil {
-		var issued bool
-		current, issued, err = c.reserveAutomatic(ctx, run.ID, index, "stage")
-		if stoppedAutomaticError(err) {
-			return nil
-		}
-		if err != nil || !issued {
-			return err
-		}
-		target = current.Targets[index]
-		request.Automatic = automaticRequest(current, target)
-	}
+	request := updateinstall.Request{ID: run.ID, TargetID: target.Host.ID, Generation: target.Generation, Manifest: run.Release, Current: *target.Build}
 	var status updateinstall.Status
 	if err = c.Remote.Call(ctx, target.Host, "stage", request, &status); err != nil {
 		return c.recordError(run.ID, index, err)
@@ -343,20 +291,8 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 	if target.InstallationID != "" {
 		installationID = target.InstallationID
 	}
-	if run.Origin != nil && target.InstallationID == "" && !sameInstallationOrigin(status.Request.Automatic, automaticRequest(run, target)) {
-		return c.fail(run.ID, index, errors.New("automatic installation origin differs from approval"))
-	}
 	if status.Request.ID != installationID || status.Request.TargetID != target.Host.ID || status.Request.Manifest.Digest() != run.ReleaseDigest || status.Request.Generation != target.Generation {
 		return c.fail(run.ID, index, errors.New("installation does not match approved operation"))
-	}
-	var err error
-	run, err = c.observeAutomaticDispatch(run, index, status)
-	if err != nil {
-		return err
-	}
-	target = run.Targets[index]
-	if run.Cancel && target.RetryUnsettled {
-		return c.recordError(run.ID, index, errors.New("issued installation retry is not yet visible; cancellation awaits its token"))
 	}
 	if target.RetryPending {
 		return c.reconcileRetry(ctx, run, index, info)
@@ -376,7 +312,7 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 
 	case updateinstall.RolledBack, updateinstall.Failed, updateinstall.RollbackFailed:
 		if run.Cancel {
-			return c.reconcileCancelledInstallation(ctx, run, index)
+			return c.cancelTarget(ctx, run, index)
 		}
 		if err := c.record(run.ID, index, func(t *Target) { t.Grant = false }); err != nil {
 			return err
@@ -385,9 +321,6 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 	case updateinstall.Cancelled:
 		return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Grant = false; t.JoinedUnsettled = false; t.Problem = "" })
 	case updateinstall.Granted, updateinstall.Activating, updateinstall.Validating, updateinstall.RollingBack:
-		if run.Origin != nil && target.InstallationID != "" {
-			return c.observeJoinedStaging(run, index, status.Phase)
-		}
 		return c.record(run.ID, index, func(t *Target) { t.State = Granted; t.Grant = true; t.GrantAccepted = true; t.Problem = status.Error })
 	case updateinstall.Accepted, updateinstall.Staged:
 		if target.InstallationID != "" {
@@ -409,11 +342,6 @@ func (c *Coordinator) reconcileInstallation(ctx context.Context, run Run, index 
 }
 
 func (c *Coordinator) grant(ctx context.Context, id string, index int) error {
-	if current, err := c.Store.Read(id); err != nil {
-		return err
-	} else if current.Origin != nil {
-		return c.grantAutomatic(ctx, id, index)
-	}
 	issued := false
 	run, err := c.Store.Change(id, func(r *Run) error {
 		if !canGrant(*r, index) {
@@ -573,31 +501,6 @@ func offlineRetryDelay(target Target) time.Duration {
 	return offlineRetry
 }
 
-func sameInstallationOrigin(a, b *updateinstall.AutomaticReference) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-func (c *Coordinator) grantAutomatic(ctx context.Context, id string, index int) error {
-	run, issued, err := c.reserveAutomatic(ctx, id, index, "grant")
-	if stoppedAutomaticError(err) {
-		return nil
-	}
-	if err != nil || !issued {
-		return err
-	}
-	target := run.Targets[index]
-	var status updateinstall.Status
-	if err = c.Remote.Call(ctx, target.Host, "grant", Operation{ID: id, Generation: target.Generation}, &status); err != nil {
-		return c.recordError(id, index, err)
-	}
-	if !sameInstallationOrigin(status.Request.Automatic, automaticRequest(run, target)) {
-		return c.fail(id, index, errors.New("automatic grant receipt origin differs from approval"))
-	}
-	return c.record(id, index, func(t *Target) { t.GrantAccepted = true })
-}
-
 func (c *Coordinator) recordCommitted(run Run, index int, info Info, status updateinstall.Status) error {
 	return c.record(run.ID, index, func(t *Target) {
 		t.State = Updated
@@ -613,9 +516,6 @@ func (c *Coordinator) recordCommitted(run Run, index int, info Info, status upda
 		}
 	})
 }
-func (c *Coordinator) settleCancelledJoin(run Run, index int) error {
-	return c.record(run.ID, index, func(t *Target) { t.State = Cancelled; t.Grant = false; t.JoinedUnsettled = false })
-}
 func (c *Coordinator) recordIssuedCancellation(id string, index int) error {
 	return c.record(id, index, func(t *Target) {
 		t.State = Granted
@@ -623,19 +523,4 @@ func (c *Coordinator) recordIssuedCancellation(id string, index int) error {
 		t.GrantAccepted = true
 		t.Problem = "Activation was already authorized and may still finish."
 	})
-}
-
-func (c *Coordinator) reconcileCancelledInstallation(ctx context.Context, run Run, index int) error {
-	if run.Origin != nil && run.Targets[index].InstallationID != "" {
-		return c.settleCancelledJoin(run, index)
-	}
-	return c.cancelTarget(ctx, run, index)
-}
-
-func automaticStableBuild(build release.Build) bool {
-	if build.Modified {
-		return false
-	}
-	_, err := release.CompareVersions(build.Version, build.Version)
-	return err == nil
 }

@@ -79,7 +79,7 @@ func configurationControlFrames(ctx context.Context, conn transport.Conn, contro
 }
 func configurationObservationFixture(t *testing.T, id string) update.ConfigurationObservation {
 	t.Helper()
-	instance, err := update.NewAutomaticCommandID()
+	instance, err := update.NewCommandID()
 	if err != nil {
 		t.Fatal(err)
 	}

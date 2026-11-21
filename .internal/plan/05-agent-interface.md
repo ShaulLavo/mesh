@@ -965,7 +965,7 @@ Existing serving features remain exposure, not deployment (D22).
 The separately Approved MCP work in [#318], [#319] and [#320] reuses this
 interface's host controls and durable execution. Its native stdio frontend,
 owning-host services, local gateway and loopback Streamable HTTP have separate
-milestones and follow [ADR 011](../../docs/adr/011-stateless-mcp.md).
+milestones and follow [ADR 012](../../docs/adr/012-stateless-mcp.md).
 
 [#318]: https://github.com/ShaulLavo/mesh/issues/318
 [#319]: https://github.com/ShaulLavo/mesh/issues/319

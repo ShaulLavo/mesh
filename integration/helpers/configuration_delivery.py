@@ -12,12 +12,22 @@ import sys
 import tempfile
 import threading
 
-from automatic_fleet_updates import saved_fleet
 from fleet_sharing import Device
 from isolation import check_environment, termination_cleanup
 from terminal_window import Terminal, eventually, require
 
 DASHBOARD_HANG_SECONDS = 120
+
+
+def saved_fleet(devices):
+    members = [{"id": device.id, "endpoint": device.record()["endpoint"],
+                "platform": {"os": "linux", "arch": "amd64"}} for device in devices]
+    value = {"version": 1, "name": "isolated configuration fleet", "revision": 1,
+             "members": members}
+    for device in devices:
+        path = device.config / "fleet.json"
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
 
 
 def config(device, *arguments, success=True):

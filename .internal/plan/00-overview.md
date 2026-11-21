@@ -180,7 +180,7 @@ MCP is Approved under [#318], [#319] and [#320]. Mesh will expose its native
 tools over stdio, host explicitly authorized MCP services at the owning host,
 and aggregate those tools at the local frontend. Local Streamable HTTP is a
 separate milestone. All MCP hops use stateless revision 2026-07-28. See
-[ADR 011](../../docs/adr/011-stateless-mcp.md).
+[ADR 012](../../docs/adr/012-stateless-mcp.md).
 
 [#318]: https://github.com/ShaulLavo/mesh/issues/318
 [#319]: https://github.com/ShaulLavo/mesh/issues/319

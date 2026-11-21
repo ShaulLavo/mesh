@@ -2,7 +2,6 @@ package updatenotice
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -215,30 +214,54 @@ func TestInvalidManifestNeverBecomesNotice(t *testing.T) {
 	}
 }
 
-func TestSuccessfulCheckPersistsCompleteManifest(t *testing.T) {
-	store, _ := testStore(t)
-	if _, err := store.Refresh(context.Background(), false); err != nil {
-		t.Fatal(err)
+func TestUnreadableCacheIsRebuilt(t *testing.T) {
+	cases := map[string]string{
+		"unknown field": `{"checked":{"digest":"old"},"version":"v0.1.5","nextAttempt":"2099-01-01T00:00:00Z"}`,
+		"truncated":     `{"version":"v0.1.5","nextAt`,
 	}
-	data, err := os.ReadFile(filepath.Join(store.directory, "notice.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state struct {
-		Checked *struct {
-			Manifest release.Manifest `json:"manifest"`
-			Digest   string           `json:"digest"`
-		} `json:"checked"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	if state.Checked == nil || state.Checked.Digest != testManifest("v0.2.0").Digest() || state.Checked.Manifest.Digest() != state.Checked.Digest {
-		t.Fatal("successful cache lost the complete checked manifest")
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			store, _ := testStore(t)
+			if err := os.MkdirAll(store.directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(store.directory, "notice.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if cached, err := store.Cached(); err != nil || cached.Version != "" {
+				t.Fatalf("unreadable cache offered a notice or failed: %+v %v", cached, err)
+			}
+			got, err := store.Refresh(context.Background(), false)
+			if err != nil || got.Version != "v0.2.0" {
+				t.Fatalf("refresh did not rebuild the cache: %+v %v", got, err)
+			}
+			var state cacheState
+			if err := readJSON(path, &state); err != nil || state.Version != "v0.2.0" {
+				t.Fatalf("rebuilt cache is not current: %+v %v", state, err)
+			}
+		})
 	}
 }
 
-func TestCheckedReleasePublicationSettlesPhysicalParents(t *testing.T) {
+func TestUnsafeCacheStillFailsClosed(t *testing.T) {
+	store, _ := testStore(t)
+	if err := os.MkdirAll(store.directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(store.directory, "notice.json")
+	if err := os.WriteFile(path, []byte(`{"version":"v0.2.0"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { //nolint:gosec // the fixture must expose unsafe cache permissions to verify rejection
+		t.Fatal(err)
+	}
+	if _, err := store.Cached(); err == nil {
+		t.Fatal("cache with unsafe permissions was read")
+	}
+}
+
+func TestRecordPublicationSettlesPhysicalParents(t *testing.T) {
 	root := t.TempDir()
 	realDirectory := filepath.Join(root, "real")
 	if err := os.Mkdir(realDirectory, 0700); err != nil {
@@ -252,13 +275,13 @@ func TestCheckedReleasePublicationSettlesPhysicalParents(t *testing.T) {
 	if err := store.Record(context.Background(), testManifest("v0.2.0")); err != nil {
 		t.Fatalf("physical parent publication failed through an existing alias: %v", err)
 	}
-	checked, err := store.CheckedRelease(context.Background())
-	if err != nil || checked == nil {
-		t.Fatalf("settled full observation unavailable: %+v %v", checked, err)
+	notice, err := store.Cached()
+	if err != nil || notice.CheckedAt.IsZero() {
+		t.Fatalf("settled observation unavailable: %+v %v", notice, err)
 	}
 }
 
-func TestCheckedReleaseCannotUseUnsettledPublication(t *testing.T) {
+func TestRecordReportsUnsettledPublication(t *testing.T) {
 	store, _ := testStore(t)
 	original := syncNoticeDirectory
 	t.Cleanup(func() { syncNoticeDirectory = original })
@@ -271,13 +294,5 @@ func TestCheckedReleaseCannotUseUnsettledPublication(t *testing.T) {
 	}
 	if err := store.Record(context.Background(), testManifest("v0.2.0")); !errors.Is(err, injected) {
 		t.Fatalf("record did not inject barrier: %v", err)
-	}
-	if checked, err := store.CheckedRelease(context.Background()); !errors.Is(err, injected) || checked != nil {
-		t.Fatalf("unconfirmed cache offered admission: %+v %v", checked, err)
-	}
-	syncNoticeDirectory = original
-	checked, err := store.CheckedRelease(context.Background())
-	if err != nil || checked == nil || checked.Digest != testManifest("v0.2.0").Digest() {
-		t.Fatalf("cache settlement lost observation: %+v %v", checked, err)
 	}
 }
