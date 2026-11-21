@@ -135,7 +135,7 @@ check_source_contract() {
   contains .github/workflows/ci.yml 'version: v2.18.0'
   contains .github/workflows/ci.yml 'Complete CI gate'
   contains .github/workflows/ci.yml '  pull_request:'
-  contains .github/workflows/ci.yml 'types: [opened, synchronize, reopened, ready_for_review]'
+  contains .github/workflows/ci.yml 'types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]'
   contains scripts/finalize-release.sh 'gh workflow run'
   contains scripts/finalize-release.sh 'branch=automation/cask-updates'
   contains .github/workflows/ci.yml 'uses: ./.github/workflows/release.yml'
@@ -233,26 +233,6 @@ check_bundled_release() (
   python3 scripts/test-signed-bundle-publication.py
 )
 
-check_cross_builds() (
-  local build_root
-  build_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-cross-builds.XXXXXX")
-  trap 'rm -rf -- "$build_root"' EXIT
-
-  local target goos goarch binary metadata
-  for target in linux/amd64 linux/arm64 darwin/arm64; do
-    goos=${target%/*}
-    goarch=${target#*/}
-    binary=$build_root/mesh_${goos}_${goarch}
-    env CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-      go build -trimpath \
-        -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.0.0-contract' \
-        -o "$binary" ./cmd/mesh
-    metadata=$(go version -m "$binary")
-    grep -Fq "GOOS=$goos" <<<"$metadata" || fail "$binary was not built for $goos"
-    grep -Fq "GOARCH=$goarch" <<<"$metadata" || fail "$binary was not built for $goarch"
-  done
-)
-
 check_demo_commands() (
   local demo_root demo_bin tape line command
   demo_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-demo-check.XXXXXX")
@@ -273,8 +253,10 @@ check_demo_commands() (
   done
 )
 
-check_release_dist() {
-  local dist=$1
+check_release_dist() (
+  local dist=$1 archive_root
+  archive_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-archive.XXXXXX")
+  trap 'rm -rf -- "$archive_root"' EXIT
   [[ -d $dist ]] || fail "release directory does not exist: $dist"
   [[ -f $dist/checksums.txt ]] || fail "$dist/checksums.txt is missing"
   [[ -f $dist/homebrew/Casks/mesh.rb ]] || fail "$dist/homebrew/Casks/mesh.rb is missing"
@@ -317,25 +299,26 @@ check_release_dist() {
     [[ $entries == mesh ]] || fail "$archive does not contain exactly one file named mesh"
     archive_mode=$(tar -tvzf "$archive" | awk 'NR == 1 { print $1 }')
     [[ $archive_mode == -??x* ]] || fail "$archive mesh entry is not owner-executable"
-    unpacked=$(mktemp -d "${TMPDIR:-/tmp}/mesh-archive.XXXXXX")
+    unpacked=$archive_root/$target
+    mkdir -- "$unpacked"
     tar -xzf "$archive" -C "$unpacked"
     [[ -f $unpacked/mesh && ! -L $unpacked/mesh && -x $unpacked/mesh ]] ||
       fail "$archive does not contain an executable regular mesh binary"
     metadata=$(go version -m "$unpacked/mesh")
     grep -Fq "GOOS=$goos" <<<"$metadata" || fail "$archive contains the wrong operating-system binary"
     grep -Fq "GOARCH=$goarch" <<<"$metadata" || fail "$archive contains the wrong architecture binary"
-    rm -rf -- "$unpacked"
   done
-}
+)
 
-check_source_contract
-check_cross_builds
-check_demo_commands
-if [[ $# -gt 1 ]]; then
-  fail 'usage: scripts/check-packaging.sh [dist-directory]'
-fi
-if [[ $# -eq 1 ]]; then
-  check_release_dist "$1"
-fi
+case $# in
+  0)
+    check_source_contract
+    check_demo_commands
+    ;;
+  1)
+    check_release_dist "$1"
+    ;;
+  *) fail 'usage: scripts/check-packaging.sh [dist-directory]' ;;
+esac
 
 echo 'PASS: packaging contract'

@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
-import fnmatch
 import importlib.util
 import json
-import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,18 +19,15 @@ def module(name, file):
 PROBE = module("reader_probe", "probe-update-reader.py")
 STAGE = module("reader_stage", "stage-release-publication.py")
 ORIGINAL = module("original_readers", "run-original-update-readers.py")
+CHANGES = module("ci_changes", "ci-changes.py")
 
 
 class ReaderPublicationTests(unittest.TestCase):
     def test_reader_only_changes_require_native_proofs(self):
-        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
-        section = workflow.split("id: update_paths\n", 1)[1].split("\n  app-pill:", 1)[0]
-        patterns = re.findall(r"^\s+- '([^']+)'$", section, re.M)
-        self.assertTrue(patterns)
         for path in ("internal/cli/update_reader.go", "internal/cli/command.go", "cmd/mesh/main.go",
                      "internal/update/host_updater.go", "db/migrations/00017_example.sql"):
             with self.subTest(path=path):
-                self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns), path)
+                self.assertIn("update_proofs", CHANGES.checks_for(path))
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="mrp-")

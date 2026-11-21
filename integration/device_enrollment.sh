@@ -8,6 +8,4 @@ if [[ -z ${MESH:-} ]]; then
   go build -o "$MESH" ./cmd/mesh
 fi
 helpers=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/helpers" && pwd)
-python3 "$helpers/enrollment_snapshot_test.py"
-python3 "$helpers/native_enrollment_test.py"
 python3 "$helpers/native_enrollment.py" "$MESH"

@@ -7,10 +7,13 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
-CODE_FILTER = "${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}"
 DRAFT_FILTER = "github.event_name == 'pull_request' && github.event.pull_request.draft"
-FILTERED = {"app-pill", "socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
-MAC_TURN = {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery"}
+SCOPED = {
+    "CODE": ("race", "integration", "native"),
+    "BROWSER": ("app-pill",),
+    "PACKAGING": (),
+    "UPDATE_PROOFS_REQUIRED": ("update-proofs", "installed-catchup"),
+}
 PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
@@ -27,7 +30,7 @@ def step(source, name):
 
 
 def run_script(source):
-    match = re.search(r"^        run: \|\n((?:          .*(?:\n|$))+)", source, re.M)
+    match = re.search(r"^        run: \|\n((?:(?:          .*)?(?:\n|$))+)", source, re.M)
     assert match, "missing step script"
     return "\n".join(line[10:] for line in match.group(1).splitlines())
 
@@ -40,24 +43,17 @@ def status(command, environment, pipefail=True):
                           check=False, timeout=5).returncode
 
 
-def check_recovery(ci, recovery):
-    caller = job(ci, "helper-recovery")
-    assert "uses: ./.github/workflows/helper-recovery.yml" in caller
-    assert not re.search(r"^    continue-on-error:", caller, re.M)
-    for name in FILTERED:
-        filtered = job(ci, name)
-        # Jobs with a Mac leg also wait for their Mac turn behind main CI.
-        needs = "\\[changes, mac-turn\\]" if name in MAC_TURN else "changes"
-        assert re.search(rf"^    needs: {needs}$", filtered, re.M), f"{name} has the wrong dependencies"
-        assert re.findall(r"^    if: (.+)$", filtered, re.M) == [CODE_FILTER]
-    assert re.search(r"^  workflow_call:\s*$", recovery, re.M)
-    assert re.search(r"^defaults:\n  run:\n    shell: bash$", recovery, re.M)
-    assert set(re.findall(r"^\s+shell: (.+)$", recovery, re.M)) == {"bash"}
+def check_recovery(ci):
+    native = job(ci, "native")
+    assert "needs: changes" in native and "if: needs.changes.outputs.code == 'true'" in native
+    assert re.search(r"^    defaults:\n      run:\n        shell: bash$", native, re.M)
     for platform, runner in (("linux/amd64", "ubuntu-24.04"), ("darwin/arm64", "macos-15")):
-        assert re.search(rf"platform: {platform}\s+runner: {runner}", recovery)
-    assert "fail-fast: false" in recovery and "continue-on-error:" not in recovery
-    assert '$(go env GOHOSTOS)/$(go env GOHOSTARCH)' in recovery
-    assert "bash scripts/prove-helper-recovery.sh" in recovery and "if: always()" in recovery
+        assert re.search(rf"platform: {platform}\s+runner: {runner}\b", native)
+    assert "fail-fast: false" in native and "continue-on-error:" not in native
+    assert '$(go env GOHOSTOS)/$(go env GOHOSTARCH)' in native
+    recovery = step(native, "Recover historical helper and run published bridge chain")
+    assert "if: matrix.platform != 'linux/arm64'" in recovery
+    assert 'bash scripts/prove-helper-recovery.sh "$RUNNER_TEMP/helper-recovery"' in run_script(recovery)
 
 
 def reject_outcomes(command, environment, variable):
@@ -65,44 +61,47 @@ def reject_outcomes(command, environment, variable):
         if outcome == environment[variable]:
             continue
         changed = dict(environment, **{variable: outcome})
-        assert status(command, changed) != 0, f"aggregate accepts {variable}={outcome!r} with CODE={environment['CODE']}"
+        assert status(command, changed) != 0, f"aggregate accepts {variable}={outcome!r}"
 
 
 def check_outcomes(command, results):
-    for code in ("true", "false"):
-        for proofs in ("true", "false"):
-            check_filtered_outcomes(command, results, code, proofs)
-    environment = dict(os.environ, UPDATE_PROOFS_REQUIRED="true", **{name: "success" for name in results})
-    for code in ("", "pending", "True", "unknown"):
-        assert status(command, dict(environment, CODE=code)) != 0, f"aggregate accepts unknown CODE={code!r}"
-    for proofs in ("", "pending", "True", "unknown"):
-        assert status(command, dict(environment, CODE="true", UPDATE_PROOFS_REQUIRED=proofs)) != 0, \
-            f"aggregate accepts unknown UPDATE_PROOFS_REQUIRED={proofs!r}"
+    for flags in ((False, False, False, False), (True, False, False, False), (True, True, False, False),
+                  (True, False, True, True), (True, True, True, True)):
+        decisions = dict(zip(SCOPED, flags, strict=True))
+        required = {"changes", "quality"}
+        for flag, dependencies in SCOPED.items():
+            if decisions[flag]:
+                required.update(dependencies)
+        environment = dict(os.environ)
+        environment.update({name: str(value).lower() for name, value in decisions.items()})
+        environment.update({name: "success" if dependency in required else "skipped"
+                            for name, dependency in results.items()})
+        environment["SNAPSHOT"] = "success" if decisions["PACKAGING"] else "skipped"
+        environment["SNAPSHOT_CONTRACT"] = environment["SNAPSHOT"]
+        assert status(command, environment) == 0, f"aggregate rejects valid decisions {decisions}"
+        for variable in tuple(results) + ("SNAPSHOT", "SNAPSHOT_CONTRACT"):
+            reject_outcomes(command, environment, variable)
+        for variable in SCOPED:
+            assert status(command, dict(environment, **{variable: ""})) != 0
+            assert status(command, dict(environment, **{variable: "unknown"})) != 0
 
 
-def check_filtered_outcomes(command, results, code, proofs):
-    environment = dict(os.environ, CODE=code, UPDATE_PROOFS_REQUIRED=proofs)
-    environment.update({name: "skipped" if code == "false" and dependency in FILTERED else "success"
-                        for name, dependency in results.items()})
-    environment["UPDATE_PROOFS"] = "success" if proofs == "true" else "skipped"
-    environment["INSTALLED_CATCHUP"] = environment["UPDATE_PROOFS"]
-    assert status(command, environment) == 0, f"aggregate rejects valid CODE={code}, proofs={proofs} results"
-    for variable in results:
-        reject_outcomes(command, environment, variable)
-
-
-def check_gate(ci, recovery):
-    check_recovery(ci, recovery)
+def check_gate(ci):
+    check_recovery(ci)
     gate = job(ci, "gate")
     assert "name: Complete CI gate" in gate and "if: ${{ always() && !inputs.client_interrupt }}" in gate
     needed = re.search(r"^    needs: \[(.+)\]$", gate, re.M)
-    assert needed
     dependencies = {name.strip() for name in needed.group(1).split(",")}
-    assert {"changes", "helper-recovery"} <= dependencies
+    assert dependencies == {"changes", "quality"} | set().union(*SCOPED.values())
     results = dict(re.findall(r"^          (\w+): \$\{\{ needs\.([\w-]+)\.result \}\}$", gate, re.M))
-    assert set(results.values()) == dependencies and FILTERED <= dependencies
+    assert set(results.values()) == dependencies
     aggregate = step(gate, "Require every CI job")
-    assert "CODE: ${{ needs.changes.outputs.code }}" in aggregate
+    assert "if: ${{ success() && !cancelled() }}" in aggregate
+    for check in SCOPED:
+        output = {"UPDATE_PROOFS_REQUIRED": "update_proofs"}.get(check, check.lower())
+        assert f"{check}: ${{{{ needs.changes.outputs.{output} }}}}" in aggregate
+    assert "SNAPSHOT: ${{ needs.quality.outputs.snapshot }}" in aggregate
+    assert "SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}" in aggregate
     readiness = step(gate, "Require a ready PR")
     assert re.findall(r"^        if: (.+)$", readiness, re.M) == [DRAFT_FILTER]
     assert status(run_script(readiness), os.environ) != 0, "draft readiness script succeeds"
@@ -111,6 +110,22 @@ def check_gate(ci, recovery):
     assert "needs: gate" in publication and "uses: ./.github/workflows/release.yml" in publication
     assert "source_sha: ${{ github.sha }}" in publication
     assert re.findall(r"^    if: (.+)$", publication, re.M) == [PUBLICATION_FILTER]
+    check_cask_status(gate)
+
+
+def check_cask_status(gate):
+    report = step(gate, "Report the real CI verdict on the tested commit")
+    assert "always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/automation/cask-updates'" in report
+    assert "HEAD: ${{ github.sha }}" in report and "RESULT: ${{ steps.verdict.outcome }}" in report
+    assert "statuses: write" in gate
+    prefix = 'gh() { printf "%s\\n" "$@"; }\n'
+    for result, state in (("success", "success"), ("failure", "failure"), ("skipped", "failure"), ("cancelled", "failure")):
+        sha = "a" * 40
+        environment = dict(os.environ, RESULT=result, GH_REPO="ShaulLavo/mesh", HEAD=sha, RUN_URL="test-run")
+        args = subprocess.check_output(["bash", "-e", "-c", prefix + run_script(report)],
+                                       env=environment, text=True, timeout=5).splitlines()
+        assert f"repos/ShaulLavo/mesh/statuses/{sha}" in args
+        assert f"state={state}" in args and "context=Complete CI gate" in args
 
 
 def without_gate_dependency(ci, dependency):
@@ -123,38 +138,31 @@ def without_gate_dependency(ci, dependency):
     return ci.replace(gate, gate[:needed.start(1)] + remaining + gate[needed.end(1):], 1)
 
 
-def reject_source(ci, recovery):
-    try:
-        check_gate(ci, recovery)
-    except AssertionError:
-        return
-    raise AssertionError("disconnected helper publication gate accepted")
-
-
-def check_mutations(ci, recovery):
+def check_mutations(ci):
     mutations = (
-        without_gate_dependency(ci, "helper-recovery"),
-        ci.replace(' && $HELPER_RECOVERY == "$expected"', "", 1),
-        ci.replace("name: Required native helper recovery", "name: Required native helper recovery\n    if: false", 1),
+        without_gate_dependency(ci, "native"),
+        ci.replace('          require "$CODE" native "$NATIVE"\n', "", 1),
+        ci.replace("          bash scripts/prove-helper-recovery.sh", "          echo skipped instead of", 1),
         ci.replace("CODE: ${{ needs.changes.outputs.code }}", "CODE: false", 1),
-        ci.replace("[[ $CHANGES == success ]]", "[[ $CHANGES == success ]] || true", 1),
+        ci.replace('          require true changes "$CHANGES"\n', "", 1),
         ci.replace(DRAFT_FILTER, "false", 1),
+        ci.replace("HEAD: ${{ github.sha }}", "HEAD: ${{ github.event.pull_request.head.sha }}", 1),
     )
     for mutated in mutations:
         assert mutated != ci, "publication negative control did not change CI source"
-        reject_source(mutated, recovery)
-    unsafe = recovery.replace("defaults:\n  run:\n    shell: bash\n\n", "", 1)
-    assert unsafe != recovery, "shell negative control did not change workflow"
-    reject_source(ci, unsafe)
+        try:
+            check_gate(mutated)
+        except AssertionError:
+            continue
+        raise AssertionError("disconnected helper publication gate accepted")
     assert status("(exit 71) | true", os.environ, pipefail=False) == 0
     assert status("(exit 71) | true", os.environ) != 0, "piped test failure was ignored"
 
 
 def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
-    recovery = (ROOT / ".github/workflows/helper-recovery.yml").read_text()
-    check_gate(ci, recovery)
-    check_mutations(ci, recovery)
+    check_gate(ci)
+    check_mutations(ci)
     reservation = (ROOT / "scripts/reserve-release.sh").read_text()
     assert '.name == "Complete CI gate"' in reservation
     assert '.status == "completed"' in reservation and '.conclusion == "success"' in reservation

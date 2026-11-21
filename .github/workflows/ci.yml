@@ -5,7 +5,7 @@ on:
     branches:
       - main
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
     inputs:
       client_interrupt:
@@ -62,81 +62,27 @@ jobs:
 
   changes:
     if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
+    runs-on: ubuntu-24.04
     outputs:
-      code: ${{ github.event_name != 'pull_request' || steps.paths.outputs.code == 'true' }}
-      update_proofs: ${{ github.event_name == 'pull_request' && steps.update_paths.outputs.updates == 'true' }}
+      code: ${{ steps.paths.outputs.code }}
+      browser: ${{ steps.paths.outputs.browser }}
+      packaging: ${{ steps.paths.outputs.packaging }}
+      update_proofs: ${{ steps.paths.outputs.update_proofs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
-        id: paths
-        with:
-          predicate-quantifier: every
-          filters: |
-            code:
-              - '**'
-              - '!docs/**/*.md'
-              - '!README.md'
-              - '!AGENTS.md'
-              - '!LICENSE'
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
-        id: update_paths
-        with:
-          filters: |
-            updates:
-              - 'cmd/**'
-              - 'internal/cli/**'
-              - 'internal/release/**'
-              - 'internal/releasedocuments/**'
-              - 'internal/update*/**'
-              - 'internal/storage/**'
-              - 'internal/worker/**'
-              - 'internal/session/**'
-              - 'internal/protocol/**'
-              - 'internal/daemon/**'
-              - 'db/**'
-              - 'go.mod'
-              - 'go.sum'
-              - 'scripts/**'
-              - '.github/workflows/*'
-              - '.github/actions/installed-go/**'
-
-  mac-turn:
-    # The owner's Mac runners (mesh-mac alone, mesh-mac-shared up to three at
-    # once) serve every trusted Darwin leg, and GitHub gives them whichever
-    # queued job it picks. A same-repository PR's Mac legs wait here,
-    # on a hosted runner, until no main CI run (the publish path) is queued or
-    # running. Main, manual, fork and draft runs pass at once.
-    if: ${{ !inputs.client_interrupt }}
-    name: Wait for main CI before Mac legs
-    runs-on: ubuntu-24.04
-    timeout-minutes: 200
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
           persist-credentials: false
-          sparse-checkout: scripts/wait-for-main-ci.py
-          sparse-checkout-cone-mode: false
-      - name: Wait until no main CI run is queued or running
+      - name: Classify changed paths
+        id: paths
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          DRAFT: ${{ github.event.pull_request.draft }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-        run: python3 -B scripts/wait-for-main-ci.py
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 -B scripts/ci-changes.py "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$BASE" "$HEAD" >> "$GITHUB_OUTPUT"
 
   app-pill:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: needs.changes.outputs.browser == 'true'
     name: Reusable floating pill
     runs-on: ubuntu-24.04
     steps:
@@ -147,6 +93,8 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.24.0
+          cache: true
+          cache_dependency_path: web/app-pill/pnpm-lock.yaml
       - run: pnpm --dir web/app-pill install --frozen-lockfile
       - run: pnpm --dir web/app-pill build
       - name: Require current embedded assets
@@ -181,6 +129,11 @@ jobs:
         with:
           packages: ${{ steps.browser-packages.outputs.packages }}
           options: --no-install-recommends
+      - name: Cache confirmation browser engines
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('web/app-pill/pnpm-lock.yaml') }}
       - name: Install confirmation browser engines
         # A hang cap, not a speed limit.
         timeout-minutes: 25
@@ -196,7 +149,8 @@ jobs:
         run: node web/app-pill/tests/snap.mjs
 
   race:
-    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Race tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -218,7 +172,8 @@ jobs:
         run: go test -race ./...
 
   integration:
-    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     name: Integration tests
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -237,67 +192,13 @@ jobs:
           MESH_INTEGRATION_TIMEOUT: 60s
         run: ./scripts/verify.sh
 
-  test:
-    name: Race tests and integrations
-    if: ${{ always() && !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    needs: [race, integration]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Verify test scheduling and aggregate controls
-        run: python3 -B scripts/test-ci-scheduling.py
-      - name: Require races and integrations
-        env:
-          RACE: ${{ needs.race.result }}
-          INTEGRATION: ${{ needs.integration.result }}
-        run: |
-          [[ $RACE == success && $INTEGRATION == success ]]
-
-  socket-portability:
-    needs: [changes, mac-turn]
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Native socket and daemon fixtures (${{ matrix.runner }})
-    # Trusted Darwin legs (main pushes, manual runs, same-repository PRs) run on
-    # the owner's Mac runner; fork PRs stay hosted. The Mac job first waits in
-    # the Mac FIFO for up to 45 minutes, so its hang cap carries that wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 55 || 10 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04, macos-15]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
-      - name: Verify full daemon suite under long and symlinked scratch
-        shell: bash
-        run: |
-          python3 scripts/test-native-socket-runner.py
-          python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"
-      - name: Refuse the integration supervisor before creating anything
-        # Linux runs these controls inside the integration suite.
-        if: runner.os == 'macOS'
-        run: python3 scripts/test-verify-runner.py SourceContractTest
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: native-socket-results-${{ matrix.runner }}
-          path: |
-            ${{ runner.temp }}/native-socket-results.jsonl
-            ${{ runner.temp }}/native-socket-results.schedule.json
-          retention-days: 7
-
-  auth-cutover:
-    needs: [changes, mac-turn]
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Device auth cutover (${{ matrix.platform }})
-    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
+  native:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Native fixtures (${{ matrix.platform }})
+    # PRs and dispatches use hosted capacity, including every fork.
+    runs-on: ${{ matrix.runner == 'macos-15' && github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && github.event_name == 'push' && github.ref == 'refs/heads/main' && 85 || 40 }}
     strategy:
       fail-fast: false
       matrix:
@@ -308,10 +209,14 @@ jobs:
             runner: ubuntu-24.04-arm
           - platform: darwin/arm64
             runner: macos-15
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -320,26 +225,34 @@ jobs:
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
         run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
-      - name: Verify fixture TLS and published artifact boundaries
+      - name: Verify Unix sockets under long and symlinked scratch
+        if: matrix.platform != 'linux/arm64'
         run: |
-          python3 scripts/test-fixture-tls.py
-          python3 scripts/test-published-releases.py
+          python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"
+      - name: Verify Darwin process group cleanup
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          python3 -B scripts/test-native-socket-runner.py ProcessTest BinaryTest
+          python3 -B integration/helpers/native_enrollment_test.py \
+            NativeEnrollmentTest.test_owned_zombie_group_is_pending_until_reaped \
+            NativeEnrollmentTest.test_nested_cli_ssh_timeout_joins_with_inherited_output \
+            NativeEnrollmentTest.test_daemon_needing_escalation_is_joined_within_eight_seconds
+      - name: Refuse the integration supervisor before creating anything
+        # Linux runs these controls inside the integration suite.
+        if: runner.os == 'macOS'
+        run: python3 scripts/test-verify-runner.py SourceContractTest
       - name: Verify native authentication regressions
+        if: matrix.platform != 'linux/amd64'
         run: |
-          go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS|DarwinInstallerLaunchdActivation)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon ./scripts/install
-      - name: Verify opt-in transport observer fixture
-        run: go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s -run '^(TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$' ./internal/transporttrace ./internal/transport ./internal/daemon
+          go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon
+      - name: Verify the Darwin installer activates launchd
+        if: matrix.platform == 'darwin/arm64'
+        run: go test -race -count=1 -run '^TestDarwinInstallerLaunchdActivation$' ./scripts/install
       - name: Verify native pinned-fleet enrollment
         run: |
           set -euo pipefail
-          output="$RUNNER_TEMP/device-enrollment-test.log"
-          go test -race -count=1 -timeout=180s -v -run '^Test(CheckedApproval|ApproveFleet)' ./internal/cli | tee "$output"
-          command grep -Fq -- '--- PASS: TestCheckedApprovalNativeBindingAndIdempotency ' "$output"
-          command grep -Fq -- '--- PASS: TestApproveFleetSystemSSHRequiresExistingHostKeyTrust ' "$output"
-          python3 integration/helpers/enrollment_snapshot_test.py
-          python3 integration/helpers/native_enrollment_test.py
           root=$(mktemp -d "$RUNNER_TEMP/mesh-enrollment.XXXXXX")
-          trap 'status=$?; if (( status == 0 )); then rm -rf -- "$root"; else echo "retained enrollment paths: $root" >&2; fi' EXIT
+          trap 'rm -rf -- "$root"' EXIT
           MESH="$root/mesh"
           go build -o "$MESH" ./cmd/mesh
           mkdir -m 700 "$root/home" "$root/state" "$root/config" "$root/tmp"
@@ -349,6 +262,14 @@ jobs:
           export TMPDIR="$root/tmp"
           export TMP="$TMPDIR" TEMP="$TMPDIR" PYTHONDONTWRITEBYTECODE=1
           python3 integration/helpers/native_enrollment.py "$MESH"
+      - name: Verify Linux ARM64 enrollment and naming
+        if: matrix.platform == 'linux/arm64'
+        run: |
+          go test -race -count=1 -v -run '^Test(CheckedApproval|ApproveFleet)' ./internal/cli | tee "$RUNNER_TEMP/device-enrollment-test.log"
+          grep -Fq -- '--- PASS: TestCheckedApprovalNativeBindingAndIdempotency ' "$RUNNER_TEMP/device-enrollment-test.log"
+          grep -Fq -- '--- PASS: TestApproveFleetSystemSSHRequiresExistingHostKeyTrust ' "$RUNNER_TEMP/device-enrollment-test.log"
+          go test -race -count=1 -run '^Test(DestinationNamePublishedAfterCommitAndRetryCoalesces|HostRenameErrorsAreStructuredAndWatchReadOnly|HostRenameCannotHealRevokedConnection)$' ./internal/daemon
+          go test -race -count=1 ./internal/machinename
       - name: Verify Darwin retains its mapped executable
         if: matrix.platform == 'darwin/arm64'
         run: |
@@ -366,77 +287,46 @@ jobs:
         env:
           AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
         run: scripts/prove-device-auth-cutover.sh "$RUNNER_TEMP/auth-cutover"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: device-auth-cutover-${{ strategy.job-index }}
-          path: |
-            ${{ runner.temp }}/auth-cutover
-            ${{ runner.temp }}/darwin-mapped-executable-test.log
-            ${{ runner.temp }}/device-enrollment-test.log
-          retention-days: 7
-
-  machine-naming:
-    needs: [changes, mac-turn]
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Destination naming (${{ matrix.platform }})
-    # Trusted Darwin legs run on the owner's Mac runner after a Mac FIFO wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 60 || 15 }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            runner: macos-15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: ${{ runner.environment == 'github-hosted' }}
-      - name: Require the actual native platform
-        env:
-          REQUIRED_PLATFORM: ${{ matrix.platform }}
-        run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
-      - name: Verify destination persistence, publication and authentication
-        if: matrix.platform != 'linux/amd64'
-        run: |
-          set -euo pipefail
-          go test -race -count=1 ./internal/machinename ./internal/protocol
-          if [[ "$(go env GOHOSTOS)" == darwin ]]; then
-            output="$RUNNER_TEMP/machine-naming-daemon.log"
-            go test -race -count=1 -v -run '^Test(DestinationNamePublishedAfterCommitAndRetryCoalesces|HostRenameErrorsAreStructuredAndWatchReadOnly|HostRenameCannotHealRevokedConnection)$' ./internal/daemon | tee "$output"
-            for test in TestDestinationNamePublishedAfterCommitAndRetryCoalesces TestHostRenameErrorsAreStructuredAndWatchReadOnly TestHostRenameCannotHealRevokedConnection; do
-              grep -Fq -- "--- PASS: $test " "$output"
-            done
-          else
-            go test -race -count=1 ./internal/daemon
-          fi
       - name: Verify native retained terminal and authenticated source transition
         env:
           NAMING_PROOF_PLATFORM: ${{ matrix.platform }}
         run: scripts/prove-machine-naming.sh "$RUNNER_TEMP/machine-naming"
+      - name: Verify recovery cancellation, rejection and mapped helper identity
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          mkdir -p "$RUNNER_TEMP/helper-recovery"
+          go test -race ./internal/updateinstall -run 'TestHelperRecovery|TestHelperProcess|TestHelperLaunchdTarget|TestLaunchdHelperPID|TestUpgradeHelper|TestFailedRollback|TestOriginalInode|TestDarwinMappedExecutable' -count=1 -timeout=180s 2>&1 | tee "$RUNNER_TEMP/helper-recovery/race-tests.log"
+      - name: Recover historical helper and run published bridge chain
+        if: matrix.platform != 'linux/arm64'
+        env:
+          HELPER_RECOVERY_PLATFORM: ${{ matrix.platform }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/helper-recovery"
+          git rev-parse HEAD > "$RUNNER_TEMP/helper-recovery/source-sha.txt"
+          go env GOHOSTOS GOHOSTARCH > "$RUNNER_TEMP/helper-recovery/native-platform.txt"
+          bash scripts/prove-helper-recovery.sh "$RUNNER_TEMP/helper-recovery"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: machine-naming-${{ strategy.job-index }}
+          name: native-fixtures-${{ matrix.runner }}
           path: |
+            ${{ runner.temp }}/native-socket-results.jsonl
+            ${{ runner.temp }}/native-socket-results.schedule.json
+            ${{ runner.temp }}/auth-cutover
+            ${{ runner.temp }}/darwin-*-test.log
+            ${{ runner.temp }}/device-enrollment-test.log
             ${{ runner.temp }}/machine-naming
-            ${{ runner.temp }}/machine-naming-daemon.log
+            ${{ runner.temp }}/helper-recovery
           retention-days: 7
 
-  gates:
-    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+  quality:
+    needs: changes
     name: Quality gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
+    outputs:
+      snapshot: ${{ steps.snapshot.outcome }}
+      snapshot_contract: ${{ steps.snapshot_contract.outcome }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -452,12 +342,22 @@ jobs:
       # install-only skips the action's schema check; golangci-lint run ignores unknown keys.
       - name: Verify golangci-lint configuration schema
         run: golangci-lint config verify
+      - name: Verify CI scheduling and fixture controls
+        run: |
+          python3 -B scripts/test-ci-scheduling.py
+          python3 -B scripts/test-ci-changes.py
+          python3 -B scripts/test-helper-recovery-gate.py
+          python3 -B scripts/test-native-socket-runner.py
+          python3 -B scripts/test-client-interrupt.py DiagnosticTest.test_registered_vehicle_runs_only_one_diagnostic_job_and_cannot_publish
+          python3 -B scripts/test-fixture-tls.py
+          python3 -B scripts/test-published-releases.py
+          python3 -B integration/helpers/enrollment_snapshot_test.py
+          python3 -B integration/helpers/native_enrollment_test.py
       - name: Verify CI download failure fixtures
         run: python3 scripts/test-ci-downloads.py
       - name: Verify installed release gate wiring
         run: |
           python3 scripts/test-installed-gate-wiring.py
-          python3 scripts/test-installed-clock.py
           python3 scripts/test-installed-prepared.py
           python3 scripts/test-installed-workflow.py
           python3 scripts/test-publication-jobs.py
@@ -491,57 +391,34 @@ jobs:
           name: gates-reports
           path: ${{ runner.temp }}/gates-reports
           retention-days: 7
-
-  vulnerability:
-    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Vulnerability scan
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
       - name: govulncheck v1.7.0
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
-
-  packaging:
-    if: ${{ !inputs.client_interrupt && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Packaging contract
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
-        with:
-          version: v2.18.0
-          args: release --snapshot --clean
+      - name: Verify opt-in transport observer fixture
+        run: go test -race -tags=mesh_installed_fixture -count=1 -timeout=120s -run '^(TestRecorder.*|TestErrorClassificationPreservesKnownCausesWithoutText|TestServerLifecycle.*|TestDaemonLifecycle.*)$' ./internal/transporttrace ./internal/transport ./internal/daemon
       - name: Verify default-branch failure fixtures
         run: python3 scripts/test-check-default-branch.py
       - name: Require main as the repository default branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/check-default-branch.py '${{ github.repository }}'
-      - name: Verify release and installer contracts
+      - name: Verify release and installer source contracts
+        run: ./scripts/check-packaging.sh
+      - name: Build snapshot packages
+        id: snapshot
+        if: needs.changes.outputs.packaging == 'true'
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.0
+          args: release --snapshot --clean
+      - name: Verify snapshot archives
+        id: snapshot_contract
+        if: needs.changes.outputs.packaging == 'true'
         run: ./scripts/check-packaging.sh dist
-
-  helper-recovery:
-    needs: [changes, mac-turn]
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    name: Required native helper recovery
-    uses: ./.github/workflows/helper-recovery.yml
 
   update-proofs:
     name: Required native update proofs
-    # Its Darwin legs use the shared Mac runners, whose three slots leave room
-    # for main, so it does not wait for its Mac turn.
     needs: changes
-    if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
+    if: needs.changes.outputs.update_proofs == 'true'
     uses: ./.github/workflows/update-proofs.yml
     with:
       source_sha: ${{ github.sha }}
@@ -549,7 +426,7 @@ jobs:
   installed-catchup:
     name: Required installed update proofs
     needs: [changes, update-proofs]
-    if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
+    if: needs.changes.outputs.update_proofs == 'true'
     permissions:
       contents: read
       actions: read
@@ -565,8 +442,11 @@ jobs:
     permissions:
       statuses: write
     if: ${{ always() && !inputs.client_interrupt }}
-    needs: [changes, app-pill, test, socket-portability, auth-cutover, machine-naming, helper-recovery, update-proofs, installed-catchup, gates, vulnerability, packaging]
+    needs: [changes, quality, race, integration, native, app-pill, update-proofs, installed-catchup]
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Require a ready PR
         if: github.event_name == 'pull_request' && github.event.pull_request.draft
@@ -575,35 +455,50 @@ jobs:
           exit 1
       - name: Require every CI job
         id: verdict
+        if: ${{ success() && !cancelled() }}
         env:
           CHANGES: ${{ needs.changes.result }}
+          QUALITY: ${{ needs.quality.result }}
           CODE: ${{ needs.changes.outputs.code }}
-          APP_PILL: ${{ needs.app-pill.result }}
-          TEST: ${{ needs.test.result }}
-          SOCKET_PORTABILITY: ${{ needs.socket-portability.result }}
-          AUTH_CUTOVER: ${{ needs.auth-cutover.result }}
-          MACHINE_NAMING: ${{ needs.machine-naming.result }}
-          HELPER_RECOVERY: ${{ needs.helper-recovery.result }}
+          BROWSER: ${{ needs.changes.outputs.browser }}
+          PACKAGING: ${{ needs.changes.outputs.packaging }}
           UPDATE_PROOFS_REQUIRED: ${{ needs.changes.outputs.update_proofs }}
+          RACE: ${{ needs.race.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          NATIVE: ${{ needs.native.result }}
+          APP_PILL: ${{ needs.app-pill.result }}
+          SNAPSHOT: ${{ needs.quality.outputs.snapshot }}
+          SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}
           UPDATE_PROOFS: ${{ needs.update-proofs.result }}
           INSTALLED_CATCHUP: ${{ needs.installed-catchup.result }}
-          GATES: ${{ needs.gates.result }}
-          VULNERABILITY: ${{ needs.vulnerability.result }}
-          PACKAGING: ${{ needs.packaging.result }}
         run: |
-          [[ $CHANGES == success ]] || exit 1
-          case "$CODE" in
-            true) expected=success ;;
-            false) expected=skipped ;;
-            *) exit 1 ;;
-          esac
-          [[ $APP_PILL == "$expected" && $SOCKET_PORTABILITY == "$expected" && $AUTH_CUTOVER == "$expected" && $MACHINE_NAMING == "$expected" && $HELPER_RECOVERY == "$expected" ]] || exit 1
-          [[ $TEST == success && $GATES == success && $VULNERABILITY == success && $PACKAGING == success ]] || exit 1
-          case "$UPDATE_PROOFS_REQUIRED" in
-            true) [[ $UPDATE_PROOFS == success && $INSTALLED_CATCHUP == success ]] || exit 1 ;;
-            false) [[ $UPDATE_PROOFS == skipped && $INSTALLED_CATCHUP == skipped ]] || exit 1 ;;
-            *) exit 1 ;;
-          esac
+          require() {
+            local decision=$1 name=$2 actual=$3 expected
+            case "$decision" in
+              true) expected=success ;;
+              false) expected=skipped ;;
+              *) echo "::error::Invalid CI path decision for $name: $decision"; return 1 ;;
+            esac
+            if [[ $actual != "$expected" ]]; then
+              echo "::error::$name reported '$actual', expected '$expected'."
+              return 1
+            fi
+          }
+
+          require true changes "$CHANGES"
+          require true quality "$QUALITY"
+          if [[ $CODE == false && ( $BROWSER != false || $PACKAGING != false || $UPDATE_PROOFS_REQUIRED != false ) ]]; then
+            echo '::error::A documentation-only change cannot select product checks.'
+            exit 1
+          fi
+          require "$CODE" race "$RACE"
+          require "$CODE" integration "$INTEGRATION"
+          require "$CODE" native "$NATIVE"
+          require "$BROWSER" app-pill "$APP_PILL"
+          require "$PACKAGING" snapshot "$SNAPSHOT"
+          require "$PACKAGING" snapshot-contract "$SNAPSHOT_CONTRACT"
+          require "$UPDATE_PROOFS_REQUIRED" update-proofs "$UPDATE_PROOFS"
+          require "$UPDATE_PROOFS_REQUIRED" installed-catchup "$INSTALLED_CATCHUP"
 
       # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
       - name: Report the real CI verdict on the tested commit

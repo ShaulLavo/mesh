@@ -137,12 +137,8 @@ jobs:
             key: darwin-arm64
             archive: mesh_darwin_arm64.tar.gz
             runner: macos-15
-    # Trusted Darwin legs (the caller's main pushes, manual runs and
-    # same-repository PRs) run on the owner's Mac runner; fork PRs stay hosted.
-    # Preparation and proofs keep everything in their own work tree, home,
-    # temporary root and ephemeral ports, so they take the shared Mac runners,
-    # which run up to three such jobs at once.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    # Draft release proofs share the owner's Mac. All PR proofs run hosted.
+    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -273,9 +269,9 @@ jobs:
       # Platform, key, runner and shard rows from prepare-release-baselines.py
       # --prove-matrix: all of them for a release, one Darwin shard on a PR.
       matrix: ${{ fromJSON(needs.policy.outputs.prove) }}
-    # Trusted Darwin legs run on the shared Mac runners after a Mac FIFO wait.
-    runs-on: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 105 || 60 }}
+    # Draft proofs on the shared Mac runners carry the Mac FIFO wait in their cap.
+    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 105 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
