@@ -229,6 +229,14 @@ jobs:
         if: matrix.platform != 'linux/arm64'
         run: |
           python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"
+      - name: Verify Darwin process group cleanup
+        if: matrix.platform == 'darwin/arm64'
+        run: |
+          python3 -B scripts/test-native-socket-runner.py ProcessTest BinaryTest
+          python3 -B integration/helpers/native_enrollment_test.py \
+            NativeEnrollmentTest.test_owned_zombie_group_is_pending_until_reaped \
+            NativeEnrollmentTest.test_nested_cli_ssh_timeout_joins_with_inherited_output \
+            NativeEnrollmentTest.test_daemon_needing_escalation_is_joined_within_eight_seconds
       - name: Refuse the integration supervisor before creating anything
         # Linux runs these controls inside the integration suite.
         if: runner.os == 'macOS'
