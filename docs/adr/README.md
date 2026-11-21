@@ -12,3 +12,4 @@ One file per decision that has a real "why". The format is in each file. Do not 
 | [006](006-tailnet-only-hosting.md) | Hosting stays inside the tailnet |
 | [007](007-innermost-detach-key.md) | `ctrl+]` detaches the innermost session |
 | [008](008-kept-routes-in-the-route-state-machine.md) | Kept routes live in the route state machine |
+| [011](011-stateless-mcp.md) | Mesh speaks only stateless MCP 2026-07-28 |
