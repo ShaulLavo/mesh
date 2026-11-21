@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hold a pull request's Mac legs until no main CI run is queued or running.
 
-GitHub hands the one mesh-mac runner's next job to any queued job, so a stream
+GitHub hands the Mac runners' next jobs to any queued jobs, so a stream
 of pull request runs can keep a main publish run waiting for hours. Main CI
 runs, manual runs, fork pull requests and drafts pass at once. A same-repository
 pull request waits here, on a hosted runner, until main is idle. If main is
