@@ -66,7 +66,7 @@ type Policy struct {
 }
 
 func Trust(ctx context.Context, stateDir, id string, ifEmpty bool) error {
-	err := access.WithClassWriter(ctx, stateDir, 1500*time.Millisecond, func(ctx context.Context) error { return trustOwned(ctx, stateDir, id, ifEmpty) })
+	err := access.WithClassWriter(ctx, stateDir, access.ClassWriterBudget, func(ctx context.Context) error { return trustOwned(ctx, stateDir, id, ifEmpty) })
 	if err != nil {
 		return fmt.Errorf("update: trust administrator: %w", err)
 	}

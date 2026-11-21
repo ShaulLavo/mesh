@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_native, installed_releases, installed_clock
+from fixtures import fleet_baselines, installed_adoption, installed_chain, installed_native, installed_releases, installed_clock, publication_origin
 
 
 def prove(root, output, native):
@@ -61,7 +61,7 @@ class FreshCase(installed_adoption.AdoptionCase):
             raise RuntimeError("fresh installation check changed its verified helper PID")
         self.units.start("daemon")
         installed_native.native_services.wait_for(self.ready, "fresh managed daemon did not become ready")
-        host = self.control("host.info")["host"]
+        host = self.settled_host()
         self.require_automatic_zero(host)
         self.require_fresh_state()
         started = self.first_start(daemon)
@@ -94,7 +94,7 @@ class FreshCase(installed_adoption.AdoptionCase):
         after = self.retained()
         installed_adoption.validate_initialized_baseline(before, after, str(self.root / "config/domains.json"))
         self.require_fresh_state()
-        self.require_automatic_zero(self.control("host.info")["host"])
+        self.require_automatic_zero(self.settled_host())
         if self.mapped_helper()["pid"] != helper["pid"]:
             raise RuntimeError("baseline initialization changed the verified helper PID")
         return {"command": "daemon installation-check", "before": before, "after": after,
@@ -104,6 +104,20 @@ class FreshCase(installed_adoption.AdoptionCase):
         paths = (self.state / "updates/host-policy.json", self.state / "updates/host-adoption.json", self.state / "update/installation.json")
         if any(path.exists() for path in paths):
             raise RuntimeError("fresh first-start fixture acquired a policy, adoption envelope or installation journal")
+
+    def settled_host(self):
+        """host.info once its update summary is a real reading, not a held-lock placeholder.
+
+        The daemon's summary waits only briefly for the updater's authority lock and
+        reports an empty status with the lock error while discovery holds it, as it
+        does right after installation-check. Read again until the fixture cap; any
+        other summary is returned as is for the strict checks."""
+        deadline = time.monotonic() + installed_clock.timeout()
+        while True:
+            host = self.control("host.info")["host"]
+            if not summary_lock_busy(host) or time.monotonic() >= deadline:
+                return host
+            time.sleep(0.05)
 
     def require_automatic_zero(self, host):
         summary = host.get("hostUpdate") or {}
@@ -251,8 +265,12 @@ def await_commit(case, target):
     raise RuntimeError("fresh managed daemon did not finish its first revision-zero automatic hop")
 
 
+def summary_lock_busy(host):
+    return publication_origin.AUTHORITY_BUSY in ((host.get("hostUpdate") or {}).get("problem") or "")
+
+
 def validate_commit(case, target, entry, helper):
-    host = case.control("host.info")["host"]
+    host = case.settled_host()
     case.require_automatic_zero(host)
     attachment = case.inspect_retained()
     pin = installed_releases.digest((case.releases.directory / target / "mesh-update.json").read_bytes())

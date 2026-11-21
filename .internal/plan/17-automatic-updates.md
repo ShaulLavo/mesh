@@ -1227,6 +1227,50 @@ blocker.
 4. **A notice command.** `t3 thread send` exists on the PC. The managing
    thread's identifier is supplied at start.
 
+**Open gap: the start does not check need 3.** As of v0.1.343, `adopt start`
+probes each remote's platform and deploy tools over system SSH, but it never
+checks that every host can read the evidence of each host it requires. The
+real rollout (operation `d1ccc7ed…`, started on v0.1.335 on 2026-11-18) hit
+this: the VPS approved only the PC and the Pi, so after the Pi and the VPS
+committed v0.1.343 the Mac's adoption waited with `update evidence refused:
+... tls: bad certificate`, and the VPS logged `device key is not approved`.
+The operation had already been recorded and the Pi and the VPS had adopted,
+so nothing could be fixed inside the product. On 2026-11-20 the Mac was
+approved on the VPS with `mesh device approve-checked` there. To fix: before
+recording anything, the start checks over system SSH, for each host and each
+host in its `require` list, that the predecessor's daemon approves the
+requiring host's device key. The check uses the same read-only
+`mesh device approve-checked ID --check` on the predecessor, or an
+equivalent read of its approved keys, and reports every missing grant as the
+exact blocker. Add a unit test with a fleet in which one predecessor does not
+approve its successor, and check that the start writes no adoption record.
+
+**Open gap: a host with predecessors needs a saved fleet it may not have.**
+`HostOrder.refresh` (`internal/update/host_order.go`) reads the daemon's
+`fleet.json` whenever the host policy has `After`. Adoption gives the Mac
+`After: [Pi, VPS]`, but only the PC had a `fleet.json`; the Pi and the VPS do
+not need one because they have no predecessors. In the same rollout the Mac
+adopted the pin at 01:49 UTC on 2026-11-20 and its host updater then stayed in
+`waiting` with `open state snapshot: open ~/.config/mesh/fleet.json: no such
+file or directory`, so it never discovered the next release. Nothing in the
+product writes `fleet.json`. To fix: the remote adoption input already carries
+the exact predecessor hosts (`require`); store them with the host policy and
+read predecessors from there, or have the start write the operation's fleet
+to each remote that has predecessors. The start's preflight should refuse an
+order it cannot satisfy. Add a test where a successor host has no saved fleet
+and check that it still reads its predecessors after adoption.
+
+**Open gap: the notice cannot say what actually happened.** The notice argv is
+fixed when the operation starts, so its text can only name what the operator
+knew then. In the same rollout the operator wrote the pin, v0.1.335, into the
+message, and the notice delivered on 2026-11-20 at 03:19 UTC said the Pi, the
+VPS and the Mac had adopted v0.1.335 while all three were on v0.1.343. To fix:
+when the helper runs the notice, pass the facts it checked through the
+environment, for example `MESH_ADOPTION_PIN_VERSION`, the predecessors'
+committed versions, and the activation time after the lead, and document them
+for `--notice`. Notice commands that wrap `t3 thread send` can then include
+them. Add a test that the notice process receives these values.
+
 ## Implementation units
 
 Each unit is one pull request with its own independent review. Hours are agent

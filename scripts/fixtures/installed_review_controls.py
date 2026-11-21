@@ -754,6 +754,44 @@ class ProductReaderAuthorityTest(unittest.TestCase):
             self.assertNotIsInstance(caught.exception, publication_origin.AuthorityBusy)
 
 
+class FreshSummaryLockTest(unittest.TestCase):
+    """The revision-zero checks read past a held-lock summary and stay strict otherwise."""
+    BUSY = "update: acquire authority lock: context deadline exceeded"
+
+    def setUp(self):
+        self.case = object.__new__(installed_fresh.FreshCase)
+
+    def host(self, **summary):
+        value = {"mode": "automatic", "phase": "idle", "revision": 0, "installation": "managed"} | summary
+        return {"host": {"hostUpdate": value}}
+
+    def busy(self):
+        # The daemon's placeholder when HostStatus cannot take the lock in time.
+        return self.host(mode="unknown", phase="attention", problem=self.BUSY)
+
+    def test_a_held_lock_summary_is_read_again_until_the_real_one(self):
+        self.case.control = Mock(side_effect=[self.busy(), self.busy(), self.host()])
+        host = self.case.settled_host()
+        self.case.require_automatic_zero(host)
+        self.assertEqual(self.case.control.call_count, 3)
+
+    def test_a_lock_that_stays_held_runs_out_the_cap_and_fails_strictly(self):
+        self.case.control = Mock(return_value=self.busy())
+        with patch.object(installed_fresh.installed_clock, "timeout", return_value=0.2):
+            host = self.case.settled_host()
+        with self.assertRaisesRegex(RuntimeError, "revision-zero automatic default"):
+            self.case.require_automatic_zero(host)
+
+    def test_a_real_wrong_summary_fails_at_once(self):
+        for summary in ({"mode": "manual"}, {"revision": 1}, {"installation": "unmanaged"},
+                        {"mode": "unknown", "phase": "attention", "problem": "update: lock authority: permission denied"}):
+            self.case.control = Mock(return_value=self.host(**summary))
+            host = self.case.settled_host()
+            self.assertEqual(self.case.control.call_count, 1)
+            with self.subTest(summary), self.assertRaisesRegex(RuntimeError, "revision-zero automatic default"):
+                self.case.require_automatic_zero(host)
+
+
 class PublishedHelperHandoffTest(unittest.TestCase):
     def setUp(self):
         if sys.platform != "linux":
