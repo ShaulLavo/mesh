@@ -1,4 +1,5 @@
 """Native consumers of actual main-only draft bytes and their real signature."""
+from contextlib import contextmanager
 import errno
 import hashlib
 import json
@@ -13,7 +14,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion, release_tool, release_documents
+from fixtures import draft_intake, installed_clock, fleet_baselines, installed_adoption, installed_chain, installed_fresh, installed_native, installed_cohort, publication_origin, published_releases, release_worker_index, release_worker_completion, release_publication_platform, release_tool, release_documents
 
 # A daemon being replaced closes its control socket before, during or after
 # reading a request.
@@ -190,6 +191,23 @@ def prove(root, output, native, version, source, preparer, registry=None, probe=
     directory = releases.directory / version
     inventory = release_worker_completion.task_inventory(directory, native, os.environ["MESH_HARNESS_SOURCE"]) if task_id is not None else None
     task = release_worker_completion.select_task(inventory, task_id) if inventory else None
+    with start_origin(root, output, releases, version) as origin:
+        if task is None:
+            run_pairs(root, output, native, version, preparer, releases, origin)
+            run_fresh(root, output, version, releases, origin)
+            run_first_published(root, output, version, releases, origin, registry, probe)
+        else:
+            run_task(root, output, version, preparer, releases, origin, registry, probe, task)
+    if task is None:
+        release_worker_completion.record(root, output, native, version, source)
+        return
+    context = release_worker_completion.release_context(directory)
+    selection = json.loads((directory / "mesh-worker-groups.json").read_bytes())["selection"]
+    release_worker_completion.record_task(output, inventory, task, context, selection)
+
+
+@contextmanager
+def start_origin(root, output, releases, version):
     inspector = release_tool.configured().parent / "publication-reader"
     if not inspector.is_file():
         raise ValueError("publication requires the once-built reviewed H inspector")
@@ -197,20 +215,31 @@ def prove(root, output, native, version, source, preparer, registry=None, probe=
     try:
         origin.start()
         origin.head(releases.directory, version)
-        if task is None:
-            run_pairs(root, output, native, version, preparer, releases, origin)
-            run_fresh(root, output, version, releases, origin)
-            run_first_published(root, output, version, releases, origin, registry, probe)
-        else:
-            run_task(root, output, version, preparer, releases, origin, registry, probe, task)
+        yield origin
     finally:
         (output / "publication-transport-cleanup.json").write_text(json.dumps(origin.close(), indent=2) + "\n")
-    if task is None:
-        release_worker_completion.record(root, output, native, version, source)
-        return
+
+
+def prove_platform(root, output, native, version, source, preparer, registry, probe, plan_path, plan_sha256):
+    releases = stage(root, output, native, version, source)
+    directory = releases.directory / version
     context = release_worker_completion.release_context(directory)
-    selection = json.loads((directory / "mesh-worker-groups.json").read_bytes())["selection"]
-    release_worker_completion.record_task(output, inventory, task, context, selection)
+    index = json.loads((directory / "mesh-worker-groups.json").read_bytes())
+    snapshot = json.loads((output / "draft-intake.json").read_bytes())
+    plan = release_publication_platform.load_plan(plan_path, plan_sha256)
+    inventory = release_publication_platform.validate_plan_platform(plan, directory, native,
+        os.environ["MESH_HARNESS_SOURCE"], snapshot, context, index)
+    binding = release_publication_platform.job_binding(native, int(os.environ["GITHUB_RUN_ID"]),
+        int(os.environ["GITHUB_RUN_ATTEMPT"]), plan_sha256)
+    if binding["run"] != snapshot["intake_run"]:
+        raise ValueError("native publication must run in the signed draft's writer run")
+    cases = {task["id"]: task["prior"] for task in inventory["tasks"] if "prior" in task}
+    routes = [task for task in inventory["tasks"] if "group" in task]
+    with start_origin(root, output, releases, version) as origin:
+        run_fresh(root, output, version, releases, origin)
+        run_pairs(root, output, native, version, preparer, releases, origin, planned=cases)
+        run_first_published(root, output, version, releases, origin, registry, probe, tasks=routes)
+    release_publication_platform.record_installed(output, inventory, binding, context, index["selection"])
 
 
 def run_task(root, output, version, preparer, releases, origin, registry, probe, task):
@@ -234,24 +263,35 @@ def run_task(root, output, version, preparer, releases, origin, registry, probe,
     run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario)
 
 
-def run_pairs(root, output, native, version, preparer, releases, origin):
+def run_pairs(root, output, native, version, preparer, releases, origin, *, planned=None):
     hosts = [host for host in fleet_baselines.load()["hosts"] if host["platform"] == native]
     for host in hosts:
-        pair = fleet_baselines.acquire_pair(root / "public", host)
-        prior_version = "v0.1." + str(int(host["daemon"].split(".")[-1]) - 1)
-        previous = fleet_baselines.acquire(root / "public", prior_version, pair["daemon"]["artifact"]["platform"])
-        for scenario in ("publication", "rollback", "publication-interrupt"):
-            run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario)
+        run_host_pairs(root, output, host, version, preparer, releases, origin, planned)
 
 
-def run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario):
+def run_host_pairs(root, output, host, version, preparer, releases, origin, planned):
+    pair = fleet_baselines.acquire_pair(root / "public", host)
+    prior_version = "v0.1." + str(int(host["daemon"].split(".")[-1]) - 1)
+    previous = fleet_baselines.acquire(root / "public", prior_version, pair["daemon"]["artifact"]["platform"])
+    for scenario in ("publication", "rollback", "publication-interrupt"):
+        case = host["name"] + "-" + scenario
+        if planned is not None and case not in planned:
+            continue
+        options = {} if planned is None else {"prior": planned[case]}
+        run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario, **options)
+
+
+def run_pair(root, output, host, pair, preparer, releases, origin, previous, version, scenario, *, prior=None):
     case = DraftCase(root, host, pair, preparer, origin, releases, scenario, previous)
     fault = PortFault(case, version)
     record = {"passed": False, "realDraft": version, "testTrustRoot": False, "scenario": scenario}
+    failure = None
     try:
         record["initial"] = case.prepare()
         case.seed_prior()
         case.seed()
+        if prior is not None:
+            record["priorPair"] = observe_prior_pair(case, prior)
         original = {"version": host["daemon"], "platform": pair["daemon"]["artifact"]["platform"],
                     "digest": pair["daemon"]["artifact"]["binarySha256"], "protocol": pair["daemon"]["manifest"]["compatibility"]["workerWrite"]}
         record["publication"] = release_worker_completion.publication_case(case, releases, scenario, original)
@@ -263,12 +303,29 @@ def run_pair(root, output, host, pair, preparer, releases, origin, previous, ver
         record["result"] = case.validate_result(case.await_result(version), version, started["pin"])
         if scenario == "rollback" and (not fault.bound or not fault.released or fault.error):
             raise RuntimeError("real draft native activation fault did not reach and release its actual rollback boundary")
+        if scenario == "rollback" and prior is not None:
+            record["activationFault"] = {"bound": fault.bound, "released": fault.released, "error": fault.error}
         record["passed"] = True
     except BaseException as error:
         record["error"] = str(error)
+        failure = error
         raise
     finally:
-        finish_fault_case(case, record, output, fault)
+        finish_fault_case(case, record, output, fault, failure)
+
+
+def observe_prior_pair(case, prior):
+    daemon = case.control("host.info")["host"]["build"]
+    release_worker_completion.validate_build(daemon, {"version": prior["daemon"]["version"],
+        "platform": prior["daemon"]["platform"], "workerProtocol": prior["daemon"]["protocol"], "digest": prior["daemon"]["digest"]})
+    receipt = json.loads((case.state / "update/helper/installed.json").read_bytes())
+    helper = case.units.managers["helper"]
+    pid = helper.manager_pid()
+    if bool(pid) != prior["helperRunning"] or receipt["digest"] != prior["helper"]["digest"]:
+        raise ValueError("installed adoption began with another prior helper or running mode")
+    if pid and case.check_helper()["sha256"] != prior["helper"]["digest"]:
+        raise ValueError("installed adoption began with another mapped helper")
+    return prior
 
 
 def run_fresh(root, output, version, releases, origin):
@@ -292,7 +349,7 @@ def run_fresh(root, output, version, releases, origin):
         installed_fresh.finish(case, output, record)
 
 
-def run_first_published(root, output, version, releases, origin, registry, probe, *, task=None):
+def run_first_published(root, output, version, releases, origin, registry, probe, *, task=None, tasks=None):
     contract = releases.verification["routeContract"]
     first = contract["first"]
     (output / "first-published-updater.json").write_text(json.dumps(contract, indent=2) + "\n")
@@ -309,15 +366,21 @@ def run_first_published(root, output, version, releases, origin, registry, probe
     releases.builds[first] = build | {"path": str(baseline["executable"])}
     owned_registry = installed_cohort.stage(registry, root / "published-workers", platform)
     groups = installed_adoption.installed_groups(owned_registry, first, baseline["executable"], baseline["executable"])
-    if task is not None:
-        selected = [group for group in groups if group["index"] == task["group"]["index"]]
-        if len(selected) != 1 or release_worker_completion.groups.public_group(selected[0]) != task["group"]:
-            raise ValueError("native publication group differs from its signed inventory")
-        run_published_groups(root, output, first, version, releases, origin, owned_registry, probe,
-                             task["rollback"], selected, task["scenario"], task["via"], complete=False)
+    selected_tasks = [task] if task is not None else tasks
+    if selected_tasks is not None:
+        for selected_task in selected_tasks:
+            run_published_task(root, output, first, version, releases, origin, owned_registry, probe, groups, selected_task)
         return
     for name, rollback, via in release_worker_completion.route_scenarios(contract):
         run_published_groups(root, output, first, version, releases, origin, owned_registry, probe, rollback, groups, name, via)
+
+
+def run_published_task(root, output, first, version, releases, origin, registry, probe, groups, task):
+    selected = [group for group in groups if group["index"] == task["group"]["index"]]
+    if len(selected) != 1 or release_worker_completion.groups.public_group(selected[0]) != task["group"]:
+        raise ValueError("native publication group differs from its signed inventory")
+    run_published_groups(root, output, first, version, releases, origin, registry, probe,
+                         task["rollback"], selected, task["scenario"], task["via"], complete=False)
 
 
 def run_published_groups(root, output, first, target, releases, origin, registry, probe, rollback, groups, name, via, *, complete=True):

@@ -13,6 +13,7 @@ from unittest import mock
 from types import SimpleNamespace
 
 from fixtures import installed_publication, release_worker_completion as completion
+from fixtures import release_publication_platform as platforms, release_documents, draft_intake
 from fixtures import release_worker_groups as groups
 
 controls = importlib.import_module("test-release-worker-groups")
@@ -274,6 +275,293 @@ class PublicationJobsTests(unittest.TestCase):
         depth = importlib.import_module("test-installed-catchup").maximum_depth
         for path in (Path(__file__), Path(__file__).with_name("publication-jobs.py")):
             self.assertLessEqual(depth(ast.parse(path.read_text()), 0), 3, str(path))
+
+
+class ReducedPublicationTests(unittest.TestCase):
+    RUN = 179
+    ATTEMPTS = dict(zip(platforms.PLATFORMS, (2, 1, 2), strict=True))
+
+    def setUp(self):
+        self.old = PublicationJobsTests()
+        self.old.setUp()
+        self.addCleanup(self.old.doCleanups)
+        for artifact in self.old.fixture.release["artifacts"]:
+            native = artifact["platform"]
+            artifact["archive"] = draft_intake.ARCHIVES[native["os"] + "/" + native["arch"]]
+        self.root, self.logical = self.old.root, self.old.directory
+        self.evidence = self.root / "evidence"
+        self.evidence.mkdir()
+        self.packet_root = self.root / "packets"
+
+    def configure(self, *, first=True, staged=True):
+        self.old.configure(first=first, staged=staged)
+        self.context = self.old.context
+        fleet = completion.fleet_baselines.load()
+        for host in fleet["hosts"]:
+            host.update(helper="v0.1.2", helperRunning=host["name"] != "pc")
+        fleet["hosts"].append({"name": "vps", "platform": "linux/amd64", "daemon": "v0.1.2",
+                               "helper": "v0.1.1", "helperRunning": True})
+        self.index = json.loads((self.logical / "mesh-worker-groups.json").read_bytes())
+        self.snapshot = self.physical_snapshot()
+        for native in platforms.PLATFORMS:
+            self.write_reader_index(native, first)
+        self.plan = platforms.plan(self.logical, controls.SOURCE, self.snapshot, self.packet_root, self.context, self.index)
+        self.plan_path = self.root / "plan.json"
+        self.plan_path.write_bytes(groups.encode(self.plan))
+        self.sha = groups.digest(self.plan_path.read_bytes())
+
+    def physical_snapshot(self):
+        names = set(draft_intake.NAMES) | set(release_documents.PHYSICAL) | {"mesh.rb"}
+        assets = [{"id": number, "name": name, "state": "uploaded", "size": 1, "digest": "sha256:" + groups.digest(name.encode())}
+                  for number, name in enumerate(sorted(names), 1)]
+        repository = "https://github.com/ShaulLavo/mesh"
+        return {"id": 1, "intake_run": self.RUN, "repository": "ShaulLavo/mesh", "draft": True,
+                "tag_name": self.context["version"], "target_commitish": self.context["source"], "frozen_baselines": [],
+                "url": "https://api.github.com/repos/ShaulLavo/mesh/releases/1",
+                "html_url": repository + "/releases/tag/" + self.context["version"], "assets": assets}
+
+    def write_reader_index(self, native, first):
+        platform = dict(zip(("os", "arch"), native.split("/"), strict=True))
+        directory = self.packet_root / platforms.platform_key(native)
+        directory.mkdir(parents=True)
+        digest = groups.digest(native.encode())
+        invocation = {"artifact": {"platform": platform, "binarySha256": "b" * 64}, "binary": "c" * 64,
+                      "source": "v0.1.1", "metadata": self.context["metadata"], "sha256": digest,
+                      "packet": digest + ".reader.json"}
+        (directory / "index.json").write_bytes(groups.encode(
+            {"schema": 1, "target": self.context["version"], "platform": platform,
+             "invocations": [invocation] if first else []}))
+
+    def test_reduced_contract_keeps_exact_release_shapes(self):
+        self.configure()
+        expected = {
+            "linux/amd64": ["fresh-managed", "pc-publication", "pc-publication-interrupt", "pc-rollback", "vps-publication",
+                            "published:0", "published-rollback:0", "published-chain:0", "published-chain-rb:0"],
+            "linux/arm64": ["fresh-managed", "pi-publication", "published-chain:0", "published-chain-rb:0"],
+            "darwin/arm64": ["fresh-managed", "mac-publication", "mac-publication-interrupt", "mac-rollback",
+                             "published-chain:0", "published-chain-rb:0"],
+        }
+        actual = {native: [task["id"] for task in inventory["tasks"]] for native, inventory in self.plan["platforms"].items()}
+        self.assertEqual(actual, expected)
+        self.assertEqual(self.plan, platforms.plan(self.logical, controls.SOURCE, self.snapshot, self.packet_root, self.context, self.index))
+        self.assertEqual(self.plan["platforms"]["linux/amd64"]["tasks"][1]["prior"]["helperRunning"], False)
+        self.assertEqual(self.plan["platforms"]["linux/amd64"]["tasks"][4]["prior"]["daemon"]["version"], "v0.1.2")
+
+    def test_first_updater_has_no_routes_and_first_successor_has_direct_on_each_platform(self):
+        for first, route_names in ((False, []), (True, ["published", "published-rollback"])):
+            with self.subTest(first=first):
+                self.check_first_routes(first, route_names)
+
+    def check_first_routes(self, first, route_names):
+        self.configure(first=first, staged=False)
+        for inventory in self.plan["platforms"].values():
+            self.assertEqual([task["scenario"] for task in inventory["tasks"] if "group" in task], route_names)
+        shutil.rmtree(self.packet_root)
+
+    def test_representative_group_prefers_an_older_worker_protocol(self):
+        self.configure()
+        workers = [worker | {"protocol": 2} for worker in controls.selected(65, controls.PLATFORM)]
+        workers[33]["protocol"] = 1
+        contract = self.context["routeContract"] | {"first": workers[-1]["version"], "intermediate": None}
+        context = self.context | {"routeContract": contract}
+        selection = {"workers": [groups.member(worker) for worker in workers]}
+        index = {"selection": selection, "sources": [controls.Bundle(self.logical, workers).reference()]}
+        routes = platforms.route_tasks(self.logical, "linux/amd64", context, index)
+        self.assertEqual([task["group"]["index"] for task in routes], [1, 1])
+        self.assertEqual(len(routes[0]["group"]["members"]), 31)
+
+    def emit(self):
+        for native, attempt in self.ATTEMPTS.items():
+            output = self.directory(native)
+            output.mkdir()
+            planned = self.plan["platforms"][native]
+            binding = platforms.job_binding(native, self.RUN, attempt, self.sha)
+            self.emit_installed(output, native, planned, binding)
+            dist = output / platforms.READERS
+            dist.parent.mkdir()
+            dist.write_bytes(groups.encode(planned["readers"]["outcome"] | {"publication": binding}))
+            (output / "scratch-cleanup.json").write_bytes(groups.encode({"root": str(self.root / "removed"), "absent": True}))
+            (output / "publication-transport-cleanup.json").write_bytes(groups.encode({"proxyStopped": True, "testSignatureRootUsed": False}))
+            platforms.record_platform(output, self.plan, self.sha, native, self.RUN, attempt)
+
+    def emit_installed(self, output, native, planned, binding):
+        source = self.root / platforms.platform_key(native)
+        for filename in ("real-draft.json", "harness-source.json", "first-published-updater.json"):
+            shutil.copyfile(source / filename, output / filename)
+        draft = json.loads((output / "real-draft.json").read_bytes())
+        publication = {"release": completion.release_binding(self.context), "candidate": draft["build"], "harness": controls.SOURCE}
+        for task in planned["tasks"]:
+            self.emit_task(output, source, native, publication, task)
+        platforms.record_installed(output, planned, binding, self.context, self.index["selection"])
+
+    def emit_task(self, output, source, native, publication, task):
+        if "case" not in task:
+            relative = Path("groups") / task["scenario"] / str(task["group"]["index"])
+            shutil.copytree(source / relative, output / relative)
+            return
+        expected = completion.expected_case(task["case"], native, publication, self.index["selection"])
+        self.old.fixture.write_case(output, task["case"], expected)
+        if "prior" not in task:
+            return
+        path = output / task["case"]
+        record = json.loads(path.read_bytes())
+        record["priorPair"] = task["prior"]
+        if expected["scenario"] == "rollback":
+            record["activationFault"] = {"bound": True, "released": True, "error": ""}
+        if expected["scenario"] == "publication-interrupt":
+            record["interruption"].update(confirmedBeforeInterruption=False, killedNativePID=12)
+            record["result"]["helper"]["pid"] = 18
+        path.write_bytes(groups.encode(record))
+
+    def directory(self, native):
+        return self.evidence / platforms.artifact_name(native, self.ATTEMPTS[native])
+
+    def rewrite(self, path, changes):
+        original = path.read_bytes()
+        path.write_bytes(groups.encode(json.loads(original) | changes))
+        return original
+
+    def validate(self):
+        finalizer = importlib.import_module("verify-worker-publication")
+        with (
+            mock.patch.object(finalizer.draft_intake, "documents", side_effect=self.materialize),
+            mock.patch.object(finalizer.release_worker_index, "validate_index", return_value=self.index),
+            mock.patch.object(finalizer.installed_publication, "verify_signature"),
+            mock.patch.object(finalizer.draft_intake, "compare_live") as compare,
+        ):
+            finalizer.verify(self.context["version"], controls.SOURCE, self.evidence, self.root / "draft", self.RUN,
+                             platform_plan=self.plan_path, plan_sha256=self.sha, harness=controls.SOURCE, attempts=self.ATTEMPTS)
+        compare.assert_called_once()
+
+    def materialize(self, _snapshot, _version, _source, target, _run):
+        shutil.copytree(self.logical, target)
+        return self.snapshot
+
+    def test_finalizer_accepts_exact_fresh_and_surviving_jobs_from_a_failed_jobs_rerun(self):
+        self.configure()
+        self.emit()
+        self.validate()
+
+    def test_finalizer_refuses_missing_duplicate_other_attempt_and_wrong_platform_evidence(self):
+        self.configure()
+        self.emit()
+        output = self.directory("linux/amd64")
+        path = output / platforms.RECEIPT
+        missing = path.read_bytes()
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "missing, duplicate"):
+            self.validate()
+        path.write_bytes(missing)
+        duplicate = output / "duplicate"
+        duplicate.mkdir()
+        (duplicate / platforms.RECEIPT).write_bytes(missing)
+        with self.assertRaisesRegex(ValueError, "missing, duplicate"):
+            self.validate()
+        shutil.rmtree(duplicate)
+        for changes, error in (({"attempt": 1}, "producer attempt"), ({"run": 177}, "producer attempt"),
+                               ({"platform": "darwin/arm64"}, "native platform")):
+            self.reject_platform_claim(path, changes, error)
+        self.validate()
+
+    def reject_platform_claim(self, path, changes, error):
+        original = self.rewrite(path, changes)
+        with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, error):
+            self.validate()
+        path.write_bytes(original)
+
+    def test_finalizer_refuses_other_attempt_inside_a_current_receipt(self):
+        self.configure()
+        self.emit()
+        output = self.directory("linux/amd64")
+        readers = output / platforms.READERS
+        original = json.loads(readers.read_bytes())
+        self.rewrite(readers, {"publication": original["publication"] | {"attempt": 1}})
+        self.rewrite(output / platforms.RECEIPT, {"readers": completion.asset(output, readers)})
+        with self.assertRaisesRegex(ValueError, "original reader"):
+            self.validate()
+
+    def test_finalizer_requires_each_original_reader_and_exact_physical_draft(self):
+        self.configure()
+        self.emit()
+        output = self.directory("linux/amd64")
+        readers = output / platforms.READERS
+        reader_original = json.loads(readers.read_bytes())
+        for count in (0, 2):
+            self.rewrite(readers, {"readers": reader_original["readers"] * count})
+            self.rewrite(output / platforms.RECEIPT, {"readers": completion.asset(output, readers)})
+            with self.assertRaisesRegex(ValueError, "original reader"):
+                self.validate()
+        readers.write_bytes(groups.encode(reader_original))
+        self.rewrite(output / platforms.RECEIPT, {"readers": completion.asset(output, readers)})
+        self.snapshot["assets"][0]["id"] += 100
+        with self.assertRaisesRegex(ValueError, "authenticated draft"):
+            self.validate()
+
+    def test_reduced_receipts_cannot_relabel_a_fresh_or_legacy_pair(self):
+        self.configure()
+        self.emit()
+        native = "linux/amd64"
+        output = self.directory(native)
+        installed = output / platforms.INSTALLED
+        case = output / "pc-publication-native-pair.json"
+        record = json.loads(case.read_bytes())
+        self.rewrite(case, {"priorPair": record["priorPair"] | {"helperRunning": True}})
+        header = json.loads(installed.read_bytes())
+        for task in header["tasks"]:
+            if task["id"] == "pc-publication":
+                task["case"] = completion.asset(output, case)
+        installed.write_bytes(groups.encode(header))
+        self.rewrite(output / platforms.RECEIPT, {"installed": completion.asset(output, installed)})
+        with self.assertRaisesRegex(ValueError, "prior daemon/helper"):
+            self.validate()
+
+    def test_reader_runner_checks_the_signer_index_before_running_any_reader(self):
+        self.configure()
+        runner = importlib.import_module("run-original-update-readers")
+        args = SimpleNamespace(publication_platform_plan=self.plan_path, publication_plan_sha256=self.sha, platform="linux/amd64")
+        raw = (self.packet_root / "linux-amd64/index.json").read_bytes()
+        with (
+            mock.patch.object(installed_publication, "require_main"),
+            mock.patch.object(runner.release_tool, "native_target", return_value=controls.PLATFORM),
+            mock.patch.dict(os.environ, GITHUB_RUN_ID=str(self.RUN), GITHUB_RUN_ATTEMPT="2"),
+        ):
+            binding = runner.platform_publication(args, raw)
+            self.assertEqual(binding, platforms.job_binding(args.platform, self.RUN, 2, self.sha))
+            self.reject_reader_index(runner, args, raw + b"\n")
+
+    def reject_reader_index(self, runner, args, raw):
+        with self.assertRaisesRegex(ValueError, "exact signer plan"):
+            runner.platform_publication(args, raw)
+
+    def test_native_driver_consumes_one_draft_and_only_its_planned_cases(self):
+        self.configure()
+        native = "linux/amd64"
+        output = self.root / "native-driver"
+        output.mkdir()
+        (output / "draft-intake.json").write_bytes(groups.encode(self.snapshot))
+        version = self.context["version"]
+        releases = SimpleNamespace(directory=self.root / "logical")
+        shutil.copytree(self.logical, releases.directory / version)
+        with (
+            mock.patch.object(installed_publication, "stage", return_value=releases) as stage,
+            mock.patch.object(installed_publication, "start_origin") as origin,
+            mock.patch.object(installed_publication, "run_fresh") as fresh,
+            mock.patch.object(installed_publication, "run_pairs") as pairs,
+            mock.patch.object(installed_publication, "run_first_published") as routes,
+            mock.patch.object(platforms, "record_installed") as record,
+            mock.patch.dict(os.environ, MESH_HARNESS_SOURCE=controls.SOURCE, GITHUB_RUN_ID=str(self.RUN), GITHUB_RUN_ATTEMPT="2"),
+        ):
+            installed_publication.prove_platform(self.root, output, native, version, controls.SOURCE,
+                                                 "helper", "registry", "probe", self.plan_path, self.sha)
+        stage.assert_called_once()
+        origin.assert_called_once()
+        fresh.assert_called_once()
+        self.assertEqual(set(pairs.call_args.kwargs["planned"]), {"pc-publication", "pc-publication-interrupt", "pc-rollback", "vps-publication"})
+        planned = self.plan["platforms"][native]
+        self.assertEqual(routes.call_args.kwargs["tasks"], [task for task in planned["tasks"] if "group" in task])
+        record.assert_called_once_with(output, planned, platforms.job_binding(native, self.RUN, 2, self.sha),
+                                       self.context, self.index["selection"])
+
 
 
 if __name__ == "__main__":

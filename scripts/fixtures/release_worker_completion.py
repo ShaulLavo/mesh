@@ -350,10 +350,14 @@ def task_inventory(directory, native, harness):
     for name, rollback, via in route_scenarios(context["routeContract"]):
         tasks.extend({"id": name + ":" + str(group["index"]), "scenario": name, "rollback": rollback,
                       "via": via, "group": group} for group in selected)
-    return {"schema": 1, "release": release_binding(context), "platform": native, "harness": harness,
+    return {"schema": 1, **inventory_context(directory, native, harness, context), "tasks": tasks}
+
+
+def inventory_context(directory, native, harness, context):
+    return {"release": release_binding(context), "platform": native, "harness": harness,
             "routeContract": context["routeContract"], "baselineSha256": groups.digest(groups.encode(fleet_baselines.load())),
             "retentionSha256": groups.digest((directory / "mesh-retention.json").read_bytes()),
-            "signatureSha256": groups.digest((directory / "mesh-update.sig.json").read_bytes()), "tasks": tasks}
+            "signatureSha256": groups.digest((directory / "mesh-update.sig.json").read_bytes())}
 
 
 def select_task(inventory, task_id):
@@ -397,19 +401,27 @@ def validate_task(root, value, inventory, context, selection):
     if resolve(root, value["routeObservation"]) != inventory["routeContract"]:
         raise ValueError("publication task has another retained route observation")
     publication = {"release": release_binding(context), "candidate": draft["build"], "harness": harness}
+    validate_task_outcome(root, task, value, inventory, publication, selection)
+
+
+def validate_task_outcome(root, task, value, inventory, publication, selection):
+    native = inventory["platform"]
     if "case" in task:
         if value["case"]["name"] != task["case"]:
             raise ValueError("publication task selected another case")
-        validate_case(resolve(root, value["case"]), expected_case(task["case"], native, publication, selection))
-        return
+        result = resolve(root, value["case"])
+        validate_case(result, expected_case(task["case"], native, publication, selection))
+        return result, None
     route = value["route"]
     expected = {"routeContract": inventory["routeContract"], "scenario": task["scenario"], "rollback": task["rollback"],
                 "via": task["via"], "groups": route["groups"]}
     if route != expected or len(route["groups"]) != 1 or route["groups"][0]["group"] != task["group"]:
         raise ValueError("publication task selected another route or bounded group")
     source = baseline_source(selection, native, inventory["routeContract"]["first"])
-    validate_route_entry(root, route, route["groups"][0], publication, selection,
-                         {"artifact": {"platform": source["platform"], "binarySha256": source["digest"]}, "protocol": source["protocol"]})
+    original = validate_route_entry(root, route, route["groups"][0], publication, selection,
+                                    {"artifact": {"platform": source["platform"], "binarySha256": source["digest"]},
+                                     "protocol": source["protocol"]})
+    return None, original["stateRun"]
 
 
 def task_references(value):
