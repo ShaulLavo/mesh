@@ -201,6 +201,30 @@ class BaselineTests(unittest.TestCase):
                 RUNNER.main()
         run.assert_not_called()
 
+    def test_release_proves_every_shard_on_every_platform(self):
+        matrix = BASELINES.prove_matrix([0, 1, 2], True)["include"]
+        self.assertEqual(sorted((row["platform"], row["shard"]) for row in matrix),
+                         sorted((platform, shard) for platform in ("linux/amd64", "linux/arm64", "darwin/arm64") for shard in (0, 1, 2)))
+        self.assertIn({"platform": "darwin/arm64", "key": "darwin-arm64", "runner": "macos-15", "shard": 2}, matrix)
+
+    def test_pull_request_keeps_every_linux_shard_and_one_darwin_shard(self):
+        matrix = BASELINES.prove_matrix([0, 1, 2, 3], False)["include"]
+        rows = [(row["platform"], row["shard"]) for row in matrix]
+        self.assertEqual([row for row in rows if row[0] == "darwin/arm64"], [("darwin/arm64", 0)])
+        for platform in ("linux/amd64", "linux/arm64"):
+            self.assertEqual([shard for name, shard in rows if name == platform], [0, 1, 2, 3])
+        self.assertIn({"platform": "linux/arm64", "key": "linux-arm64", "runner": "ubuntu-24.04-arm", "shard": 3}, matrix)
+
+    def test_prove_matrix_cli_rejects_unknown_modes_and_gapped_shards(self):
+        script = str(Path(__file__).with_name("prepare-release-baselines.py"))
+        result = subprocess.run([sys.executable, script, "--prove-matrix", "[0,1]", "false"], capture_output=True, text=True, timeout=30, check=True)
+        self.assertEqual(len(json.loads(result.stdout)["include"]), 5)
+        for shards in ([], [1, 2], [0, 0], {"0": 1}):
+            with self.assertRaisesRegex(ValueError, "0 through N-1"):
+                BASELINES.prove_matrix(shards, True)
+        main_mode = subprocess.run([sys.executable, script, "--prove-matrix", "[0]", "yes"], capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(main_mode.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
