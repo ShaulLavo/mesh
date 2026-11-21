@@ -116,21 +116,6 @@ func TestDashboardUpdatesConfigOnlyPinsExactCoordinatorAndBothGroups(t *testing.
 	}
 }
 
-func TestDashboardUpdatesIgnoresOldBinaryPolicy(t *testing.T) {
-	state, local, coordinator, store := dashboardGrantFixture(t)
-	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range []string{"automatic.json", "automatic-consent.json"} {
-		if err := os.WriteFile(filepath.Join(state, "updates", file), []byte("invalid"), 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	selection, err := readDashboardUpdateSelection(t.Context(), state, local.ID)
-	if err != nil || len(selection.Bindings) != 1 || len(selection.Problems) != 0 || selection.Bindings[0].Host.ID != coordinator.ID {
-		t.Fatalf("old binary policy affected configuration status: %+v %v", selection, err)
-	}
-}
 func TestDashboardUpdatesRejectsChangedFleetOrLocalBinding(t *testing.T) {
 	state, local, coordinator, store := dashboardGrantFixture(t)
 	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
@@ -203,7 +188,7 @@ func TestDashboardUpdatesWithdrawnSelectionAndCancellationJoin(t *testing.T) {
 }
 func TestDashboardUpdatesReadRefusalIsNotHostUnreachable(t *testing.T) {
 	for _, cause := range []error{&update.RemoteError{Problem: "administrator admission absent"}, errors.New("connection refused")} {
-		observation, _ := dashboardStatusCall(t.Context(), updateCallFunc(func(context.Context, update.Host, string, any, any) error { return cause }), update.Host{}, "automatic.status", nil, nil)
+		observation, _ := dashboardStatusCall(t.Context(), updateCallFunc(func(context.Context, update.Host, string, any, any) error { return cause }), update.Host{}, "configuration.status", nil, nil)
 		if observation.State == DashboardStatusObserved {
 			t.Fatal(observation)
 		}
@@ -282,14 +267,6 @@ func TestDashboardUpdatesIndependentEnrollmentFailures(t *testing.T) {
 func testDashboardIndependentEnrollment(t *testing.T, damaged string) {
 	t.Helper()
 	state, local, coordinator, store := dashboardGrantFixture(t)
-	path, _ := ConfigPath()
-	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.SetRecipientConsent(t.Context(), 0, update.ConsentChange{LocalHostID: local.ID, CoordinatorID: coordinator.ID, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {
 		t.Fatal(err)
 	}
@@ -370,9 +347,6 @@ func TestDashboardUpdatesIndependentEnrollmentFencesWithdrawnResponse(t *testing
 	path, _ := ConfigPath()
 	fleet, err := update.ReadFleet(filepath.Join(filepath.Dir(path), "fleet.json"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.SetRecipientConsent(t.Context(), 0, update.ConsentChange{LocalHostID: local.ID, CoordinatorID: coordinator.ID, Fleet: fleet, Epoch: 1, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.SetConfigurationGrant(t.Context(), 0, local.ID, coordinator.ID, true, false); err != nil {

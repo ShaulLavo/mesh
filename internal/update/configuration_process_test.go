@@ -102,7 +102,7 @@ func testConfigurationProcessRecovery(t *testing.T, fault string) {
 	if err := coordinator.call(t, "configuration.preview", selection, &proposal); err != nil {
 		t.Fatal(err)
 	}
-	approval := ConfigurationApproval{CommandID: mustAutomaticID(t), Proposal: proposal}
+	approval := ConfigurationApproval{CommandID: mustRandomID(t), Proposal: proposal}
 	var status ConfigurationStatus
 	if err := coordinator.call(t, "configuration.approve", approval, &status); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func testConfigurationProcessRecovery(t *testing.T, fault string) {
 	if err := coordinator.call(t, "configuration.approve", approval, &status); err != nil || status.Revision != 1 {
 		t.Fatalf("approval restart replay: %+v %v", status, err)
 	}
-	command := ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: proposal.ID, ExpectedRevision: status.Revision}
+	command := ConfigurationCommand{ID: mustRandomID(t), ChangeID: proposal.ID, ExpectedRevision: status.Revision}
 	if err := coordinator.call(t, "configuration.retry", command, &status); err != nil {
 		t.Fatal(err)
 	}

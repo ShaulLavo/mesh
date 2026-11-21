@@ -69,7 +69,7 @@ func TestConfigurationRetryReplayRechecksSavedMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}
+	command := ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision}
 	status, err = c.ChangeConfiguration(t.Context(), actor, "retry", command)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestConfigurationRetryReplayRechecksSavedMembership(t *testing.T) {
 	if _, err = c.ChangeConfiguration(t.Context(), actor, "retry", command); err == nil {
 		t.Fatal("retry replay acknowledged withdrawn saved membership")
 	}
-	cancel := ConfigurationCommand{ID: mustAutomaticID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision, Retire: true}
+	cancel := ConfigurationCommand{ID: mustRandomID(t), ChangeID: approval.Proposal.ID, ExpectedRevision: status.Revision, Retire: true}
 	status, err = c.ChangeConfiguration(t.Context(), actor, configurationCancel, cancel)
 	if err != nil || !status.Change.Retired {
 		t.Fatalf("local retirement after changed membership: %+v %v", status, err)
@@ -102,7 +102,7 @@ func TestConfigurationObservationAdmissionDoesNotRepublish(t *testing.T) {
 	}
 	record.Current.Cancelled = true
 	record.Current.Targets[0].Issued = true
-	record.Current.Targets[0].DispatchID = mustAutomaticID(t)
+	record.Current.Targets[0].DispatchID = mustRandomID(t)
 	record.Current.Targets[0].Attempt = 1
 	if err = c.Store.writeConfiguration(record); err != nil {
 		t.Fatal(err)

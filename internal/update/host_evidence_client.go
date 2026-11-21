@@ -137,7 +137,7 @@ func writeEvidenceRequest(conn transport.Conn, request EvidenceRequest) (string,
 	if err != nil {
 		return "", hostError(err)
 	}
-	id, err := newAutomaticID()
+	id, err := newRandomID()
 	if err != nil {
 		return "", hostError(err)
 	}

@@ -25,7 +25,7 @@ func (a *application) runLocalHostUpdate(ctx context.Context, options updateOpti
 	if !options.local || options.coordinator != "" {
 		return false, nil
 	}
-	environment, err := existingAutomaticEnvironment(ctx, "")
+	environment, err := existingUpdateEnvironment(ctx, "")
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -143,7 +143,7 @@ func localTargetFailure(output updateOutput, options updateOptions, message stri
 		Problem string `json:"problem"`
 	}{cause.Error()}
 	if options.json {
-		if err := writeAutomaticJSON(output.out, detail); err != nil {
+		if err := writeUpdateJSON(output.out, detail); err != nil {
 			return err
 		}
 		return updateExit(1)
@@ -168,7 +168,7 @@ func (a *application) confirmLocalTarget(plan update.HostTargetPlan, out io.Writ
 
 func printLocalTargetPlan(out io.Writer, source string, plan update.HostTargetPlan, options updateOptions, output updateOutput) error {
 	if options.json {
-		return writeAutomaticJSON(out, plan)
+		return writeUpdateJSON(out, plan)
 	}
 	if options.details {
 		return printUpdateDetails(out, plan, output.privacy)
@@ -203,7 +203,7 @@ func localTargetExit(phase update.HostTargetPhase) int {
 
 func printLocalTargetStatus(out io.Writer, status update.HostTargetStatus, structured, details bool, output updateOutput) error {
 	if structured {
-		return writeAutomaticJSON(out, status)
+		return writeUpdateJSON(out, status)
 	}
 	if details {
 		return printUpdateDetails(out, status, output.privacy)
@@ -233,10 +233,7 @@ func (a *application) localTargetOperation(cmd *cobra.Command, action string, op
 	if options.coordinator != "" {
 		return errors.New("local target operations require this machine; omit --coordinator")
 	}
-	if cmd.Flags().Changed("expected-policy-revision") || cmd.Flags().Changed("command-id") {
-		return errors.New("use --local without --expected-policy-revision or --command-id")
-	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}

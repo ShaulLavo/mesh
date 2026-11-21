@@ -60,7 +60,7 @@ func (a *application) runConfigurationGrant(cmd *cobra.Command, args []string, a
 	if !cmd.Flags().Changed("expected-revision") || allow && !options.usage && !options.domain {
 		return errors.New("--expected-revision and at least one explicit configuration group are required for allowance")
 	}
-	environment, err := existingAutomaticEnvironment(cmd.Context(), "")
+	environment, err := existingUpdateEnvironment(cmd.Context(), "")
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (a *application) runConfigurationGrant(cmd *cobra.Command, args []string, a
 	if err != nil {
 		return fmt.Errorf("change configuration grant: %w", err)
 	}
-	return writeAutomaticJSON(cmd.OutOrStdout(), grant)
+	return writeUpdateJSON(cmd.OutOrStdout(), grant)
 }
 func (a *application) configurationActionCommand(action string) *cobra.Command {
 	options := configurationOptions{}
@@ -110,7 +110,7 @@ func (a *application) configurationActionCommand(action string) *cobra.Command {
 }
 func (a *application) runConfigurationAction(cmd *cobra.Command, action string, args []string, options configurationOptions) error {
 	coordinator, _ := cmd.Flags().GetString("coordinator")
-	environment, err := existingAutomaticEnvironment(cmd.Context(), coordinator)
+	environment, err := existingUpdateEnvironment(cmd.Context(), coordinator)
 	if err != nil {
 		return err
 	}
@@ -126,7 +126,7 @@ func (a *application) runConfigurationAction(cmd *cobra.Command, action string, 
 		if err = environment.client.Call(cmd.Context(), environment.coordinator, "configuration.preview", selection, &proposal); err != nil {
 			return fmt.Errorf("preview configuration: %w", err)
 		}
-		return writeAutomaticJSON(cmd.OutOrStdout(), proposal)
+		return writeUpdateJSON(cmd.OutOrStdout(), proposal)
 	}
 	if action == configurationApply {
 		return a.approveConfiguration(cmd, environment, options)
@@ -151,7 +151,7 @@ func (a *application) runConfigurationAction(cmd *cobra.Command, action string, 
 	if err = environment.client.Call(cmd.Context(), environment.coordinator, "configuration."+action, input, &status); err != nil {
 		return fmt.Errorf("configuration %s: %w", action, err)
 	}
-	return writeAutomaticJSON(cmd.OutOrStdout(), status)
+	return writeUpdateJSON(cmd.OutOrStdout(), status)
 }
 func (a *application) approveConfiguration(cmd *cobra.Command, environment updateEnvironment, options configurationOptions) error {
 	var proposal update.ConfigurationProposal
@@ -170,7 +170,7 @@ func (a *application) approveConfiguration(cmd *cobra.Command, environment updat
 	if err = environment.client.Call(cmd.Context(), environment.coordinator, "configuration.approve", approval, &status); err != nil {
 		return fmt.Errorf("approve configuration: %w", err)
 	}
-	return writeAutomaticJSON(cmd.OutOrStdout(), status)
+	return writeUpdateJSON(cmd.OutOrStdout(), status)
 }
 func readConfigurationInput(path string, value any) error {
 	if path == "" {
@@ -206,7 +206,7 @@ func configurationCommandID(id string) (string, error) {
 		}
 		return id, nil
 	}
-	result, err := update.NewAutomaticCommandID()
+	result, err := update.NewCommandID()
 	if err != nil {
 		return "", fmt.Errorf("allocate configuration command: %w", err)
 	}

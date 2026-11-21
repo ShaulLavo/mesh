@@ -182,6 +182,30 @@ func TestFleetUpdatePlainOutputAndDashboardAttention(t *testing.T) {
 	}
 }
 
+func TestFleetUpdatePlainOutputNamesOrdinaryWait(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct{ pending, want string }{
+		{"predecessors have no newer soaked release", "Waiting until an earlier machine has run a newer release for its configured wait."},
+		{"update: read peer evidence: dial tcp 100.64.0.9:443: connection refused", "Waiting. Use --details for the reason."},
+	}
+	for _, item := range cases {
+		summary := currentFleetSummary(now)
+		summary.Phase, summary.Pending = string(update.HostWaiting), item.pending
+		member := FleetUpdateMember{Host: update.Host{ID: strings.Repeat("a", 64), MachineName: "pc"}, Build: &release.Build{Version: "v0.1.0", Digest: strings.Repeat("c", 64)}, Update: summary}
+		if code := classifyFleetUpdate(&member, now); code != 0 || member.State != fleetCurrent || member.Problem != "" {
+			t.Fatalf("ordinary wait classified as a problem: code %d %+v", code, member)
+		}
+		var out bytes.Buffer
+		if err := printFleetUpdates(&out, FleetUpdateStatus{Members: []FleetUpdateMember{member}}, false, presentationMask(nil)); err != nil {
+			t.Fatal(err)
+		}
+		text := out.String()
+		if strings.Contains(text, "needs attention") || !strings.Contains(text, item.want) || strings.Contains(text, "100.64.0.9") {
+			t.Fatalf("plain output disagrees with exit code 0 for %q:\n%s", item.pending, text)
+		}
+	}
+}
+
 func TestFleetUpdateStateSnapshotOwnsSummary(t *testing.T) {
 	now := time.Now().UTC()
 	summary := currentFleetSummary(now)

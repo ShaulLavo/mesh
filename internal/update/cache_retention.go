@@ -56,17 +56,9 @@ func (s *Store) cacheReferences() (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	automatic, err := s.readAutomatic()
-	if err != nil {
-		return nil, err
-	}
-	currentID := ""
-	if automatic != nil && automatic.Current != nil {
-		currentID = automatic.Current.ID
-	}
 	keep := map[string]bool{}
 	for _, run := range runs {
-		if !run.statusOnly && !run.Done() || run.ID == currentID {
+		if !run.Done() {
 			keep[run.ReleaseDigest] = true
 		}
 	}
