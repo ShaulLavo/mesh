@@ -48,7 +48,7 @@ func (s *SSEReader) Read() ([]byte, error) {
 		return nil, fmt.Errorf("read MCP SSE line: %w", err)
 	}
 	if data != nil {
-		return nil, ErrInterrupted
+		return nil, io.ErrUnexpectedEOF
 	}
 	return nil, io.EOF
 }
@@ -92,7 +92,7 @@ func scanSSELine(data []byte, atEOF bool) (int, []byte, error) {
 	i := bytes.IndexAny(data, "\r\n")
 	if i < 0 {
 		if atEOF && len(data) > 0 {
-			return len(data), data, nil
+			return 0, nil, io.ErrUnexpectedEOF
 		}
 		return 0, nil, nil
 	}

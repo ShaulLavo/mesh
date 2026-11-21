@@ -275,13 +275,8 @@ func (r *HTTPResponse) Next() (Event, error) {
 
 func (r *HTTPResponse) nextSSE() (Event, error) {
 	raw, err := r.stream.Read()
-	if errors.Is(err, io.EOF) {
-		if err := r.exchange.Finish(); err != nil {
-			return Event{}, err
-		}
-	}
 	if err != nil {
-		return Event{}, err
+		return Event{}, r.sseReadError(err)
 	}
 	event, err := r.exchange.Accept(raw)
 	if err != nil {
@@ -291,6 +286,17 @@ func (r *HTTPResponse) nextSSE() (Event, error) {
 		return Event{}, err
 	}
 	return event, nil
+}
+
+func (r *HTTPResponse) sseReadError(err error) error {
+	if r.exchange.Finish() == nil || errors.Is(err, ErrPeerMessage) ||
+		errors.Is(err, ErrTooLarge) || errors.Is(err, ErrInterrupted) {
+		return err
+	}
+	if errors.Is(err, io.EOF) {
+		return ErrInterrupted
+	}
+	return fmt.Errorf("%w: %w", ErrInterrupted, err)
 }
 
 func (r *HTTPResponse) jsonResponse(raw []byte) (Event, error) {

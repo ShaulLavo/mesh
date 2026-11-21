@@ -125,16 +125,11 @@ func CompileParameterHeaders(schema json.RawMessage) (ParameterHeaders, error) {
 }
 
 func (h *ParameterHeaders) scanSchema(node any, path []string, reachable bool, seen map[string]bool) error {
-	if fields, ok := node.(map[string]any); ok {
-		return h.scanSchemaObject(fields, path, reachable, seen)
+	fields, _ := node.(map[string]any)
+	if fields == nil {
+		return nil
 	}
-	entries, _ := node.([]any)
-	for _, entry := range entries {
-		if err := h.scanSchema(entry, nil, false, seen); err != nil {
-			return err
-		}
-	}
-	return nil
+	return h.scanSchemaObject(fields, path, reachable, seen)
 }
 
 func (h *ParameterHeaders) scanSchemaObject(fields map[string]any, path []string, reachable bool, seen map[string]bool) error {
@@ -152,15 +147,44 @@ func (h *ParameterHeaders) scanSchemaObject(fields map[string]any, path []string
 }
 
 func (h *ParameterHeaders) scanSchemaChild(name string, node any, path []string, reachable bool, seen map[string]bool) error {
-	if name == "x-mcp-header" {
+	switch name {
+	case "properties":
+		return h.scanSchemaMap(node, path, reachable, seen)
+	case "$defs", "definitions", "patternProperties", "dependentSchemas", "dependencies":
+		return h.scanSchemaMap(node, path, false, seen)
+	case "allOf", "anyOf", "oneOf", "prefixItems":
+		return h.scanSchemaArray(node, path, seen)
+	case "items":
+		if _, array := node.([]any); array {
+			return h.scanSchemaArray(node, path, seen)
+		}
+		return h.scanSchema(node, path, false, seen)
+	case "not", "if", "then", "else", "contains", "propertyNames", "additionalProperties", "additionalItems",
+		"unevaluatedProperties", "unevaluatedItems", "contentSchema":
+		return h.scanSchema(node, path, false, seen)
+	default:
 		return nil
 	}
-	if name != "properties" {
-		return h.scanSchema(node, nil, false, seen)
+}
+
+func (h *ParameterHeaders) scanSchemaMap(node any, path []string, reachable bool, seen map[string]bool) error {
+	children, _ := node.(map[string]any)
+	for key, child := range children {
+		childPath := path
+		if reachable {
+			childPath = append(childPath, key)
+		}
+		if err := h.scanSchema(child, childPath, reachable, seen); err != nil {
+			return err
+		}
 	}
-	properties, _ := node.(map[string]any)
-	for key, property := range properties {
-		if err := h.scanSchema(property, append(path, key), reachable, seen); err != nil {
+	return nil
+}
+
+func (h *ParameterHeaders) scanSchemaArray(node any, path []string, seen map[string]bool) error {
+	children, _ := node.([]any)
+	for _, child := range children {
+		if err := h.scanSchema(child, path, false, seen); err != nil {
 			return err
 		}
 	}
@@ -172,7 +196,7 @@ func (h *ParameterHeaders) add(fields map[string]any, path []string, reachable b
 	kind, _ := fields["type"].(string)
 	lower := strings.ToLower(name)
 	if !reachable || len(path) == 0 || !fieldToken(name) || seen[lower] ||
-		(kind != "string" && kind != "boolean" && kind != "integer") {
+		(kind != schemaString && kind != schemaBoolean && kind != schemaInteger) {
 		return fmt.Errorf("invalid x-mcp-header at %q", strings.Join(path, "."))
 	}
 	seen[lower] = true
@@ -216,7 +240,7 @@ func (p parameterHeader) apply(arguments object, headers http.Header, verify boo
 }
 
 func (p parameterHeader) matches(headers http.Header, want string) bool {
-	if p.kind != "integer" {
+	if p.kind != schemaInteger {
 		return headerMatches(headers, p.name, want, true)
 	}
 	values := headerValues(headers, p.name)
@@ -230,9 +254,9 @@ func (p parameterHeader) matches(headers http.Header, want string) bool {
 
 func (p parameterHeader) convert(value []byte) (string, bool) {
 	switch p.kind {
-	case "string":
+	case schemaString:
 		return decodeString(value)
-	case "boolean":
+	case schemaBoolean:
 		return string(value), optionalBool(value)
 	default:
 		return safeInteger(value)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strconv"
 )
 
 // Methods maps implemented core methods to their required client capabilities.
@@ -68,9 +69,9 @@ func validateRequest(m Message, methods Methods) *Fault {
 	if !implemented || !coreMethod(m.method) {
 		return m.fault(MethodNotFound, "MCP method not found")
 	}
-	if !hasCapabilities(caps, required) {
+	if missing := missingCapabilities(caps, required); len(missing) != 0 {
 		fault := m.fault(MissingCapability, "Required MCP client capability is missing")
-		fault.Data = map[string]any{"requiredCapabilities": required}
+		fault.Data = map[string]any{"requiredCapabilities": missing}
 		return fault
 	}
 	if !validParams(m) {
@@ -134,18 +135,38 @@ func validCapabilityEntries(fields object) bool {
 	return true
 }
 
-func hasCapabilities(caps object, required map[string]any) bool {
+func missingCapabilities(caps object, required map[string]any) map[string]any {
+	var missing map[string]any
 	for name, value := range required {
-		declared, ok := decodeObject(caps[name])
+		absent, ok := missingCapability(caps[name], value)
 		if !ok {
-			return false
+			continue
 		}
-		settings, nested := value.(map[string]any)
-		if nested && !hasCapabilities(declared, settings) {
-			return false
+		if missing == nil {
+			missing = make(map[string]any)
 		}
+		missing[name] = absent
 	}
-	return true
+	return missing
+}
+
+func missingCapability(raw []byte, required any) (any, bool) {
+	switch expected := required.(type) {
+	case map[string]any:
+		declared, ok := decodeObject(raw)
+		if !ok {
+			return expected, true
+		}
+		missing := missingCapabilities(declared, expected)
+		return missing, len(missing) != 0
+	case bool:
+		return expected, !bytes.Equal(raw, []byte(strconv.FormatBool(expected)))
+	case string:
+		declared, ok := decodeString(raw)
+		return expected, !ok || declared != expected
+	default:
+		return required, !isObject(raw)
+	}
 }
 
 func validParams(m Message) bool {

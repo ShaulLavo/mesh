@@ -15,34 +15,33 @@ type StdioReader struct {
 
 func NewStdioReader(r io.Reader) *StdioReader { return &StdioReader{r: bufio.NewReader(r)} }
 
-// Read returns ErrTooLarge only after discarding the complete oversized line.
-// ErrFramingLost means the caller must close the channel.
-func (s *StdioReader) Read() ([]byte, error) {
+// Read returns ErrTooLarge after draining an oversized client line.
+func (s *StdioReader) Read() ([]byte, error) { return s.read(false) }
+
+// ReadReply recovers a reply ID only when the entire envelope and line boundary
+// can be verified within the drain limits. Callers must match it to an active
+// request before reporting a request-level error. ErrFramingLost faults the pipe.
+func (s *StdioReader) ReadReply() ([]byte, error) { return s.read(true) }
+
+func (s *StdioReader) read(reply bool) ([]byte, error) {
 	line, err := s.r.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
 		body, err := finishStdioLine(line, err)
 		return bytes.Clone(body), err
 	}
-
 	body := append([]byte(nil), line...)
-	size := len(line)
 	for errors.Is(err, bufio.ErrBufferFull) {
 		line, err = s.r.ReadSlice('\n')
-		size += len(line)
-		if size > MaxMessage+MaxStdioDrain {
-			return nil, fmt.Errorf("%w: oversized stdio line did not end within the drain limit", ErrFramingLost)
-		}
-		if size <= MaxMessage+2 {
-			body = append(body, line...)
+		body = append(body, line...)
+		if len(body) > MaxMessage+2 {
+			return nil, s.rejectOversize(body, err, reply)
 		}
 	}
-	if err != nil {
-		return finishStdioLine(line, err)
+	raw, err := finishStdioLine(body, err)
+	if errors.Is(err, ErrTooLarge) {
+		return nil, s.rejectOversize(body, nil, reply)
 	}
-	if len(body) != size {
-		return nil, ErrTooLarge
-	}
-	return finishStdioLine(body, nil)
+	return raw, err
 }
 
 func finishStdioLine(line []byte, err error) ([]byte, error) {

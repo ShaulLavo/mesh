@@ -49,7 +49,7 @@ func Complete(request Message, result json.RawMessage, serverInfo json.RawMessag
 	if err != nil {
 		return nil, fmt.Errorf("encode MCP result metadata: %w", err)
 	}
-	raw, err := encodeMessage(map[string]any{"jsonrpc": jsonRPCVersion, "id": request.id, "result": fields})
+	raw, err := encodeMessage(map[string]any{"jsonrpc": jsonRPCVersion, "id": request.id, keyResult: fields})
 	if err != nil {
 		return nil, err
 	}
@@ -214,81 +214,6 @@ func stringArray(raw []byte) ([]string, bool) {
 		items = append(items, item)
 	}
 	return items, true
-}
-
-func validInputRequired(request Message, result object) bool {
-	switch request.method {
-	case MethodCallTool, MethodGetPrompt, MethodReadResource:
-	default:
-		return false
-	}
-	if result["ttlMs"] != nil || result["cacheScope"] != nil || !optionalString(result["requestState"]) {
-		return false
-	}
-	if result["inputRequests"] == nil {
-		return result["requestState"] != nil
-	}
-	inputs, ok := decodeObject(result["inputRequests"])
-	if !ok || (len(inputs) == 0 && result["requestState"] == nil) {
-		return false
-	}
-	caps, _ := decodeObject(request.meta[ClientCapsKey])
-	for _, input := range inputs {
-		if !validInputRequest(input, caps) {
-			return false
-		}
-	}
-	return true
-}
-
-func validInputRequest(raw []byte, caps object) bool {
-	input, _ := decodeObject(raw)
-	method, _ := decodeString(input["method"])
-	if input["id"] != nil || input["jsonrpc"] != nil {
-		return false
-	}
-	params, _ := decodeObject(input["params"])
-	switch method {
-	case "elicitation/create":
-		return validElicitation(params, caps)
-	case "roots/list":
-		return isObject(caps["roots"]) && optionalObject(input["params"])
-	case "sampling/createMessage":
-		return validSampling(params, caps)
-	default:
-		return false
-	}
-}
-
-func validElicitation(params, caps object) bool {
-	capability, ok := decodeObject(caps["elicitation"])
-	if !ok || !hasStrings(params, "message") || !optionalString(params["mode"]) {
-		return false
-	}
-	mode, _ := decodeString(params["mode"])
-	switch mode {
-	case "", "form":
-		schema, _ := decodeObject(params["requestedSchema"])
-		kind, _ := decodeString(schema["type"])
-		return (isObject(capability["form"]) || len(capability) == 0) && kind == "object"
-	case "url":
-		return isObject(capability["url"]) && hasStrings(params, "url", "elicitationId")
-	default:
-		return false
-	}
-}
-
-func validSampling(params, caps object) bool {
-	sampling, ok := decodeObject(caps["sampling"])
-	return ok && isNumber(params["maxTokens"]) &&
-		validObjectArray(params["messages"], validSamplingMessage) &&
-		((params[keyTools] == nil && params["toolChoice"] == nil) || isObject(sampling[keyTools]))
-}
-
-func validSamplingMessage(message object) bool {
-	role, _ := decodeString(message["role"])
-	return (role == "user" || role == "assistant") &&
-		(isObject(message["content"]) || validObjectArray(message["content"], func(object) bool { return true }))
 }
 
 func validateRPCError(message Message) (int, error) {

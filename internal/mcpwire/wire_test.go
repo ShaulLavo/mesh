@@ -343,7 +343,7 @@ func checkStdioFrameLengths(t *testing.T, raw []byte) {
 }
 
 func TestMRTRRejectsUnnegotiatedAndMalformedResults(t *testing.T) {
-	const input = `{"resultType":"input_required","requestState":"opaque","inputRequests":{"ask":{"method":"elicitation/create","params":{"mode":"form","message":"Confirm","requestedSchema":{"type":"object"}}}}}`
+	const input = `{"resultType":"input_required","requestState":"opaque","inputRequests":{"ask":{"method":"elicitation/create","params":{"mode":"form","message":"Confirm","requestedSchema":{"type":"object","properties":{}}}}}}`
 	const params = `,"name":"echo"`
 	offered := mustParse(t, requestBytes("1", "tools/call", Version, `{"elicitation":{"form":{}}}`, params))
 	missing := fixtureRequest(t, "1", "tools/call", params)

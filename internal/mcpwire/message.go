@@ -12,6 +12,11 @@ import (
 )
 
 const (
+	keyResult     = "result"
+	schemaString  = "string"
+	schemaBoolean = "boolean"
+	schemaInteger = "integer"
+
 	MethodDiscover              = "server/discover"
 	MethodListTools             = "tools/list"
 	MethodCallTool              = "tools/call"
@@ -116,7 +121,7 @@ func (m Message) Kind() Kind                   { return m.kind }
 func (m Message) ID() ID                       { return m.id }
 func (m Message) Method() string               { return m.method }
 func (m Message) Raw() json.RawMessage         { return m.raw }
-func (m Message) Result() json.RawMessage      { return m.fields["result"] }
+func (m Message) Result() json.RawMessage      { return m.fields[keyResult] }
 func (m Message) ErrorObject() json.RawMessage { return m.fields["error"] }
 func (m Message) Params() json.RawMessage      { return m.fields["params"] }
 
@@ -174,7 +179,7 @@ func parseCall(m Message, usable bool) (Message, *Fault) {
 		m.kind = Request
 	}
 	m.method, _ = decodeString(m.fields["method"])
-	if m.method == "" || m.fields["result"] != nil || m.fields["error"] != nil || (m.kind == Request && !usable) {
+	if m.method == "" || m.fields[keyResult] != nil || m.fields["error"] != nil || (m.kind == Request && !usable) {
 		return m, m.fault(InvalidRequest, "Invalid JSON-RPC request or notification")
 	}
 	m.params, _ = decodeObject(m.fields["params"])
@@ -183,7 +188,7 @@ func parseCall(m Message, usable bool) (Message, *Fault) {
 }
 
 func parseReply(m Message, usable bool) (Message, *Fault) {
-	result, rpcError := m.fields["result"], m.fields["error"]
+	result, rpcError := m.fields[keyResult], m.fields["error"]
 	if result != nil || rpcError != nil {
 		m.kind = Response
 	}
@@ -320,7 +325,7 @@ func (a *ActiveIDs) End(id ID) {
 func (m Message) WithMetadata(replacements map[string]json.RawMessage) ([]byte, error) {
 	location := "params"
 	if m.kind == Response {
-		location = "result"
+		location = keyResult
 	}
 	fields, ok := decodeObject(m.fields[location])
 	if !ok {
