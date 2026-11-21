@@ -35,6 +35,7 @@ MAC_SHARED_ROUTE = MAC_ROUTE.replace(MAIN_PUSH, MAIN_DRAFT).replace('"mesh-mac"'
 MAC_FIFO_MINUTES = 45
 MAC_JOBS = {"ci.yml": ("native",), "update-proofs.yml": ("prepare", "prove")}
 MAC_GO_CACHE = "${{ runner.environment == 'github-hosted' }}"
+INSTALLED_TIMEOUT = "needs.changes.outputs.installed == 'true' && 80 || "
 
 
 def check_phase(ci, name, command):
@@ -235,7 +236,12 @@ def check_mac_job(source, name, route, guard):
     timeouts = re.findall(r"^    timeout-minutes: (.+)$", job, re.M)
     if not timeouts:
         return
-    match = re.fullmatch(r"\$\{\{ " + re.escape("matrix.runner == 'macos-15' && " + guard) + r" && (\d+) \|\| (\d+) \}\}", timeouts[0])
+    prefix = r"\$\{\{ " + re.escape("matrix.runner == 'macos-15' && " + guard)
+    hosted_timeout = r"(\d+)"
+    if name == "native":
+        hosted_timeout = r"\(" + re.escape(INSTALLED_TIMEOUT) + hosted_timeout + r"\)"
+    match = re.fullmatch(prefix + r" && (\d+) \|\| " + hosted_timeout + r" \}\}", timeouts[0])
+    assert match, f"{name} must preserve its hosted and self-hosted hang caps"
     assert match, f"{name} must bound the Mac and hosted legs separately"
     mac, hosted = (int(value) for value in match.groups())
     assert mac == hosted + MAC_FIFO_MINUTES, f"{name} Mac hang cap must add the FIFO wait to the hosted bound"
@@ -258,7 +264,8 @@ def reject_mac_routing(workflows):
     mutations = (
         ("ci.yml", lambda text: text.replace(MAC_ROUTE, MAC_ROUTE.replace(MAIN_PUSH, "true"), 1)),
         ("ci.yml", lambda text: text.replace('"mesh-mac"', '"other"', 1)),
-        ("ci.yml", lambda text: text.replace("&& 85 || 40", "&& 40 || 40", 1)),
+        ("ci.yml", lambda text: text.replace("&& 85 ||", "&& 40 ||", 1)),
+        ("ci.yml", lambda text: text.replace(INSTALLED_TIMEOUT, "", 1)),
         ("ci.yml", lambda text: text.replace("cache: " + MAC_GO_CACHE, "cache: true", 1)),
         ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, MAC_SHARED_ROUTE.replace("inputs.draft && ", ""), 1)),
         ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, "${{ matrix.runner }}", 1)),

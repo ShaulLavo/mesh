@@ -109,7 +109,7 @@ class WorkflowControls(unittest.TestCase):
         self.assertNotIn("installed-go", job(CATCHUP, "publication-native"))
         self.assertEqual(job(PREPARED, "prepare").count("uses: ./.github/actions/installed-go"), 1)
         self.assertNotIn("installed-go", job(PREPARED, "consume"))
-        self.assertEqual(job(CI, "installed").count("uses: ./.github/actions/installed-go"), 1)
+        self.assertEqual(job(CI, "native").count("uses: ./.github/actions/installed-go"), 1)
         changes = runpy.run_path(str(ROOT / "scripts/ci-changes.py"))
         self.assertIn("installed", changes["checks_for"](".github/actions/installed-go/action.yml"))
 

@@ -198,7 +198,11 @@ jobs:
     name: Native fixtures (${{ matrix.platform }})
     # PRs and dispatches use hosted capacity, including every fork.
     runs-on: ${{ matrix.runner == 'macos-15' && github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && github.event_name == 'push' && github.ref == 'refs/heads/main' && 85 || 40 }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && github.event_name == 'push' && github.ref == 'refs/heads/main' && 85 || (needs.changes.outputs.installed == 'true' && 80 || 40) }}
+    outputs:
+      linux_amd64: ${{ steps.result.outputs.linux_amd64 }}
+      linux_arm64: ${{ steps.result.outputs.linux_arm64 }}
+      darwin_arm64: ${{ steps.result.outputs.darwin_arm64 }}
     strategy:
       fail-fast: false
       matrix:
@@ -217,19 +221,29 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Set up Go for native fixtures
+        id: native_go
+        if: github.event_name != 'pull_request' || needs.changes.outputs.installed != 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ runner.environment == 'github-hosted' }}
+      - name: Set up Go for native and installed fixtures
+        id: installed_go
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installed == 'true'
+        uses: ./.github/actions/installed-go
       - name: Require the actual native platform
+        id: platform
         env:
           REQUIRED_PLATFORM: ${{ matrix.platform }}
         run: test "$(go env GOHOSTOS)/$(go env GOHOSTARCH)" = "$REQUIRED_PLATFORM"
       - name: Verify Unix sockets under long and symlinked scratch
+        id: sockets
         if: matrix.platform != 'linux/arm64'
         run: |
           python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"
       - name: Verify Darwin process group cleanup
+        id: darwin_cleanup
         if: matrix.platform == 'darwin/arm64'
         run: |
           python3 -B scripts/test-native-socket-runner.py ProcessTest BinaryTest
@@ -238,17 +252,21 @@ jobs:
             NativeEnrollmentTest.test_nested_cli_ssh_timeout_joins_with_inherited_output \
             NativeEnrollmentTest.test_daemon_needing_escalation_is_joined_within_eight_seconds
       - name: Refuse the integration supervisor before creating anything
+        id: supervisor
         # Linux runs these controls inside the integration suite.
         if: runner.os == 'macOS'
         run: python3 scripts/test-verify-runner.py SourceContractTest
       - name: Verify native authentication regressions
+        id: auth
         if: matrix.platform != 'linux/amd64'
         run: |
           go test -race -count=1 -timeout=180s -run 'Test(QueriedKeyMustNotOwnAuthenticatedSSHGrant|BootstrapReapprovalMustNotHealBareGrant|BootstrapMustSerializeWithDeviceRevocation|GrantLockMustRespectHandshakeCancellation|ManagedGrantWriterBoundsLockContention|GrantPolicyRejectsSpecialFilesWithoutBlocking|PublishedGrantSurvivesOtherAndIdempotentWriterContention|GrantContentionReleasesRealControlSlotBeforeUnlock|UpdaterPolicyFIFOReleasesRealControlSlot|UpdaterPolicyUnsafeSnapshotsRejectRealTLS)$' ./internal/identity ./internal/transport ./internal/sshd ./internal/daemon
       - name: Verify the Darwin installer activates launchd
+        id: installer
         if: matrix.platform == 'darwin/arm64'
         run: go test -race -count=1 -run '^TestDarwinInstallerLaunchdActivation$' ./scripts/install
       - name: Verify native pinned-fleet enrollment
+        id: enrollment
         run: |
           set -euo pipefail
           root=$(mktemp -d "$RUNNER_TEMP/mesh-enrollment.XXXXXX")
@@ -263,6 +281,7 @@ jobs:
           export TMP="$TMPDIR" TEMP="$TMPDIR" PYTHONDONTWRITEBYTECODE=1
           python3 integration/helpers/native_enrollment.py "$MESH"
       - name: Verify Linux ARM64 enrollment and naming
+        id: arm_enrollment
         if: matrix.platform == 'linux/arm64'
         run: |
           go test -race -count=1 -v -run '^Test(CheckedApproval|ApproveFleet)' ./internal/cli | tee "$RUNNER_TEMP/device-enrollment-test.log"
@@ -271,12 +290,14 @@ jobs:
           go test -race -count=1 -run '^Test(DestinationNamePublishedAfterCommitAndRetryCoalesces|HostRenameErrorsAreStructuredAndWatchReadOnly|HostRenameCannotHealRevokedConnection)$' ./internal/daemon
           go test -race -count=1 ./internal/machinename
       - name: Verify Darwin retains its mapped executable
+        id: mapped
         if: matrix.platform == 'darwin/arm64'
         run: |
           output="$RUNNER_TEMP/darwin-mapped-executable-test.log"
           go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap | tee "$output"
           grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement' "$output"
       - name: Verify launch agent inspection skips other applications' stubs
+        id: launch_agent
         if: matrix.platform == 'darwin/arm64'
         run: |
           output="$RUNNER_TEMP/darwin-launch-agent-test.log"
@@ -284,19 +305,23 @@ jobs:
           grep -Fq -- '--- PASS: TestInspectDaemonServiceSkipsLaunchAgentsWithoutLabel' "$output"
           grep -Fq -- '--- PASS: TestInspectDaemonServiceFailsOnMeshAgentWithoutLabel' "$output"
       - name: Exercise old local cutover and authenticated fleet recovery
+        id: cutover
         env:
           AUTH_CUTOVER_PLATFORM: ${{ matrix.platform }}
         run: scripts/prove-device-auth-cutover.sh "$RUNNER_TEMP/auth-cutover"
       - name: Verify native retained terminal and authenticated source transition
+        id: naming
         env:
           NAMING_PROOF_PLATFORM: ${{ matrix.platform }}
         run: scripts/prove-machine-naming.sh "$RUNNER_TEMP/machine-naming"
       - name: Verify recovery cancellation, rejection and mapped helper identity
+        id: recovery_controls
         if: matrix.platform == 'darwin/arm64'
         run: |
           mkdir -p "$RUNNER_TEMP/helper-recovery"
           go test -race ./internal/updateinstall -run 'TestHelperRecovery|TestHelperProcess|TestHelperLaunchdTarget|TestLaunchdHelperPID|TestUpgradeHelper|TestFailedRollback|TestOriginalInode|TestDarwinMappedExecutable' -count=1 -timeout=180s 2>&1 | tee "$RUNNER_TEMP/helper-recovery/race-tests.log"
       - name: Recover historical helper and run published bridge chain
+        id: bridge
         if: matrix.platform != 'linux/arm64'
         env:
           HELPER_RECOVERY_PLATFORM: ${{ matrix.platform }}
@@ -305,7 +330,31 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/helper-recovery/source-sha.txt"
           go env GOHOSTOS GOHOSTARCH > "$RUNNER_TEMP/helper-recovery/native-platform.txt"
           bash scripts/prove-helper-recovery.sh "$RUNNER_TEMP/helper-recovery"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      # These checks can use the same native manager, console and listener as the
+      # preceding fixtures. Run them only after the native steps finish.
+      - name: Exercise signed updates and preserved sessions with the native manager
+        id: installed_proof
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installed == 'true'
+        env:
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          MESH_HARNESS_SOURCE: ${{ github.sha }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -B scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-pr" --native-preflight --pull-request
+      - name: Verify native services and listeners stop after fixture errors
+        id: installed_cleanup
+        if: github.event_name == 'pull_request' && needs.changes.outputs.installed == 'true' && matrix.platform != 'linux/arm64'
+        env:
+          MESH_TEST_NATIVE_MANAGER: '1'
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          log="$RUNNER_TEMP/installed-pr/cleanup.log"
+          python3 -B scripts/test-installed-catchup.py \
+            NativeServiceTest.test_exception_after_launch_stops_real_service \
+            InstalledCleanupTest.test_terminal_failure_still_stops_actual_listener_and_both_units 2>&1 | tee "$log"
+          grep -q '^Ran 2 tests in ' "$log"
+          test "$(tail -n 1 "$log")" = OK
+      - name: Upload native fixture evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: native-fixtures-${{ matrix.runner }}
@@ -318,6 +367,81 @@ jobs:
             ${{ runner.temp }}/machine-naming
             ${{ runner.temp }}/helper-recovery
           retention-days: 7
+      - name: Upload installed fixture evidence
+        if: ${{ always() && github.event_name == 'pull_request' && needs.changes.outputs.installed == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: installed-pr-${{ matrix.runner }}
+          path: ${{ runner.temp }}/installed-pr
+          retention-days: 7
+      - name: Record completed native fixture checks
+        id: result
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          INSTALLED_REQUIRED: ${{ needs.changes.outputs.installed }}
+          NATIVE_GO: ${{ steps.native_go.outcome }}
+          INSTALLED_GO: ${{ steps.installed_go.outcome }}
+          PLATFORM_CHECK: ${{ steps.platform.outcome }}
+          SOCKETS: ${{ steps.sockets.outcome }}
+          DARWIN_CLEANUP: ${{ steps.darwin_cleanup.outcome }}
+          SUPERVISOR: ${{ steps.supervisor.outcome }}
+          AUTH: ${{ steps.auth.outcome }}
+          INSTALLER: ${{ steps.installer.outcome }}
+          ENROLLMENT: ${{ steps.enrollment.outcome }}
+          ARM_ENROLLMENT: ${{ steps.arm_enrollment.outcome }}
+          MAPPED: ${{ steps.mapped.outcome }}
+          LAUNCH_AGENT: ${{ steps.launch_agent.outcome }}
+          CUTOVER: ${{ steps.cutover.outcome }}
+          NAMING: ${{ steps.naming.outcome }}
+          RECOVERY_CONTROLS: ${{ steps.recovery_controls.outcome }}
+          BRIDGE: ${{ steps.bridge.outcome }}
+          INSTALLED_PROOF: ${{ steps.installed_proof.outcome }}
+          INSTALLED_CLEANUP: ${{ steps.installed_cleanup.outcome }}
+        run: |
+          require_steps() {
+            local expected=$1 name
+            shift
+            for name in "$@"; do
+              if [[ ${!name} != "$expected" ]]; then
+                echo "::error::$PLATFORM $name reported '${!name}', expected '$expected'."
+                return 1
+              fi
+            done
+          }
+
+          amd64_or_darwin=success
+          auth=success
+          arm_enrollment=skipped
+          darwin=skipped
+          case "$PLATFORM" in
+            linux/amd64) auth=skipped ;;
+            linux/arm64) amd64_or_darwin=skipped; arm_enrollment=success ;;
+            darwin/arm64) darwin=success ;;
+            *) echo "::error::Unexpected native platform: $PLATFORM"; exit 1 ;;
+          esac
+
+          require_steps success PLATFORM_CHECK ENROLLMENT CUTOVER NAMING
+          require_steps "$amd64_or_darwin" SOCKETS BRIDGE
+          require_steps "$auth" AUTH
+          require_steps "$arm_enrollment" ARM_ENROLLMENT
+          require_steps "$darwin" DARWIN_CLEANUP SUPERVISOR INSTALLER MAPPED LAUNCH_AGENT RECOVERY_CONTROLS
+
+          case "$INSTALLED_REQUIRED" in
+            true)
+              require_steps success INSTALLED_GO INSTALLED_PROOF
+              require_steps skipped NATIVE_GO
+              require_steps "$amd64_or_darwin" INSTALLED_CLEANUP
+              suite=installed
+              ;;
+            false)
+              require_steps success NATIVE_GO
+              require_steps skipped INSTALLED_GO INSTALLED_PROOF INSTALLED_CLEANUP
+              suite=native
+              ;;
+            *) echo "::error::Invalid installed fixture selection: $INSTALLED_REQUIRED"; exit 1 ;;
+          esac
+
+          printf '%s=%s\n' "${PLATFORM//\//_}" "$suite" >> "$GITHUB_OUTPUT"
 
   quality:
     needs: changes
@@ -422,56 +546,12 @@ jobs:
         if: needs.changes.outputs.packaging == 'true'
         run: ./scripts/check-packaging.sh dist
 
-  installed:
-    needs: changes
-    if: needs.changes.outputs.installed == 'true'
-    name: Installed updates (${{ matrix.platform }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm
-          - platform: darwin/arm64
-            runner: macos-15
-    env:
-      INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
-      MESH_HARNESS_SOURCE: ${{ github.sha }}
-      PYTHONDONTWRITEBYTECODE: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/installed-go
-      - name: Exercise signed updates and preserved sessions with the native manager
-        run: python3 -B scripts/prove-installed-catchup.py "$RUNNER_TEMP/installed-pr" --native-preflight --pull-request
-      - name: Verify native services and listeners stop after fixture errors
-        if: matrix.platform != 'linux/arm64'
-        env:
-          MESH_TEST_NATIVE_MANAGER: '1'
-        run: |
-          python3 -B scripts/test-installed-catchup.py \
-            NativeServiceTest.test_exception_after_launch_stops_real_service \
-            InstalledCleanupTest.test_terminal_failure_still_stops_actual_listener_and_both_units
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: installed-pr-${{ matrix.runner }}
-          path: ${{ runner.temp }}/installed-pr
-          retention-days: 7
-
   gate:
     name: Complete CI gate
     permissions:
       statuses: write
     if: ${{ always() && !inputs.client_interrupt }}
-    needs: [changes, quality, race, integration, native, app-pill, installed]
+    needs: [changes, quality, race, integration, native, app-pill]
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -495,10 +575,12 @@ jobs:
           RACE: ${{ needs.race.result }}
           INTEGRATION: ${{ needs.integration.result }}
           NATIVE: ${{ needs.native.result }}
+          NATIVE_LINUX_AMD64: ${{ needs.native.outputs.linux_amd64 }}
+          NATIVE_LINUX_ARM64: ${{ needs.native.outputs.linux_arm64 }}
+          NATIVE_DARWIN_ARM64: ${{ needs.native.outputs.darwin_arm64 }}
           APP_PILL: ${{ needs.app-pill.result }}
           SNAPSHOT: ${{ needs.quality.outputs.snapshot }}
           SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}
-          INSTALLED: ${{ needs.installed.result }}
         run: |
           require() {
             local decision=$1 name=$2 actual=$3 expected
@@ -515,17 +597,28 @@ jobs:
 
           require true changes "$CHANGES"
           require true quality "$QUALITY"
-          if [[ $CODE == false && ( $BROWSER != false || $PACKAGING != false || $INSTALLED_REQUIRED != false ) ]]; then
+          case "$CODE/$INSTALLED_REQUIRED" in
+            true/true) native_expected=installed ;;
+            true/false) native_expected=native ;;
+            false/false) native_expected='' ;;
+            *) echo '::error::Invalid native fixture selection.'; exit 1 ;;
+          esac
+          if [[ $CODE == false && ( $BROWSER != false || $PACKAGING != false ) ]]; then
             echo '::error::A documentation-only change cannot select product checks.'
             exit 1
           fi
           require "$CODE" race "$RACE"
           require "$CODE" integration "$INTEGRATION"
           require "$CODE" native "$NATIVE"
+          for platform in NATIVE_LINUX_AMD64 NATIVE_LINUX_ARM64 NATIVE_DARWIN_ARM64; do
+            if [[ ${!platform} != "$native_expected" ]]; then
+              echo "::error::$platform reported '${!platform}', expected '$native_expected'."
+              exit 1
+            fi
+          done
           require "$BROWSER" app-pill "$APP_PILL"
           require "$PACKAGING" snapshot "$SNAPSHOT"
           require "$PACKAGING" snapshot-contract "$SNAPSHOT_CONTRACT"
-          require "$INSTALLED_REQUIRED" installed "$INSTALLED"
 
       # Dispatch job checks do not satisfy PR requirements. Commit statuses do.
       - name: Report the real CI verdict on the tested commit

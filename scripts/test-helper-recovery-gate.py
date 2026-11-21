@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 DRAFT_FILTER = "github.event_name == 'pull_request' && github.event.pull_request.draft"
@@ -12,8 +13,14 @@ SCOPED = {
     "CODE": ("race", "integration", "native"),
     "BROWSER": ("app-pill",),
     "PACKAGING": (),
-    "INSTALLED_REQUIRED": ("installed",),
+    "INSTALLED_REQUIRED": (),
 }
+PLATFORM_OUTPUTS = {
+    "linux/amd64": "linux_amd64",
+    "linux/arm64": "linux_arm64",
+    "darwin/arm64": "darwin_arm64",
+}
+NATIVE_ENV = {f"NATIVE_{output.upper()}": output for output in PLATFORM_OUTPUTS.values()}
 PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
@@ -47,17 +54,20 @@ def check_recovery(ci):
     native = job(ci, "native")
     assert "needs: changes" in native and "if: needs.changes.outputs.code == 'true'" in native
     assert re.search(r"^    defaults:\n      run:\n        shell: bash$", native, re.M)
-    for platform, runner in (("linux/amd64", "ubuntu-24.04"), ("darwin/arm64", "macos-15")):
-        assert re.search(rf"platform: {platform}\s+runner: {runner}\b", native)
+    assert re.findall(r"^          - platform: (\S+)\n            runner: (\S+)$", native, re.M) == [
+        ("linux/amd64", "ubuntu-24.04"), ("linux/arm64", "ubuntu-24.04-arm"), ("darwin/arm64", "macos-15"),
+    ]
     assert "fail-fast: false" in native and "continue-on-error:" not in native
+    outputs = dict(re.findall(r"^      (\w+): \$\{\{ steps\.result\.outputs\.(\w+) \}\}$", native, re.M))
+    assert outputs == {name: name for name in PLATFORM_OUTPUTS.values()}
     assert '$(go env GOHOSTOS)/$(go env GOHOSTARCH)' in native
     recovery = step(native, "Recover historical helper and run published bridge chain")
     assert "if: matrix.platform != 'linux/arm64'" in recovery
     assert 'bash scripts/prove-helper-recovery.sh "$RUNNER_TEMP/helper-recovery"' in run_script(recovery)
 
 
-def reject_outcomes(command, environment, variable):
-    for outcome in ("success", "failure", "cancelled", "skipped", "", "pending"):
+def reject_outcomes(command, environment, variable, outcomes=("success", "failure", "cancelled", "skipped", "", "pending")):
+    for outcome in outcomes:
         if outcome == environment[variable]:
             continue
         changed = dict(environment, **{variable: outcome})
@@ -78,12 +88,65 @@ def check_outcomes(command, results):
                             for name, dependency in results.items()})
         environment["SNAPSHOT"] = "success" if decisions["PACKAGING"] else "skipped"
         environment["SNAPSHOT_CONTRACT"] = environment["SNAPSHOT"]
+        suite = "installed" if decisions["INSTALLED_REQUIRED"] else "native" if decisions["CODE"] else ""
+        environment.update(dict.fromkeys(NATIVE_ENV, suite))
         assert status(command, environment) == 0, f"aggregate rejects valid decisions {decisions}"
         for variable in tuple(results) + ("SNAPSHOT", "SNAPSHOT_CONTRACT"):
             reject_outcomes(command, environment, variable)
         for variable in SCOPED:
             assert status(command, dict(environment, **{variable: ""})) != 0
             assert status(command, dict(environment, **{variable: "unknown"})) != 0
+        for variable in NATIVE_ENV:
+            reject_outcomes(command, environment, variable, ("native", "installed", "", "skipped", "failure", "cancelled"))
+
+
+def expected_native_steps(platform, installed):
+    groups = (
+        (True, "PLATFORM_CHECK ENROLLMENT CUTOVER NAMING"),
+        (platform != "linux/arm64", "SOCKETS BRIDGE"),
+        (platform != "linux/amd64", "AUTH"),
+        (platform == "linux/arm64", "ARM_ENROLLMENT"),
+        (platform == "darwin/arm64", "DARWIN_CLEANUP SUPERVISOR INSTALLER MAPPED LAUNCH_AGENT RECOVERY_CONTROLS"),
+        (not installed, "NATIVE_GO"),
+        (installed, "INSTALLED_GO INSTALLED_PROOF"),
+        (installed and platform != "linux/arm64", "INSTALLED_CLEANUP"),
+    )
+    expected = {}
+    for required, names in groups:
+        expected.update(dict.fromkeys(names.split(), "success" if required else "skipped"))
+    return expected
+
+
+def check_native_results(ci, directory):
+    native = job(ci, "native")
+    record = step(native, "Record completed native fixture checks")
+    assert "        id: result\n" in record
+    assert "        if:" not in record
+    assert "PLATFORM: ${{ matrix.platform }}" in record
+    assert "INSTALLED_REQUIRED: ${{ needs.changes.outputs.installed }}" in record
+    wiring = dict(re.findall(r"^          (\w+): \$\{\{ steps\.(\w+)\.outcome \}\}$", record, re.M))
+    assert wiring.pop("PLATFORM_CHECK") == "platform"
+    assert wiring == {name: name.lower() for name in expected_native_steps("linux/amd64", False) if name != "PLATFORM_CHECK"}
+    command = run_script(record)
+    output = directory / "native-result"
+    for platform, key in PLATFORM_OUTPUTS.items():
+        for installed in (False, True):
+            check_native_result(command, output, platform, key, installed)
+
+
+def check_native_result(command, output, platform, key, installed):
+    outcomes = expected_native_steps(platform, installed)
+    environment = os.environ | outcomes | {
+        "GITHUB_OUTPUT": str(output), "PLATFORM": platform, "INSTALLED_REQUIRED": str(installed).lower(),
+    }
+    output.write_text("")
+    assert status(command, environment) == 0, (platform, installed)
+    suite = "installed" if installed else "native"
+    assert output.read_text() == f"{key}={suite}\n"
+    output.write_text("")
+    for variable in outcomes:
+        reject_outcomes(command, environment, variable, ("success", "failure", "cancelled", "skipped", ""))
+    assert not output.read_text(), "a failed or skipped selected step wrote a successful result"
 
 
 def check_gate(ci):
@@ -102,6 +165,8 @@ def check_gate(ci):
         assert f"{check}: ${{{{ needs.changes.outputs.{output} }}}}" in aggregate
     assert "SNAPSHOT: ${{ needs.quality.outputs.snapshot }}" in aggregate
     assert "SNAPSHOT_CONTRACT: ${{ needs.quality.outputs.snapshot_contract }}" in aggregate
+    for name, output in NATIVE_ENV.items():
+        assert f"{name}: ${{{{ needs.native.outputs.{output} }}}}" in aggregate
     readiness = step(gate, "Require a ready PR")
     assert re.findall(r"^        if: (.+)$", readiness, re.M) == [DRAFT_FILTER]
     assert status(run_script(readiness), os.environ) != 0, "draft readiness script succeeds"
@@ -141,9 +206,12 @@ def without_gate_dependency(ci, dependency):
 def check_mutations(ci):
     mutations = (
         without_gate_dependency(ci, "native"),
-        without_gate_dependency(ci, "installed"),
         ci.replace('          require "$CODE" native "$NATIVE"\n', "", 1),
-        ci.replace('          require "$INSTALLED_REQUIRED" installed "$INSTALLED"\n', "", 1),
+        ci.replace("NATIVE_LINUX_AMD64 NATIVE_LINUX_ARM64 NATIVE_DARWIN_ARM64; do",
+                   "NATIVE_LINUX_AMD64 NATIVE_LINUX_ARM64; do", 1),
+        ci.replace("          - platform: linux/arm64\n            runner: ubuntu-24.04-arm\n", "", 1),
+        ci.replace("NATIVE_LINUX_AMD64: ${{ needs.native.outputs.linux_amd64 }}",
+                   "NATIVE_LINUX_AMD64: ${{ needs.native.outputs.linux_arm64 }}", 1),
         ci.replace("          bash scripts/prove-helper-recovery.sh", "          echo skipped instead of", 1),
         ci.replace("CODE: ${{ needs.changes.outputs.code }}", "CODE: false", 1),
         ci.replace('          require true changes "$CHANGES"\n', "", 1),
@@ -165,11 +233,13 @@ def main():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     check_gate(ci)
     check_mutations(ci)
+    with tempfile.TemporaryDirectory(prefix="native-result-") as temporary:
+        check_native_results(ci, Path(temporary))
     reservation = (ROOT / "scripts/reserve-release.sh").read_text()
     assert '.name == "Complete CI gate"' in reservation
     assert '.status == "completed"' in reservation and '.conclusion == "success"' in reservation
     assert "commits/$source_sha/check-runs" in reservation
-    print("PASS native helper publication contract: code, documentation and draft outcomes, rejection controls and exact-source publication")
+    print("PASS code, documentation and draft outcomes, missing native legs, skipped and failed fixture steps, and exact-source publication")
 
 
 if __name__ == "__main__":
