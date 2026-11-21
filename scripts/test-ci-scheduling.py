@@ -45,6 +45,8 @@ MAC_ROUTE = "${{ " + TRUSTED + " && fromJSON('[\"self-hosted\",\"macOS\",\"ARM64
 # keep every file, process and port in their own job may use them.
 MAC_SHARED_ROUTE = MAC_ROUTE.replace('"mesh-mac"', '"mesh-mac-shared"')
 MAC_SHARED_JOBS = {("update-proofs.yml", "prepare"), ("update-proofs.yml", "prove")}
+# CI callers whose Mac legs all run on the shared runners.
+MAC_TURN_FREE = {"update-proofs"}
 # The Mac runner's start hook waits up to this long in the Mac FIFO.
 MAC_FIFO_MINUTES = 45
 MAC_JOBS = {"ci.yml": ("socket-portability", "auth-cutover", "machine-naming"),
@@ -357,7 +359,12 @@ def check_mac_turn(ci):
     assert users == {"socket-portability", "auth-cutover", "machine-naming", "helper-recovery", "update-proofs"}, users
     for name in users:
         needs = re.findall(r"^    needs: (.+)$", JOB(ci, name), re.M)
-        assert needs == ["[changes, mac-turn]"], f"{name} must wait for its Mac turn"
+        # Exclusive mesh-mac legs wait so main goes first; update proofs use only the
+        # shared runners, whose three slots leave room for main, so they start at once.
+        if name in MAC_TURN_FREE:
+            assert needs == ["changes"], f"{name} must not hold its shared Mac legs behind main CI"
+        else:
+            assert needs == ["[changes, mac-turn]"], f"{name} must wait for its Mac turn"
 
 
 class FakeGitHub:
@@ -414,8 +421,9 @@ def check_wait_script(source):
 def reject_mac_turn(ci, script):
     mutations = (
         (ci.replace("  socket-portability:\n    needs: [changes, mac-turn]", "  socket-portability:\n    needs: changes", 1), script),
-        (ci.replace("    name: Required native update proofs\n    needs: [changes, mac-turn]",
-                    "    name: Required native update proofs\n    needs: changes", 1), script),
+        (ci.replace("  helper-recovery:\n    needs: [changes, mac-turn]", "  helper-recovery:\n    needs: changes", 1), script),
+        # Holding the shared-runner proofs behind main again wastes the shared slots.
+        (ci.replace("its Mac turn.\n    needs: changes\n", "its Mac turn.\n    needs: [changes, mac-turn]\n", 1), script),
         (ci.replace("    timeout-minutes: 200\n", "    timeout-minutes: 20\n", 1), script),
         (ci.replace("    name: Wait for main CI before Mac legs\n", "    name: Wait for main CI before Mac legs\n    continue-on-error: true\n", 1), script),
         (ci, script.replace('return environment.get("HEAD_REPOSITORY") == environment.get("REPOSITORY")', "return False", 1)),

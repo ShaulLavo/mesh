@@ -538,7 +538,9 @@ jobs:
 
   update-proofs:
     name: Required native update proofs
-    needs: [changes, mac-turn]
+    # Its Darwin legs use the shared Mac runners, whose three slots leave room
+    # for main, so it does not wait for its Mac turn.
+    needs: changes
     if: needs.changes.outputs.update_proofs == 'true' && !github.event.pull_request.draft
     uses: ./.github/workflows/update-proofs.yml
     with:
