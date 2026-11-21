@@ -126,3 +126,5 @@ Automated checks cover process termination, acknowledged checkpoints, concurrent
 recovery, and simulated boot changes. They do not establish physical power-loss
 durability. Run the [disposable VM acceptance procedure](recovery-powerloss.md)
 before relying on stronger filesystem or shell-history guarantees.
+
+<!-- Documentation-only CI validation. -->
