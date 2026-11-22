@@ -30,18 +30,11 @@ func newFrameLookahead(conn transport.Conn) *frameLookahead { return &frameLooka
 // already started if there is one.
 func (l *frameLookahead) read() (protocol.Frame, error) {
 	if !l.armed {
-		return wrapRead(l.conn.ReadFrame())
+		return l.conn.ReadFrame() //nolint:wrapcheck // the client loop classifies the raw transport error
 	}
 	l.armed = false
 	result := <-l.pending
-	return wrapRead(result.frame, result.err)
-}
-
-func wrapRead(frame protocol.Frame, err error) (protocol.Frame, error) {
-	if err != nil {
-		return frame, fmt.Errorf("daemon: read client frame: %w", err)
-	}
-	return frame, nil
+	return result.frame, result.err
 }
 
 // watch returns a context that ends when the connection fails.
