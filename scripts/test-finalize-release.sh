@@ -83,6 +83,10 @@ cat >"$test_root/bin/python3" <<'PYTHON'
 set -euo pipefail
 if [[ $1 == */verify-worker-publication.py ]]; then
   printf '%s\n' 'worker evidence gate' >> "$GH_LOG"
+  [[ $* == *"--platform-plan $RUNNER_TEMP/plan.json"* ]]
+  [[ $* == *"--plan-sha256 $(printf 'a%.0s' {1..64})"* ]]
+  [[ $* == *"--harness $(printf 'b%.0s' {1..40})"* ]]
+  [[ $* == *'--attempts {"darwin/arm64":1,"linux/amd64":1,"linux/arm64":1}'* ]]
   [[ ${FAIL_WORKER_PROOF:-0} == 0 ]]
   exit "$?"
 fi
@@ -94,6 +98,9 @@ run_finalize() {
   (cd "$checkout" && env PATH="$test_root/bin:$PATH" GIT_CONFIG_GLOBAL="$test_root/gitconfig" \
     GITHUB_REPOSITORY=ShaulLavo/mesh RUNNER_TEMP="$test_root" GH_LOG="$test_root/gh.log" \
     MESH_INSTALLED_COMPLETION="$test_root/installed-completion" MESH_PUBLICATION_DRAFT="$test_root/snapshot" GITHUB_RUN_ID=42 \
+    MESH_PUBLICATION_PLAN="$test_root/plan.json" MESH_PUBLICATION_PLAN_SHA256="$(printf 'a%.0s' {1..64})" \
+    MESH_PUBLICATION_HARNESS="$(printf 'b%.0s' {1..40})" \
+    MESH_PUBLICATION_ATTEMPTS='{"darwin/arm64":1,"linux/amd64":1,"linux/arm64":1}' \
     PR_CREATED="$test_root/pr" FIXTURE_REMOTE="$remote" "$repo_root/scripts/finalize-release.sh" "${CASK_VERSION:-v0.1.2}" "$source_sha" v0.1.1 "$test_root/cask")
 }
 run_finalize >"$test_root/output"
