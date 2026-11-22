@@ -82,6 +82,13 @@ func (c Credential) IsZero() bool { return c == Credential{} }
 func (c Credential) String() string   { return "[application credential]" }
 func (c Credential) GoString() string { return c.String() }
 
+// The redaction must hold wherever a credential is formatted, including
+// through an Identity value.
+var (
+	_ fmt.Stringer   = Credential{}
+	_ fmt.GoStringer = Credential{}
+)
+
 // Fingerprint is a short local label for listing identities. It is a
 // separate digest from the application ID, so it reveals neither the secret
 // nor the ID a host derives.
