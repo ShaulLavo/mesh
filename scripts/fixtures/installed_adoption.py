@@ -82,6 +82,11 @@ class AdoptionCase(installed_native.Installation):
         else:
             self.units.stop("helper")
 
+    def require_unadopted(self):
+        paths = ("updates/host-policy.json", "updates/host-adoption.json", "update/installation.json")
+        if any((self.state / path).exists() for path in paths):
+            raise RuntimeError("legacy initial adoption must start without a policy, adoption record or install journal")
+
     def retained(self):
         paths = [self.state / "identity.key", self.state / "authorized_keys"]
         paths.extend(self.home.glob("Library/LaunchAgents/*mesh.plist"))
@@ -309,6 +314,8 @@ def run_case(root, output, host, pair, preparer, origin, releases, scenario, pre
     failure = None
     try:
         record["initial"] = case.prepare()
+        if previous is None:
+            case.require_unadopted()
         case.seed_prior()
         if case.prior:
             record["genuinePrior"] = {"version": host["daemon"], "phase": case.prior["phase"], "settings": case.prior["settings"]}
@@ -597,7 +604,7 @@ def run_chain(root, output, native, preparer, host, releases, origin, prepare_on
 
 
 def run_order(root, output, native, preparer, host, releases, origin, prepare_only):
-    from fixtures import installed_order, installed_account_run
+    from fixtures import installed_order
     if native != "linux/amd64" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise RuntimeError("ordered native hosts require a disposable GitHub Linux AMD64 runner")
     pair = fleet_baselines.acquire_pair(root / "public", host)
@@ -605,8 +612,14 @@ def run_order(root, output, native, preparer, host, releases, origin, prepare_on
     origin.serve_tree(root / "public")
     if prepare_only:
         return
+    execute_order(root, output, native, preparer, host, pair, releases, installed_releases.VERSIONS)
+
+
+def execute_order(root, output, native, preparer, host, pair, releases, versions):
+    from fixtures import installed_account_run, installed_order
     descriptor = root / "ordered-input.json"
     descriptor.write_text(json.dumps({"root": str(root), "origin": str(root), "host": host, "pair": pair,
+        "versions": versions,
         "fixtureDeadlineNs": installed_clock.parent_deadline(),
         "fixtureCleanupDeadlineNs": releases.clock.deadline_ns + installed_clock.CLEANUP_SECONDS * installed_clock.SECOND,
         "fixtureEmergencyNs": installed_clock.CLEANUP_SECONDS * installed_clock.SECOND,

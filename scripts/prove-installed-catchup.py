@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--format-waypoint", action="store_true", help="cross an actual incompatible manifest schema through an old-format waypoint")
     parser.add_argument("--ordered-hosts", action="store_true", help="three disposable native-manager hosts with real predecessor policy")
     parser.add_argument("--fresh-managed", action="store_true", help="actual fresh helper preparation and missing-policy automatic first start")
+    parser.add_argument("--pull-request", action="store_true", help="run the focused native update cases on a hosted pull request runner")
     parser.add_argument("--export-prepared", type=Path, help="export immutable chain/waypoint releases after complete preparation")
     parser.add_argument("--prepared-releases", type=Path, help="consume a verified immutable prepared-release bundle")
     parser.add_argument("--installed-slice", type=Path, help="exact reviewed profile/group and reader selection for a prepared consumer")
@@ -40,6 +41,12 @@ def main():
     parser.add_argument("--publication-task", help="one complete task ID from publication-jobs.py inventory")
     parser.add_argument("--launch-record", type=Path, help="job-owned command dispatch and fixture launch lifecycle record")
     arguments = parser.parse_args()
+    if arguments.pull_request and any((arguments.acquire_baselines, arguments.native_helper, arguments.installed_adoption,
+            arguments.prepare_only, arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain,
+            arguments.format_waypoint, arguments.ordered_hosts, arguments.fresh_managed, arguments.export_prepared,
+            arguments.prepared_releases, arguments.installed_slice, arguments.scenario, arguments.publication_version,
+            arguments.publication_source, arguments.publication_task)):
+        parser.error("pull request cases own their build and cannot be combined with another proof mode")
     if arguments.publication_task is not None and (not arguments.publication_version or not arguments.publication_source
             or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only
             or arguments.signed_chain or arguments.format_waypoint or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
@@ -71,6 +78,10 @@ def validate_invocation(parser, arguments, output):
         raise RuntimeError(f"native platform is {native}; required {required}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
+    if getattr(arguments, "pull_request", False):
+        if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
+            raise RuntimeError("pull request cases require a disposable GitHub-hosted runner")
+        return native, installed_clock.Clock({"platform": native, "mode": "pull-request"}, hang_seconds=30 * 60)
     clocked = arguments.installed_adoption or arguments.fresh_managed or arguments.export_prepared or arguments.prepared_releases
     clock = installed_clock.from_arguments(arguments, native) if clocked else None
     return native, clock
@@ -141,6 +152,10 @@ def finish_owned(root, output, clock):
 
 
 def run_requested(arguments, root, output, native):
+    if getattr(arguments, "pull_request", False):
+        from fixtures import installed_pr
+        installed_pr.run(root, output, native)
+        return
     if arguments.export_prepared or arguments.prepared_releases:
         run_prepared_requested(arguments, root, output, native)
         return

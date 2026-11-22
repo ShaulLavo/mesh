@@ -61,7 +61,8 @@ class PartitionTest(unittest.TestCase):
     def test_workflow_keeps_native_matrix_bounds_artifacts_and_blocking_runner(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
         job = workflow.split("  native:\n", 1)[1].split("\n  quality:", 1)[0]
-        for contract in ("&& 85 || 40 }}", "runner: ubuntu-24.04", "runner: macos-15",
+        for contract in ("&& 85 || (needs.changes.outputs.installed == 'true' && 80 || 40) }}",
+                         "runner: ubuntu-24.04", "runner: macos-15",
                          'python3 scripts/native_socket_runner.py --output "$RUNNER_TEMP/native-socket-results.jsonl"',
                          "native-socket-results.schedule.json"):
             self.assertIn(contract, job)

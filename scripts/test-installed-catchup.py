@@ -28,7 +28,7 @@ from fixtures import fleet_baselines, installed_paths as paths, native_services,
 from fixtures import installed_review_controls, installed_listener_controls, installed_catalog_controls, installed_order_trace_controls
 from fixtures import installed_attachment_controls, installed_publication_controls
 from fixtures import installed_releases, release_transition
-from fixtures import installed_adoption, installed_clock
+from fixtures import installed_adoption, installed_clock, installed_pr
 
 PROOF_PATH = Path(__file__).with_name("prove-installed-catchup.py")
 SPEC = importlib.util.spec_from_file_location("installed_catchup_proof", PROOF_PATH)
@@ -300,7 +300,7 @@ class SocketPathsTest(unittest.TestCase):
         scripts = PROOF_PATH.parent
         files = (PROOF_PATH, Path(__file__), scripts / "test-installed-clock.py", *(scripts / "fixtures" / name for name in
             ("release_worker_groups.py", "release_worker_index.py", "release_worker_completion.py", "noindex_paths.py", "installed_paths.py", "native_services.py", "installed_listener.py", "installed_listener_evidence.py", "installed_listener_controls.py", "installed_attachment_evidence.py", "installed_attachment_controls.py", "installed_continuity.py", "installed_native.py", "fleet_baselines.py",
-             "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_catalog_evidence.py", "installed_catalog_controls.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_order_trace.py", "installed_order_trace_controls.py", "installed_fresh.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py", "installed_publication_controls.py")))
+             "installed_clock.py", "installed_origin.py", "installed_releases.py", "installed_adoption.py", "installed_cohort.py", "installed_catalog_evidence.py", "installed_catalog_controls.py", "installed_chain.py", "installed_waypoint.py", "installed_artifacts.py", "installed_accounts.py", "installed_order.py", "installed_order_host.py", "installed_order_trace.py", "installed_order_trace_controls.py", "installed_fresh.py", "installed_pr.py", "installed_routes.py", "installed_storage.py", "publication_origin.py", "installed_publication.py", "installed_account_run.py", "installed_review_controls.py", "installed_publication_controls.py")))
         for path in files:
             self.assertLessEqual(maximum_depth(ast.parse(path.read_text()), 0), 3, str(path))
 
@@ -380,6 +380,71 @@ class FleetBaselinesTest(unittest.TestCase):
         self.manifest["version"] = "v0.1.196"
         with self.assertRaisesRegex(RuntimeError, "schema or version differs"):
             fleet_baselines.acquire(self.root, "v0.1.249", self.platform, fetcher=self.fetch)
+
+
+class InstalledPRTest(unittest.TestCase):
+    def test_cli_rejects_other_proof_modes_and_non_hosted_runners(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-installed-pr-") as scratch:
+            root = Path(scratch)
+            self.assert_cli_rejects(root, ["--fresh-managed"], "cannot be combined with another proof mode")
+            self.assert_cli_rejects(root, [], "require a disposable GitHub-hosted runner")
+            self.assertFalse((root / "output/native-manager.json").exists())
+
+    def assert_cli_rejects(self, root, extra, message):
+        environment = dict(os.environ, GITHUB_ACTIONS="false", RUNNER_ENVIRONMENT="self-hosted", MESH_HARNESS_SOURCE="")
+        environment.pop("INSTALLED_CATCHUP_PLATFORM", None)
+        result = subprocess.run([sys.executable, "-B", str(PROOF_PATH), str(root / "output"), "--native-preflight",
+                                 "--pull-request", *extra], env=environment, check=False, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+
+    def test_native_only_manifest_slot_never_compiles_another_platform(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-installed-pr-") as scratch:
+            root = Path(scratch)
+            releases = installed_releases.Releases(root, "linux/amd64", root, native_only=True)
+            version = installed_releases.VERSIONS[0]
+            with patch.object(installed_releases.subprocess, "run") as go:
+                artifact = releases.build_platform(version, "darwin/arm64", None)
+            go.assert_not_called()
+            archive = releases.directory / version / artifact["archive"]
+            self.assertEqual(artifact["sha256"], installed_releases.digest(archive.read_bytes()))
+            with self.assertRaises(tarfile.ReadError):
+                tarfile.open(archive, "r:gz")
+
+    def test_every_native_fixture_selects_a_real_happy_chain_and_fault(self):
+        self.assertEqual(installed_pr.chain_profiles("linux/amd64"), ("none", "first"))
+        self.assertEqual(installed_pr.chain_profiles("linux/arm64"), ("none", "final"))
+        self.assertEqual(installed_pr.chain_profiles("darwin/arm64"), ("none", "final"))
+
+    def test_pr_chain_initializes_managed_defaults_before_adoption_takes_its_snapshot(self):
+        case = Mock()
+        case.start_adoption.return_value = {"pin": "fixture"}
+        releases = Mock(native_only=True)
+        first = installed_releases.VERSIONS[0]
+        with (patch.object(installed_adoption, "AdoptionCase", return_value=case),
+              patch.object(installed_chain.installed_transport_lifecycle, "prove"),
+              patch.object(installed_chain.installed_continuity, "reconnect_current"),
+              patch.object(installed_chain, "await_chain"), patch.object(installed_chain, "finish")):
+            installed_chain.run_case(None, None, None, None, None, Mock(), releases, None, "none")
+        operations = case.mock_calls
+        self.assertLess(operations.index(unittest.mock.call.require_unadopted()),
+                        operations.index(unittest.mock.call.initialize_preserved_baseline()))
+        self.assertLess(operations.index(unittest.mock.call.initialize_preserved_baseline()),
+                        operations.index(unittest.mock.call.start_adoption(first)))
+
+    def test_every_current_edge_proves_rollback_for_both_live_worker_images(self):
+        first, intermediate, final = installed_releases.VERSIONS
+        releases = Mock(root=Path("unused"), directory=Path("unused/releases"),
+                        builds={first: {"path": "current-first"}, intermediate: {"path": "current-intermediate"}})
+        pair = {"daemon": {"executable": "legacy-daemon"}}
+        with patch.object(installed_pr, "bind_retained_worker") as bind:
+            installed_pr.prepare(releases, Mock(), pair, ordered=False)
+        bind.assert_called_once_with(releases, pair["daemon"])
+        history = releases.mock_calls
+        retained = history.index(unittest.mock.call.retain_custom_source(first))
+        self.assertLess(history.index(unittest.mock.call.prove("legacy-daemon", first)), retained)
+        self.assertLess(retained, history.index(unittest.mock.call.prove("current-first", intermediate)))
+        self.assertLess(retained, history.index(unittest.mock.call.prove("current-intermediate", final)))
 
 
 class InstalledModeShellTest(unittest.TestCase):
@@ -883,6 +948,25 @@ class ChainObservationTest(unittest.TestCase):
 
     def observe(self):
         return installed_chain.observe_hop(self.case, self.record, self.middle)
+
+    def test_rollback_helper_restart_records_new_mapped_source_process(self):
+        helper = SimpleNamespace(manager_pid=Mock(return_value=100))
+        self.case.units = Mock()
+        self.case.units.managers = {"helper": helper}
+        mapped = {"pid": 101, "sha256": self.builds[self.source]["digest"]}
+        self.helper_reader.return_value = mapped
+        self.assertEqual(installed_chain.restart_rollback_helper(self.case, self.source),
+                         {"previousPID": 100, "image": mapped})
+        self.case.units.stop.assert_called_once_with("helper")
+        self.case.units.start.assert_called_once_with("helper")
+        self.helper_reader.assert_called_once_with(self.case, self.source)
+
+    def test_rollback_helper_restart_rejects_the_old_process(self):
+        self.case.units = Mock()
+        self.case.units.managers = {"helper": SimpleNamespace(manager_pid=Mock(return_value=100))}
+        self.helper_reader.return_value = {"pid": 100, "sha256": self.builds[self.source]["digest"]}
+        with self.assertRaisesRegex(RuntimeError, "did not replace"):
+            installed_chain.restart_rollback_helper(self.case, self.source)
 
     def assert_unobserved(self):
         self.assertEqual(self.record, {"hops": []})

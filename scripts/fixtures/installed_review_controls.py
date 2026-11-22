@@ -109,7 +109,8 @@ def exercise_model(model, driver_type=OrderDriver):
         time_ns=lambda: installed_order.timestamp_ns(model.clock.stamp()))
     dates = SimpleNamespace(now=lambda _: model.clock.now(), fromisoformat=datetime.fromisoformat, fromtimestamp=datetime.fromtimestamp)
     with patch.object(installed_order.installed_origin, "Origin", return_value=model), patch.object(installed_order, "time", clock), patch.object(installed_order, "datetime", dates):
-        installed_order.scenarios(Path("/unused"), drivers, {"releases": {"directory": "/unused"}}, record)
+        descriptor = {"releases": {"directory": "/unused"}, "versions": installed_releases.VERSIONS}
+        installed_order.scenarios(Path("/unused"), drivers, descriptor, record)
     return record
 
 

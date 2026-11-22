@@ -35,6 +35,7 @@ MAC_SHARED_ROUTE = MAC_ROUTE.replace(MAIN_PUSH, MAIN_DRAFT).replace('"mesh-mac"'
 MAC_FIFO_MINUTES = 45
 MAC_JOBS = {"ci.yml": ("native",), "update-proofs.yml": ("prepare", "prove")}
 MAC_GO_CACHE = "${{ runner.environment == 'github-hosted' }}"
+INSTALLED_TIMEOUT = "needs.changes.outputs.installed == 'true' && 80 || "
 
 
 def check_phase(ci, name, command):
@@ -231,7 +232,12 @@ def check_mac_job(source, name, route, guard):
     timeouts = re.findall(r"^    timeout-minutes: (.+)$", job, re.M)
     if not timeouts:
         return
-    match = re.fullmatch(r"\$\{\{ " + re.escape("matrix.runner == 'macos-15' && " + guard) + r" && (\d+) \|\| (\d+) \}\}", timeouts[0])
+    prefix = r"\$\{\{ " + re.escape("matrix.runner == 'macos-15' && " + guard)
+    hosted_timeout = r"(\d+)"
+    if name == "native":
+        hosted_timeout = r"\(" + re.escape(INSTALLED_TIMEOUT) + hosted_timeout + r"\)"
+    match = re.fullmatch(prefix + r" && (\d+) \|\| " + hosted_timeout + r" \}\}", timeouts[0])
+    assert match, f"{name} must preserve its hosted and self-hosted hang caps"
     assert match, f"{name} must bound the Mac and hosted legs separately"
     mac, hosted = (int(value) for value in match.groups())
     assert mac == hosted + MAC_FIFO_MINUTES, f"{name} Mac hang cap must add the FIFO wait to the hosted bound"
@@ -254,7 +260,8 @@ def reject_mac_routing(workflows):
     mutations = (
         ("ci.yml", lambda text: text.replace(MAC_ROUTE, MAC_ROUTE.replace(MAIN_PUSH, "true"), 1)),
         ("ci.yml", lambda text: text.replace('"mesh-mac"', '"other"', 1)),
-        ("ci.yml", lambda text: text.replace("&& 85 || 40", "&& 40 || 40", 1)),
+        ("ci.yml", lambda text: text.replace("&& 85 ||", "&& 40 ||", 1)),
+        ("ci.yml", lambda text: text.replace(INSTALLED_TIMEOUT, "", 1)),
         ("ci.yml", lambda text: text.replace("cache: " + MAC_GO_CACHE, "cache: true", 1)),
         ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, MAC_SHARED_ROUTE.replace("inputs.draft && ", ""), 1)),
         ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, "${{ matrix.runner }}", 1)),
@@ -328,8 +335,8 @@ PROVE_MATRIX_STEP = ("          printf 'prove=%s\\n' \"$(python3 scripts/prepare
                      "--prove-matrix \"$shards\" \"$DRAFT\")\" >> \"$GITHUB_OUTPUT\"\n")
 
 
-def check_darwin_smoke(workflows):
-    """A PR proves one Darwin shard; the release path still proves all of them."""
+def check_release_proof_matrix(workflows):
+    """The release path still proves every selected shard, including Darwin."""
     proofs, release = workflows["update-proofs.yml"], workflows["release.yml"]
     policy = JOB(proofs, "policy")
     assert "      prove: ${{ steps.select.outputs.prove }}\n" in policy
@@ -342,10 +349,10 @@ def check_darwin_smoke(workflows):
     caller = JOB(release, "prove-transition")
     assert "    uses: ./.github/workflows/update-proofs.yml\n" in caller and "      draft: true\n" in caller, \
         "the release path must prove every Darwin shard"
-    assert not re.search(r"^      draft:", JOB(workflows["ci.yml"], "update-proofs"), re.M), "PR proofs must not claim the release matrix"
+    assert "uses: ./.github/workflows/update-proofs.yml" not in workflows["ci.yml"], "PRs must not run the release proof matrix"
 
 
-def reject_darwin_smoke(workflows):
+def reject_release_proof_mutations(workflows):
     mutations = (
         ("release.yml", lambda text: text.replace("      draft: true\n", "      draft: false\n", 1)),
         ("update-proofs.yml", lambda text: text.replace("one Darwin shard.\n    if: inputs.draft\n", "one Darwin shard.\n", 1)),
@@ -356,7 +363,7 @@ def reject_darwin_smoke(workflows):
         mutated = dict(workflows, **{name: mutate(workflows[name])})
         assert mutated[name] != workflows[name], f"Darwin smoke mutation did not apply to {name}"
         try:
-            check_darwin_smoke(mutated)
+            check_release_proof_matrix(mutated)
         except AssertionError:
             continue
         raise AssertionError(f"Darwin smoke wiring accepted a mutation of {name}")
@@ -401,8 +408,8 @@ def main():
     workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
-    check_darwin_smoke(workflows)
-    reject_darwin_smoke(workflows)
+    check_release_proof_matrix(workflows)
+    reject_release_proof_mutations(workflows)
     sources = mktemp_sources()
     check_mktemp_templates(sources)
     reject_mktemp_templates(sources)
@@ -410,7 +417,7 @@ def main():
     check_apt_workflows(workflows, action)
     reject_apt_mutations(workflows, action)
     check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, one Darwin proof shard on PRs and all on releases, hosted PR Mac legs, offline apt cache, one never-cancelled main CI group and mutation controls")
+    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, all Darwin proof shards on release, hosted PR Mac legs, offline apt cache, one never-cancelled main CI group and mutation controls")
 
 
 if __name__ == "__main__":

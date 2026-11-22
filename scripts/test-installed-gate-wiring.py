@@ -16,6 +16,9 @@ WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()
 PROOFS = (WORKFLOWS / "update-proofs.yml").read_text()
+INSTALLED_PR = "github.event_name == 'pull_request' && needs.changes.outputs.installed == 'true'"
+PROOF_STEP = "Exercise signed updates and preserved sessions with the native manager"
+CLEANUP_STEP = "Verify native services and listeners stop after fixture errors"
 SPEC = importlib.util.spec_from_file_location("ci_gate", ROOT / "scripts/test-helper-recovery-gate.py")
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
@@ -66,13 +69,61 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertNotIn("always()", source)
         self.assertNotIn("43151893803", source)
 
-    def test_normal_proofs_run_once_after_successful_preparation(self):
-        installed = GATE.job(CI, "installed-catchup")
-        self.assert_consumer(installed, "update-proofs")
-        self.assertEqual(field(installed, "needs"), "[changes, update-proofs]")
-        self.assertEqual(field(installed, "if"), field(GATE.job(CI, "update-proofs"), "if"))
-        self.assertEqual(CI.count(f"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@{PIN}"), 1)
+    def test_pr_proofs_share_native_runner_and_setup_after_classification(self):
+        native = GATE.job(CI, "native")
+        self.assertNotIn("\n  installed:\n", CI)
+        self.assertEqual(field(native, "if"), "needs.changes.outputs.code == 'true'")
+        self.assertEqual(field(native, "needs"), "changes")
+        self.assertEqual(native.count("uses: actions/checkout@"), 1)
+        self.assertIn("persist-credentials: false", native)
+        self.assertIn("\npermissions:\n  contents: read\n", CI)
+        plain_setup = GATE.step(native, "Set up Go for native fixtures")
+        self.assertIn("if: github.event_name != 'pull_request' || needs.changes.outputs.installed != 'true'", plain_setup)
+        self.assertIn("uses: actions/setup-go@", plain_setup)
+        installed_setup = GATE.step(native, "Set up Go for native and installed fixtures")
+        self.assertIn(f"if: {INSTALLED_PR}\n", installed_setup)
+        self.assertIn("uses: ./.github/actions/installed-go", installed_setup)
+        proof = GATE.step(native, PROOF_STEP)
+        self.assertIn(f"if: {INSTALLED_PR}\n", proof)
+        self.assertIn("INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}", proof)
+        self.assertIn("MESH_HARNESS_SOURCE: ${{ github.sha }}", proof)
+        self.assertIn("scripts/prove-installed-catchup.py", proof)
+        self.assertIn("--native-preflight --pull-request", proof)
+        cleanup = GATE.step(native, CLEANUP_STEP)
+        self.assertIn(f"if: {INSTALLED_PR} && matrix.platform != 'linux/arm64'\n", cleanup)
+        self.assertIn("MESH_TEST_NATIVE_MANAGER: '1'", cleanup)
+        ordered = ("id: installed_go", "id: bridge", "id: installed_proof", "id: installed_cleanup", "id: result")
+        positions = [native.index(marker) for marker in ordered]
+        self.assertEqual(positions, sorted(positions))
+        for name, artifact in (("Upload native fixture evidence", "native-fixtures"), ("Upload installed fixture evidence", "installed-pr")):
+            upload = GATE.step(native, name)
+            self.assertIn(f"name: {artifact}-${{{{ matrix.runner }}}}", upload)
+            self.assertIn("always()", upload)
+        self.assertIn(f"always() && {INSTALLED_PR}", GATE.step(native, "Upload installed fixture evidence"))
+        for setting in ("continue-on-error", "secrets.", "download-artifact", "actions: write", "contents: write"):
+            self.assertNotIn(setting, native)
+        self.assertNotIn("installed-catchup.yml@", CI)
         self.assertNotIn("installed-catchup.yml@", PROOFS)
+        catchup = (WORKFLOWS / "installed-catchup.yml").read_text()
+        self.assertNotIn("  pull_request:", catchup.split("\npermissions:", 1)[0])
+
+    def test_actual_native_cleanup_shell_requires_both_selected_cases_to_pass(self):
+        cleanup = GATE.step(GATE.job(CI, "native"), CLEANUP_STEP)
+        stub = """python3() {
+          test "$#" -eq 4 && test "$1" = -B && test "$2" = scripts/test-installed-catchup.py || return 73
+          test "$3" = NativeServiceTest.test_exception_after_launch_stops_real_service || return 73
+          test "$4" = InstalledCleanupTest.test_terminal_failure_still_stops_actual_listener_and_both_units || return 73
+          printf 'Ran %s tests in 0.001s\\n\\n%s\\n' "$CASES" "$VERDICT"
+          return "$EXIT"
+        }
+        """
+        command = stub + GATE.run_script(cleanup)
+        with tempfile.TemporaryDirectory(prefix="installed-pr-cleanup-") as temporary:
+            (Path(temporary) / "installed-pr").mkdir()
+            environment = dict(os.environ, RUNNER_TEMP=temporary, CASES="2", VERDICT="OK", EXIT="0")
+            self.assertEqual(GATE.status(command, environment), 0)
+            for failure in ({"CASES": "1"}, {"VERDICT": "OK (skipped=1)"}, {"VERDICT": ""}, {"EXIT": "1"}):
+                self.assertNotEqual(GATE.status(command, environment | failure), 0, failure)
 
     def test_update_paths_include_installed_and_release_dependencies(self):
         classifier = (ROOT / "scripts/ci-changes.py").read_text()
@@ -83,7 +134,7 @@ class InstalledGateWiringTests(unittest.TestCase):
                  "scripts/prepare-rollback-context.py", "scripts/fixtures/installed_artifacts.py",
                  "scripts/test-installed-catchup.py", ".github/workflows/installed-catchup.yml")
         for path in paths:
-            self.assertIn("update_proofs", classify["checks_for"](path), path)
+            self.assertIn("installed", classify["checks_for"](path), path)
 
     def test_producer_outputs_bind_source_input_and_current_run_after_all_preparations(self):
         context = GATE.job(PROOFS, "context")

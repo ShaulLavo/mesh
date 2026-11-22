@@ -10,7 +10,7 @@ import sys
 CORE = frozenset({"code"})
 BROWSER = CORE | {"browser"}
 PACKAGING = CORE | {"packaging"}
-UPDATE = PACKAGING | {"update_proofs"}
+UPDATE = PACKAGING | {"installed"}
 ALL = UPDATE | BROWSER
 
 # First match wins. Paths without a rule require the full PR suite.
@@ -21,7 +21,8 @@ PATH_CHECKS = (
     (("web/app-pill/*",), BROWSER),
     (("go.mod", "go.sum", "mise.toml", "db/*", ".github/*", "third_party/*"), ALL),
     # The browser proof builds its renderer from Go source and embeds pill assets.
-    (("internal/apps/*", "internal/apppill/*", "internal/htmlrender/*", "internal/serve/*"), PACKAGING | BROWSER),
+    (("internal/apps/*", "internal/apppill/*", "internal/htmlrender/*"), PACKAGING | BROWSER),
+    (("internal/serve/*",), ALL),
     (("cmd/*", "internal/cli/*", "internal/release*/*", "internal/update*/*", "internal/storage/*",
       "internal/worker/*", "internal/session/*", "internal/protocol/*", "internal/daemon/*",
       "internal/paths/*", "internal/identity/*", "internal/transport*/*", "internal/sshd/*",

@@ -242,13 +242,14 @@ class ContinuityPolicyTest(unittest.TestCase):
         case = Mock()
         case.validate_result.return_value = {"running": self.build}
         case.start_adoption.return_value = {"pin": "metadata-pin"}
-        releases = SimpleNamespace(registry="registry", probe="probe", directory=self.root)
+        releases = SimpleNamespace(registry="registry", probe="probe", directory=self.root, native_only=False)
         origin = Mock()
         with patch.object(installed_chain.installed_adoption, "AdoptionCase", return_value=case), \
                 patch.object(continuity, "reconnect_current", return_value={"strictContinuityPassed": True}) as reconnect, \
                 patch.object(installed_chain, "await_chain") as hop:
             self.run_chain(case, releases, origin)
         reconnect.assert_called_once_with(case, self.first)
+        case.initialize_preserved_baseline.assert_not_called()
         hop.assert_called_once()
 
     def test_ordered_host_explicitly_reconnects_after_adoption(self):

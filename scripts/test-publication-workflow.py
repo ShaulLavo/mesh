@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -337,10 +338,9 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("name: installed-publication-${{ matrix.key }}", aggregate)
         self.assertIn("publication-trust", aggregate)
         pin = importlib.import_module("test-installed-gate-wiring").PIN
-        for name in ("release", "ci"):
-            caller = (ROOT / ".github/workflows" / (name + ".yml")).read_text()
-            self.assertEqual(re.findall(r"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@([0-9a-f]{40})", caller), [pin])
-            self.assertIn("harness_source: " + pin, caller)
+        caller = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertEqual(re.findall(r"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@([0-9a-f]{40})", caller), [pin])
+        self.assertIn("harness_source: " + pin, caller)
 
     def test_actual_native_shell_forwards_one_complete_task_and_propagates_failure(self):
         command = wiring.step(wiring.job(WORKFLOW, "publication-native"), "Exercise the actual signed draft through native services")
@@ -376,7 +376,8 @@ class PublicationWorkflowTests(unittest.TestCase):
         ci = (ROOT / ".github/workflows/ci.yml").read_text()
         for name in ("test-publication-jobs", "test-publication-workflow"):
             self.assertIn("python3 scripts/" + name + ".py", ci)
-            self.assertIn("scripts/" + name + ".py", WORKFLOW)
+            classifier = runpy.run_path(str(ROOT / "scripts/ci-changes.py"))
+            self.assertIn("installed", classifier["checks_for"]("scripts/" + name + ".py"))
 
 
 class DraftIntakeTests(unittest.TestCase):

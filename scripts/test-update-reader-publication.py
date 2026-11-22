@@ -27,7 +27,7 @@ class ReaderPublicationTests(unittest.TestCase):
         for path in ("internal/cli/update_reader.go", "internal/cli/command.go", "cmd/mesh/main.go",
                      "internal/update/host_updater.go", "db/migrations/00017_example.sql"):
             with self.subTest(path=path):
-                self.assertIn("update_proofs", CHANGES.checks_for(path))
+                self.assertIn("installed", CHANGES.checks_for(path))
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="mrp-")
