@@ -2004,7 +2004,9 @@ Run Mesh's stateless MCP 2026-07-28 server over stdio, or over loopback
 Streamable HTTP when --http is passed.
 
 In stdio mode, stdout carries only newline-delimited JSON-RPC MCP messages;
-diagnostics and startup errors go to stderr.
+diagnostics and startup errors go to stderr. Pass --identity NAME to enable
+durable execution contexts and mesh_exec; without --identity, only passive
+native discovery is enabled.
 
 In HTTP mode (--http 127.0.0.1:PORT --identity NAME), Mesh binds only the
 specified loopback address at /mcp and authenticates every POST with a

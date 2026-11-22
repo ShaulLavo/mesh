@@ -64,9 +64,9 @@ Each JSON invocation writes one envelope with `schemaVersion`, `operation`, `sta
 
 ## Run the native MCP stdio server
 
-Start `mesh mcp` from an MCP client that speaks the stateless `2026-07-28` protocol. `stdout` carries only newline-delimited JSON-RPC MCP messages; diagnostics and startup errors go to `stderr` (exiting with status 2 before any protocol output). Legacy `initialize` handshakes are refused with `-32601`.
+Create a per-agent application identity once with `mesh mcp identity create NAME`, then start `mesh mcp --identity NAME` from an MCP client that speaks the stateless `2026-07-28` protocol. Without `--identity`, `mesh mcp` serves passive discovery tools and refuses `mesh_context_*` and `mesh_exec` with `usage.invalid`. `stdout` carries only newline-delimited JSON-RPC MCP messages; diagnostics, `--help`, and startup errors go to `stderr` (exiting with status 2 before any protocol output on bad usage). Legacy `initialize` handshakes are refused with `-32601`.
 
-Tool results carry the same agent envelope in `structuredContent` and a bounded summary in `content`. Opaque job handles (`mj1.<hostId>.<sessionId>.<instance>`) let a fresh `mesh mcp` process inspect, wait on, read output from, send stdin to, signal, cancel, or remove durable jobs as its very first request without discovery. Cancelling a wait or closing stdin never cancels an accepted job.
+Tool results carry the same agent envelope in `structuredContent` and a bounded summary in `content`. Opaque context handles (`mc1.<hostId>.<contextId>`) and job handles (`mj1.<hostId>.<sessionId>.<instance>`) let a fresh `mesh mcp --identity NAME` process open/update/close working contexts, run keyed pipe commands with `mesh_exec`, or inspect, wait on, read output from, send stdin to, signal, cancel, or remove durable jobs as its very first request without discovery. A retried `mesh_context_open` and `mesh_context_receipt` return the original revision-1 snapshot; call `mesh_context_get` for the current state. Cancelling a wait or closing stdin never cancels an accepted job.
 
 ## Run the native MCP loopback HTTP server
 
@@ -77,7 +77,7 @@ mesh mcp identity create codex
 mesh mcp --http 127.0.0.1:8765 --identity codex
 ```
 
-Mesh listens only on the given loopback IP and port at `/mcp`. It matches the exact configured `Host` and port, accepts an absent `Origin` or an explicitly configured exact loopback origin (`--allow-origin http://127.0.0.1:3000`), rejects `GET` and `DELETE` with `405`, and ignores incoming `Mcp-Session-Id` and `Last-Event-ID` headers.
+Mesh exposes the same native tool catalog (including contexts and `mesh_exec`) through the shared dispatch core, listening only on the given loopback IP and port at `/mcp`. It matches the exact configured `Host` and port, accepts an absent `Origin` or an explicitly configured exact loopback origin (`--allow-origin http://127.0.0.1:3000`), rejects `GET` and `DELETE` with `405`, and ignores incoming `Mcp-Session-Id` and `Last-Event-ID` headers.
 
 Every `POST /mcp` requires `Authorization: Bearer TOKEN` from the private `0600` token file tied to that listener and identity (path printed on stderr; the token value is never logged). Responses use `application/json` or request-scoped `text/event-stream` (`Accept` must include both). Closing the response stream cancels the in-flight HTTP request and never cancels an accepted Mesh job.
 

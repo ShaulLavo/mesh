@@ -83,7 +83,7 @@ func TestMCPHTTPValidationAndTokenFileSecurity(t *testing.T) {
 		t.Fatalf("public origin accepted: stdout=%q err=%v", stdout, err)
 	}
 
-	symlinkDir := canonicalTempDir(t)
+	symlinkDir := t.TempDir()
 	symlinkPath := filepath.Join(symlinkDir, "link.json")
 	if err := os.Symlink(filepath.Join(symlinkDir, "real.json"), symlinkPath); err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 		t.Fatalf("create identity: %v", err)
 	}
 
-	tokenPath := filepath.Join(canonicalTempDir(t), "mcp-http-token.json")
+	tokenPath := filepath.Join(t.TempDir(), "mcp-http-token.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -126,7 +126,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 	}()
 
 	// Wait until the private 0600 token file appears.
-	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile, testenv.HangTimeout)
+	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile)
 
 	info, err := os.Lstat(tokenPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
@@ -280,7 +280,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		}), nil
 	}
 
-	tokenPath := filepath.Join(canonicalTempDir(t), "review-a.json")
+	tokenPath := filepath.Join(t.TempDir(), "review-a.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr-*")
@@ -297,7 +297,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		<-done
 	}()
 
-	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile, testenv.HangTimeout)
+	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile)
 
 	jobHandle := "mj1." + hostID + ".7K3D.0123456789abcdef0123456789abcdef"
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_job_status","arguments":{"job":"` + jobHandle + `"}}}`
@@ -371,7 +371,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 	}
 }
 
-func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testing.T) {
+func TestMCPHTTPTokenFileParentResolutionSwapAndExclusivity(t *testing.T) {
 	prepareCommandEnvironment(t)
 	if _, _, err := executeCommand(t, Dependencies{}, "mcp", "identity", "create", "agent-a", "--json"); err != nil {
 		t.Fatal(err)
@@ -390,16 +390,65 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 		t.Fatal(err)
 	}
 
-	// 1. Symlinked parent directory must be refused (bounded context so regression never hangs).
+	// 1. Symlinked parent directory (such as macOS /tmp or /work/repos) is
+	// resolved once, then created/managed via O_NOFOLLOW descriptors under the
+	// canonical directory — including when a leaf subdir does not yet exist.
 	symTokenPath := filepath.Join(symParent, "sub", "tok.json")
-	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", symTokenPath); err == nil || !strings.Contains(err.Error(), "sym-parent") {
-		t.Fatalf("symlinked parent directory accepted or wrong error: %v", err)
+	symCtx, symCancel := context.WithCancel(t.Context())
+	defer symCancel()
+	stderrSym, err := os.CreateTemp(root, "stderr-sym-*")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Lstat(filepath.Join(realDir, "sub", "tok.json")); !os.IsNotExist(err) {
-		t.Fatalf("token file created through symlinked parent: %v", err)
+	defer func() { _ = stderrSym.Close() }()
+	symCmd := NewCommand(Dependencies{Stderr: stderrSym, Now: time.Now})
+	symCmd.SetArgs([]string{"mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", symTokenPath})
+	symDone := make(chan error, 1)
+	go func() { symDone <- symCmd.ExecuteContext(symCtx) }()
+
+	symRec := waitForMCPHTTPTokenFile(t, symTokenPath, symDone, stderrSym)
+	canonicalTokenPath := filepath.Join(realDir, "sub", "tok.json")
+	info, err := os.Lstat(canonicalTokenPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || symRec.Identity != "agent-a" {
+		symCancel()
+		<-symDone
+		t.Fatalf("symlinked parent did not create regular 0600 file at canonical path %s: info=%v err=%v", canonicalTokenPath, info, err)
+	}
+	symCancel()
+	if err := <-symDone; err != nil {
+		t.Fatalf("symlinked-parent listener exit error: %v", err)
+	}
+	if _, err := os.Lstat(canonicalTokenPath); !os.IsNotExist(err) {
+		t.Fatalf("symlinked-parent token file not cleaned up on exit: %v", err)
 	}
 
-	// 2. Existing unrelated regular file must be refused and left untouched.
+	// 2. A mid-operation symlink swap in the canonical path is still refused by
+	// the strict O_NOFOLLOW descriptor walk.
+	if f, err := openTokenDirNoFollow(filepath.Join(symParent, "sub")); err == nil || !strings.Contains(err.Error(), "sym-parent") {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("openTokenDirNoFollow accepted symlink component: err=%v", err)
+	}
+
+	// 3. The token file itself must never be a symlink (pointing to an existing or missing target).
+	targetFile := filepath.Join(realDir, "target.txt")
+	const targetSentinel = "do-not-touch\n"
+	if err := os.WriteFile(targetFile, []byte(targetSentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(symParent, "leaf-link.json")
+	if err := os.Symlink(targetFile, leafLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", leafLink); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("symlink token leaf accepted or wrong error: %v", err)
+	}
+	if got, err := os.ReadFile(targetFile); err != nil || string(got) != targetSentinel { //nolint:gosec // test temp file
+		t.Fatalf("symlink leaf target altered: got=%q err=%v", got, err)
+	}
+
+	// 4. Existing unrelated regular file must be refused and left untouched.
 	existing := filepath.Join(realDir, "unrelated.txt")
 	const sentinel = "keep-me-intact\n"
 	if err := os.WriteFile(existing, []byte(sentinel), 0o600); err != nil {
@@ -413,7 +462,7 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 		t.Fatalf("unrelated file altered: got=%q err=%v", got, err)
 	}
 
-	// 3. Two live listeners configured with the same token path: second must fail without overwriting first.
+	// 5. Two live listeners configured with the same token path: second must fail without overwriting first.
 	sharedPath := filepath.Join(realDir, "shared.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -431,7 +480,7 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 		<-done1
 	}()
 
-	rec1 := waitForMCPHTTPTokenFile(t, sharedPath, done1, stderr1, testenv.HangTimeout)
+	rec1 := waitForMCPHTTPTokenFile(t, sharedPath, done1, stderr1)
 
 	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-b", "--token-file", sharedPath); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("second listener overwrote live listener token file or wrong error: %v", err)
@@ -455,10 +504,10 @@ func canonicalTempDir(t *testing.T) string {
 	return canonical
 }
 
-func waitForMCPHTTPTokenFile(t *testing.T, tokenPath string, done chan error, stderrFile *os.File, timeout time.Duration) mcpHTTPTokenFile {
+func waitForMCPHTTPTokenFile(t *testing.T, tokenPath string, done chan error, stderrFile *os.File) mcpHTTPTokenFile {
 	t.Helper()
 	var record mcpHTTPTokenFile
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(testenv.HangTimeout)
 	for time.Now().Before(deadline) {
 		raw, err := os.ReadFile(tokenPath) //nolint:gosec // test temp file
 		if err == nil && json.Unmarshal(raw, &record) == nil && record.Token != "" {
@@ -473,7 +522,7 @@ func waitForMCPHTTPTokenFile(t *testing.T, tokenPath string, done chan error, st
 		}
 	}
 	stderrBytes, _ := os.ReadFile(stderrFile.Name())
-	t.Fatalf("token file %s never populated within %s (stderr=%q)", tokenPath, timeout, stderrBytes)
+	t.Fatalf("token file %s never populated within %s (stderr=%q)", tokenPath, testenv.HangTimeout, stderrBytes)
 	return mcpHTTPTokenFile{}
 }
 

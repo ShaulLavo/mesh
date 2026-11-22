@@ -99,6 +99,23 @@ func TestSDKClientPositivePeerInterop(t *testing.T) {
 		t.Fatalf("SDK mesh_job_output: res=%+v err=%v", outRes, err)
 	}
 
+	// Context open and mesh_exec round-trip through Go SDK v1.8.0.
+	ctxRes, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "mesh_context_open",
+		Arguments: map[string]any{"host": testHostID, "request_key": "sdk-ctx", "cwd": "/work"},
+	})
+	if err != nil || ctxRes.IsError || ctxRes.StructuredContent == nil {
+		t.Fatalf("SDK mesh_context_open: res=%+v err=%v", ctxRes, err)
+	}
+
+	execRes, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "mesh_exec",
+		Arguments: map[string]any{"context": testContext, "request_key": "sdk-exec", "argv": []string{"/bin/true"}},
+	})
+	if err != nil || execRes.IsError || execRes.StructuredContent == nil {
+		t.Fatalf("SDK mesh_exec: res=%+v err=%v", execRes, err)
+	}
+
 	// Tool error carries isError:true and the agentapi envelope in structuredContent.
 	errRes, err := session.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "mesh_job_output",

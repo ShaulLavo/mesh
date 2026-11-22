@@ -397,6 +397,41 @@ def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, tok
     return token2
 
 
+def exercise_http_context_and_exec(fixture, authority, token):
+    """Open a durable context and run a short job over loopback HTTP via shared dispatch."""
+    host_id = fixture.remote_id
+    opened = call_tool_json(
+        authority,
+        token,
+        50,
+        "mesh_context_open",
+        {"host": host_id, "request_key": "http-exec-ctx-1", "cwd": str(fixture.root), "shell": "sh"},
+    )
+    require(not opened["result"]["isError"], f"HTTP mesh_context_open failed: {opened}")
+    ctx_handle = opened["result"]["structuredContent"]["data"]["handle"]
+    require(ctx_handle.startswith(f"mc1.{host_id}."), f"unexpected HTTP context handle: {ctx_handle}")
+
+    ran = call_tool_json(
+        authority,
+        token,
+        51,
+        "mesh_exec",
+        {
+            "context": ctx_handle,
+            "request_key": "http-exec-job-1",
+            "command": "printf 'hello-http-exec\\n'",
+            "wait_ms": 10000,
+        },
+    )
+    require(not ran["result"]["isError"], f"HTTP mesh_exec failed: {ran}")
+    data = ran["result"]["structuredContent"]["data"]
+    require(data["state"] == "exited" and data["result"]["termination"]["code"] == 0, f"HTTP mesh_exec result: {data}")
+    require(data["stdout"]["data"] == "hello-http-exec\n", f"HTTP mesh_exec stdout: {data}")
+
+    closed = call_tool_json(authority, token, 52, "mesh_context_close", {"context": ctx_handle})
+    require(not closed["result"]["isError"] and closed["result"]["structuredContent"]["data"]["state"] == "closed", f"HTTP mesh_context_close failed: {closed}")
+
+
 def exercise_application_identity_isolation(fixture, root):
     host_id = fixture.remote_id
     for name in ("review-a", "review-b"):
@@ -527,6 +562,7 @@ def main():
 
             check_endpoint_and_protocol_matrix(authority, token1)
             token2 = exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, token1)
+            exercise_http_context_and_exec(fixture, authority, token2)
             exercise_application_identity_isolation(fixture, root)
 
             # Clean SIGTERM shutdown removes token file and emits zero stdout and zero token leakage.

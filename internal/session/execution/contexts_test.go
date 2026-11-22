@@ -501,3 +501,46 @@ func TestContextListPages(t *testing.T) {
 		t.Fatalf("pages returned %d of 5 contexts", len(seen))
 	}
 }
+
+func TestContextJobReceiptPreservesResolvedCwdAcrossContextEdit(t *testing.T) {
+	j := contextJournal(t)
+	c := openTestContext(t, j, ownerA, "ctx-cwd", "/work/dir-a")
+	key := jobKey(ownerA, c.ID, "job-cwd-1")
+	first, owner, err := reserveJob(t, j, key, "cmd-1", nil)
+	if err != nil || !owner {
+		t.Fatalf("initial reserve: owner=%v err=%v", owner, err)
+	}
+	first, err = j.Published(t.Context(), first.Binding)
+	if err != nil {
+		t.Fatalf("publish launch: %v", err)
+	}
+	if first.Cwd != "/work/dir-a" {
+		t.Fatalf("first receipt Cwd = %q, want /work/dir-a", first.Cwd)
+	}
+
+	// Edit context to a new directory and replay the same request key.
+	nextDir := "/work/dir-b"
+	if _, err := j.UpdateContext(t.Context(), ownerA, c.ID, 1, ContextChange{Cwd: &nextDir}, func(ContextSpec) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	replay, owner, err := reserveJob(t, j, key, "cmd-1", nil)
+	if err != nil || owner {
+		t.Fatalf("replay reserve: owner=%v err=%v", owner, err)
+	}
+	if replay.Cwd != "/work/dir-a" {
+		t.Fatalf("replayed receipt Cwd = %q, want original /work/dir-a", replay.Cwd)
+	}
+
+	// Simulate an older persisted receipt on disk with Cwd cleared: ReadLaunchSnapshot restores it.
+	first.Cwd = ""
+	if _, err := j.save(first); err != nil {
+		t.Fatal(err)
+	}
+	lookedUp, err := j.Lookup(t.Context(), key)
+	if err != nil && !errors.Is(err, ErrProgress) {
+		t.Fatalf("Lookup after clearing Cwd: %v", err)
+	}
+	if lookedUp.Cwd != "/work/dir-a" {
+		t.Fatalf("Lookup did not restore Cwd from launch snapshot: got %q, want /work/dir-a", lookedUp.Cwd)
+	}
+}

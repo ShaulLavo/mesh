@@ -1177,3 +1177,139 @@ func TestHTTPBoundarySizeInvalidEnvelopeWithLongID(t *testing.T) {
 		t.Fatalf("boundary jsonrpc 1.0 status=%d body=%s", resp2.StatusCode, raw2)
 	}
 }
+
+func TestHTTPContextOpenAndExec(t *testing.T) {
+	var openedReq OpenContextRequest
+	var execReq ExecRequest
+	releaseExec := make(chan struct{})
+	exitZero := 0
+	controls := &stubControls{
+		openContextFn: func(_ context.Context, req OpenContextRequest) (CallOutcome, error) {
+			openedReq = req
+			return CallOutcome{
+				Envelope: okEnvelope("contexts.open", agentapi.ExecutionContext{
+					Handle:    testContext,
+					HostID:    testHostID,
+					ContextID: testContextID,
+					State:     "open",
+					Revision:  1,
+					Cwd:       req.Cwd,
+					Shell:     req.Shell,
+				}),
+				Target: &TargetMeta{HostID: testHostID, ContextID: testContext, Cwd: req.Cwd},
+			}, nil
+		},
+		execFn: func(ctx context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+			execReq = req
+			if notify != nil {
+				notify(ProgressUpdate{Progress: 12, Message: "running " + testJob})
+			}
+			select {
+			case <-releaseExec:
+			case <-ctx.Done():
+				return CallOutcome{}, ctx.Err()
+			}
+			return CallOutcome{
+				Envelope: okEnvelope("sessions.create", ExecResultData{
+					Job:        testJob,
+					RequestKey: req.RequestKey,
+					Target:     TargetMeta{HostID: testHostID, ContextID: req.Context.String(), Cwd: "/tmp"},
+					State:      "exited",
+					Wait:       "completed",
+					Result: &agentapi.ExecutionResult{
+						Termination: agentapi.ExecutionTermination{Kind: "exit", Code: &exitZero},
+					},
+					Stdout: &ExecStreamData{Encoding: "utf-8", Data: "hello-from-http-exec\n", EOF: true},
+					Stderr: &ExecStreamData{Encoding: "utf-8", Data: "", EOF: true},
+				}),
+				Target: &TargetMeta{HostID: testHostID, ContextID: req.Context.String(), Cwd: "/tmp"},
+			}, nil
+		},
+	}
+
+	_, ts, endpoint := startTestHTTPServer(t, HTTPServerOptions{
+		ServerOptions: ServerOptions{Version: "0.1.0-ctx", Controls: controls},
+	})
+	client := ts.Client()
+
+	// 1. tools/list over HTTP exposes context tools and mesh_exec from the shared registry.
+	listReq := makeMCPHTTPRequest(t, endpoint, testHTTPToken, standardMCPReqBody("1", mcpwire.MethodListTools, ""), func(r *http.Request) {
+		r.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+		r.Header.Set(mcpwire.MethodHeader, mcpwire.MethodListTools)
+	})
+	listResp, err := client.Do(listReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listRaw, err := io.ReadAll(listResp.Body)
+	_ = listResp.Body.Close()
+	if err != nil || listResp.StatusCode != http.StatusOK {
+		t.Fatalf("tools/list status=%d err=%v body=%s", listResp.StatusCode, err, listRaw)
+	}
+	for _, wantTool := range []string{"mesh_context_open", "mesh_context_get", "mesh_context_list", "mesh_context_receipt", "mesh_context_update", "mesh_context_close", "mesh_exec"} {
+		if !bytes.Contains(listRaw, []byte(`"`+wantTool+`"`)) {
+			t.Fatalf("HTTP tools/list missing %s", wantTool)
+		}
+	}
+
+	// 2. Open a context over HTTP (JSON response).
+	openBody := standardMCPReqBody("2", mcpwire.MethodCallTool, `,"name":"mesh_context_open","arguments":{"host":"pc","request_key":"http-ctx-1","cwd":"/tmp","shell":"sh"}`)
+	openReq := makeMCPHTTPRequest(t, endpoint, testHTTPToken, openBody, func(r *http.Request) {
+		r.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+		r.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+		r.Header.Set(mcpwire.NameHeader, "mesh_context_open")
+	})
+	openResp, err := client.Do(openReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openRaw, err := io.ReadAll(openResp.Body)
+	_ = openResp.Body.Close()
+	if err != nil || openResp.StatusCode != http.StatusOK || !bytes.Contains(openRaw, []byte(testContext)) {
+		t.Fatalf("mesh_context_open status=%d err=%v body=%s", openResp.StatusCode, err, openRaw)
+	}
+	if openedReq.Host != "pc" || openedReq.RequestKey != "http-ctx-1" || openedReq.Cwd != "/tmp" || openedReq.Shell != "sh" {
+		t.Fatalf("unexpected OpenContextRequest: %+v", openedReq)
+	}
+
+	// 3. Run a short job with mesh_exec over HTTP (SSE with progress notification + terminal result).
+	execBody := fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"_meta":{"%s":"%s","%s":{},"progressToken":"exec-1"},"name":"mesh_exec","arguments":{"context":%q,"request_key":"http-exec-1","command":"echo hello-from-http-exec"}}}`,
+		mcpwire.VersionKey, mcpwire.Version, mcpwire.ClientCapsKey, testContext,
+	)
+	execHTTPReq := makeMCPHTTPRequest(t, endpoint, testHTTPToken, execBody, func(r *http.Request) {
+		r.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+		r.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+		r.Header.Set(mcpwire.NameHeader, "mesh_exec")
+	})
+	execResp, err := client.Do(execHTTPReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = execResp.Body.Close() }()
+	if execResp.StatusCode != http.StatusOK || !strings.HasPrefix(execResp.Header.Get("Content-Type"), "text/event-stream") {
+		raw, _ := io.ReadAll(execResp.Body)
+		close(releaseExec)
+		t.Fatalf("mesh_exec status=%d content-type=%q body=%s", execResp.StatusCode, execResp.Header.Get("Content-Type"), raw)
+	}
+	// Read the first SSE progress chunk before releasing exec completion so the test is deterministic.
+	buf := make([]byte, 4096)
+	n, readErr := execResp.Body.Read(buf)
+	close(releaseExec)
+	rest, restErr := io.ReadAll(execResp.Body)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		t.Fatalf("read SSE progress: %v", readErr)
+	}
+	if restErr != nil {
+		t.Fatalf("read SSE completion: %v", restErr)
+	}
+	var execRaw []byte
+	execRaw = append(execRaw, buf[:n]...)
+	execRaw = append(execRaw, rest...)
+	if !bytes.Contains(execRaw, []byte(`"notifications/progress"`)) || !bytes.Contains(execRaw, []byte("hello-from-http-exec")) {
+		t.Fatalf("mesh_exec SSE missing progress or stdout: %s", execRaw)
+	}
+	if execReq.Context.String() != testContext || execReq.RequestKey != "http-exec-1" || execReq.Command != "echo hello-from-http-exec" {
+		t.Fatalf("unexpected ExecRequest: %+v", execReq)
+	}
+}

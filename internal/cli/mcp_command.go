@@ -23,7 +23,9 @@ func (a *application) mcpCommand() *cobra.Command {
 		Long: "Run Mesh's stateless MCP 2026-07-28 server over stdio, or over loopback\n" +
 			"Streamable HTTP when --http is passed.\n\n" +
 			"In stdio mode, stdout carries only newline-delimited JSON-RPC MCP messages;\n" +
-			"diagnostics and startup errors go to stderr.\n\n" +
+			"diagnostics and startup errors go to stderr. Pass --identity NAME to enable\n" +
+			"durable execution contexts and mesh_exec; without --identity, only passive\n" +
+			"native discovery is enabled.\n\n" +
 			"In HTTP mode (--http 127.0.0.1:PORT --identity NAME), Mesh binds only the\n" +
 			"specified loopback address at /mcp and authenticates every POST with a\n" +
 			"random bearer token stored in a private 0600 file. Rotate tokens with\n" +

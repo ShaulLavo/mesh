@@ -185,22 +185,23 @@ type HostUpdateCommit struct {
 
 // HostInfo is the transport representation of one daemon's identity.
 type HostInfo struct {
-	MachineName             string             `json:"machineName,omitempty"`
-	NameRevision            uint64             `json:"nameRevision,omitempty"`
-	Build                   *release.Build     `json:"build,omitempty"`
-	UpdateEvidenceSupported bool               `json:"updateEvidenceSupported,omitempty"`
-	HostUpdate              *HostUpdateSummary `json:"hostUpdate,omitempty"`
-	UpdateSupported         bool               `json:"updateSupported,omitempty"`
-	RecoverySupported       bool               `json:"recoverySupported,omitempty"`
-	ServiceHealthSupported  bool               `json:"serviceHealthSupported,omitempty"`
-	FilesSupported          bool               `json:"filesSupported,omitempty"`
-	ExecutionPipeSupported  bool               `json:"executionPipeSupported,omitempty"`
-	ID                      string             `json:"id"`
-	MeshIdentity            string             `json:"meshIdentity"`
-	Account                 string             `json:"account,omitempty"`
-	TailscaleName           string             `json:"tailscaleName,omitempty"`
-	PrivateName             string             `json:"privateName,omitempty"`
-	Wake                    *wake.Grant        `json:"wake,omitempty"`
+	MachineName               string             `json:"machineName,omitempty"`
+	NameRevision              uint64             `json:"nameRevision,omitempty"`
+	Build                     *release.Build     `json:"build,omitempty"`
+	UpdateEvidenceSupported   bool               `json:"updateEvidenceSupported,omitempty"`
+	HostUpdate                *HostUpdateSummary `json:"hostUpdate,omitempty"`
+	UpdateSupported           bool               `json:"updateSupported,omitempty"`
+	RecoverySupported         bool               `json:"recoverySupported,omitempty"`
+	ServiceHealthSupported    bool               `json:"serviceHealthSupported,omitempty"`
+	FilesSupported            bool               `json:"filesSupported,omitempty"`
+	ExecutionPipeSupported    bool               `json:"executionPipeSupported,omitempty"`
+	ExecutionContextSupported bool               `json:"executionContextSupported,omitempty"`
+	ID                        string             `json:"id"`
+	MeshIdentity              string             `json:"meshIdentity"`
+	Account                   string             `json:"account,omitempty"`
+	TailscaleName             string             `json:"tailscaleName,omitempty"`
+	PrivateName               string             `json:"privateName,omitempty"`
+	Wake                      *wake.Grant        `json:"wake,omitempty"`
 }
 
 // ServiceInfo is the transport representation of one origin service and its

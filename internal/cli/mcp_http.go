@@ -240,18 +240,56 @@ func resolveTokenFilePath(stateDir, authority, identityName, override string) (s
 	return abs, nil
 }
 
-// openTokenParentNoFollow walks every directory component without following
-// symlinks (allowing only macOS's system /var and /tmp root prefixes) and
-// returns a held directory descriptor verified to be a directory.
-func openTokenParentNoFollow(dir string) (*os.File, error) {
+// canonicalizeTokenParentDir resolves symlinks in the existing parent prefix of
+// dir once, so ordinary paths such as /tmp on macOS or a linked workspace root
+// like /work/repos work. Not-yet-created suffix directories stay literal, and
+// the token filename itself is never passed here. Everything after this walks
+// the canonical path with O_NOFOLLOW descriptors so a mid-operation symlink
+// swap is refused.
+func canonicalizeTokenParentDir(dir string) (string, error) {
 	clean := filepath.Clean(dir)
 	if !filepath.IsAbs(clean) {
-		return nil, fmt.Errorf("token directory %q must be absolute", dir)
+		return "", fmt.Errorf("token directory %q must be absolute", dir)
 	}
-	anchor, parts := splitNoFollowAnchor(clean)
-	fd, err := unix.Open(anchor, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	var tail []string
+	cur := clean
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("resolve token directory %s: %w", cur, err)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", fmt.Errorf("resolve token directory %s: %w", cur, err)
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
+}
+
+// openTokenDirNoFollow walks every directory component of a canonical absolute
+// path from "/" without following symlinks and returns a held directory
+// descriptor verified to be a directory.
+func openTokenDirNoFollow(canonicalDir string) (*os.File, error) {
+	clean := filepath.Clean(canonicalDir)
+	if !filepath.IsAbs(clean) {
+		return nil, fmt.Errorf("token directory %q must be absolute", canonicalDir)
+	}
+	sep := string(os.PathSeparator)
+	rest := strings.TrimPrefix(clean, sep)
+	var parts []string
+	if rest != "" {
+		parts = strings.Split(rest, sep)
+	}
+	fd, err := unix.Open(sep, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open token root %s: %w", anchor, err)
+		return nil, fmt.Errorf("open token root %s: %w", sep, err)
 	}
 	for _, part := range parts {
 		next, stepErr := openOrCreateDirComponent(fd, part)
@@ -274,14 +312,6 @@ func openTokenParentNoFollow(dir string) (*os.File, error) {
 	return file, nil
 }
 
-func splitNoFollowAnchor(clean string) (string, []string) {
-	anchor, rest := noFollowAnchor(clean)
-	if rest == "" {
-		return anchor, nil
-	}
-	return anchor, strings.Split(rest, string(os.PathSeparator))
-}
-
 func openOrCreateDirComponent(parentFD int, name string) (int, error) {
 	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 	fd, err := unix.Openat(parentFD, name, flags, 0)
@@ -302,11 +332,16 @@ func openOrCreateDirComponent(parentFD int, name string) (int, error) {
 }
 
 func claimPrivateTokenFile(path string, record mcpHTTPTokenFile) (*mcpHTTPTokenHandle, error) {
-	dirFile, err := openTokenParentNoFollow(filepath.Dir(path))
+	canonicalDir, err := canonicalizeTokenParentDir(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	dirFile, err := openTokenDirNoFollow(canonicalDir)
 	if err != nil {
 		return nil, err
 	}
 	baseName := filepath.Base(path)
+	canonicalPath := filepath.Join(canonicalDir, baseName)
 	dirFD := int(dirFile.Fd())
 
 	tempName, dev, ino, err := writeTempTokenInDir(dirFD, record)
@@ -318,9 +353,9 @@ func claimPrivateTokenFile(path string, record mcpHTTPTokenFile) (*mcpHTTPTokenH
 		_ = unix.Unlinkat(dirFD, tempName, 0)
 		_ = dirFile.Close()
 		if errors.Is(err, unix.EEXIST) {
-			return nil, fmt.Errorf("token file %s already exists; choose a fresh path or stop the existing listener", path)
+			return nil, fmt.Errorf("token file %s already exists; choose a fresh path or stop the existing listener", canonicalPath)
 		}
-		return nil, fmt.Errorf("claim token file %s: %w", path, err)
+		return nil, fmt.Errorf("claim token file %s: %w", canonicalPath, err)
 	}
 	_ = unix.Unlinkat(dirFD, tempName, 0)
 	_ = unix.Fsync(dirFD)
@@ -328,7 +363,7 @@ func claimPrivateTokenFile(path string, record mcpHTTPTokenFile) (*mcpHTTPTokenH
 	return &mcpHTTPTokenHandle{
 		dir:        dirFile,
 		baseName:   baseName,
-		path:       path,
+		path:       canonicalPath,
 		authority:  record.Listener,
 		identity:   record.Identity,
 		ownerNonce: record.OwnerNonce,
