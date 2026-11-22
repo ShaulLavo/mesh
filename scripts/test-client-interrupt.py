@@ -380,13 +380,14 @@ class DiagnosticTest(unittest.TestCase):
         guarded = {"changes", "gate"}
         for name in guarded:
             self.assertIn("!inputs.client_interrupt", jobs[name])
-        for name in set(jobs).difference(guarded, {"client-interrupt-diagnostic", "publish"}):
+        self.assertNotIn("publish", jobs)
+        self.assertNotIn("uses: ./.github/workflows/release.yml", source)
+        for name in set(jobs).difference(guarded, {"client-interrupt-diagnostic"}):
             self.assertRegex(jobs[name], r"(?m)^    needs: (?:changes|\[changes, update-proofs\])$")
             condition = re.findall(r"^    if: (.+)$", jobs[name], re.MULTILINE)
             if name != "quality":
                 self.assertEqual(len(condition), 1)
                 self.assertNotIn("always()", condition[0])
-        self.assertIn("needs.gate.result == 'success'", jobs["publish"])
         diagnostic = jobs["client-interrupt-diagnostic"]
         self.assertIn("github.event_name == 'workflow_dispatch' && inputs.client_interrupt", diagnostic)
         self.assertNotIn("strategy:", diagnostic)

@@ -294,14 +294,20 @@ git -C "$checkout" commit -qam 'later cask update'
 batched_head=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
 cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask3.rb"
-# Head not green yet -> clean no-green-commit skip (never falls back to older SHA with inconsistent provenance),
+# Head not green yet AND underlying feature also not green -> clean no-green-commit skip,
 # unless Cask is stale (then reconciles stale Cask!).
-result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask3.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "" "")
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask3.rb" GH_GATE_COUNT=0 WORKFLOW_SHA="$batched_head" run_reserve "" "")
 grep -Fqx 'action=skip' <<<"$result"
 grep -Fqx 'reason=no-green-commit' <<<"$result"
-result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "" "")
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" GH_GATE_COUNT=0 WORKFLOW_SHA="$batched_head" run_reserve "" "")
 grep -Fqx 'action=reconcile' <<<"$result"
 grep -Fqx 'version=v0.1.44' <<<"$result"
+# Trailing automated Cask merge (GITHUB_TOKEN push, no main push CI) on top of a green feature
+# commit -> inherits the underlying feature commit's green main CI and publishes batched_head!
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask3.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "" "")
+grep -Fqx 'action=publish' <<<"$result"
+grep -Fqx "source=$batched_head" <<<"$result"
+grep -Fqx 'version=v0.1.45' <<<"$result"
 # API outages MUST fail loudly instead of looking like a clean no-green-commit skip.
 if GH_LATEST_TAG=v0.1.44 GH_CHECK_RUNS_FAIL=1 WORKFLOW_SHA="$batched_head" run_reserve "" "" >/dev/null 2>&1; then
   echo 'FAIL: check-runs API failure was swallowed as a skip' >&2
@@ -344,10 +350,14 @@ if GH_LATEST_TAG=v0.1.44 run_reserve "$side_commit" "" >/dev/null 2>&1; then
   echo 'FAIL: accepted a non-first-parent side-branch commit' >&2
   exit 1
 fi
-# Matching green main HEAD publishes cleanly (even after a cask commit in the batch)!
+# A merge commit with code changes MUST NOT inherit an earlier commit's green CI!
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask3.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$merged_head" run_reserve "" "")
+grep -Fqx 'action=skip' <<<"$result"
+grep -Fqx 'reason=no-green-commit' <<<"$result"
+# Matching green main HEAD publishes cleanly!
 result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$merged_head" WORKFLOW_SHA="$merged_head" run_reserve "" "")
 grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx "source=$merged_head" <<<"$result"
-grep -Fqx 'version=v0.1.45' <<<"$result"
+grep -Fqx 'version=v0.1.46' <<<"$result"
 
 echo 'PASS: release reservation rejects classifier errors, requires tested source, preserves retries, advances past failed reservations, and supports batched auto-selection'

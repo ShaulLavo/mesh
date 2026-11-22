@@ -26,8 +26,23 @@ trap 'rm -rf -- "$temporary"' EXIT
 
 is_main_first_parent() {
   local commit=$1
-  git rev-list --first-parent origin/main >"$temporary/first-parent.txt"
+  git rev-list --first-parent origin/main >"$temporary/first-parent.txt" || return 1
   grep -Fxq "$commit" "$temporary/first-parent.txt"
+}
+
+effective_gate_sha() {
+  local current=$1 published_source=$2
+  local parent commit_changes
+  while [[ $current != "$published_source" ]]; do
+    parent=$(git rev-parse "${current}^1" 2>/dev/null) || break
+    commit_changes=$(git diff --name-only "$parent..$current") || return 1
+    if [[ -z $commit_changes ]] || classify_non_cask_changes "$commit_changes"; then
+      printf '%s\n' "$current"
+      return 0
+    fi
+    current=$parent
+  done
+  printf '%s\n' "$current"
 }
 
 classify_non_cask_changes() {
@@ -203,6 +218,15 @@ fi
 
 GATE_STATUS=missing
 check_green_gate "$source_sha"
+if [[ $GATE_STATUS != green ]]; then
+  gate_sha=$(effective_gate_sha "$source_sha" "$published_source")
+  if [[ $gate_sha != "$source_sha" && $gate_sha != "$published_source" ]]; then
+    trailing_changes=$(git diff --name-only "$gate_sha..$source_sha")
+    if ! classify_non_cask_changes "$trailing_changes"; then
+      check_green_gate "$gate_sha"
+    fi
+  fi
+fi
 if [[ $GATE_STATUS != green ]]; then
   if [[ -z $requested_source ]]; then
     if maybe_reconcile_cask "$latest_tag" "$published_source" "$explicit_version"; then
