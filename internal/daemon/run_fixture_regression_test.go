@@ -22,9 +22,9 @@ func TestDaemonRunFixtureCleanup(t *testing.T) {
 
 func checkDaemonFixtureProbe(t *testing.T, scenario string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), runtimeTestTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDaemonRunFixtureProbe$", "-test.v", "-test.timeout=12s") //nolint:gosec // executes this test binary with a fixed probe selection
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDaemonRunFixtureProbe$", "-test.v", "-test.timeout="+runtimeTestTimeout.String()) //nolint:gosec // executes this test binary with a fixed probe selection
 	cmd.Env = append(os.Environ(), daemonFixtureProbe+"="+scenario)
 	output, err := cmd.CombinedOutput()
 	var exitErr *exec.ExitError
@@ -60,6 +60,10 @@ func TestDaemonRunFixtureProbe(t *testing.T) {
 	var runCtx context.Context
 	t.Cleanup(func() { checkFakeDaemonCleanup(runCtx, t, scenario, fixture, release) })
 	fixture = newDaemonRunFixture(t)
+	if scenario == "readiness-timeout" || strings.HasSuffix(scenario, "join-timeout") {
+		// These controls deliberately withhold readiness or completion until timeout.
+		fixture.timeout = 3 * time.Second
+	}
 	if scenario == "restart-join-timeout" {
 		fixture.start(t, func(ctx context.Context) error {
 			return runFiniteDaemonFake(ctx, fixture.root, "success", release)

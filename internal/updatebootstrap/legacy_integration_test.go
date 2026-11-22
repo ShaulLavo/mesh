@@ -18,6 +18,7 @@ import (
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/testenv"
 	workerstate "github.com/shaul/mesh/internal/worker"
 )
 
@@ -117,7 +118,7 @@ func stopLegacyFixture(t *testing.T, state string, command *exec.Cmd, exited <-c
 }
 
 func createLegacySession(parent context.Context, state string, inspect func(context.Context, net.Conn) (executableImage, error)) (string, int, error) {
-	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	ctx, cancel := context.WithTimeout(parent, testenv.HangTimeout)
 	defer cancel()
 	conn, err := dial(ctx, filepath.Join(state, "daemon.sock"))
 	if err != nil {
@@ -144,9 +145,16 @@ type legacyFixtureProcess struct {
 	args   []string
 }
 
-func legacyFixtureProcesses() (map[int]legacyFixtureProcess, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+func TestLegacyFixtureProcessListingHonorsCleanupCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	processes, err := legacyFixtureProcesses(ctx)
+	if !errors.Is(err, context.Canceled) || processes != nil {
+		t.Fatalf("process listing after cleanup cancellation = %v, %v", processes, err)
+	}
+}
+
+func legacyFixtureProcesses(ctx context.Context) (map[int]legacyFixtureProcess, error) {
 	output, err := exec.CommandContext(ctx, "ps", "-axww", "-o", "pid=,ppid=,stat=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list fixture processes: %w", err)
@@ -197,7 +205,9 @@ func legacyOwnedProcesses(all map[int]legacyFixtureProcess, state string) map[in
 	return owned
 }
 func cleanupLegacyWorkers(state string) error {
-	all, err := legacyFixtureProcesses()
+	ctx, cancel := context.WithTimeout(context.Background(), testenv.HangTimeout)
+	defer cancel()
+	all, err := legacyFixtureProcesses(ctx)
 	if err != nil {
 		return err
 	}
@@ -205,12 +215,10 @@ func cleanupLegacyWorkers(state string) error {
 	for pid := range owned {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		all, err = legacyFixtureProcesses()
+		all, err = legacyFixtureProcesses(ctx)
 		if err != nil {
 			return err
 		}
@@ -250,7 +258,9 @@ func testLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T, binary string) 
 		t.Fatal(err)
 	}
 	cleanup()
-	all, err := legacyFixtureProcesses()
+	ctx, cancel := context.WithTimeout(t.Context(), testenv.HangTimeout)
+	defer cancel()
+	all, err := legacyFixtureProcesses(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,14 +272,9 @@ func testLegacyWorkerFixtureCleansFailedImageProbe(t *testing.T, binary string) 
 	}
 }
 
-// legacyDaemonSocketCap is a hang cap, not a speed limit: a loaded CI runner
-// can take seconds to start a retained daemon. The test checks the outcome,
-// that the socket opens, and stops at once if the daemon exits first.
-const legacyDaemonSocketCap = 60 * time.Second
-
 func awaitLegacyDaemonSocket(t *testing.T, path string, exited <-chan struct{}) {
 	t.Helper()
-	deadline := time.Now().Add(legacyDaemonSocketCap)
+	deadline := time.Now().Add(testenv.HangTimeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return

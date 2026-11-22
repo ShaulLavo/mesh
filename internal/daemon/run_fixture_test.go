@@ -16,6 +16,7 @@ type daemonRunFixture struct {
 	root     string
 	stateDir string
 	cancel   context.CancelFunc
+	timeout  time.Duration
 	done     chan struct{}
 	err      error
 	joined   bool
@@ -38,7 +39,7 @@ func newDaemonRunFixture(t *testing.T) *daemonRunFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &daemonRunFixture{root: root, stateDir: filepath.Join(root, "state"), env: make(map[string]daemonFixtureEnv)}
+	fixture := &daemonRunFixture{root: root, stateDir: filepath.Join(root, "state"), timeout: runtimeTestTimeout, env: make(map[string]daemonFixtureEnv)}
 	t.Cleanup(func() { fixture.remove(t) })
 	if len(SocketPath(fixture.stateDir)) > 103 {
 		t.Fatal("daemon fixture socket path exceeds 103 bytes; set MESH_SHORT_TMP to a shorter private directory")
@@ -88,7 +89,7 @@ func (f *daemonRunFixture) stop(t *testing.T) {
 	}
 	t.Log("daemon fixture: canceling")
 	f.cancel()
-	timer := time.NewTimer(runtimeTestTimeout)
+	timer := time.NewTimer(f.timeout)
 	defer timer.Stop()
 	select {
 	case <-f.done:
@@ -98,7 +99,7 @@ func (f *daemonRunFixture) stop(t *testing.T) {
 			t.Errorf("daemon fixture run: %v", f.err)
 		}
 	case <-timer.C:
-		t.Errorf("daemon fixture: shutdown did not complete within %s; retaining %s", runtimeTestTimeout, f.root)
+		t.Errorf("daemon fixture: shutdown did not complete within %s; retaining %s", f.timeout, f.root)
 	}
 }
 
@@ -127,7 +128,7 @@ func (f *daemonRunFixture) remove(t *testing.T) {
 
 func (f *daemonRunFixture) dial(t *testing.T) transport.Conn {
 	t.Helper()
-	timer := time.NewTimer(runtimeTestTimeout)
+	timer := time.NewTimer(f.timeout)
 	defer timer.Stop()
 	retry := time.NewTicker(10 * time.Millisecond)
 	defer retry.Stop()
@@ -137,7 +138,7 @@ func (f *daemonRunFixture) dial(t *testing.T) transport.Conn {
 		case <-f.done:
 			t.Fatalf("daemon fixture: run returned before readiness: %v", f.err)
 		case <-timer.C:
-			t.Fatalf("daemon fixture: readiness did not complete within %s: %v", runtimeTestTimeout, lastErr)
+			t.Fatalf("daemon fixture: readiness did not complete within %s: %v", f.timeout, lastErr)
 		case <-retry.C:
 		}
 		stream, err := net.DialTimeout("unix", SocketPath(f.stateDir), 100*time.Millisecond)

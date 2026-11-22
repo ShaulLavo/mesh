@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 
-from fixtures import tls, release_documents
+from fixtures import installed_clock, tls, release_documents
 
 
 class Origin(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -72,15 +72,16 @@ def inspect(binary, manifest, environment, output):
 
 
 def wait_daemon(binary, environment, process):
-    for _ in range(120):
+    deadline = installed_clock.parent_deadline(120)
+    while True:
+        remaining = installed_clock.remaining_until(deadline, 120)
         if process.poll() is not None:
             raise RuntimeError("original reader daemon exited during setup")
-        result = subprocess.run([str(binary), "ls", "--daemon"], env=environment,
-                                capture_output=True, timeout=5, check=False)
+        result = subprocess.run([str(binary), "ls", "--daemon", f"--timeout={remaining}s"], env=environment,
+                                capture_output=True, timeout=remaining, check=False)
         if result.returncode == 0:
             return
         time.sleep(0.05)
-    raise RuntimeError("original reader daemon did not start within its existing proof budget")
 
 
 def exercise(args, root, server):
@@ -121,12 +122,13 @@ def exercise(args, root, server):
 
 
 def terminate(process):
+    deadline = installed_clock.cleanup_deadline()
     process.terminate()
     try:
-        process.wait(timeout=10)
+        process.wait(timeout=installed_clock.remaining_until(deadline, 10))
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        process.wait(timeout=installed_clock.remaining_until(deadline, installed_clock.CLEANUP_SECONDS))
 
 
 def inspect_with_daemon(args, candidate, manifest_bytes, source_digest, environment, daemon, server):
