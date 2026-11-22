@@ -27,6 +27,17 @@ type fileFixture struct {
 	root       string
 }
 
+// resolvedPath removes symlinks from a scratch path, because the file controls
+// refuse them anywhere (macOS keeps temporary directories behind /var and /tmp).
+func resolvedPath(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 func newFileFixture(t *testing.T) *fileFixture {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -592,7 +603,7 @@ func TestFileOperationsRefuseSymlinksAndSpecialFiles(t *testing.T) {
 	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	socketPath := filepath.Join(compactSocketTempDir(t), "s")
+	socketPath := filepath.Join(resolvedPath(t, compactSocketTempDir(t)), "s")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
@@ -731,7 +742,7 @@ func TestFileSearchStopsAtMatchAndFileLimits(t *testing.T) {
 		t.Fatalf("limited: %d %q", len(limited.Matches), limited.Truncated)
 	}
 
-	crowd := t.TempDir()
+	crowd := resolvedPath(t, t.TempDir())
 	for i := range protocol.MaxFileSearchFiles + 5 {
 		if err := os.WriteFile(filepath.Join(crowd, fmt.Sprintf("f%05d", i)), nil, 0o600); err != nil {
 			t.Fatal(err)

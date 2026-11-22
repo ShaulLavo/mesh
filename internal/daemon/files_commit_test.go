@@ -330,7 +330,7 @@ func TestQueuedFileReplyUsesLatchedFullGrant(t *testing.T) {
 	}
 	device, grantCtx := bindExecutionFixtureGrant(t, state, host.ID)
 	controller := newFileController(host.ID)
-	file := filepath.Join(t.TempDir(), "a.txt")
+	file := filepath.Join(resolvedPath(t, t.TempDir()), "a.txt")
 	if err := os.WriteFile(file, []byte("private"), 0o600); err != nil {
 		t.Fatal(err)
 	}

@@ -63,12 +63,14 @@ func TestFileSearchBudgetsEncodedMatches(t *testing.T) {
 	f := newFileFixture(t)
 	markup := strings.Repeat("<", protocol.MaxFileMatchText)
 	f.put("markup.txt", []byte(strings.Repeat(markup+"\n", 1000)))
+	// Escape-heavy directory names, as deep as the filesystem's path limit allows.
 	deep := f.root
 	for range 6 {
-		deep = filepath.Join(deep, strings.Repeat("<", 200))
-		if err := os.Mkdir(deep, 0o750); err != nil {
-			t.Fatal(err)
+		next := filepath.Join(deep, strings.Repeat("<", 200))
+		if err := os.Mkdir(next, 0o750); err != nil {
+			break
 		}
+		deep = next
 	}
 	if err := os.WriteFile(filepath.Join(deep, "more.txt"), []byte(strings.Repeat(markup+"\n", 1000)), 0o600); err != nil {
 		t.Fatal(err)
@@ -92,18 +94,21 @@ func TestFileSearchBudgetsEncodedMatches(t *testing.T) {
 func TestFileReadCursorSurvivesALongEscapeHeavyPath(t *testing.T) {
 	f := newFileFixture(t)
 	dir := f.root
+	// As deep as the filesystem's path limit allows: PATH_MAX is 4096 on Linux
+	// and 1024 on macOS.
 	for len(dir)+256 < protocol.MaxFilePath-16 {
-		dir = filepath.Join(dir, strings.Repeat("<", 250))
-		if err := os.Mkdir(dir, 0o750); err != nil {
-			t.Fatal(err)
+		next := filepath.Join(dir, strings.Repeat("<", 250))
+		if err := os.Mkdir(next, 0o750); err != nil {
+			break
 		}
+		dir = next
 	}
 	path := filepath.Join(dir, "data.txt")
 	want := patternBytes(protocol.MaxFilePage + 4096)
 	if err := os.WriteFile(path, want, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if len(path) < protocol.MaxFilePath-300 {
+	if len(path) < 600 {
 		t.Fatalf("test path is only %d bytes", len(path))
 	}
 	first := f.readPage(protocol.FileReadRequest{Path: path})
