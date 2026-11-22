@@ -132,6 +132,11 @@ func (r *clientRelay) HandleFrame(ctx context.Context, frame protocol.Frame) (bo
 		if err != nil {
 			return true, fmt.Errorf("daemon: decode client control: %w", err)
 		}
+		// Terminal controls forward the original frame, so a credential is
+		// refused before any effect or forwarding.
+		if err := rejectStrayCaller(message); err != nil {
+			return true, err
+		}
 		switch message.Type {
 		case protocol.TypeAttach, protocol.TypeAttachDetached:
 			if err := terminfo.Install(ctx, message.Term, message.Terminfo); err != nil {

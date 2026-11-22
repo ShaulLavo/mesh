@@ -18,6 +18,9 @@ import (
 
 const MaxRecord = 64 << 10
 
+// MaxBoundedRecord is the largest record PublishBounded accepts.
+const MaxBoundedRecord = 256 << 10
+
 type Stage string
 
 const (
@@ -125,16 +128,19 @@ func (f *Files) open(name string, flags int) (*os.File, error) {
 	}
 	return file, nil
 }
-func (f *Files) Read(name string, out any) error {
+func (f *Files) Read(name string, out any) error { return f.ReadBounded(name, out, MaxRecord) }
+
+// ReadBounded reads a record published with PublishBounded at the same limit.
+func (f *Files) ReadBounded(name string, out any, limit int) error {
 	file, err := f.open(name, os.O_RDONLY)
 	if err != nil {
 		return err
 	}
-	bytes, readErr := io.ReadAll(io.LimitReader(file, MaxRecord+1))
+	bytes, readErr := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err := errors.Join(readErr, f.closeFile(file)); err != nil {
 		return err
 	}
-	if len(bytes) > MaxRecord {
+	if len(bytes) > limit {
 		return fmt.Errorf("execution: record exceeds size bound")
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(bytes)))
@@ -180,8 +186,11 @@ func (f *Files) Publish(name string, value any, exclusive bool) (Stage, error) {
 }
 func (f *Files) PublishBounded(name string, value any, exclusive bool, limit int) (Stage, error) {
 	data, err := json.Marshal(value)
-	if err != nil || len(data) > limit || limit > 256<<10 || limit < 1 {
+	if err != nil {
 		return BeforePublish, fmt.Errorf("execution: encode bounded record: %w", err)
+	}
+	if len(data) > limit || limit > MaxBoundedRecord || limit < 1 {
+		return BeforePublish, fmt.Errorf("execution: record of %d bytes exceeds its %d byte bound", len(data), limit)
 	}
 	return f.publishBytes(name, data, exclusive)
 }

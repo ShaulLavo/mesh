@@ -39,6 +39,9 @@ func (s *clientServer) stateRequest(ctx context.Context, frame protocol.Frame) p
 	if err := validateRequestID(request); err != nil {
 		return stateRequestError(request, err)
 	}
+	if err := rejectStrayCaller(request); err != nil {
+		return stateRequestError(request, err)
+	}
 	readCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	defer cancel()
 	response, err := s.stateReadControl(readCtx, request)

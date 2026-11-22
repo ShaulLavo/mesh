@@ -55,6 +55,7 @@ func (a *application) sessionExecutionCommand(name, kind string) *cobra.Command 
 	command.Flags().BoolVar(&o.json, "json", false, "write one agent result, required")
 	command.Flags().DurationVar(&o.timeout, "timeout", 5*time.Second, "finite deadline from 100ms to 60s")
 	command.Flags().StringVar(&o.instance, "instance", "", "exact instance from the creation receipt, required")
+	applicationExecutionFlags(command, &o.agentExecutionOptions)
 	if kind == protocol.TypeExecutionLogs {
 		command.Flags().StringVar(&o.stream, "stream", execution.KindPTY, "exact stream, pty, stdout or stderr")
 		command.Flags().StringVar(&o.cursor, "cursor", "", "saved independent output cursor")
