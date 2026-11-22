@@ -9,12 +9,12 @@ import (
 	"github.com/shaul/mesh/internal/mcpwire"
 )
 
-// profileGroups maps the gateway profile's native groups to registry groups.
-// mesh_skill is always present.
 // profileTerminal names both the profile group and the registry group of
 // the terminal tools.
 const profileTerminal = "terminal"
 
+// profileGroups maps the gateway profile's native groups to registry groups.
+// mesh_skill is always present.
 var profileGroups = map[string][]string{
 	"hosts":         {groupHosts},
 	"contexts":      {groupContexts},

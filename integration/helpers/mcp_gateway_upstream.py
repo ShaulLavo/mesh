@@ -163,7 +163,6 @@ class Core:
             self.listens[key] = (req_id, acked, send)
         send({"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
               "params": {"notifications": acked, "_meta": {"io.modelcontextprotocol/subscriptionId": req_id}}}, False)
-        return None
 
     def notify_all(self, uri):
         with self.lock:

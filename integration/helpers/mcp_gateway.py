@@ -7,15 +7,14 @@ saturation, cancellation, graceful close, revocation and profile edits."""
 import base64
 import json
 import os
-from pathlib import Path
-import queue
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
-from mcp_connect import setup_client_device, run_mesh
-from mcp_gateway_upstream import HTTPUpstream, LONG_TOOL
+from mcp_connect import run_mesh, setup_client_device
+from mcp_gateway_upstream import LONG_TOOL, HTTPUpstream
 from pipe_execution import PipeFixture
 from terminal_window import print_diagnostics, require
 
@@ -25,7 +24,6 @@ META = {"io.modelcontextprotocol/protocolVersion": PROTO, "io.modelcontextprotoc
 ROUTE = "com.github.shaullavo.mesh/route"
 UPSTREAM_INFO = "com.github.shaullavo.mesh/upstreamServerInfo"
 SUB = "io.modelcontextprotocol/subscriptionId"
-B32 = "abcdefghijklmnopqrstuvwxyz234567"
 
 
 def b32(raw):
@@ -221,7 +219,7 @@ def run(world, binary, root):
 
     env, cfg, _state, device = setup_client_device(binary, root, "laptop", [entry_a, entry_b],
                                                    {host_a: claim_a, host_b: claim_b})
-    env_c, cfg_c, _state_c, device_c = setup_client_device(binary, root, "phone", [entry_a], {host_a: claim_a})
+    env_c, _cfg_c, _state_c, device_c = setup_client_device(binary, root, "phone", [entry_a], {host_a: claim_a})
     for host_env in (env_a, env_b):
         run_mesh(binary, host_env, "device", "approve", "--allow-root", "--", device, check_rc=0)
     run_mesh(binary, env_a, "device", "approve", "--allow-root", "--", device_c, check_rc=0)
@@ -283,7 +281,7 @@ def listing(binary, env, host_a, host_b, repo_a, search, repo_b):
                 require(exposed_name(host, svc, "t", tool) in names, f"missing {tool} on {host}")
         require(exposed_name(host_a, repo_a, "t", "echo") != exposed_name(host_b, repo_b, "t", "echo"), "collision across hosts")
         overflow = [t for t in hosted if t["name"].startswith("hx_")]
-        require(len(overflow) == 3 and len(set(t["name"] for t in overflow)) == 3, f"overflow names {overflow}")
+        require(len(overflow) == 3 and len({t["name"] for t in overflow}) == 3, f"overflow names {overflow}")
         require(all(len(n) <= 128 for n in names), "a name exceeds 128 characters")
         echo = next(t for t in hosted if t["name"] == exposed_name(host_a, repo_a, "t", "echo"))
         require(echo["x-vendor"]["big"] == 12345678901234567890 and echo["_meta"]["vendor.example/tag"] == "echo", echo)
@@ -439,12 +437,12 @@ def subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b):
         refused = exposed_uri(host_a, repo_a, "file:///refused/x")
         readme_b = exposed_uri(host_b, repo_b, "file:///docs/readme.md")
         readme_http = exposed_uri(host_a, search, "file:///docs/readme.md")
-        active = gw.start("subscriptions/listen", {"notifications": {"toolsListChanged": True, "resourceSubscriptions": [readme_a, refused, readme_b]}}, "active")
+        gw.start("subscriptions/listen", {"notifications": {"toolsListChanged": True, "resourceSubscriptions": [readme_a, refused, readme_b]}}, "active")
         ack = gw.wait_events("active", 1)[0]
         acked = ack["params"]["notifications"]
         require(ack["method"] == "notifications/subscriptions/acknowledged" and acked.get("toolsListChanged") is True, ack)
         require(sorted(acked["resourceSubscriptions"]) == sorted([readme_a, readme_b]), f"acknowledged subset {acked}")
-        quiet = gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [readme_http]}}, "quiet")
+        gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [readme_http]}}, "quiet")
         require(gw.wait_events("quiet", 1)[0]["params"]["notifications"]["resourceSubscriptions"] == [readme_http], "quiet ack")
         gw.tool(exposed_name(host_a, repo_a, "t", "touch"), {"uri": "file:///docs/readme.md"})
         events = gw.wait_events("active", 3)
@@ -555,7 +553,7 @@ def edits(binary, env, env_a, cfg, host_a, host_b, repo_a, notes):
 def revocation(binary, env, env_b, host_a, host_b, search, repo_b, device):
     gw = gateway(binary, env)
     try:
-        held = gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [exposed_uri(host_b, repo_b, "file:///docs/readme.md")]}}, "held")
+        gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [exposed_uri(host_b, repo_b, "file:///docs/readme.md")]}}, "held")
         gw.wait_events("held", 1)
         run_mesh(binary, env_b, "device", "revoke", "--", device, check_rc=0)
         ended = gw.reply("held", timeout=30)
