@@ -34,6 +34,10 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
 	}
 	if err := l.authorizeBoundExecution(ctx, req, journal, b); err != nil {
+		if journalBusy(err) {
+			// A typed execution failure carries state.unavailable, which callers retry.
+			return executionResponse(req, execution.Receipt{}, executionBoundaryError("execution control", err))
+		}
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	r, err := journal.Exact(admittedContext(ctx), b)
@@ -59,10 +63,22 @@ func (l *lifecycle) authorizeBoundExecution(ctx context.Context, req protocol.Co
 	if r.Key.Host != "" {
 		return authorizeExecutionOwner(ctx, req, r.Key)
 	}
+	// A journal lock that timed out says nothing about ownership. Reporting it
+	// as a denial told the job's own owner, under load, that it no longer owned
+	// its job, with no hint to retry.
+	if journalBusy(err) {
+		return executionBoundaryError("authorize bound execution", err)
+	}
 	if req.Caller != "" || req.ExecutionContext != nil {
 		return errors.Join(errCallerDenied, err)
 	}
 	return nil
+}
+
+// journalBusy reports a journal read that ran out of time waiting for its
+// lock, as opposed to a receipt that is missing or unreadable.
+func journalBusy(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {

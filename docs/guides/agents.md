@@ -70,6 +70,57 @@ Tool results carry the same agent envelope in `structuredContent` and a bounded 
 
 `mesh_terminal_open`, `mesh_terminal_input`, `mesh_terminal_resize` and `mesh_terminal_screen` run terminal jobs in a context; they reach only jobs the identity created, and input and resize return `terminal.attached` while a person is attached. `mesh_service_start`, `mesh_service_stop`, `mesh_service_publish`, `mesh_service_unpublish`, `mesh_apps_list`, `mesh_session_hibernate` and `mesh_session_recover` use the same host controls and restrictions as `mesh serve`, `mesh unserve`, `mesh app list`, `mesh hibernate` and `mesh recover`, without attaching to anything.
 
+## Configure an MCP client
+
+Give each agent client its own identity, so its contexts and jobs stay separate from other agents on the same account:
+
+```sh
+mesh mcp identity create claude
+mesh mcp identity create codex
+```
+
+### Claude Code
+
+Add the server to a project. This writes the entry to the project's `.mcp.json`:
+
+```sh
+claude mcp add --scope project mesh -- mesh mcp --identity claude
+```
+
+```json
+{
+  "mcpServers": {
+    "mesh": {
+      "type": "stdio",
+      "command": "mesh",
+      "args": ["mcp", "--identity", "claude"]
+    }
+  }
+}
+```
+
+Claude Code speaks the stateless protocol by default. It sends `server/discover` first and never falls back to `initialize` against Mesh. For `claude -p`, allow the tools with `--allowedTools mcp__mesh`.
+
+### Codex CLI
+
+Codex needs two opt-ins for this protocol: its `mcp_2026_07_28` feature, and `CODEX_MCP_PROTOCOL_VERSION` in the server's `env`. In `~/.codex/config.toml`:
+
+```toml
+[features]
+mcp_2026_07_28 = true
+
+[mcp_servers.mesh]
+command = "mesh"
+args = ["mcp", "--identity", "codex"]
+env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28" }
+```
+
+If either opt-in is missing, Codex sends a legacy `initialize`. Mesh refuses it, and Codex starts without the mesh tools and shows no error. Codex prints an "under-development features" warning while the feature is on. `codex exec` cannot ask for approval, so it refuses calls to tools that change state, such as `mesh_exec`, unless the server entry also sets `default_tools_approval_mode = "approve"`. Interactive Codex asks for approval instead.
+
+### What was verified
+
+Verified on Linux on 2026-11-22 with Mesh at `02700c75`, Claude Code 2.1.322 and Codex CLI 0.167.1, over stdio. Both clients were run non-interactively against an isolated second daemon. Each one listed hosts, opened a context and ran a command with `mesh_exec`. A second client process, with a fresh `mesh mcp`, then found the job by its request key and read its output. Codex was also run with each opt-in missing, which produced the legacy `initialize` described above. The redacted traces and the script that produced them are in `.internal/bench-results/mcp-clients/`. Codex was configured with `-c` overrides that use the same keys as the file above. Claude Code was configured with both `--mcp-config` and a project `.mcp.json`. The loopback HTTP endpoint was not tested with these clients.
+
 ## Run the native MCP loopback HTTP server
 
 When a local MCP client speaks stateless `2026-07-28` over Streamable HTTP, bind the native frontend to one explicit loopback address and application identity:
