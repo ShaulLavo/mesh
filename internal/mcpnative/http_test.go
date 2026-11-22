@@ -775,11 +775,17 @@ func (b *trackingBody) Read(p []byte) (int, error) {
 
 func (b *trackingBody) Close() error { return nil }
 
+// blockingResponseWriter models net/http's buffered response writer: Write
+// only buffers, a flush is what delivers bytes to the client, and a flush after
+// the write deadline has passed fails and drops what was buffered. Treating
+// buffered bytes as delivered would report a frame whose flush rotation aborted
+// as if the client had received it.
 type blockingResponseWriter struct {
 	header       http.Header
 	status       int
 	mu           sync.Mutex
-	buf          bytes.Buffer
+	pending      bytes.Buffer
+	delivered    bytes.Buffer
 	flushEntered chan struct{}
 	flushRelease chan struct{}
 	blockFirst   bool
@@ -815,14 +821,17 @@ func (w *blockingResponseWriter) Write(p []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	n, err := w.buf.Write(p)
+	n, err := w.pending.Write(p)
 	if err != nil {
 		return n, fmt.Errorf("write blocking test buffer: %w", err)
 	}
 	return n, nil
 }
 
-func (w *blockingResponseWriter) Flush() {
+func (w *blockingResponseWriter) Flush() { _ = w.FlushError() }
+
+// FlushError is what http.ResponseController.Flush calls.
+func (w *blockingResponseWriter) FlushError() error {
 	w.mu.Lock()
 	w.flushes++
 	n := w.flushes
@@ -834,6 +843,21 @@ func (w *blockingResponseWriter) Flush() {
 		}
 		<-w.flushRelease
 	}
+	return w.deliverPending()
+}
+
+// finish is the flush net/http performs when the handler returns.
+func (w *blockingResponseWriter) finish() { _ = w.deliverPending() }
+
+func (w *blockingResponseWriter) deliverPending() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.aborted.Load() {
+		w.pending.Reset()
+		return context.DeadlineExceeded
+	}
+	_, _ = w.pending.WriteTo(&w.delivered)
+	return nil
 }
 
 func (w *blockingResponseWriter) SetWriteDeadline(t time.Time) error {
@@ -846,7 +870,7 @@ func (w *blockingResponseWriter) SetWriteDeadline(t time.Time) error {
 func (w *blockingResponseWriter) bodyString() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.buf.String()
+	return w.delivered.String()
 }
 
 func TestHTTPByteBudgetsIngressAndOutput(t *testing.T) {
@@ -1053,18 +1077,48 @@ func TestHTTPByteBudgetsIngressAndOutput(t *testing.T) {
 	}
 }
 
+// The worker returns only after the progress frame's flush is already blocked,
+// so the terminal result is queued behind a paused flush when rotation lands.
 func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T) {
+	flushBlocked := make(chan struct{})
 	workerDone := make(chan struct{})
 	controls := &stubControls{
 		waitFn: func(_ context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+			defer close(workerDone)
 			total := float64(req.WaitMS)
 			notify(ProgressUpdate{Progress: 1, Total: &total, Message: "waiting"})
-			defer close(workerDone)
-			return CallOutcome{
-				Envelope: okEnvelope("sessions.wait", JobStateData{Job: req.Job.String(), State: "exited", Wait: "completed"}),
-			}, nil
+			<-flushBlocked
+			return completedWaitOutcome(req), nil
 		},
 	}
+	runRotationDuringBlockedFlush(t, controls, `,"progressToken":"p7"`, func() {
+		close(flushBlocked)
+		<-workerDone
+	})
+}
+
+// With no progress token the first flush carries the terminal result itself;
+// rotation during that flush must drop the frame instead of completing it.
+func TestHTTPRotationDropsTerminalFrameDuringBlockedFlush(t *testing.T) {
+	controls := &stubControls{
+		waitFn: func(_ context.Context, req JobWaitRequest, _ func(ProgressUpdate)) (CallOutcome, error) {
+			return completedWaitOutcome(req), nil
+		},
+	}
+	runRotationDuringBlockedFlush(t, controls, "", func() {})
+}
+
+func completedWaitOutcome(req JobWaitRequest) CallOutcome {
+	return CallOutcome{
+		Envelope: okEnvelope("sessions.wait", JobStateData{Job: req.Job.String(), State: "exited", Wait: "completed"}),
+	}
+}
+
+// runRotationDuringBlockedFlush pauses the exchange's first flush, runs
+// beforeRotate, rotates the token, releases the flush, and asserts the client
+// never receives request 7's result.
+func runRotationDuringBlockedFlush(t *testing.T, controls *stubControls, extraMeta string, beforeRotate func()) {
+	t.Helper()
 	srv, err := NewHTTPServer(HTTPServerOptions{
 		ServerOptions: ServerOptions{Version: "0.1.0-rot", Controls: controls},
 		Authority:     "127.0.0.1:9000",
@@ -1076,8 +1130,8 @@ func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T
 	defer func() { _ = srv.Shutdown(context.Background()) }()
 
 	waitBody := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"_meta":{"%s":"%s","%s":{},"progressToken":"p7"},"name":"mesh_job_wait","arguments":{"job":%q,"wait_ms":5000}}}`,
-		mcpwire.VersionKey, mcpwire.Version, mcpwire.ClientCapsKey, testJob,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"_meta":{"%s":"%s","%s":{}%s},"name":"mesh_job_wait","arguments":{"job":%q,"wait_ms":5000}}}`,
+		mcpwire.VersionKey, mcpwire.Version, mcpwire.ClientCapsKey, extraMeta, testJob,
 	)
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(waitBody))
 	req.URL.Host = ""
@@ -1096,11 +1150,10 @@ func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T
 		srv.ServeHTTP(bw, req)
 	}()
 
-	// Pause on the first progress flush and wait until the worker has ALREADY returned.
 	<-bw.flushEntered
-	<-workerDone
+	beforeRotate()
 
-	// Rotate the token while the SSE exchange is still open on the paused flush.
+	// Rotate the token while the exchange is still open on the paused flush.
 	gen, retired, err := srv.RotateToken(testHTTPTokenRotated)
 	if err != nil || gen != 2 || retired != 1 {
 		close(bw.flushRelease)
@@ -1111,10 +1164,11 @@ func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T
 	// Unblock the paused flush; the retired stream MUST NOT deliver the terminal result.
 	close(bw.flushRelease)
 	<-serveDone
+	bw.finish()
 
 	body := bw.bodyString()
 	if strings.Contains(body, `"resultType":"complete"`) || strings.Contains(body, `"id":7`) {
-		t.Fatalf("retired SSE stream delivered terminal result after rotation: %s", body)
+		t.Fatalf("retired stream delivered terminal result after rotation: %s", body)
 	}
 }
 
