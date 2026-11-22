@@ -35,7 +35,7 @@ type Operation struct {
 	Summary, Example                       string
 }
 
-var Operations = append(coreOperations, applicationOperations...)
+var Operations = append(append(coreOperations, applicationOperations...), mcpHTTPOperations...)
 
 var coreOperations = []Operation{
 	{Name: "scope.keygen", Command: "mesh device scope keygen", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: keyDirFlag, Value: pathFlagValue, Required: true, Summary: "explicit dedicated credential directory"}}, Summary: "Create a separate metadata credential without enrolling it.", Example: "mesh device scope keygen --key-dir KEY_DIRECTORY --json"},
@@ -150,7 +150,7 @@ func valueFlag(arg string) bool {
 	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", fileFlag, expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, cursorFlag, limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", maxBytesFlag, colsFlag, rowsFlag, instanceFlag, "--stream", "--signal", "--stdin", "--offset", "--write-key", "--base64", "--text":
 		return true
 	}
-	return applicationValueFlag(arg)
+	return applicationValueFlag(arg) || mcpHTTPValueFlag(arg)
 }
 
 func sessionReadFlags(list bool) []Flag {

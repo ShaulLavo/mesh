@@ -464,3 +464,76 @@ func TestMCPPart2DurableCwdContextListBudgetWaitMismatchAndLostAck(t *testing.T)
 		t.Fatalf("Finding 8a: expected 1 launch, got %d", launches.Load())
 	}
 }
+
+func TestMCPExecAlreadyTerminalCreateSetsWaitCompleted(t *testing.T) {
+	prepareCommandEnvironment(t)
+	hostID := "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"
+	ctxID := "fedcba9876543210fedcba9876543210"
+	inst := "0123456789abcdef0123456789abcdef"
+	if err := SaveHost(HostRecord{
+		ID: hostID, MeshIdentity: hostID, MachineName: "pc", NameRevision: 1, Endpoint: "ws://127.0.0.1:1/control/ws",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &application{dependencies: Dependencies{Now: time.Now}}
+
+	var waitCalls atomic.Int32
+	pool := newMCPHostPool(func(_ context.Context, h HostRecord) (transport.Conn, error) {
+		return newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) {
+			switch req.Type {
+			case protocol.TypeHostInfo:
+				return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: h.ID, MeshIdentity: h.MeshIdentity, MachineName: "pc", NameRevision: 1}}, nil
+			case protocol.TypeExecutionCreate:
+				return protocol.Control{Type: protocol.TypeExecutionReceipt, ExecutionReceipt: &protocol.ExecutionReceipt{
+					HostID: h.ID, SessionID: "7K3D", Instance: inst, RequestKey: req.RequestKey,
+					KeyScope: "application", Kind: "pipe", Phase: "terminal", Acceptance: "durable",
+					LaunchOutcome: "started", Publication: "published", Removal: "present",
+					ContextID: ctxID, Cwd: "/tmp", Result: testTerminalResult(),
+				}}, nil
+			case protocol.TypeExecutionWait:
+				waitCalls.Add(1)
+				return protocol.Control{Type: protocol.TypeError, ErrorCode: "internal", Message: "unexpected wait call"}, nil
+			case protocol.TypeExecutionLogs:
+				return protocol.Control{Type: protocol.TypeExecutionReceipt, ExecutionPage: &protocol.ExecutionPage{
+					HostID: h.ID, SessionID: "7K3D", Instance: inst, Stream: req.Stream,
+					StartCursor: "0", EndCursor: "0", NextCursor: "0", EarliestCursor: "0", ObservedEnd: "0",
+					Available: true, EOF: true, StreamClosed: true, Loss: "none",
+				}}, nil
+			default:
+				return protocol.Control{Type: protocol.TypeError, ErrorCode: "usage.invalid", Message: "unexpected"}, nil
+			}
+		}), nil
+	}, time.Now)
+	defer pool.Close()
+
+	controls := newMCPControls(app, pool, "mac1_test_cred")
+
+	// When wait_ms > 0 and execution.create already returns a terminal receipt, wait must be "completed".
+	out, err := controls.Exec(t.Context(), mcpnative.ExecRequest{
+		Context: mcpnative.ContextRef{HostID: hostID, ContextID: ctxID}, RequestKey: "k-fast-1",
+		Argv: []string{"/bin/true"}, Stdin: "closed", WaitMS: 10000, OutputBytes: 4096,
+	}, nil)
+	if err != nil || out.IsError {
+		t.Fatalf("Exec fast-terminal failed: out=%+v err=%v", out, err)
+	}
+	data, ok := out.Envelope.Data.(mcpnative.ExecResultData)
+	if !ok || data.State != "exited" || data.Wait != "completed" {
+		t.Fatalf("Exec fast-terminal data = %#v, want state=exited wait=completed", out.Envelope.Data)
+	}
+
+	// When wait_ms == 0, wait stays omitted even for an already-terminal receipt.
+	noWaitOut, err := controls.Exec(t.Context(), mcpnative.ExecRequest{
+		Context: mcpnative.ContextRef{HostID: hostID, ContextID: ctxID}, RequestKey: "k-fast-0",
+		Argv: []string{"/bin/true"}, Stdin: "closed", WaitMS: 0, OutputBytes: 4096,
+	}, nil)
+	if err != nil || noWaitOut.IsError {
+		t.Fatalf("Exec wait_ms=0 failed: out=%+v err=%v", noWaitOut, err)
+	}
+	noWaitData, ok := noWaitOut.Envelope.Data.(mcpnative.ExecResultData)
+	if !ok || noWaitData.State != "exited" || noWaitData.Wait != "" {
+		t.Fatalf("Exec wait_ms=0 data = %#v, want state=exited wait=''", noWaitOut.Envelope.Data)
+	}
+	if waitCalls.Load() != 0 {
+		t.Fatalf("expected 0 TypeExecutionWait calls for already-terminal create receipts, got %d", waitCalls.Load())
+	}
+}
