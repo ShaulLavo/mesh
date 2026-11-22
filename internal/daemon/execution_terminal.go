@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
@@ -68,8 +69,10 @@ func workerTerminalError(answer protocol.Control) error {
 	}
 }
 
-// executionScreen returns the rendered inspection of a terminal job. It reads
-// the screen the way session inspection does and never changes its size.
+// executionScreen returns the rendered inspection of a terminal job. The
+// live read goes to the exact worker instance, and the saved read only to
+// the checkpoint of the same reservation, so a removed job whose session ID
+// was reused never yields another job's screen. It never changes the size.
 func (l *lifecycle) executionScreen(ctx context.Context, req protocol.Control, r execution.Receipt, response protocol.Control) (protocol.Control, error) {
 	if err := terminalJobError(r); err != nil {
 		return response, err
@@ -81,24 +84,59 @@ func (l *lifecycle) executionScreen(ctx context.Context, req protocol.Control, r
 	if err := protocol.ValidateInspectDimensions(cols, rows); err != nil {
 		return response, &protocol.ExecutionValidationError{Err: err}
 	}
-	inspect := protocol.Control{Type: protocol.TypeInspect, RequestID: req.RequestID, SessionID: req.SessionID, PreviewCols: cols, PreviewRows: rows}
+	// Recheck the full grant immediately before reading the screen.
+	if err := workerExecutionAdmission(ctx); err != nil {
+		return response, executionBoundaryError("execution screen", err)
+	}
 	if liveTerminal(r) {
-		live, err := l.forwardRead(ctx, inspect, trustedReadAdmission)
-		if err == nil && live.Inspection != nil {
-			response.Inspection = live.Inspection
+		forward := protocol.Control{Type: protocol.TypeExecutionScreen, RequestID: req.RequestID, SessionID: req.SessionID, Instance: req.Instance, PreviewCols: cols, PreviewRows: rows}
+		answer, err := worker.ExchangeExecution(ctx, l.sessionsDir, forward)
+		if err == nil && answer.Type == protocol.TypeOK && answer.Inspection != nil {
+			response.Inspection, response.ScreenSource = answer.Inspection, screenSourceLive
 			return response, nil
 		}
 	}
-	saved, err := l.savedOutputPreview(ctx, inspect, trustedReadAdmission)
+	inspection, err := l.savedTerminalScreen(ctx, r.Binding, cols, rows)
 	if err != nil {
-		return response, fmt.Errorf("execution screen %s: %w", req.SessionID, errScreenUnavailable)
+		return response, err
+	}
+	response.Inspection, response.ScreenSource = &inspection, screenSourceSaved
+	return response, nil
+}
+
+const (
+	screenSourceLive  = "live"
+	screenSourceSaved = "saved"
+)
+
+// savedTerminalScreen reads the last checkpoint of exactly this job. The
+// session directory must hold the job's own reservation before and after the
+// read; otherwise the job's screen is gone.
+func (l *lifecycle) savedTerminalScreen(ctx context.Context, b execution.Binding, cols, rows int) (protocol.SessionInspection, error) {
+	dir := filepath.Join(l.sessionsDir, b.Reservation.ID)
+	sameJob := func() bool {
+		ref, ok := worker.ReservedAllocation(dir)
+		return ok && ref == b.Reservation
+	}
+	if !sameJob() {
+		return protocol.SessionInspection{}, fmt.Errorf("execution screen %s: %w", b.Reservation.ID, execution.ErrResultExpired)
+	}
+	inspect := protocol.Control{Type: protocol.TypeInspect, RequestID: "screen", SessionID: b.Reservation.ID, PreviewCols: cols, PreviewRows: rows}
+	saved, err := l.savedOutputPreview(ctx, inspect, trustedReadAdmission)
+	if !sameJob() {
+		return protocol.SessionInspection{}, fmt.Errorf("execution screen %s: %w", b.Reservation.ID, execution.ErrResultExpired)
+	}
+	if err != nil {
+		return protocol.SessionInspection{}, fmt.Errorf("execution screen %s: %w", b.Reservation.ID, errScreenUnavailable)
 	}
 	inspection := protocol.SessionInspection{Preview: saved.Preview, StyledPreview: saved.StyledPreview}
-	if saved.ObservedAt != nil {
+	switch {
+	case saved.CheckpointAt != nil:
+		inspection.ObservedAt = *saved.CheckpointAt
+	case saved.ObservedAt != nil:
 		inspection.ObservedAt = *saved.ObservedAt
 	}
-	response.Inspection = &inspection
-	return response, nil
+	return inspection, nil
 }
 
 var errScreenUnavailable = fmt.Errorf("no rendered screen is available for this job")

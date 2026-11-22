@@ -382,6 +382,9 @@ type Control struct {
 	// sessions a person started. mesh mcp sets it, so an agent's
 	// human-session tools never reach keyed jobs, service workers or apps.
 	HumanSessionOnly bool `json:"humanSessionOnly,omitempty"`
+	// ScreenSource says where a terminal job's screen came from: "live"
+	// from its worker, or "saved" from its last checkpoint.
+	ScreenSource string `json:"screenSource,omitempty"`
 
 	// Logs
 	Output []byte `json:"output,omitempty"`

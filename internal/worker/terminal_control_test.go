@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +92,12 @@ func (f terminalJobFixture) input(t *testing.T, key string, offset uint64, data 
 func (f terminalJobFixture) control(t *testing.T, req protocol.Control) protocol.Control {
 	t.Helper()
 	req.RequestID, req.SessionID, req.Instance = "terminal", f.w.cfg.ID, f.binding.Reservation.Instance
+	return f.raw(t, req)
+}
+
+// raw sends req exactly as given, for requests naming another instance.
+func (f terminalJobFixture) raw(t *testing.T, req protocol.Control) protocol.Control {
+	t.Helper()
 	client, server := net.Pipe()
 	defer func() { _ = client.Close() }()
 	done := make(chan struct{})
@@ -237,4 +244,20 @@ func TestTerminalInputRacesHumanAttach(t *testing.T) {
 	attaching.Wait()
 	waitFor(t, func() bool { return bytes.Equal(f.pty.inputs(), want.Bytes()) })
 	t.Logf("%d of 200 writes refused while attached", refused)
+}
+
+// The worker answers a screen read only for its own instance; a read meant
+// for an earlier job under the same session ID gets nothing.
+func TestTerminalScreenIsBoundToTheInstance(t *testing.T) {
+	f := newTerminalJobWorker(t)
+	queryEmit(t, f.pty, []byte("SCREEN-MARK\r\n"))
+	waitFor(t, func() bool {
+		reply := f.control(t, protocol.Control{Type: protocol.TypeExecutionScreen, PreviewCols: 80, PreviewRows: 24})
+		return reply.Type == protocol.TypeOK && reply.Inspection != nil && strings.Contains(strings.Join(reply.Inspection.Preview, "\n"), "SCREEN-MARK")
+	})
+	other := protocol.Control{Type: protocol.TypeExecutionScreen, RequestID: "screen", SessionID: f.w.cfg.ID, Instance: "0123456789abcdef0123456789abcdef", PreviewCols: 80, PreviewRows: 24}
+	reply := f.raw(t, other)
+	if reply.ErrorCode != protocol.ErrorCodeInstanceMismatch || reply.Inspection != nil {
+		t.Fatalf("screen for another instance = %+v", reply)
+	}
 }

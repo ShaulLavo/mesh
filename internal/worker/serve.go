@@ -41,7 +41,7 @@ func (w *Worker) serve(conn net.Conn) {
 		w.executionControl(conn, msg)
 		return
 	}
-	if err == nil && (msg.Type == protocol.TypeExecutionInput || msg.Type == protocol.TypeExecutionResize) {
+	if err == nil && (msg.Type == protocol.TypeExecutionInput || msg.Type == protocol.TypeExecutionResize || msg.Type == protocol.TypeExecutionScreen) {
 		w.serveTerminalControl(conn, msg)
 		return
 	}

@@ -125,6 +125,11 @@ func (c *mcpControls) runTerminalControl(ctx context.Context, operation string, 
 const executionPhaseTerminal = "terminal"
 
 const (
+	screenSourceLive  = "live"
+	screenSourceSaved = "saved"
+)
+
+const (
 	agentSessionResize = "sessions.resize"
 	agentSessionScreen = "sessions.screen"
 )
@@ -161,7 +166,10 @@ func agentTerminalScreen(response, request protocol.Control, host string) (agent
 		at := inspection.ObservedAt.UTC()
 		screen.ObservedAt = &at
 	}
-	screen.Live = response.ExecutionReceipt != nil && response.ExecutionReceipt.Phase != executionPhaseTerminal
+	screen.Source = response.ScreenSource
+	if screen.Source != screenSourceLive && screen.Source != screenSourceSaved {
+		return agentapi.TerminalScreen{}, fmt.Errorf("host returned a screen without its source")
+	}
 	return screen, nil
 }
 

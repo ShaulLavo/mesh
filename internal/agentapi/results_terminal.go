@@ -37,7 +37,9 @@ type TerminalScreen struct {
 	Lines    []string `json:"lines"`
 	Cols     int      `json:"cols"`
 	Rows     int      `json:"rows"`
-	Live     bool     `json:"live"`
+	// Source is "live" when the job's worker rendered the screen now, or
+	// "saved" for its last checkpoint; ObservedAt is then the checkpoint time.
+	Source string `json:"source"`
 }
 
 // ServiceChange is a route after a start, stop or publish.

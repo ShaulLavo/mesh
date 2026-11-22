@@ -30,6 +30,15 @@ func (w *Worker) serveTerminalControl(conn net.Conn, req protocol.Control) {
 		receipt, err := w.terminalInputRequest(req)
 		reply.InputReceipt = receipt
 		inputReplyError(&reply, err)
+	case req.Type == protocol.TypeExecutionScreen:
+		// The screen read is answered by this exact instance, so a reused
+		// session ID can never return another job's screen.
+		if err := protocol.ValidateInspectDimensions(req.PreviewCols, req.PreviewRows); err != nil {
+			inputReplyError(&reply, &protocol.ExecutionValidationError{Err: err})
+			break
+		}
+		inspection := w.inspectSession(req.PreviewCols, req.PreviewRows)
+		reply.Inspection = &inspection
 	default:
 		inputReplyError(&reply, w.terminalResize(req.Cols, req.Rows))
 		reply.Cols, reply.Rows = req.Cols, req.Rows
