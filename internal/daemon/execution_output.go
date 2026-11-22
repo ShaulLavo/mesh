@@ -70,6 +70,10 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 	switch req.Type {
 	case protocol.TypeExecutionInput:
 		return l.executionInput(ctx, req, r, response)
+	case protocol.TypeExecutionResize:
+		return l.executionResize(ctx, req, r, response)
+	case protocol.TypeExecutionScreen:
+		return l.executionScreen(ctx, req, r, response)
 	case protocol.TypeExecutionInspect:
 		if r.Phase == "uncertain" {
 			return response, execution.ErrUnknown

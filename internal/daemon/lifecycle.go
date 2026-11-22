@@ -276,7 +276,7 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 		}
 	}
 	switch request.Type {
-	case protocol.TypeExecutionLogs, protocol.TypeExecutionWait, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove, protocol.TypeExecutionInput, protocol.TypeExecutionInspect:
+	case protocol.TypeExecutionLogs, protocol.TypeExecutionWait, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove, protocol.TypeExecutionInput, protocol.TypeExecutionInspect, protocol.TypeExecutionResize, protocol.TypeExecutionScreen:
 		response, err := l.boundExecutionControl(ctx, request)
 		return response, true, err
 	case protocol.TypeExecutionList:

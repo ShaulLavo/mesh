@@ -139,7 +139,11 @@ type Worker struct {
 	nesting     map[net.Conn]protocol.SessionIdentity
 	nestReaders sync.WaitGroup
 	input       *inputRelay
-	finished    bool
+	// agentInput holds keyed acknowledgments of input written by an agent
+	// while no person was attached, and attempt makes them durable.
+	agentInput *terminalInput
+	attempt    *execution.Attempt
+	finished   bool
 	// hibernating keeps the agent recipe active through the stop, and turns
 	// away attachments that would otherwise land on a session mid-shutdown.
 	hibernating bool
@@ -236,6 +240,13 @@ func (r *inputRelay) enqueue(owner *attachment, payload []byte) bool {
 	}
 }
 
+// fits reports whether a write of size bytes can be queued now.
+func (r *inputRelay) fits(size int) bool {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	return !r.closed && r.queuedFrames < inputQueueFrameLimit && size <= inputQueueByteLimit-r.queuedBytes
+}
+
 func (r *inputRelay) release(frame inputFrame) {
 	r.queueMu.Lock()
 	r.queuedFrames--
@@ -248,16 +259,20 @@ func (r *inputRelay) writeLoop() {
 	for {
 		select {
 		case frame := <-r.queue:
-			if !r.worker.ownsAttachment(frame.owner) {
+			// A frame without an owner is acknowledged agent input. It was
+			// admitted before anyone attached, so it is written regardless.
+			if frame.owner != nil && !r.worker.ownsAttachment(frame.owner) {
 				r.release(frame)
 				continue
 			}
 			_, err := r.worker.pty.Write(frame.payload)
 			r.release(frame)
 			if err != nil {
-				r.worker.mu.Lock()
-				r.worker.dropLocked(frame.owner, "")
-				r.worker.mu.Unlock()
+				if frame.owner != nil {
+					r.worker.mu.Lock()
+					r.worker.dropLocked(frame.owner, "")
+					r.worker.mu.Unlock()
+				}
 				r.stop()
 				return
 			}
@@ -552,6 +567,12 @@ func Run(cfg Config) (int, error) {
 		exited:         make(chan struct{}),
 		pumpDone:       make(chan struct{}),
 		attached:       make(chan struct{}),
+		attempt:        attempt,
+	}
+	if attempt != nil {
+		if err := attempt.PrepareInput(); err != nil {
+			return 0, fmt.Errorf("worker: prepare terminal input: %w", err)
+		}
 	}
 
 	meta := Meta{

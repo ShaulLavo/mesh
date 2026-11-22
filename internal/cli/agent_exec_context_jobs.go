@@ -60,9 +60,6 @@ func (a *application) runContextJobCreate(cmd *cobra.Command, o agentExecutionOp
 	if o.context == "" {
 		return agentapi.Usage(operation, "--identity jobs need --context.")
 	}
-	if o.kind != execution.KindPipe {
-		return agentapi.Usage(operation, "Context jobs use --kind pipe.")
-	}
 	if (len(args) == 0) == (o.shellCommand == "") {
 		return agentapi.Usage(operation, "Pass either -- argv or --shell-command.")
 	}
@@ -70,5 +67,28 @@ func (a *application) runContextJobCreate(cmd *cobra.Command, o agentExecutionOp
 		return agentapi.Usage(operation, "Put command arguments after --.")
 	}
 	request := protocol.Control{Type: protocol.TypeExecutionCreate, ExecutionKind: o.kind, RequestKey: o.key, Command: args, Cwd: o.cwd, Stdin: o.stdin, ExecutionContext: &protocol.ExecutionContextRequest{ShellCommand: o.shellCommand}}
+	if err := contextJobTerminal(cmd, o, &request); err != nil {
+		return agentapi.Usage(operation, err.Error())
+	}
 	return a.runAgentExecution(cmd, o, request)
+}
+
+// contextJobTerminal applies terminal settings to a context job. A terminal
+// job takes input through its terminal, so it has no stdin mode.
+func contextJobTerminal(cmd *cobra.Command, o agentExecutionOptions, request *protocol.Control) error {
+	switch o.kind {
+	case execution.KindPipe:
+		if cmd.Flags().Changed("cols") || cmd.Flags().Changed("rows") || cmd.Flags().Changed("term") {
+			return fmt.Errorf("terminal settings require --kind pty")
+		}
+		return nil
+	case execution.KindPTY:
+		if o.stdin != "" {
+			return fmt.Errorf("terminal jobs take input through their terminal; omit --stdin")
+		}
+		request.Cols, request.Rows, request.Term = o.cols, o.rows, o.term
+		return nil
+	default:
+		return fmt.Errorf("choose --kind pty or --kind pipe")
+	}
 }

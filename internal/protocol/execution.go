@@ -24,6 +24,11 @@ const (
 	TypeExecutionRemove  = "execution.remove"
 	TypeExecutionInput   = "execution.input"
 	TypeExecutionInspect = "execution.inspect"
+	// TypeExecutionResize sets the size of a terminal job's PTY, and
+	// TypeExecutionScreen reads its rendered screen without changing it. The
+	// worker refuses a resize while a person is attached.
+	TypeExecutionResize  = "execution.resize"
+	TypeExecutionScreen  = "execution.screen"
 	TypeExecutionList    = "execution.list"
 	TypeExecutionListed  = "execution.listed"
 	TypeWorkerPipeProbe  = "worker.pipe.probe"
@@ -344,7 +349,7 @@ type ExecutionPage struct {
 // controls are admitted by the worker socket.
 func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionList:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionResize, TypeExecutionScreen, TypeExecutionList:
 		return true
 	default:
 		return false
@@ -362,31 +367,35 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	if (kind == TypeExecutionInput || kind == TypeWorkerLineInput) && name != sessionIDField && name != "instance" {
 		return validateExecutionInputField(name, raw)
 	}
-	switch name {
-	case sessionIDField, "instance":
+	if name == sessionIDField || name == "instance" {
 		return executionString(raw)
-	case "writeKey":
-		if kind == TypeWorkerLineRetire {
-			return executionString(raw)
-		}
-	case "stream", "cursor":
-		if kind == TypeExecutionLogs {
-			return executionString(raw)
-		}
-	case "maxBytes":
-		if kind == TypeExecutionLogs {
-			return executionInteger(name, raw)
-		}
-	case "timeoutMillis":
-		if kind == TypeExecutionWait {
-			return executionInteger(name, raw)
-		}
-	case "signal":
-		if kind == TypeExecutionSignal {
-			return executionString(raw)
-		}
 	}
-	return fmt.Errorf("execution: unexpected field %s", name)
+	field, ok := boundExecutionFields[name]
+	if !ok || field.kind != kind {
+		return fmt.Errorf("execution: unexpected field %s", name)
+	}
+	if field.integer {
+		return executionInteger(name, raw)
+	}
+	return executionString(raw)
+}
+
+// boundExecutionFields names the one exact-instance control that may carry
+// each optional field, and whether it is an integer.
+var boundExecutionFields = map[string]struct {
+	kind    string
+	integer bool
+}{
+	"writeKey":      {kind: TypeWorkerLineRetire},
+	"stream":        {kind: TypeExecutionLogs},
+	"cursor":        {kind: TypeExecutionLogs},
+	"maxBytes":      {kind: TypeExecutionLogs, integer: true},
+	"timeoutMillis": {kind: TypeExecutionWait, integer: true},
+	"signal":        {kind: TypeExecutionSignal},
+	"cols":          {kind: TypeExecutionResize, integer: true},
+	"rows":          {kind: TypeExecutionResize, integer: true},
+	"previewCols":   {kind: TypeExecutionScreen, integer: true},
+	"previewRows":   {kind: TypeExecutionScreen, integer: true},
 }
 
 func validateExecutionInputField(name string, raw json.RawMessage) error {
@@ -416,6 +425,9 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 		required = append(required, "kind", "command", "cwd")
 	} else if kind == TypeExecutionCreate {
 		required = append(required, "kind")
+	}
+	if kind == TypeExecutionResize {
+		required = append(required, "cols", "rows")
 	}
 	if kind == TypeExecutionInput || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire {
 		required = append(required, "writeKey")

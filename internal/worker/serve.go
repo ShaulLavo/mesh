@@ -41,6 +41,10 @@ func (w *Worker) serve(conn net.Conn) {
 		w.executionControl(conn, msg)
 		return
 	}
+	if err == nil && (msg.Type == protocol.TypeExecutionInput || msg.Type == protocol.TypeExecutionResize) {
+		w.serveTerminalControl(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeAgentBegin {
 		w.serveAgent(conn, msg)
 		return
