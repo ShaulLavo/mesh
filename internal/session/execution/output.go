@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // Output retains confirmations only for this reader lifetime and anchored file identities.
@@ -66,7 +68,7 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	return s.readPage(ctx, value, size)
 }
 func (s *streamStore) readPage(ctx context.Context, value string, size int) (Page, error) {
-	gate, err := s.files.lockShared(ctx, s.path("stream.lock"))
+	gate, err := s.readerFence(ctx, unix.LOCK_SH)
 	if err != nil {
 		return Page{}, err
 	}
@@ -83,7 +85,7 @@ func (s *streamStore) readPage(ctx context.Context, value string, size int) (Pag
 	if err != nil {
 		return Page{}, err
 	}
-	gate, err = s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err = s.readerFence(ctx, unix.LOCK_EX)
 	if err != nil {
 		return Page{}, err
 	}
@@ -165,7 +167,7 @@ func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamRes
 		return err
 	}
 	defer s.leave()
-	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err := s.readerFence(ctx, unix.LOCK_EX)
 	if err != nil {
 		return err
 	}

@@ -65,6 +65,9 @@ func (c *Capture) initialize() error {
 	if err := s.files.Confirm(s.path("stream.lock")); err != nil {
 		return executionBoundaryError("capture", err)
 	}
+	if err := s.createReaderLock(); err != nil {
+		return err
+	}
 	generation, err := freshToken()
 	if err != nil {
 		return executionBoundaryError("capture", err)
@@ -266,6 +269,9 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	ctx := c.writeCtx
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if err := s.yieldToReaders(ctx); err != nil {
+		return StreamResult{}, err
 	}
 	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
 	if err != nil {

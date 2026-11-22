@@ -128,12 +128,28 @@ func (a *application) runAgentExecution(cmd *cobra.Command, o agentExecutionOpti
 		deadline, _ := ctx.Deadline()
 		request.TimeoutMillis = max(1, int(time.Until(deadline)/time.Millisecond)-20)
 	}
+	if request.Type == protocol.TypeExecutionLogs {
+		request.TimeoutMillis = executionReadMillis(ctx)
+	}
 	response, err := controlRequest(ctx, conn, request)
 	if err != nil {
 		return a.executionExchangeError(request, host.ID, err)
 	}
 	return a.writeExecutionReply(cmd, request, response, host.ID, o.key)
 }
+
+// executionReadMillis is how long the host may hold an output read: the
+// caller's remaining time less a margin for the reply to travel back, so the
+// host answers before the caller gives up. No deadline leaves the host default.
+func executionReadMillis(ctx context.Context) int {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return min(60000, max(1, int(time.Until(deadline)/time.Millisecond)-executionReadMarginMillis))
+}
+
+const executionReadMarginMillis = 100
 
 func (a *application) executionExchangeError(request protocol.Control, host string, err error) error {
 	if request.Type == protocol.TypeExecutionInput && request.InputOffset != nil {

@@ -373,7 +373,7 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 		return executionString(raw)
 	}
 	field, ok := boundExecutionFields[name]
-	if !ok || field.kind != kind {
+	if !ok || (field.kind != kind && field.also != kind) {
 		return fmt.Errorf("execution: unexpected field %s", name)
 	}
 	if field.integer {
@@ -382,17 +382,19 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	return executionString(raw)
 }
 
-// boundExecutionFields names the one exact-instance control that may carry
+// boundExecutionFields names the exact-instance controls that may carry
 // each optional field, and whether it is an integer.
 var boundExecutionFields = map[string]struct {
-	kind    string
-	integer bool
+	kind, also string
+	integer    bool
 }{
-	"writeKey":      {kind: TypeWorkerLineRetire},
-	"stream":        {kind: TypeExecutionLogs},
-	"cursor":        {kind: TypeExecutionLogs},
-	"maxBytes":      {kind: TypeExecutionLogs, integer: true},
-	"timeoutMillis": {kind: TypeExecutionWait, integer: true},
+	"writeKey": {kind: TypeWorkerLineRetire},
+	"stream":   {kind: TypeExecutionLogs},
+	"cursor":   {kind: TypeExecutionLogs},
+	"maxBytes": {kind: TypeExecutionLogs, integer: true},
+	// A logs read carries its caller's remaining wait, so the host waits for a
+	// busy output stream up to that budget instead of its short default.
+	"timeoutMillis": {kind: TypeExecutionWait, also: TypeExecutionLogs, integer: true},
 	"signal":        {kind: TypeExecutionSignal},
 	"cols":          {kind: TypeExecutionResize, integer: true},
 	"rows":          {kind: TypeExecutionResize, integer: true},

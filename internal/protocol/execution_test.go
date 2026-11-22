@@ -55,3 +55,15 @@ func TestExecutionDiscriminatorAliasesCannotBypassRawBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionReadWaitBelongsToLogsAndWait(t *testing.T) {
+	base := `{"requestId":"r","sessionId":"7K3D","instance":"i","timeoutMillis":30000,"type":"`
+	for _, kind := range []string{TypeExecutionLogs, TypeExecutionWait} {
+		if _, err := DecodeControl([]byte(base + kind + `"}`)); err != nil {
+			t.Errorf("%s rejected its caller wait: %v", kind, err)
+		}
+	}
+	if _, err := DecodeControl([]byte(base + TypeExecutionSignal + `"}`)); err == nil {
+		t.Error("signal accepted a caller wait")
+	}
+}

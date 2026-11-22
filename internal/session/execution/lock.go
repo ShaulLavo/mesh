@@ -20,8 +20,26 @@ func (f *Files) Lock(ctx context.Context, name string) (*Fence, error) {
 func (f *Files) LockExisting(ctx context.Context, name string) (*Fence, error) {
 	return f.lockFile(ctx, name, os.O_RDWR, unix.LOCK_EX)
 }
+
+type callerWaitKey struct{}
+
+// WithCallerWait lets lock waits under ctx run to ctx's own deadline instead
+// of lockWaitLimit. A read whose caller said how long it will wait uses it, so
+// a loaded host answers within that budget rather than failing after 1.5 s.
+// Without a deadline on ctx the short default still applies.
+func WithCallerWait(ctx context.Context) context.Context {
+	return context.WithValue(ctx, callerWaitKey{}, true)
+}
+
+func lockWait(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok && ctx.Value(callerWaitKey{}) == true {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, lockWaitLimit)
+}
+
 func (f *Files) lockFile(ctx context.Context, name string, flags, mode int) (*Fence, error) {
-	ctx, cancel := context.WithTimeout(ctx, lockWaitLimit)
+	ctx, cancel := lockWait(ctx)
 	defer cancel()
 	file, err := f.open(name, flags)
 	if err != nil {
@@ -67,8 +85,4 @@ func (f *Files) currentLock(file *os.File, name string) error {
 		return fmt.Errorf("execution: replaced lock inode")
 	}
 	return regular(file)
-}
-
-func (f *Files) lockShared(ctx context.Context, name string) (*Fence, error) {
-	return f.lockFile(ctx, name, os.O_RDWR, unix.LOCK_SH)
 }

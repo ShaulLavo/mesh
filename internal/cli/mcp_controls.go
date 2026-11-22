@@ -570,6 +570,7 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 		MaxBytes:  req.MaxBytes,
 	}
 	c.attachCaller(&control, req.Context)
+	control.TimeoutMillis = executionReadMillis(callCtx)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)
 	if err != nil {
