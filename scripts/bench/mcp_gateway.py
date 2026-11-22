@@ -23,7 +23,8 @@ from pipe_execution import PipeFixture  # noqa: E402
 from terminal_window import require  # noqa: E402
 
 SERVICES = 10
-EXTRA_TOOLS = 39  # 11 fixture tools plus 39 plain ones: 50 per service.
+FIXTURE_TOOLS = 14
+EXTRA_TOOLS = 50 - FIXTURE_TOOLS  # 50 tools per service.
 COLD, WARM, BIG = 8, 100, 10
 BIG_BYTES = 2 << 20
 
@@ -121,14 +122,14 @@ def run(binary, root, fixture):
     env, cfg, state, device = setup_client_device(binary, root, "client", [entry], {host: claim})
     run_mesh(binary, host_env, "device", "approve", "--allow-root", "--", device, check_rc=0)
     run_mesh(binary, env, "mcp", "identity", "create", "bench", "--json", check_rc=0)
-    run_mesh(binary, env, "mcp", "profile", "add", "one", f"{host}/svc0", "--native", "none", "--json", check_rc=0)
+    run_mesh(binary, env, "mcp", "profile", "add", "--native", "none", "--json", "--", "one", f"{host}/svc0", check_rc=0)
     run_mesh(binary, env, "mcp", "profile", "add", "all", "--native", "all", "--json", check_rc=0)
     for i in range(SERVICES):
-        run_mesh(binary, env, "mcp", "profile", "add", "all", f"{host}/svc{i}", "--json", check_rc=0)
+        run_mesh(binary, env, "mcp", "profile", "add", "--json", "--", "all", f"{host}/svc{i}", check_rc=0)
 
     echo_name = exposed_name(host, services[0], "t", "echo")
     big_name = exposed_name(host, services[0], "t", "big")
-    direct_args = ["connect", f"{host}/svc0", "--identity", "bench"]
+    direct_args = ["connect", "--identity", "bench", "--", f"{host}/svc0"]
     gateway_args = ["--profile", "one", "--identity", "bench"]
     # Start the hosted instance once so cold samples measure the frontend.
     warmup = Client(binary, env, direct_args)
@@ -149,7 +150,7 @@ def run(binary, root, fixture):
         "commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False, cwd=HELPERS).stdout.strip(),
         "goVersion": subprocess.run(["go", "version"], capture_output=True, text=True, check=False).stdout.strip(),
         "platform": f"{platform.system().lower()}/{platform.machine()}", "loadAvg": os.getloadavg(),
-        "params": {"services": SERVICES, "toolsPerService": 11 + EXTRA_TOOLS, "cold": COLD, "warm": WARM, "big": BIG, "bigBytes": BIG_BYTES},
+        "params": {"services": SERVICES, "toolsPerService": FIXTURE_TOOLS + EXTRA_TOOLS, "cold": COLD, "warm": WARM, "big": BIG, "bigBytes": BIG_BYTES},
         "coldDirectMs": summary(raw["coldDirect"]), "coldGatewayMs": summary(raw["coldGateway"]),
         "warmDirectMs": summary(raw["warmDirect"]), "warmGatewayMs": summary(raw["warmGateway"]),
         "bigDirectMiBs": summary(raw["bigDirectMiBs"]), "bigGatewayMiBs": summary(raw["bigGatewayMiBs"]),
@@ -170,7 +171,7 @@ def discover_all(binary, env, state):
             tools, _ = list_all(gw, "tools/list", "tools")
             elapsed = ms(start)
             hosted = [t for t in tools if t["name"].startswith(("h_", "hx_"))]
-            if len(hosted) != SERVICES * (11 + EXTRA_TOOLS):
+            if len(hosted) != SERVICES * (FIXTURE_TOOLS + EXTRA_TOOLS):
                 gw.kill()
                 require(False, f"listed {len(hosted)} hosted tools: {gw.proc.stderr.read().decode(errors='replace')}")
             start = time.perf_counter()
