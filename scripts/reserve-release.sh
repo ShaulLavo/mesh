@@ -12,12 +12,24 @@ fi
 
 requested_source=${1:-}
 explicit_version=${2:-}
+workflow_sha=${WORKFLOW_SHA:-}
+if [[ -n $workflow_sha ]]; then
+  [[ $workflow_sha =~ ^[0-9a-f]{40}$ ]] || {
+    echo "release reservation: WORKFLOW_SHA must be an exact lowercase commit SHA" >&2
+    exit 1
+  }
+fi
 git fetch --force origin main 'refs/tags/*:refs/tags/*'
 
 temporary=$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-release-reserve.XXXXXX")
 trap 'rm -rf -- "$temporary"' EXIT
 
-has_non_cask_changes() {
+is_main_first_parent() {
+  local commit=$1
+  git rev-list --first-parent origin/main | grep -Fxq "$commit"
+}
+
+classify_non_cask_changes() {
   local changed=$1
   if [[ -z $changed ]]; then
     return 0
@@ -34,14 +46,46 @@ has_non_cask_changes() {
   esac
 }
 
-has_green_gate() {
+# Sets GATE_STATUS to "green" or "missing"; exits non-zero on API errors.
+check_green_gate() {
   local source_sha=$1
-  local gate_count
+  local gate_count ci_run_count
   gate_count=$(gh api \
     -H 'Accept: application/vnd.github+json' \
     "repos/$GITHUB_REPOSITORY/commits/$source_sha/check-runs" \
     --jq '[.check_runs[] | select(.name == "Complete CI gate" and .status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length')
-  [[ $gate_count =~ ^[0-9]+$ && $gate_count -gt 0 ]]
+  [[ $gate_count =~ ^[0-9]+$ ]] || {
+    echo "release reservation: invalid check-runs count for $source_sha: $gate_count" >&2
+    exit 1
+  }
+  ci_run_count=$(gh api \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$source_sha&branch=main&event=push&per_page=20" \
+    --jq "[.workflow_runs[] | select(.head_sha == \"$source_sha\" and .head_branch == \"main\" and .event == \"push\" and .status == \"completed\" and .conclusion == \"success\")] | length")
+  [[ $ci_run_count =~ ^[0-9]+$ ]] || {
+    echo "release reservation: invalid ci.yml run count for $source_sha: $ci_run_count" >&2
+    exit 1
+  }
+  if (( gate_count > 0 && ci_run_count > 0 )); then
+    GATE_STATUS=green
+  else
+    GATE_STATUS=missing
+  fi
+}
+
+maybe_reconcile_cask() {
+  local latest_tag=$1 published_source=$2 explicit_version=$3
+  if [[ -n $explicit_version && $explicit_version != "$latest_tag" ]]; then
+    return 1
+  fi
+  if gh release download "$latest_tag" --pattern mesh.rb --dir "$temporary" >/dev/null 2>&1; then
+    if ! git show "origin/main:Casks/mesh.rb" 2>/dev/null | cmp -s - "$temporary/mesh.rb"; then
+      printf 'action=reconcile\nsource=%s\nversion=%s\nprevious_tag=%s\nprevious_source=%s\n' \
+        "$published_source" "$latest_tag" "$latest_tag" "$published_source"
+      return 0
+    fi
+  fi
+  return 1
 }
 
 if [[ -n $requested_source ]]; then
@@ -54,8 +98,21 @@ if [[ -n $requested_source ]]; then
     echo "release reservation: source $requested_source did not resolve exactly" >&2
     exit 1
   }
-  git merge-base --is-ancestor "$source_sha" origin/main || {
-    echo "release reservation: $source_sha is not on origin/main" >&2
+  is_main_first_parent "$source_sha" || {
+    echo "release reservation: $source_sha is not on origin/main first-parent history" >&2
+    exit 1
+  }
+else
+  # Auto-select targets the running workflow revision (github.sha on main) so
+  # attestation provenance, installed harness pin, and built archives always
+  # refer to the exact same commit.
+  if [[ -n $workflow_sha ]]; then
+    source_sha=$(git rev-parse "$workflow_sha^{commit}")
+  else
+    source_sha=$(git rev-parse HEAD)
+  fi
+  is_main_first_parent "$source_sha" || {
+    echo "release reservation: workflow commit $source_sha is not on origin/main first-parent history" >&2
     exit 1
   }
 fi
@@ -67,60 +124,17 @@ else
   published_source=$(git rev-list -n 1 "$latest_tag")
 fi
 
-gate_verified=false
-if [[ -z $requested_source ]]; then
-  main_head=$(git rev-parse origin/main)
-  if [[ $main_head == "$published_source" ]]; then
-    if [[ -z $explicit_version || $explicit_version == "$latest_tag" ]] &&
-      gh release download "$latest_tag" --pattern mesh.rb --dir "$temporary" >/dev/null 2>&1; then
-      if ! git show "origin/main:Casks/mesh.rb" 2>/dev/null | cmp -s - "$temporary/mesh.rb"; then
-        printf 'action=reconcile\nsource=%s\nversion=%s\nprevious_tag=%s\nprevious_source=%s\n' \
-          "$published_source" "$latest_tag" "$latest_tag" "$published_source"
-        exit 0
-      fi
-    fi
-    printf 'action=skip\nsource=%s\nreason=already-published\nprevious_tag=%s\nprevious_source=%s\n' \
-      "$main_head" "$latest_tag" "$published_source"
-    exit 0
-  fi
-  if git merge-base --is-ancestor "$main_head" "$published_source"; then
-    printf 'action=skip\nsource=%s\nreason=already-published\nprevious_tag=%s\nprevious_source=%s\n' \
-      "$main_head" "$latest_tag" "$published_source"
-    exit 0
-  fi
-  if ! git merge-base --is-ancestor "$published_source" "$main_head"; then
-    echo "release reservation: origin/main ($main_head) diverges from published source $published_source" >&2
-    exit 1
-  fi
-  changed=$(git diff --name-only "$published_source..$main_head")
-  if ! has_non_cask_changes "$changed"; then
-    printf 'action=skip\nsource=%s\nreason=cask-only\nprevious_tag=%s\nprevious_source=%s\n' \
-      "$main_head" "$latest_tag" "$published_source"
-    exit 0
-  fi
-  source_sha=
-  while IFS= read -r candidate; do
-    [[ -n $candidate ]] || continue
-    candidate_changed=$(git diff --name-only "$published_source..$candidate")
-    if ! has_non_cask_changes "$candidate_changed"; then
-      break
-    fi
-    if has_green_gate "$candidate"; then
-      source_sha=$candidate
-      gate_verified=true
-      break
-    fi
-  done < <(git rev-list --max-count=50 "$published_source..$main_head")
-  if [[ -z $source_sha ]]; then
-    printf 'action=skip\nsource=%s\nreason=no-green-commit\nprevious_tag=%s\nprevious_source=%s\n' \
-      "$main_head" "$latest_tag" "$published_source"
-    exit 0
-  fi
-fi
-
 plan=$(scripts/plan-release.sh "$source_sha" "$published_source" "$latest_tag")
 action=$(sed -n 's/^action=//p' <<<"$plan")
 if [[ $action == skip ]]; then
+  if [[ -z $requested_source ]]; then
+    if maybe_reconcile_cask "$latest_tag" "$published_source" "$explicit_version"; then
+      exit 0
+    fi
+    printf 'action=skip\nsource=%s\nreason=already-published\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$source_sha" "$latest_tag" "$published_source"
+    exit 0
+  fi
   if [[ $source_sha == "$published_source" ]]; then
     [[ -z $explicit_version || $explicit_version == "$latest_tag" ]] || {
       echo "release reservation: published source $source_sha is $latest_tag, not requested $explicit_version" >&2
@@ -134,12 +148,22 @@ if [[ $action == skip ]]; then
   exit 0
 fi
 
-if [[ -n $requested_source ]]; then
-  changed=$(git diff --name-only "$published_source..$source_sha")
-  if ! has_non_cask_changes "$changed"; then
-    printf 'action=skip\nsource=%s\nreason=cask-only\n' "$source_sha"
+changed=$(git diff --name-only "$published_source..$source_sha")
+if ! classify_non_cask_changes "$changed"; then
+  if [[ -z $requested_source ]] && maybe_reconcile_cask "$latest_tag" "$published_source" "$explicit_version"; then
     exit 0
   fi
+  printf 'action=skip\nsource=%s\nreason=cask-only\nprevious_tag=%s\nprevious_source=%s\n' \
+    "$source_sha" "$latest_tag" "$published_source"
+  exit 0
+fi
+
+# Publishing must match the running workflow commit so OIDC attestation
+# provenance and the workflow's pinned installed harness stay bound to the
+# exact source being built and finalized.
+if [[ -n $workflow_sha && $source_sha != "$workflow_sha" ]]; then
+  echo "release reservation: publish source $source_sha does not match workflow commit $workflow_sha" >&2
+  exit 1
 fi
 
 version=$(sed -n 's/^version=//p' <<<"$plan")
@@ -171,8 +195,18 @@ if [[ -n $explicit_version ]]; then
   version=$explicit_version
 fi
 
-if [[ $gate_verified != true ]] && ! has_green_gate "$source_sha"; then
-  echo "release reservation: $source_sha has no successful Complete CI gate check" >&2
+GATE_STATUS=missing
+check_green_gate "$source_sha"
+if [[ $GATE_STATUS != green ]]; then
+  if [[ -z $requested_source ]]; then
+    if maybe_reconcile_cask "$latest_tag" "$published_source" "$explicit_version"; then
+      exit 0
+    fi
+    printf 'action=skip\nsource=%s\nreason=no-green-commit\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$source_sha" "$latest_tag" "$published_source"
+    exit 0
+  fi
+  echo "release reservation: $source_sha has no successful main CI Complete CI gate run" >&2
   exit 1
 fi
 

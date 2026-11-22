@@ -60,12 +60,14 @@ def check_release_cadence(ci, release):
         "release.yml must trigger only on schedule and workflow_dispatch"
     assert "\n  push:" not in triggers and "\n  workflow_call:" not in triggers, \
         "release.yml must not trigger on push or workflow_call"
-    assert "\nconcurrency:\n  group: mesh-stable-publication\n  cancel-in-progress: false\n" in release, \
-        "release.yml must serialize publications without cancelling an active release"
+    assert "\nconcurrency:\n  group: mesh-stable-publication\n  queue: max\n" in release, \
+        "release.yml must queue publications so a scheduled tick cannot cancel a queued manual release"
     reserve = JOB(release, "reserve")
     assert re.findall(r"^    if: (.+)$", reserve, re.M) == ["github.ref == 'refs/heads/main'"], \
         "release reservation must run only on refs/heads/main"
-    assert "ref: ${{ inputs.source_sha || 'refs/heads/main' }}" in reserve
+    assert "ref: ${{ github.sha }}" in reserve, \
+        "release reservation must execute from the trusted workflow revision, not an unverified input ref"
+    assert "WORKFLOW_SHA: ${{ github.sha }}" in reserve
     for name in ("publish", "publication-native", "finalize"):
         assert "github.ref == 'refs/heads/main'" in JOB(release, name), \
             f"{name} must remain restricted to refs/heads/main"
@@ -104,8 +106,9 @@ def check_mutations(ci, release):
     release_mutations = (
         release.replace("  schedule:\n", "  push:\n    branches: [main]\n  schedule:\n", 1),
         release.replace("  schedule:\n", "  workflow_call:\n  schedule:\n", 1),
-        release.replace("  cancel-in-progress: false\n", "  cancel-in-progress: true\n", 1),
+        release.replace("  queue: max\n", "  cancel-in-progress: false\n", 1),
         release.replace("    if: github.ref == 'refs/heads/main'\n", "", 1),
+        release.replace("          ref: ${{ github.sha }}\n", "          ref: ${{ inputs.source_sha }}\n", 1),
     )
     for mutated in release_mutations:
         assert mutated != release, "negative control did not change release workflow"

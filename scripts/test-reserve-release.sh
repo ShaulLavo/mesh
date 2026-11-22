@@ -24,11 +24,26 @@ printf '%s\n' "$*" >>"$GH_CALLS"
 case " $* " in
   *'/releases/latest '*) printf '%s\n' "${GH_LATEST_TAG:-v0.1.38}" ;;
   *'/check-runs '*)
+    if [[ -n ${GH_CHECK_RUNS_FAIL:-} ]]; then
+      echo 'simulated check-runs API outage' >&2
+      exit 1
+    fi
     if [[ -n ${GH_GREEN_SHAS:-} ]]; then
       commit=$(sed -n 's|.*commits/\([0-9a-f]\{40\}\)/check-runs.*|\1|p' <<<"$*")
       if grep -Fq "$commit" <<<"$GH_GREEN_SHAS"; then printf '1\n'; else printf '0\n'; fi
     else
       printf '%s\n' "${GH_GATE_COUNT:-1}"
+    fi ;;
+  *'/actions/workflows/ci.yml/runs?'*)
+    if [[ -n ${GH_CI_RUNS_FAIL:-} ]]; then
+      echo 'simulated workflow runs API outage' >&2
+      exit 1
+    fi
+    if [[ -n ${GH_GREEN_SHAS:-} ]]; then
+      commit=$(sed -n 's|.*head_sha=\([0-9a-f]\{40\}\).*|\1|p' <<<"$*")
+      if grep -Fq "$commit" <<<"$GH_GREEN_SHAS"; then printf '1\n'; else printf '0\n'; fi
+    else
+      printf '%s\n' "${GH_CI_RUN_COUNT:-${GH_GATE_COUNT:-1}}"
     fi ;;
   *'/releases?per_page=100 '*)
     [[ -f $GH_LOG ]] || exit 0
@@ -251,13 +266,18 @@ result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" run_
 grep -Fqx 'action=reconcile' <<<"$result"
 grep -Fqx 'version=v0.1.44' <<<"$result"
 
-# 3. Only Casks/mesh.rb changed since last release -> skip cask-only.
+# 3. Only Casks/mesh.rb changed since last release -> skip cask-only when Cask matches,
+#    or reconcile when the published Cask is still stale after main advanced.
 printf 'cask-only followup\n' >>"$checkout/Casks/mesh.rb"
 git -C "$checkout" commit -qam 'cask-only followup'
 git -C "$checkout" push -q origin main
-result=$(GH_LATEST_TAG=v0.1.44 run_reserve "" "")
+cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask2.rb"
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask2.rb" run_reserve "" "")
 grep -Fqx 'action=skip' <<<"$result"
 grep -Fqx 'reason=cask-only' <<<"$result"
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" run_reserve "" "")
+grep -Fqx 'action=reconcile' <<<"$result"
+grep -Fqx 'version=v0.1.44' <<<"$result"
 
 # 4. Feature followed by cask-only commit -> NOT skipped; batches feature + cask!
 printf 'batched feature\n' >>"$checkout/source"
@@ -267,19 +287,56 @@ printf 'later cask update\n' >>"$checkout/Casks/mesh.rb"
 git -C "$checkout" commit -qam 'later cask update'
 batched_head=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
-# None green yet -> clean no-green-commit skip (no red scheduled failure).
-result=$(GH_LATEST_TAG=v0.1.44 GH_GATE_COUNT=0 run_reserve "" "")
+cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask3.rb"
+# Head not green yet -> clean no-green-commit skip (never falls back to older SHA with inconsistent provenance),
+# unless Cask is stale (then reconciles stale Cask!).
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask3.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "" "")
 grep -Fqx 'action=skip' <<<"$result"
 grep -Fqx 'reason=no-green-commit' <<<"$result"
-# Head untested, older feature green -> selects the older green commit!
-result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$batched_feature" run_reserve "" "")
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "" "")
+grep -Fqx 'action=reconcile' <<<"$result"
+grep -Fqx 'version=v0.1.44' <<<"$result"
+# API outages MUST fail loudly instead of looking like a clean no-green-commit skip.
+if GH_LATEST_TAG=v0.1.44 GH_CHECK_RUNS_FAIL=1 WORKFLOW_SHA="$batched_head" run_reserve "" "" >/dev/null 2>&1; then
+  echo 'FAIL: check-runs API failure was swallowed as a skip' >&2
+  exit 1
+fi
+if GH_LATEST_TAG=v0.1.44 GH_CI_RUNS_FAIL=1 WORKFLOW_SHA="$batched_head" run_reserve "" "" >/dev/null 2>&1; then
+  echo 'FAIL: ci.yml workflow runs API failure was swallowed as a skip' >&2
+  exit 1
+fi
+# Check-run green without a green main ci.yml push run is rejected!
+if GH_LATEST_TAG=v0.1.44 GH_GATE_COUNT=1 GH_CI_RUN_COUNT=0 WORKFLOW_SHA="$batched_head" run_reserve "$batched_head" "" >/dev/null 2>&1; then
+  echo 'FAIL: accepted a commit with Complete CI gate outside main push ci.yml' >&2
+  exit 1
+fi
+# Two-SHA provenance/pin guard: publishing an older SHA != WORKFLOW_SHA is rejected,
+# while explicit reconcile for an already-published SHA still succeeds.
+if GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$batched_feature" WORKFLOW_SHA="$batched_head" run_reserve "$batched_feature" "" >/dev/null 2>&1; then
+  echo 'FAIL: accepted publishing an older SHA different from WORKFLOW_SHA' >&2
+  exit 1
+fi
+result=$(GH_LATEST_TAG=v0.1.44 WORKFLOW_SHA="$batched_head" run_reserve "$mixed_source" "")
+grep -Fqx 'action=reconcile' <<<"$result"
+grep -Fqx 'version=v0.1.44' <<<"$result"
+# Side-branch merged commit (not on main first-parent history) is rejected!
+git -C "$checkout" switch -qc side-branch "$batched_feature"
+printf 'side\n' >"$checkout/side"
+git -C "$checkout" add side
+git -C "$checkout" commit -qm 'side commit'
+side_commit=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" switch -q main
+git -C "$checkout" merge --no-ff -qm 'merge side' side-branch
+merged_head=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" push -q origin main
+if GH_LATEST_TAG=v0.1.44 run_reserve "$side_commit" "" >/dev/null 2>&1; then
+  echo 'FAIL: accepted a non-first-parent side-branch commit' >&2
+  exit 1
+fi
+# Matching green main HEAD publishes cleanly (even after a cask commit in the batch)!
+result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$merged_head" WORKFLOW_SHA="$merged_head" run_reserve "" "")
 grep -Fqx 'action=publish' <<<"$result"
-grep -Fqx "source=$batched_feature" <<<"$result"
+grep -Fqx "source=$merged_head" <<<"$result"
 grep -Fqx 'version=v0.1.45' <<<"$result"
-# Head green (even though head commit only touched Casks/mesh.rb) -> publishes head!
-result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$batched_head" run_reserve "" "")
-grep -Fqx 'action=publish' <<<"$result"
-grep -Fqx "source=$batched_head" <<<"$result"
-grep -Fqx 'version=v0.1.46' <<<"$result"
 
 echo 'PASS: release reservation rejects classifier errors, requires tested source, preserves retries, advances past failed reservations, and supports batched auto-selection'

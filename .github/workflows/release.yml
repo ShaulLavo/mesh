@@ -18,7 +18,7 @@ on:
 
 concurrency:
   group: mesh-stable-publication
-  cancel-in-progress: false
+  queue: max
 
 permissions:
   checks: read
@@ -29,6 +29,7 @@ jobs:
     name: Reserve source and version
     if: github.ref == 'refs/heads/main'
     permissions:
+      actions: read
       checks: read
       contents: write
     runs-on: ubuntu-24.04
@@ -42,11 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ inputs.source_sha || 'refs/heads/main' }}
+          ref: ${{ github.sha }}
       - id: reserve
         name: Reserve a monotonic release
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           EXPLICIT_VERSION: ${{ inputs.version }}
         # Explicit bash adds pipefail, so a failed reservation fails the step

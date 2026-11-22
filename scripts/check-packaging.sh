@@ -147,8 +147,8 @@ check_source_contract() {
   contains .github/workflows/release.yml 'schedule:'
   contains .github/workflows/release.yml 'workflow_dispatch:'
   does_not_contain .github/workflows/release.yml 'workflow_call:'
-  contains .github/workflows/release.yml 'cancel-in-progress: false'
-  does_not_contain .github/workflows/release.yml 'queue: max'
+  contains .github/workflows/release.yml 'queue: max'
+  contains .github/workflows/release.yml "WORKFLOW_SHA: \${{ github.sha }}"
   contains .github/workflows/release.yml 'checks: read'
   contains .github/workflows/release.yml 'contents: write'
   contains .github/workflows/release.yml 'args: release --clean --skip=publish'
