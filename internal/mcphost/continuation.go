@@ -25,6 +25,7 @@ const (
 
 type continuationBinding struct {
 	caller     string
+	principal  string
 	grant      string
 	service    string
 	revision   int64
@@ -218,12 +219,13 @@ func (c *continuations) deleteLocked(ref string) {
 	}
 }
 
-// retire drops every continuation of one grant, for revocation.
-func (c *continuations) retire(grant string) {
+// retireAccount drops every continuation of a revoked account. A grant
+// mismatch already refuses them; this frees their memory at once.
+func (c *continuations) retireAccount(account string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for ref, entry := range c.entries {
-		if entry.binding.grant == grant {
+		if entry.binding.principal == account {
 			c.deleteLocked(ref)
 		}
 	}
@@ -231,7 +233,7 @@ func (c *continuations) retire(grant string) {
 
 func bindingFor(route Route, request mcpwire.Message) continuationBinding {
 	return continuationBinding{
-		caller: route.Caller.Key(), grant: route.Caller.Grant, service: route.Service, revision: route.Revision,
+		caller: route.Caller.Key(), principal: route.Caller.Account, grant: route.Caller.Grant, service: route.Service, revision: route.Revision,
 		account: route.Account, instance: route.Instance, generation: route.Generation,
 		method: request.Method(), digest: operationDigest(request.Params()),
 	}

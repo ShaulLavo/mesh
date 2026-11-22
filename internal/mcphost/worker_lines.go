@@ -32,10 +32,10 @@ type LineConn interface {
 
 // WorkerRef names the exact worker reservation a controller may attach to.
 type WorkerRef struct {
-	SessionsDir  string
-	SessionID    string
-	Instance     string
-	LaunchDigest string
+	SessionsDir  string `json:"-"`
+	SessionID    string `json:"sessionId"`
+	Instance     string `json:"instance"`
+	LaunchDigest string `json:"launchDigest"`
 }
 
 const lineAckTimeout = 30 * time.Second

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +32,7 @@ type server struct {
 	out    *bufio.Writer
 	stderr io.Writer
 	mode   string
+	secret string
 	mu     sync.Mutex
 
 	pending  sync.Map // request ID string -> chan struct{} closed on cancel
@@ -56,13 +58,21 @@ type callParams struct {
 
 // Run serves MCP on stdin and stdout until stdin closes.
 func Run(stdin io.Reader, stdout, stderr io.Writer) error {
-	s := &server{out: bufio.NewWriterSize(stdout, 64<<10), stderr: stderr, mode: os.Getenv(EnvMode), instance: strconv.Itoa(os.Getpid())}
+	return RunEnv(stdin, stdout, stderr, os.Getenv)
+}
+
+var instances atomic.Int64
+
+// RunEnv is Run with an explicit environment, for in-process tests.
+func RunEnv(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
+	s := &server{out: bufio.NewWriterSize(stdout, 64<<10), stderr: stderr, mode: getenv(EnvMode), secret: getenv(EnvSecret),
+		instance: strconv.Itoa(os.Getpid()) + "." + strconv.FormatInt(instances.Add(1), 10)}
 	if s.mode == "exit" {
 		_, _ = fmt.Fprintln(stderr, "fixture: exiting at start")
 		return fmt.Errorf("fixture exit mode")
 	}
-	if secret := os.Getenv(EnvSecret); secret != "" {
-		_, _ = fmt.Fprintf(stderr, "fixture: using token %s\n", secret)
+	if s.secret != "" {
+		_, _ = fmt.Fprintf(stderr, "fixture: using token %s\n", s.secret)
 	}
 	reader := bufio.NewReaderSize(stdin, 64<<10)
 	// Like a real server, closing stdin ends the process without waiting for
@@ -195,7 +205,7 @@ func (s *server) call(req request) {
 	case "ask":
 		s.ask(req, p)
 	case "whoami":
-		sum := sha256.Sum256([]byte(os.Getenv(EnvSecret)))
+		sum := sha256.Sum256([]byte(s.secret))
 		s.result(req.ID, text(fmt.Sprintf("instance=%s calls=%d secret-digest=%s", s.instance, calls, hex.EncodeToString(sum[:4]))))
 	case "garbage":
 		s.writeRaw([]byte("this is not json"))

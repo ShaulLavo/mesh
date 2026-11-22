@@ -46,17 +46,25 @@ func (b *syncBuffer) String() string {
 
 func newMemLines(t *testing.T) *memLines {
 	t.Helper()
+	l := startMemLines(func(string) string { return "" })
+	t.Cleanup(l.closer)
+	return l
+}
+
+// startMemLines runs one in-process fixture. closer ends it like a process
+// exit: stdin closes and stdout reaches EOF.
+func startMemLines(getenv func(string) string) *memLines {
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
 	l := &memLines{stdin: inW, stdout: bufio.NewReaderSize(outR, 64<<10), stderr: &syncBuffer{}}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = mcpfixture.Run(inR, outW, l.stderr)
+		_ = mcpfixture.RunEnv(inR, outW, l.stderr, getenv)
 		_ = outW.Close()
 	}()
-	l.closer = func() { _ = inW.Close(); _ = outR.Close(); <-done }
-	t.Cleanup(l.closer)
+	var once sync.Once
+	l.closer = func() { once.Do(func() { _ = inW.Close(); _ = outR.Close(); <-done }) }
 	return l
 }
 

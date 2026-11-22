@@ -85,9 +85,11 @@ func (u *StdioUpstream) Err() error {
 }
 
 func (u *StdioUpstream) Close() error {
-	u.fault(fmt.Errorf("mcp upstream: closed: %w", ErrNotSent))
+	u.fault(errUpstreamClosed)
 	return nil
 }
+
+var errUpstreamClosed = errors.New("mcp upstream: connection closed")
 
 func (u *StdioUpstream) fault(err error) {
 	u.mu.Lock()

@@ -33,6 +33,10 @@ type Caller struct {
 	// Current reports whether that grant is still valid. It is checked before
 	// dispatch and before every delivery.
 	Current func() bool
+	// Admin marks whole-account administration from the CLI, which may list,
+	// stop and read diagnostics of every instance. It never grants use of
+	// another caller's isolated instance.
+	Admin bool
 }
 
 // Key identifies the caller for ownership. It never includes the grant, so a
@@ -231,10 +235,10 @@ func Classify(err error) *Failure {
 		return &Failure{Code: codeMessageTooLarge, Err: err}
 	case errors.Is(err, ErrSlowConsumer):
 		return &Failure{Code: codeResourceLimit, Err: err}
-	case errors.Is(err, ErrNotSent):
-		return &Failure{Code: codeUnavailable, Retryable: true, Err: err}
 	case errors.Is(err, ErrOutcomeUnknown):
 		return &Failure{Code: codeOutcomeUnknown, Err: err}
+	case errors.Is(err, ErrNotSent):
+		return &Failure{Code: codeUnavailable, Retryable: true, Err: err}
 	case errors.Is(err, ErrProtocolFault):
 		return &Failure{Code: codeFailed, Err: err}
 	default:
