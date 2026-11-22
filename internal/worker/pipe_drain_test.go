@@ -251,6 +251,17 @@ func TestPipeDrainCutsOffASilentStreamWhileTheOtherStaysBusy(t *testing.T) {
 			reasons := make(chan []string, 1)
 			f.spawn(func() { reasons <- f.drain(pipeDrainLimits{silence: 200 * time.Millisecond, total: time.Minute}) })
 			awaitClosed(t, quiet.reader.file, silent)
+			// Close marks the file closed at once, but the descriptor itself
+			// closes only after the blocked read returns. The reader reports its
+			// end after that, so a write past this point must fail.
+			select {
+			case reason := <-quiet.reader.done:
+				if reason != pipeDrainCutoff {
+					t.Fatalf("%s reader ended with %q, want %q", silent, reason, pipeDrainCutoff)
+				}
+			case <-time.After(hangCap):
+				t.Fatalf("%s reader kept running after its cutoff", silent)
+			}
 			if _, err := quiet.writes.Write([]byte("late")); err == nil {
 				t.Fatal("a silent stream accepted bytes after its cutoff")
 			}
