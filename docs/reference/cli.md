@@ -2068,10 +2068,11 @@ Usage:
   mesh mcp [command]
 
 Available Commands:
+  connect     Connect over stdio to one hosted MCP server on any Mesh host
   identity    Manage per-agent application identities
   logs        Print a hosted MCP server instance's recent stderr
-  ls          List MCP servers hosted on this machine
-  publish     Publish an MCP server hosted on this machine
+  ls          List hosted MCP servers across saved Mesh hosts
+  publish     Publish an MCP server hosted on a Mesh machine
   restart     Replace a hosted MCP server instance's process
   rm          Remove a hosted MCP server and stop its processes
   show        Show one hosted MCP server and its instances
@@ -2091,6 +2092,33 @@ Global Flags:
       --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
 Use "mesh mcp [command] --help" for more information about a command.
+```
+
+## mesh mcp connect
+
+```text
+Run a stateless MCP 2026-07-28 stdio server on this machine that forwards
+unqualified tool, prompt, and resource names directly to one hosted MCP server
+on HOST over an authenticated Mesh H3 stream.
+
+stdout carries only newline-delimited JSON-RPC MCP messages; diagnostics, help,
+and startup errors go to stderr. Only Mesh is needed on this client.
+
+Usage:
+  mesh mcp connect HOST/NAME [flags]
+
+Examples:
+mesh mcp connect pc/repo-tools --identity codex
+mesh mcp connect local/browser --identity claude --instance mi1.HOST.SVC.INST
+
+Flags:
+  -h, --help              help for connect
+      --identity string   local application identity created with mesh mcp identity create NAME (required)
+      --instance string   optional instance handle (mi1.<hostId>.<serviceId>.<instanceId>) or instance ID
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp identity
@@ -2159,11 +2187,13 @@ Global Flags:
 Print a hosted MCP server instance's recent stderr
 
 Usage:
-  mesh mcp logs NAME [flags]
+  mesh mcp logs [HOST/]NAME [flags]
 
 Flags:
   -h, --help              help for logs
-      --instance string   instance ID, required when the server has several instances
+      --identity string   act as this local application identity
+      --instance string   instance handle or ID, required when the server has several instances
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2173,14 +2203,25 @@ Global Flags:
 ## mesh mcp ls
 
 ```text
-List MCP servers hosted on this machine
+Query saved Mesh hosts concurrently under a 2-second budget and list their
+hosted MCP servers without waking offline hosts or starting stopped services.
+Unreachable hosts retain eligible private cached entries for up to 24 hours
+(marked stale, then expired); authorization denials and pin changes discard
+cached entries immediately.
 
 Usage:
   mesh mcp ls [flags]
 
+Aliases:
+  ls, list
+
 Flags:
-  -h, --help   help for ls
-      --json   write the services as JSON
+      --cached             read private cached catalog entries without dialing hosts
+  -h, --help               help for ls
+      --host string        limit listing to one machine name, exact host ID, or local
+      --identity string    scope visible instances and private catalog cache to this application identity
+      --json               write one agent result
+      --timeout duration   hard deadline for fleet queries (100ms to 30s) (default 2s)
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2190,24 +2231,27 @@ Global Flags:
 ## mesh mcp publish
 
 ```text
-Publish stores a server definition on this machine. A stdio server runs COMMAND; an HTTP server is reached at --url, optionally started with --run. Each application caller gets its own isolated instance unless --shared is given.
+Publish stores a server definition on the target host (this machine by default).
+A stdio server runs COMMAND; an HTTP server is reached at --url, optionally started
+with --run. Each application caller gets its own isolated instance unless --shared is given.
 
 Usage:
   mesh mcp publish NAME [flags] [-- COMMAND [ARG...]]
 
 Examples:
 mesh mcp publish repo-tools --cwd /work/app -- ./repo-mcp
-mesh mcp publish search --url http://127.0.0.1:8080/mcp --shared
+mesh mcp publish search --host pc --url http://127.0.0.1:8080/mcp --shared
 
 Flags:
       --account-label string        non-secret name of the host account, shown to callers
-      --account-mode string         none, or host-account when the server uses this machine's credentials
-      --cwd string                  working directory on this machine for a stdio server
+      --account-mode string         none, or host-account when the server uses the host's credentials
+      --cwd string                  working directory on the target host for a stdio server
       --env stringArray             NAME=VALUE for the server's environment; repeat as needed
       --header-secret stringArray   HEADER=/absolute/file sent to the HTTP server
   -h, --help                        help for publish
+      --host string                 target host (machine name, exact host ID, or local; defaults to local)
       --idle duration               stop an on-demand instance after this long unused (default 15m)
-      --json                        write the stored definition as JSON
+      --json                        write one agent result
       --kept                        keep the server running instead of starting it on demand
       --ready-timeout duration      how long the server has to answer server/discover (default 30s)
       --run string                  command that starts the HTTP server at --url
@@ -2227,11 +2271,13 @@ Global Flags:
 Replace a hosted MCP server instance's process
 
 Usage:
-  mesh mcp restart NAME [flags]
+  mesh mcp restart [HOST/]NAME [flags]
 
 Flags:
   -h, --help              help for restart
-      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
+      --identity string   act as this local application identity
+      --instance string   instance handle or ID; without it, start and restart use your own instance and stop stops all of them
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2244,10 +2290,11 @@ Global Flags:
 Remove a hosted MCP server and stop its processes
 
 Usage:
-  mesh mcp rm NAME [flags]
+  mesh mcp rm [HOST/]NAME [flags]
 
 Flags:
   -h, --help   help for rm
+      --json   write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2260,11 +2307,12 @@ Global Flags:
 Show one hosted MCP server and its instances
 
 Usage:
-  mesh mcp show NAME [flags]
+  mesh mcp show [HOST/]NAME [flags]
 
 Flags:
-  -h, --help   help for show
-      --json   write the service as JSON
+  -h, --help              help for show
+      --identity string   act as this local application identity
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2277,11 +2325,13 @@ Global Flags:
 Start a hosted MCP server's instance now
 
 Usage:
-  mesh mcp start NAME [flags]
+  mesh mcp start [HOST/]NAME [flags]
 
 Flags:
   -h, --help              help for start
-      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
+      --identity string   act as this local application identity
+      --instance string   instance handle or ID; without it, start and restart use your own instance and stop stops all of them
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2294,11 +2344,13 @@ Global Flags:
 Stop a hosted MCP server's processes and keep its definition
 
 Usage:
-  mesh mcp stop NAME [flags]
+  mesh mcp stop [HOST/]NAME [flags]
 
 Flags:
   -h, --help              help for stop
-      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
+      --identity string   act as this local application identity
+      --instance string   instance handle or ID; without it, start and restart use your own instance and stop stops all of them
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

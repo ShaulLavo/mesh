@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/hostprofile"
+	"github.com/shaul/mesh/internal/mcpconnect"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -154,6 +156,108 @@ func (p *mcpHostPool) drainAllConnectionsLocked() []transport.Conn {
 // When retryRead is true, a stale idle connection is redialed once before returning an error.
 func (p *mcpHostPool) ExchangeShort(ctx context.Context, host HostRecord, req protocol.Control, retryRead bool) (protocol.Control, protocol.HostInfo, error) {
 	return p.exchangeShort(ctx, host, req, retryRead)
+}
+
+type pooledMCPStream struct {
+	pool  *mcpHostPool
+	slots chan struct{}
+	entry *mcpPooledConn
+	once  sync.Once
+}
+
+func (s *pooledMCPStream) Conn() transport.Conn      { return s.entry.conn }
+func (s *pooledMCPStream) HostID() string            { return s.entry.info.ID }
+func (s *pooledMCPStream) MCPHostingSupported() bool { return s.entry.info.MCPHostingSupported }
+func (s *pooledMCPStream) Close() {
+	s.once.Do(func() {
+		s.pool.discard(s.entry.conn)
+		<-s.slots
+	})
+}
+
+// OpenMCPStream acquires a pinned connection for one H3 mcp.forward stream
+// using the host's 4-slot stream budget for listens or 8-slot short budget for
+// ordinary requests. Because mcp.forward consumes the connection, Close discards it.
+func (p *mcpHostPool) OpenMCPStream(ctx context.Context, host HostRecord, listen bool) (mcpconnect.Stream, error) {
+	bucket, err := p.bucket(host)
+	if err != nil {
+		return nil, &preDispatchError{err: err}
+	}
+	slots := bucket.shortSlots
+	if listen {
+		slots = bucket.streamSlots
+	}
+	if err := acquireSlot(ctx, slots); err != nil {
+		return nil, &preDispatchError{err: err}
+	}
+	entry, _, err := p.checkoutFresh(ctx, host)
+	if err != nil {
+		<-slots
+		return nil, &preDispatchError{err: err}
+	}
+	return &pooledMCPStream{pool: p, slots: slots, entry: entry}, nil
+}
+
+// ExchangeMCP sends one hosted MCP management or catalog control over the host's
+// pooled short-control budget, validating MCP hosting support from host.info.
+func (p *mcpHostPool) ExchangeMCP(ctx context.Context, host HostRecord, req protocol.MCPServiceRequest, retryRead bool) (protocol.MCPServiceResponse, protocol.HostInfo, error) {
+	bucket, err := p.bucket(host)
+	if err != nil {
+		return protocol.MCPServiceResponse{}, protocol.HostInfo{}, &preDispatchError{err: err}
+	}
+	if err := acquireSlot(ctx, bucket.shortSlots); err != nil {
+		return protocol.MCPServiceResponse{}, protocol.HostInfo{}, &preDispatchError{err: err}
+	}
+	defer func() { <-bucket.shortSlots }()
+
+	if req.RequestID == "" {
+		req.RequestID, err = newDaemonRequestID()
+		if err != nil {
+			return protocol.MCPServiceResponse{}, protocol.HostInfo{}, &preDispatchError{err: err}
+		}
+	}
+	entry, reused, err := p.checkout(ctx, bucket, host)
+	if err != nil {
+		return protocol.MCPServiceResponse{}, protocol.HostInfo{}, &preDispatchError{err: err}
+	}
+	if !entry.info.MCPHostingSupported {
+		p.checkin(bucket, entry)
+		return protocol.MCPServiceResponse{}, entry.info, agentapi.Fail(agentapi.ProtocolUnsupported, "", host.ID, "Host does not support hosted MCP servers.")
+	}
+	resp, err := exchangeMCPContext(ctx, entry.conn, req)
+	if err == nil {
+		p.checkin(bucket, entry)
+		return resp, entry.info, nil
+	}
+	p.discard(entry.conn)
+	if !reused || !retryRead || ctx.Err() != nil {
+		return protocol.MCPServiceResponse{}, entry.info, err
+	}
+	fresh, _, dialErr := p.checkoutFresh(ctx, host)
+	if dialErr != nil {
+		return protocol.MCPServiceResponse{}, protocol.HostInfo{}, &preDispatchError{err: dialErr}
+	}
+	if !fresh.info.MCPHostingSupported {
+		p.checkin(bucket, fresh)
+		return protocol.MCPServiceResponse{}, fresh.info, agentapi.Fail(agentapi.ProtocolUnsupported, "", host.ID, "Host does not support hosted MCP servers.")
+	}
+	resp, err = exchangeMCPContext(ctx, fresh.conn, req)
+	if err != nil {
+		p.discard(fresh.conn)
+		return protocol.MCPServiceResponse{}, fresh.info, err
+	}
+	p.checkin(bucket, fresh)
+	return resp, fresh.info, nil
+}
+
+func exchangeMCPContext(ctx context.Context, conn transport.Conn, req protocol.MCPServiceRequest) (protocol.MCPServiceResponse, error) {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	resp, err := exchangeMCP(conn, req)
+	if err != nil {
+		return resp, daemonOperationError(ctx, req.Type, err)
+	}
+	return resp, nil
 }
 
 var errWaitBudgetExpired = errors.New("wait budget expired before dispatch")

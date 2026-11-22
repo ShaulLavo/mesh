@@ -196,6 +196,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		if response.Host != nil && s.wake != nil {
 			response.Host.Wake = s.wake.info()
 		}
+		if response.Host != nil && s.mcp != nil {
+			response.Host.MCPHostingSupported = true
+		}
 		if requestErr != nil {
 			if err := writeClientRequestError(relay, request, requestErr); err != nil {
 				return clientOperationError(ctx, fmt.Sprintf("report %s error %v", request.Type, requestErr), err)

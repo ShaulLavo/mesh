@@ -136,11 +136,11 @@ func (d *remoteMCPDaemon) control(t *testing.T, req protocol.MCPServiceRequest) 
 	return out
 }
 
-func (d *remoteMCPDaemon) service(t *testing.T, name string) mcphost.ServiceView {
+func (d *remoteMCPDaemon) service(t *testing.T, name string) mcphost.CatalogService {
 	t.Helper()
 	reply := d.local.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls"})
 	var out struct {
-		Services []mcphost.ServiceView `json:"services"`
+		Services []mcphost.CatalogService `json:"services"`
 	}
 	if err := json.Unmarshal(reply.Result, &out); err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func (d *remoteMCPDaemon) service(t *testing.T, name string) mcphost.ServiceView
 		}
 	}
 	t.Fatalf("no service %s", name)
-	return mcphost.ServiceView{}
+	return mcphost.CatalogService{}
 }
 
 // Revoking a full device and approving it again ends its live forwards and

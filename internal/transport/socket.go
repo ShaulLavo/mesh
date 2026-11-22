@@ -25,9 +25,27 @@ const (
 	inboundQueueByteLimit = 8 << 20
 )
 
+// InboundByteBudget lets a frontend account for a connection's inbound receive
+// queue inside its shared memory budget (PLAN section 2.5).
+type InboundByteBudget interface {
+	ReserveBytes(n int) bool
+	ReleaseBytes(n int)
+}
+
+// AttachInboundBudget binds conn's inbound receive queue to budget when conn
+// uses a background receive buffer. Existing queued bytes are charged immediately.
+func AttachInboundBudget(conn Conn, budget InboundByteBudget) bool {
+	sc, ok := conn.(*socketConn)
+	if !ok || budget == nil {
+		return true
+	}
+	return sc.attachInboundBudget(budget)
+}
+
 type inboundFrame struct {
-	frame protocol.Frame
-	bytes int
+	frame  protocol.Frame
+	bytes  int
+	budget InboundByteBudget
 }
 
 type socketConn struct {
@@ -49,6 +67,7 @@ type socketConn struct {
 	cause      error
 	queueMu    sync.Mutex
 	queueBytes int
+	budget     InboundByteBudget
 	trace      *transporttrace.Connection
 }
 
@@ -81,12 +100,47 @@ func newSecureSocketConn(ws *websocket.Conn, stream io.ReadWriteCloser, keepAliv
 	return c
 }
 
+func (c *socketConn) attachInboundBudget(budget InboundByteBudget) bool {
+	c.queueMu.Lock()
+	defer c.queueMu.Unlock()
+	if c.queueBytes > 0 && !budget.ReserveBytes(c.queueBytes) {
+		return false
+	}
+	c.budget = budget
+	return true
+}
+
+func (c *socketConn) releaseInboundFrame(inbound inboundFrame) {
+	c.queueMu.Lock()
+	c.queueBytes -= inbound.bytes
+	budget := inbound.budget
+	if budget == nil {
+		budget = c.budget
+	}
+	c.queueMu.Unlock()
+	if budget != nil && inbound.bytes > 0 {
+		budget.ReleaseBytes(inbound.bytes)
+	}
+}
+
+func (c *socketConn) drainUnreadInbound() {
+	for {
+		select {
+		case inbound, ok := <-c.frames:
+			if !ok {
+				return
+			}
+			c.releaseInboundFrame(inbound)
+		default:
+			return
+		}
+	}
+}
+
 func (c *socketConn) ReadFrame() (protocol.Frame, error) {
 	inbound, ok := <-c.frames
 	if ok {
-		c.queueMu.Lock()
-		c.queueBytes -= inbound.bytes
-		c.queueMu.Unlock()
+		c.releaseInboundFrame(inbound)
 		c.observeSession(inbound.frame, protocol.TypeAttach, transporttrace.AttachRead)
 		return inbound.frame, nil
 	}
@@ -151,6 +205,7 @@ func (c *socketConn) Close() error {
 	won := c.setCause(ErrClosed)
 	if !won {
 		<-c.done
+		c.drainUnreadInbound()
 		c.trace.Emit(c.ctx, transporttrace.StreamCloseEnd, nil)
 		return nil
 	}
@@ -159,6 +214,7 @@ func (c *socketConn) Close() error {
 	err := c.ws.Close(websocket.StatusNormalClosure, "")
 	c.cancel()
 	<-c.done
+	c.drainUnreadInbound()
 	c.trace.Emit(c.ctx, transporttrace.StreamCloseEnd, err)
 	if !closeCompleted(err) {
 		return fmt.Errorf("transport: close WebSocket: %w", err)
@@ -206,18 +262,22 @@ func (c *socketConn) readLoop() {
 		default:
 		}
 		c.queueMu.Lock()
-		if payloadBytes > inboundQueueByteLimit-c.queueBytes {
+		budget := c.budget
+		if payloadBytes > inboundQueueByteLimit-c.queueBytes || (budget != nil && !budget.ReserveBytes(payloadBytes)) {
 			c.queueMu.Unlock()
 			c.fail(ErrInboundQueueFull)
 			return
 		}
 		c.queueBytes += payloadBytes
 		select {
-		case c.frames <- inboundFrame{frame: frame, bytes: payloadBytes}:
+		case c.frames <- inboundFrame{frame: frame, bytes: payloadBytes, budget: budget}:
 			c.queueMu.Unlock()
 		default:
 			c.queueBytes -= payloadBytes
 			c.queueMu.Unlock()
+			if budget != nil {
+				budget.ReleaseBytes(payloadBytes)
+			}
 			c.fail(ErrInboundQueueFull)
 			return
 		}

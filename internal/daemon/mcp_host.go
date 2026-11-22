@@ -44,7 +44,7 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 	if err != nil {
 		home = "/"
 	}
-	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval})
+	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, HostID: string(l.host.ID), GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: configure MCP hosting: %w", err)
 	}
@@ -192,7 +192,7 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 	target := mcphost.Target{Service: req.Service, Instance: req.Instance, New: req.New}
 	switch req.Type {
 	case protocol.TypeMCPCatalog:
-		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), mcpServicesKey: c.sup.Services(caller)}, nil)
+		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), mcpServicesKey: c.sup.Catalog(caller)}, nil)
 	case protocol.TypeMCPServiceUpsert:
 		return c.upsert(ctx, caller, req)
 	case protocol.TypeMCPServiceDelete:
@@ -236,7 +236,7 @@ func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req p
 		if err != nil {
 			return nil, fmt.Errorf("publish MCP service: %w", err)
 		}
-		view, err := c.sup.Service(caller, saved.ID)
+		view, err := c.sup.CatalogService(caller, saved.ID)
 		if err != nil {
 			return nil, fmt.Errorf("show published MCP service: %w", err)
 		}

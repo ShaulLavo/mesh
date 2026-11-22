@@ -78,14 +78,7 @@ func (s *Supervisor) rebind(ctx context.Context, inst *instance, caller Caller) 
 
 func (s *Supervisor) findLocked(caller Caller, d Definition, target Target) (*instance, error) {
 	if target.Instance != "" {
-		inst := s.instances[target.Instance]
-		if inst == nil || inst.rec.ServiceID != d.ID {
-			return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrNotFound)
-		}
-		if inst.rec.Owner != "" && !caller.owns(inst.rec.Owner) {
-			return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrDenied)
-		}
-		return inst, nil
+		return s.findExplicitLocked(caller, d, target.Instance)
 	}
 	if target.New {
 		return nil, nil
@@ -99,6 +92,21 @@ func (s *Supervisor) findLocked(caller Caller, d Definition, target Target) (*in
 		}
 	}
 	return nil, nil
+}
+
+func (s *Supervisor) findExplicitLocked(caller Caller, d Definition, raw string) (*instance, error) {
+	instanceID, err := resolveInstanceTarget(s.cfg.HostID, d.ID, raw)
+	if err != nil {
+		return nil, err
+	}
+	inst := s.instances[instanceID]
+	if inst == nil || inst.rec.ServiceID != d.ID {
+		return nil, fmt.Errorf("instance %s of %s: %w", instanceID, d.Name, ErrNotFound)
+	}
+	if inst.rec.Owner != "" && !caller.owns(inst.rec.Owner) {
+		return nil, fmt.Errorf("instance %s of %s: %w", instanceID, d.Name, ErrDenied)
+	}
+	return inst, nil
 }
 
 func (s *Supervisor) newInstanceLocked(caller Caller, d Definition, isDefault bool) (*instance, error) {
@@ -319,7 +327,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 		_ = s.stopWorker(ctx, ref)
 		return nil, err
 	}
-	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info)}, nil
+	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info), capabilities: capabilitiesOf(info)}, nil
 }
 
 // failStart classifies an early exit, such as a missing runtime, by the

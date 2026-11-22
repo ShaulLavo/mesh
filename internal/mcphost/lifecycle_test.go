@@ -85,13 +85,13 @@ func TestKeptServiceRestartsWithBackoff(t *testing.T) {
 	f.publish(t, Definition{Name: "kept", InstancePolicy: PolicyShared, Lifecycle: LifecycleKept})
 	admin := Caller{Account: "local", Admin: true}
 	eventually(t, func() bool {
-		v := f.sup.Services(admin)[0]
+		v := f.sup.Catalog(admin)[0]
 		return len(v.Instances) == 1 && v.Instances[0].State == StateReady
 	})
 	f.launcher.stopAll()
-	eventually(t, func() bool { return f.sup.Services(admin)[0].Instances[0].State == StateFailed })
+	eventually(t, func() bool { return f.sup.Catalog(admin)[0].Instances[0].State == StateFailed })
 	eventually(t, func() bool {
-		v := f.sup.Services(admin)[0].Instances[0]
+		v := f.sup.Catalog(admin)[0].Instances[0]
 		return v.State == StateReady && v.Generation == 2
 	})
 }
@@ -102,7 +102,7 @@ func TestIncompatibleKeptServiceIsNotRetried(t *testing.T) {
 	f.publish(t, Definition{Name: "kept", InstancePolicy: PolicyShared, Lifecycle: LifecycleKept})
 	admin := Caller{Account: "local", Admin: true}
 	eventually(t, func() bool {
-		v := f.sup.Services(admin)[0]
+		v := f.sup.Catalog(admin)[0]
 		return len(v.Instances) == 1 && v.Instances[0].State == StateIncompatible
 	})
 	time.Sleep(2 * minBackoff)
