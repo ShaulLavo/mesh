@@ -11,12 +11,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
 const MaxRecord = 64 << 10
+
+// maxConfirmed bounds the confirmation memory of one Files. It is a variable
+// only so tests can reach the bound without publishing thousands of records.
+var maxConfirmed = 512
 
 // MaxBoundedRecord is the largest record PublishBounded accepts.
 const MaxBoundedRecord = 256 << 10
@@ -43,6 +48,16 @@ func (e *PersistenceError) Unwrap() error { return e.Err }
 type Files struct {
 	root  *os.Root
 	fault func(string) error
+	// observe sees every sync step without changing behavior, so tests can
+	// count them with the confirmation memory still active.
+	observe func(string)
+	// confirmed remembers JSON records this process already proved durable, so
+	// an unchanged one skips its file fsync. Directory and device barriers are
+	// never skipped: a rename can be undone or repeated without touching the
+	// file, so only the file's own bytes are vouched for here. It is bounded and
+	// forgets a path when the path is removed.
+	confirmMu sync.Mutex
+	confirmed map[string]fileStamp
 }
 
 func OpenFiles(path string) (*Files, error) {
@@ -69,7 +84,7 @@ func OpenFiles(path string) (*Files, error) {
 		}
 		return nil, executionBoundaryError("open execution root", err)
 	}
-	return &Files{root: root}, nil
+	return &Files{root: root, confirmed: make(map[string]fileStamp)}, nil
 }
 
 func (f *Files) Close() error { return executionBoundaryError("files.go Close", f.root.Close()) }
@@ -175,11 +190,75 @@ func (f *Files) Confirm(name string) error {
 	if err != nil {
 		return err
 	}
-	err = errors.Join(f.dataSync(file), f.syncDirs(name))
+	return errors.Join(f.confirmOpen(name, file), f.closeFile(file))
+}
+
+// confirmOpen makes an opened record and its namespace durable. Only the file's
+// own fsync is skipped, and only for a JSON record this process already synced
+// and has not seen change; every directory and device barrier still runs.
+func (f *Files) confirmOpen(name string, file *os.File) error {
+	stamp, ok := f.stampOf(name, file)
+	remembered := ok && f.wasConfirmed(name, stamp)
+	var err error
+	if !remembered {
+		err = f.dataSync(file)
+	}
+	err = errors.Join(err, f.syncDirs(name))
 	if err == nil {
 		err = f.flushDevice(file)
 	}
-	return errors.Join(err, f.closeFile(file))
+	if err == nil && ok && !remembered {
+		f.remember(name, stamp)
+	}
+	return err
+}
+
+// stampOf identifies the current bytes of a JSON record. Records are written
+// once to a fresh file and replaced by rename, never rewritten in place, so
+// an unchanged stamp means the bytes already synced. Locks, anchors and
+// capture segments are not records and never get a stamp. Fault injection
+// bypasses the memory so tests that script sync steps still see every one.
+func (f *Files) stampOf(name string, file *os.File) (fileStamp, bool) {
+	if f.fault != nil || !strings.HasSuffix(name, recordExtension) {
+		return fileStamp{}, false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fileStamp{}, false
+	}
+	return stampFromInfo(info)
+}
+func (f *Files) wasConfirmed(name string, stamp fileStamp) bool {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	return f.confirmed[name] == stamp
+}
+
+// remember keeps the memory bounded by starting over when it fills; the cost
+// of a forgotten record is one more fsync.
+func (f *Files) remember(name string, stamp fileStamp) {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	if _, known := f.confirmed[name]; !known && len(f.confirmed) >= maxConfirmed {
+		clear(f.confirmed)
+	}
+	f.confirmed[name] = stamp
+}
+
+// forget drops a removed path, and with tree every path beneath it.
+func (f *Files) forget(name string, tree bool) {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	delete(f.confirmed, name)
+	if !tree {
+		return
+	}
+	prefix := name + string(filepath.Separator)
+	for path := range f.confirmed {
+		if strings.HasPrefix(path, prefix) {
+			delete(f.confirmed, path)
+		}
+	}
 }
 func (f *Files) Publish(name string, value any, exclusive bool) (Stage, error) {
 	return f.PublishBounded(name, value, exclusive, MaxRecord)
@@ -223,12 +302,18 @@ func (f *Files) publishBytes(name string, data []byte, exclusive bool) (Stage, e
 	if err != nil {
 		return stage, &PersistenceError{Stage: stage, Err: errors.Join(err, f.closeFile(file))}
 	}
+	// Sampled right after the data sync and the rename, before the slower
+	// directory syncs, so it describes the bytes that were just made durable.
+	stamp, stamped := f.stampOf(name, file)
 	err = f.syncDirs(name)
 	if err == nil {
 		err = f.flushDevice(file)
 	}
 	if err = errors.Join(err, f.closeFile(file)); err != nil {
 		return Unconfirmed, &PersistenceError{Unconfirmed, err}
+	}
+	if stamped {
+		f.remember(name, stamp)
 	}
 	return Durable, nil
 }
@@ -284,11 +369,7 @@ func (f *Files) ensureOne(name string) error {
 	if err != nil {
 		return err
 	}
-	err = errors.Join(f.dataSync(file), f.syncDirs(anchor))
-	if err == nil {
-		err = f.flushDevice(file)
-	}
-	return errors.Join(err, f.closeFile(file))
+	return errors.Join(f.confirmOpen(anchor, file), f.closeFile(file))
 }
 func (f *Files) Names(dir string) ([]os.DirEntry, error) {
 	if err := f.check(dir, false); err != nil {
@@ -307,6 +388,7 @@ func (f *Files) Remove(name, anchor string) error {
 		return err
 	}
 	err = f.check(name, true)
+	f.forget(name, false)
 	if err == nil {
 		err = f.root.Remove(name)
 	}
@@ -323,6 +405,9 @@ func (f *Files) Remove(name, anchor string) error {
 }
 
 func (f *Files) step(operation string) error {
+	if f.observe != nil {
+		f.observe(operation)
+	}
 	if f.fault != nil {
 		return f.fault(operation)
 	}
@@ -349,6 +434,7 @@ func (f *Files) RemoveTree(name, anchor string) error {
 		return err
 	}
 	err = f.check(name, true)
+	f.forget(name, true)
 	if err == nil {
 		err = f.root.RemoveAll(name)
 	}

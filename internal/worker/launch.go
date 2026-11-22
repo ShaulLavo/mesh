@@ -15,6 +15,7 @@ import (
 
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/updategate"
@@ -213,6 +214,9 @@ func launchSessionDir(cfg LaunchConfig) (string, string, error) {
 func waitForWorker(dir string, timeout time.Duration, process *os.Process) error {
 	started := time.Now()
 	deadline := started.Add(timeout)
+	// A worker that publishes quickly is ready within milliseconds, so poll
+	// fast at first and settle at the steady interval.
+	pause := time.Millisecond
 	for {
 		phase := "launch-marker-unreadable"
 		_, markerErr := os.Lstat(paths.Launching(dir))
@@ -237,7 +241,8 @@ func waitForWorker(dir string, timeout time.Duration, process *os.Process) error
 		if time.Now().After(deadline) {
 			return readinessTimeout(dir, process, started, deadline, phase, markerErr)
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(pause)
+		pause = min(pause*2, 20*time.Millisecond)
 	}
 }
 
@@ -412,6 +417,9 @@ func launchArguments(cfg LaunchConfig, id, dir string) []string {
 		if cfg.Execution.Mode() != execution.KindPTY {
 			args = append(args, "--execution-kind", cfg.Execution.Kind, "--execution-stdin", cfg.Execution.Stdin)
 		}
+	}
+	if hint := release.DigestHintFor(cfg.Executable); hint != "" {
+		args = append(args, "--image-hint", hint)
 	}
 	if cfg.RecoveredFrom != "" {
 		args = append(args, "--recovered-from", cfg.RecoveredFrom)

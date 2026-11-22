@@ -67,6 +67,12 @@ func readExecutingBuild(file *os.File, err error) Build {
 		return build
 	}
 	defer file.Close() //nolint:errcheck // read-only
+	stamp := fileStamp(file)
+	if digest, ok := adoptedDigest(stamp); ok {
+		build.Digest = digest
+		rememberImage(stamp, digest)
+		return build
+	}
 	// Stream the image so identity checks do not retain binary-sized allocations.
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -74,7 +80,16 @@ func readExecutingBuild(file *os.File, err error) Build {
 		return build
 	}
 	build.Digest = hex.EncodeToString(hash.Sum(nil))
+	rememberImage(stamp, build.Digest)
 	return build
+}
+
+func fileStamp(file *os.File) string {
+	info, err := file.Stat()
+	if err != nil {
+		return ""
+	}
+	return imageStamp(info)
 }
 
 func executingExecutablePath() string {

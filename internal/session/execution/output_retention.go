@@ -24,6 +24,11 @@ func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
 	if err != nil {
 		return err
 	}
+	// Every slot is one entry, so fewer entries than the active limit can never
+	// need eviction. Observing each receipt first made a create read them all.
+	if len(entries) < j.maxActive {
+		return nil
+	}
 	candidate, slots := j.outputCandidate(ctx, entries)
 	if slots < j.maxActive || candidate.Binding.Reservation.Instance == "" {
 		return nil
