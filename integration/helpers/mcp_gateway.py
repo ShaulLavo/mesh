@@ -626,7 +626,9 @@ def two_callers(binary, env, host_b, repo_b):
     one, two = gateway(binary, env), gateway(binary, env, "other")
     name = exposed_name(host_b, repo_b, "t", "progress")
     try:
-        meta = lambda token: dict(META, progressToken=token)
+        def meta(token):
+            return dict(META, progressToken=token)
+
         one.start("tools/call", {"name": name, "arguments": {"steps": 8}, "_meta": meta("p1")}, "c1")
         two.start("tools/call", {"name": name, "arguments": {"steps": 8}, "_meta": meta("p2")}, "c2")
         wait_for(one, None, lambda e: e["params"]["progressToken"] == "p1", f"progress for the first caller: {one.replies}")
