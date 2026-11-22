@@ -3,6 +3,7 @@ package mcpnative
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sort"
 )
 
@@ -57,7 +58,7 @@ type Registry struct {
 
 // DefaultRegistry builds the shipped native MCP tool registry sorted by tool name.
 func DefaultRegistry() *Registry {
-	specs := nativeToolSpecs()
+	specs := slices.Concat(nativeToolSpecs(), terminalToolSpecs(), serviceToolSpecs())
 	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
 	byName := make(map[string]ToolSpec, len(specs))
 	for _, spec := range specs {

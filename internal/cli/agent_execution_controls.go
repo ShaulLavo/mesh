@@ -114,6 +114,9 @@ func agentExecutionPage(p *protocol.ExecutionPage, host string, request protocol
 	return &agentapi.ExecutionPage{HostID: p.HostID, SessionID: p.SessionID, Instance: p.Instance, Stream: p.Stream, Generation: p.Generation, Bytes: p.Bytes, StartCursor: p.StartCursor, NextCursor: p.NextCursor, EarliestCursor: p.EarliestCursor, EndCursor: p.EndCursor, ObservedEnd: p.ObservedEnd, StreamClosed: p.StreamClosed, EOF: p.EOF, CloseReason: p.CloseReason, Loss: p.Loss, Available: p.Available, Gap: p.Gap, Reason: p.Reason}, nil
 }
 func executionAgentData(response, request protocol.Control, host, key string) (any, error) {
+	if data, terminal, err := terminalAgentData(response, request, host); terminal {
+		return data, err
+	}
 	if request.Type == protocol.TypeExecutionInput {
 		return agentExecutionInputData(response, request)
 	}

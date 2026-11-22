@@ -651,7 +651,9 @@ COMMANDS
   list [--flags]                         List one host's sessions with bounded pages
   logs SESSION_ID [--flags]              Read exact bounded output bytes with an independent cursor
   request [--flags]                      Look up a retained creation receipt without launching work
+  resize SESSION_ID [--flags]            Resize a keyed terminal job while no person is attached
   rm SESSION_ID [--flags]                Remove a finished keyed command payload while retaining its receipt
+  screen SESSION_ID [--flags]            Read a keyed terminal job's rendered screen without resizing it
   signal SESSION_ID [--flags]            Signal the exact keyed command instance
   wait SESSION_ID [--flags]              Wait for a durable result without stopping the command
 
@@ -836,6 +838,30 @@ FLAGS
   --timeout      Hard deadline from 100ms to 60s (5s)
 ```
 
+## mesh session resize
+
+```text
+Resize a keyed terminal job while no person is attached
+
+USAGE
+
+  mesh session resize SESSION_ID [--flags]
+
+FLAGS
+
+  --cols       Terminal width, required
+  --context    With --identity, the context ID or handle of the job
+  -h --help    Help for resize
+  --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --rows       Terminal height, required
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
 ## mesh session rm
 
 ```text
@@ -855,6 +881,30 @@ FLAGS
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
   --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Finite deadline from 100ms to 60s (5s)
+```
+
+## mesh session screen
+
+```text
+Read a keyed terminal job's rendered screen without resizing it
+
+USAGE
+
+  mesh session screen SESSION_ID [--flags]
+
+FLAGS
+
+  --cols       Preview width up to 160 (80)
+  --context    With --identity, the context ID or handle of the job
+  -h --help    Help for screen
+  --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
+  --instance   Exact instance from the creation receipt, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --rows       Preview height up to 24 (24)
   --timeout    Finite deadline from 100ms to 60s (5s)
 ```
 

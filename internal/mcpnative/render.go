@@ -164,6 +164,8 @@ func renderSuccessData(b *strings.Builder, data any) {
 		renderJobList(b, v)
 	case JobInputData:
 		fmt.Fprintf(b, "job %s stdin write %s offset=%s length=%d closed=%t", v.Job, v.WriteKey, v.Offset, v.Length, v.Closed)
+	default:
+		renderTerminalAndServiceData(b, data)
 	}
 }
 

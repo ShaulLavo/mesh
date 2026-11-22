@@ -690,13 +690,14 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 		return mcpnative.CallOutcome{}, err
 	}
 	control := protocol.Control{
-		Type:        protocol.TypeExecutionInput,
-		SessionID:   req.Job.SessionID,
-		Instance:    req.Job.Instance,
-		WriteKey:    req.WriteKey,
-		InputOffset: req.Offset,
-		InputBytes:  req.Data,
-		InputEOF:    req.EOF,
+		Type:          protocol.TypeExecutionInput,
+		SessionID:     req.Job.SessionID,
+		Instance:      req.Job.Instance,
+		WriteKey:      req.WriteKey,
+		InputOffset:   req.Offset,
+		InputBytes:    req.Data,
+		InputEOF:      req.EOF,
+		ExecutionKind: req.Kind,
 	}
 	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)

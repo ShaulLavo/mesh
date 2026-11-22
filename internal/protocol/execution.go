@@ -112,6 +112,7 @@ func executionPayloadLimit(kind string) int {
 }
 
 const executionTypeField = "type"
+const executionKindField = "kind"
 const requestIDField = "requestId"
 const sessionIDField = "sessionId"
 
@@ -197,7 +198,7 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		return validateExecutionBoundField(kind, name, raw)
 	}
 	switch name {
-	case "stdin", "kind", "cwd", "term":
+	case "stdin", executionKindField, "cwd", "term":
 		return executionString(raw)
 	case "command":
 		return executionArguments(raw)
@@ -400,7 +401,7 @@ var boundExecutionFields = map[string]struct {
 
 func validateExecutionInputField(name string, raw json.RawMessage) error {
 	switch name {
-	case "writeKey", "inputOffset", "inputBytes":
+	case "writeKey", "inputOffset", "inputBytes", executionKindField:
 		return executionString(raw)
 	case "inputEOF":
 		if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
@@ -422,9 +423,9 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 	// A job in a context may take its directory from the context and a shell
 	// command instead of argv; the daemon checks that exactly one is present.
 	if kind == TypeExecutionCreate && fields[executionContextField] == nil {
-		required = append(required, "kind", "command", "cwd")
+		required = append(required, executionKindField, "command", "cwd")
 	} else if kind == TypeExecutionCreate {
-		required = append(required, "kind")
+		required = append(required, executionKindField)
 	}
 	if kind == TypeExecutionResize {
 		required = append(required, "cols", "rows")

@@ -16,7 +16,7 @@ func (l *lifecycle) executionInput(ctx context.Context, req protocol.Control, r 
 	if err != nil {
 		return response, executionBoundaryError("execution stdin", err)
 	}
-	if err := inputMode(r.Binding, intent); err != nil {
+	if err := inputMode(r.Binding, req.ExecutionKind, intent); err != nil {
 		return response, err
 	}
 	if intent == nil || r.Phase == executionTerminalPhase || r.Binding.Reservation.BootID != worker.BootID() {
@@ -48,8 +48,13 @@ func (l *lifecycle) executionInput(ctx context.Context, req protocol.Control, r 
 }
 
 // inputMode admits pipe stdin to open pipe jobs and keyed key presses to
-// terminal jobs. A terminal has no end of file to close.
-func inputMode(b execution.Binding, intent *session.InputReceipt) error {
+// terminal jobs. A terminal has no end of file to close. A request that names
+// the kind it expects (the MCP tools do) never reaches the other kind, so
+// terminal keys and pipe stdin never mix.
+func inputMode(b execution.Binding, expected string, intent *session.InputReceipt) error {
+	if expected != "" && expected != b.Mode() {
+		return &protocol.ExecutionValidationError{Err: fmt.Errorf("execution: this job is kind %s, not %s", b.Mode(), expected)}
+	}
 	switch b.Mode() {
 	case execution.KindPipe:
 		if b.Stdin != execution.StdinOpen {

@@ -289,7 +289,7 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 }
 
 func (c *mcpControls) finishExecWait(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, notify func(mcpnative.ProgressUpdate)) (*agentapi.ExecutionReceipt, string, error) {
-	if receipt.Phase == "terminal" || req.WaitMS <= 0 {
+	if receipt.Phase == executionPhaseTerminal || req.WaitMS <= 0 {
 		return receipt, "", nil
 	}
 	waited, status, waitErr := c.waitExecJob(ctx, host, req, ref, notify)
