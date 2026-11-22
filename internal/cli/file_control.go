@@ -117,7 +117,8 @@ func loadWriteData(stdin io.Reader, source string, request *protocol.FileWriteRe
 		return fmt.Errorf("write source is larger than %d bytes; use mesh cp", protocol.MaxFileWrite)
 	}
 	request.Encoding, request.Data = protocol.FileEncodingUTF8, string(data)
-	if !utf8.Valid(data) {
+	// Text whose JSON escaping would outgrow the frame travels as Base64.
+	if escaped, err := json.Marshal(request.Data); !utf8.Valid(data) || err != nil || len(escaped) > protocol.MaxFileTextEncoded {
 		request.Encoding, request.Data = protocol.FileEncodingBase64, base64.StdEncoding.EncodeToString(data)
 	}
 	return nil

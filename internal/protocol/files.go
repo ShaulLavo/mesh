@@ -172,6 +172,9 @@ type FileSearchResult struct {
 	Path         string      `json:"path"`
 	Matches      []FileMatch `json:"matches"`
 	FilesVisited int         `json:"filesVisited"`
+	// DirectoriesVisited counts directories entered. Each directory entry of
+	// any kind, files and directories alike, counts against MaxFileSearchFiles.
+	DirectoriesVisited int `json:"directoriesVisited"`
 	// Skipped counts files not searched: too large, binary, unreadable,
 	// symlinks and special files.
 	Skipped   int    `json:"skipped"`

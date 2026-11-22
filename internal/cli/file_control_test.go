@@ -177,3 +177,11 @@ func TestLoadWriteDataPicksTheExactEncoding(t *testing.T) {
 		t.Fatalf("binary: %+v %v", request, err)
 	}
 }
+
+func TestLoadWriteDataSendsEscapeHeavyTextAsBase64(t *testing.T) {
+	var request protocol.FileWriteRequest
+	markup := strings.Repeat("<", protocol.MaxFileWrite)
+	if err := loadWriteData(strings.NewReader(markup), "-", &request); err != nil || request.Encoding != protocol.FileEncodingBase64 {
+		t.Fatalf("escape-heavy text: %s %v", request.Encoding, err)
+	}
+}

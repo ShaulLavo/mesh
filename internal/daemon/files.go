@@ -15,10 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/protocol"
@@ -31,15 +28,32 @@ import (
 type fileController struct {
 	hostID  string
 	account string
-	// writeMu serializes this daemon's own commits, so two writers that both
-	// passed their digest check cannot interleave. Other processes can still
-	// change a file between the final check and the rename; the check narrows
-	// that window to the time between two system calls and cannot close it.
-	writeMu sync.Mutex
+	// admit is the grant check run immediately before a commit: the request
+	// must still be live and its device still approved.
+	admit func(context.Context) error
+	// writeSlot serializes this daemon's own commits. A waiting request gives
+	// up when its caller goes away. Another process can still write to a file
+	// while a commit is in flight; the commit protocol detects that, see
+	// commitStaged.
+	writeSlot chan struct{}
+	// searchBytes bounds the content one search reads.
+	searchBytes int64
+	// hook lets a test act between steps of an operation. It is nil in the
+	// daemon.
+	hook func(stage, path string)
 }
 
 func newFileController(hostID string) *fileController {
-	return &fileController{hostID: hostID, account: daemonAccount()}
+	return &fileController{
+		hostID: hostID, account: daemonAccount(), admit: workerExecutionAdmission,
+		writeSlot: make(chan struct{}, 1), searchBytes: protocol.MaxFileSearchBytes,
+	}
+}
+
+func (c *fileController) stage(stage, path string) {
+	if c.hook != nil {
+		c.hook(stage, path)
+	}
 }
 
 func daemonAccount() string {
@@ -197,8 +211,9 @@ func (c *fileController) beginFileRequest(target protocol.FileTarget, path strin
 
 // fileCursor is the opaque continuation token. It restates the binding the
 // daemon checks again on every use, so a token from another host, account or
-// path, or for a file that changed, is refused. It grants no access the path
-// does not already give.
+// path, or for a file that changed, is refused. The path is bound by digest,
+// so the token has a fixed size however long or escape-heavy the path is. It
+// grants no access the path does not already give.
 type fileCursor struct {
 	Kind     string `json:"k"`
 	Host     string `json:"h"`
@@ -215,8 +230,15 @@ const (
 	maxFileCursor  = 16 << 10
 )
 
-func (c *fileController) encodeCursor(cursor fileCursor) string {
-	cursor.Host, cursor.Account = c.hostID, c.account
+// pathBinding is the fixed-size stand-in for a path inside a cursor.
+func pathBinding(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:16])
+}
+
+// encodeCursor binds a cursor to this host and account and to the path.
+func (c *fileController) encodeCursor(cursor fileCursor, path string) string {
+	cursor.Host, cursor.Account, cursor.Path = c.hostID, c.account, pathBinding(path)
 	data, _ := json.Marshal(cursor) // A struct of strings and integers always encodes.
 	return base64.RawURLEncoding.EncodeToString(data)
 }
@@ -230,66 +252,10 @@ func (c *fileController) decodeCursor(token, kind, path string) (fileCursor, err
 	if err != nil || json.Unmarshal(data, &cursor) != nil {
 		return fileCursor{}, fileFailure(agentapi.FileCursorInvalid, "daemon: file cursor is malformed")
 	}
-	if cursor.Kind != kind || cursor.Host != c.hostID || cursor.Account != c.account || cursor.Path != path {
+	if cursor.Kind != kind || cursor.Host != c.hostID || cursor.Account != c.account || cursor.Path != pathBinding(path) {
 		return fileCursor{}, fileFailure(agentapi.FileCursorInvalid, "daemon: file cursor belongs to another host, account, path or operation")
 	}
 	return cursor, nil
-}
-
-// openRegularFile opens path for reading and refuses anything that is not a
-// regular file, including a symlink in the last path element. The check runs
-// on the open descriptor, so a swap between the path check and the open cannot
-// substitute a special file, and O_NONBLOCK keeps a swapped-in FIFO from
-// blocking the open.
-func openRegularFile(path string) (*os.File, os.FileInfo, error) {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return nil, nil, fileOSFailure("stat", path, err)
-	}
-	if !before.Mode().IsRegular() {
-		return nil, nil, fileFailure(agentapi.FileNotRegular, "daemon: %s is %s, not a regular file", path, describeMode(before.Mode()))
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0) //nolint:gosec // the caller names the file; the daemon account's own permissions decide access
-	if err != nil {
-		return nil, nil, fileOSFailure("open", path, err)
-	}
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		_ = file.Close()
-		if err != nil {
-			return nil, nil, fileOSFailure("stat", path, err)
-		}
-		return nil, nil, fileFailure(agentapi.FileNotRegular, "daemon: %s is %s, not a regular file", path, describeMode(info.Mode()))
-	}
-	return file, info, nil
-}
-
-func describeMode(mode fs.FileMode) string {
-	switch {
-	case mode&fs.ModeSymlink != 0:
-		return "a symlink"
-	case mode.IsDir():
-		return "a directory"
-	case mode&fs.ModeNamedPipe != 0:
-		return "a named pipe"
-	case mode&fs.ModeSocket != 0:
-		return "a socket"
-	case mode&fs.ModeDevice != 0:
-		return "a device"
-	default:
-		return "a special file"
-	}
-}
-
-// fileRevision fingerprints identity and content-change state. Replacing the
-// file changes the inode, and writing it in place changes size, modification
-// time or change time.
-func fileRevision(info os.FileInfo) string {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return protocol.FileRevisionString(0, 0, uint64(info.Size()), info.ModTime().UnixNano(), 0) //nolint:gosec // a file size is never negative
-	}
-	return protocol.FileRevisionString(uint64(stat.Dev), uint64(stat.Ino), uint64(stat.Size), info.ModTime().UnixNano(), statChangeNanos(stat)) //nolint:gosec // device, inode and size are fingerprint bits, not quantities
 }
 
 // hashFile streams a regular file through SHA-256, leaving the descriptor

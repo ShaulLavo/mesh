@@ -33,25 +33,29 @@ func (c *fileController) read(ctx context.Context, request protocol.FileReadRequ
 	if limit == 0 {
 		limit = protocol.MaxFilePage
 	}
-	file, info, err := openRegularFile(path)
+	location, err := locateFile(path)
+	if err != nil {
+		return protocol.FileReadResult{}, err
+	}
+	defer location.close()
+	file, before, err := location.openRegular()
 	if err != nil {
 		return protocol.FileReadResult{}, err
 	}
 	defer file.Close() //nolint:errcheck // The descriptor is read-only.
-	revision := fileRevision(info)
+	revision := before.revision()
 	if wantRevision != "" && wantRevision != revision {
 		return protocol.FileReadResult{}, fileFailure(agentapi.FileChanged, "daemon: %s changed since the cursor was issued; read it again from the start", path)
 	}
-	size := uint64(info.Size()) //nolint:gosec // a file size is never negative
-	page, err := readFilePage(file, size, offset, limit)
+	page, err := readFilePage(file, before.size, offset, limit)
 	if err != nil {
 		return protocol.FileReadResult{}, err
 	}
-	result := protocol.FileReadResult{Target: target, Path: path, Start: offset, Size: size, Revision: revision}
+	result := protocol.FileReadResult{Target: target, Path: path, Start: offset, Size: before.size, Revision: revision}
 	result.Encoding, result.Data, page = encodePage(page)
 	result.End = offset + uint64(len(page))
-	result.EOF = result.End >= size
-	if result.SHA256, err = readDigest(ctx, file, size, request.Digest); err != nil {
+	result.EOF = result.End >= before.size
+	if result.SHA256, err = readDigest(ctx, file, before.size, request.Digest); err != nil {
 		return protocol.FileReadResult{}, err
 	}
 	// The final stat is what makes the page a snapshot: a write during the read
@@ -60,13 +64,13 @@ func (c *fileController) read(ctx context.Context, request protocol.FileReadRequ
 		return protocol.FileReadResult{}, err
 	}
 	if !result.EOF {
-		result.NextCursor = c.encodeCursor(fileCursor{Kind: fileCursorRead, Path: path, Offset: result.End, Revision: revision})
+		result.NextCursor = c.encodeCursor(fileCursor{Kind: fileCursorRead, Offset: result.End, Revision: revision}, path)
 	}
 	return result, nil
 }
 
 // readStart takes the offset from the request or, on a continuation, from the
-// verified cursor.
+// verified cursor. A read cursor always carries the revision it was issued for.
 func (c *fileController) readStart(request protocol.FileReadRequest, path string) (uint64, string, error) {
 	if request.Cursor == "" {
 		return request.Offset, "", nil
@@ -77,6 +81,9 @@ func (c *fileController) readStart(request protocol.FileReadRequest, path string
 	cursor, err := c.decodeCursor(request.Cursor, fileCursorRead, path)
 	if err != nil {
 		return 0, "", err
+	}
+	if cursor.Revision == "" {
+		return 0, "", fileFailure(agentapi.FileCursorInvalid, "daemon: file cursor carries no file revision")
 	}
 	return cursor.Offset, cursor.Revision, nil
 }
@@ -90,11 +97,11 @@ func readDigest(ctx context.Context, file *os.File, size uint64, wanted bool) (s
 }
 
 func verifyUnchanged(file *os.File, path, revision string) error {
-	after, err := file.Stat()
+	after, err := fstatFile(file)
 	if err != nil {
 		return fileOSFailure("stat", path, err)
 	}
-	if fileRevision(after) != revision {
+	if after.revision() != revision {
 		return fileFailure(agentapi.FileChanged, "daemon: %s changed while it was being read; read it again", path)
 	}
 	return nil

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -63,7 +62,7 @@ func callFiles(t *testing.T, controller *fileController, requestType string, bod
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, handled, err := controller.HandleControl(t.Context(), protocol.Control{Type: requestType, RequestID: "files", Files: raw})
+	response, handled, err := controller.HandleControl(localServerContext(t.Context()), protocol.Control{Type: requestType, RequestID: "files", Files: raw})
 	if err != nil || !handled {
 		t.Fatalf("%s: handled=%v err=%v", requestType, handled, err)
 	}
@@ -401,12 +400,12 @@ func TestFileReadCursorIsBoundToHostAccountPathAndOperation(t *testing.T) {
 
 	// A cursor minted for another host or account is refused even for the same path.
 	otherHost := &fileController{hostID: "another-host", account: f.controller.account}
-	foreign := otherHost.encodeCursor(fileCursor{Kind: fileCursorRead, Path: path, Offset: 5, Revision: page.Revision})
+	foreign := otherHost.encodeCursor(fileCursor{Kind: fileCursorRead, Offset: 5, Revision: page.Revision}, path)
 	fileCode(t, f.read(protocol.FileReadRequest{Path: path, Cursor: foreign}), "file.cursor_invalid")
 	otherAccount := &fileController{hostID: fileTestHost, account: f.controller.account + "-other"}
-	foreign = otherAccount.encodeCursor(fileCursor{Kind: fileCursorRead, Path: path, Offset: 5, Revision: page.Revision})
+	foreign = otherAccount.encodeCursor(fileCursor{Kind: fileCursorRead, Offset: 5, Revision: page.Revision}, path)
 	fileCode(t, f.read(protocol.FileReadRequest{Path: path, Cursor: foreign}), "file.cursor_invalid")
-	listCursor := f.controller.encodeCursor(fileCursor{Kind: fileCursorList, Path: path, After: "x"})
+	listCursor := f.controller.encodeCursor(fileCursor{Kind: fileCursorList, After: "x"}, path)
 	fileCode(t, f.read(protocol.FileReadRequest{Path: path, Cursor: listCursor}), "file.cursor_invalid")
 }
 
@@ -462,7 +461,7 @@ func TestFileWriteCreateOnly(t *testing.T) {
 	if !result.Created || result.SHA256 != digestHex([]byte("first")) {
 		t.Fatalf("result: %+v", result)
 	}
-	if info, _ := os.Stat(path); info.Mode().Perm() != newFileMode {
+	if info, _ := os.Stat(path); info.Mode().Perm() != os.FileMode(newFilePermission) {
 		t.Fatalf("mode %v", info.Mode().Perm())
 	}
 	fileCode(t, f.write(protocol.FileWriteRequest{Path: path, Data: "second", CreateOnly: true}), "file.conflict")
@@ -489,43 +488,6 @@ func TestFileWriteEncodingAndBounds(t *testing.T) {
 	fileCode(t, f.write(protocol.FileWriteRequest{Path: tooLarge, Encoding: protocol.FileEncodingBase64, Data: "!!!", CreateOnly: true}), "usage.invalid")
 	if _, err := os.Stat(tooLarge); err == nil {
 		t.Fatal("an oversized write created a file")
-	}
-	f.requireNoTemporaryFiles()
-}
-
-// A change that lands after the digest matched and before the rename must not
-// be overwritten.
-func TestFileCommitRechecksTheVersionItHashed(t *testing.T) {
-	f := newFileFixture(t)
-	path := f.put("config.txt", []byte("old\n"))
-	plan, err := replacePlan(t.Context(), path, digestHex([]byte("old\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer plan.close()
-	if err := os.WriteFile(path, []byte("changed by someone else\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	err = commitFile(path, []byte("new\n"), plan)
-	var failure *fileError
-	if !errors.As(err, &failure) || failure.code != "file.conflict" {
-		t.Fatalf("commit after an external change: %v", err)
-	}
-	f.requireContent(path, []byte("changed by someone else\n"))
-	f.requireNoTemporaryFiles()
-
-	// Replacement by rename is caught by the inode.
-	plan2, err := replacePlan(t.Context(), path, digestHex([]byte("changed by someone else\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer plan2.close()
-	other := f.put("other.txt", []byte("changed by someone else\n"))
-	if err := os.Rename(other, path); err != nil {
-		t.Fatal(err)
-	}
-	if err := commitFile(path, []byte("new\n"), plan2); err == nil {
-		t.Fatal("commit after a replacement succeeded")
 	}
 	f.requireNoTemporaryFiles()
 }
@@ -688,7 +650,7 @@ func TestFileListPagesInNameOrderWithoutFollowingLinks(t *testing.T) {
 	if got, want := strings.Join(kinds, ","), "file,file,file,dir,symlink"; got != want {
 		t.Fatalf("kinds %s, want %s", got, want)
 	}
-	foreign := f.controller.encodeCursor(fileCursor{Kind: fileCursorList, Path: f.path("dir"), After: "a"})
+	foreign := f.controller.encodeCursor(fileCursor{Kind: fileCursorList, After: "a"}, f.path("dir"))
 	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.root, Cursor: foreign}), "file.cursor_invalid")
 	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.root, Limit: protocol.MaxFileList + 1}), "usage.invalid")
 	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("a.txt")}), "file.not_regular")

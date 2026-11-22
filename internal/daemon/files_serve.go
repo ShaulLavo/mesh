@@ -1,0 +1,81 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
+)
+
+// frameLookahead lets a long request notice that its caller left. The client
+// loop is the only reader of its connection, so while a request runs nothing
+// would see a closed socket. watch starts the next read early; if it fails the
+// request's context ends, and if it returns a frame the loop receives that
+// frame next, in order.
+type frameLookahead struct {
+	conn    transport.Conn
+	pending chan lookaheadRead
+	armed   bool
+}
+
+type lookaheadRead struct {
+	frame protocol.Frame
+	err   error
+}
+
+func newFrameLookahead(conn transport.Conn) *frameLookahead { return &frameLookahead{conn: conn} }
+
+// read returns the next frame from the connection, taking the one watch
+// already started if there is one.
+func (l *frameLookahead) read() (protocol.Frame, error) {
+	if !l.armed {
+		return wrapRead(l.conn.ReadFrame())
+	}
+	l.armed = false
+	result := <-l.pending
+	return wrapRead(result.frame, result.err)
+}
+
+func wrapRead(frame protocol.Frame, err error) (protocol.Frame, error) {
+	if err != nil {
+		return frame, fmt.Errorf("daemon: read client frame: %w", err)
+	}
+	return frame, nil
+}
+
+// watch returns a context that ends when the connection fails.
+func (l *frameLookahead) watch(ctx context.Context) (context.Context, context.CancelFunc) {
+	watched, cancel := context.WithCancel(ctx)
+	l.pending = make(chan lookaheadRead, 1)
+	l.armed = true
+	pending := l.pending
+	go func() {
+		frame, err := l.conn.ReadFrame()
+		pending <- lookaheadRead{frame: frame, err: err}
+		if err != nil {
+			cancel()
+		}
+	}()
+	return watched, cancel
+}
+
+// replyFiles runs one file request and queues its reply with the grant check
+// the relay applies when the frame leaves the queue, so a device revoked while
+// the request ran, or while its reply waited, receives nothing.
+func (s *clientServer) replyFiles(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {
+	requestCtx, cancel := lookahead.watch(ctx)
+	reply, _, err := s.files.HandleControl(requestCtx, request)
+	cancel()
+	if err != nil {
+		reply = clientRequestError(request, err)
+	}
+	frames, err := protocol.ControlFrames(reply)
+	if err == nil && len(frames) != 1 {
+		err = fmt.Errorf("daemon: %s reply needs %d frames", request.Type, len(frames))
+	}
+	if err != nil {
+		return writeClientRequestError(relay, request, fmt.Errorf("daemon: %s reply does not fit one frame: %w", request.Type, err))
+	}
+	return relay.enqueueAdmittedResponse(frames[0], func() error { return workerExecutionAdmission(ctx) })
+}

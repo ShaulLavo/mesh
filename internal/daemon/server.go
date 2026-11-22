@@ -91,8 +91,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 	}()
 
 	terminalUsed := false
+	lookahead := newFrameLookahead(client)
 	for {
-		frame, err := client.ReadFrame()
+		frame, err := lookahead.read()
 		if err != nil {
 			logClientStreamClose(ctx, terminalUsed, err)
 			return clientOperationError(ctx, "read client frame", err)
@@ -128,6 +129,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 
+		if protocol.IsFileControl(request.Type) && s.files != nil {
+			if err := s.replyFiles(ctx, relay, lookahead, request); err != nil {
+				return clientOperationError(ctx, "reply to file request", err)
+			}
+			continue
+		}
+
 		if request.Type == protocol.TypeStateWatch && s.state != nil {
 			if terminalUsed {
 				if err := writeClientRequestError(relay, request, errWatchMode); err != nil {
@@ -158,9 +166,6 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if !lifecycleHandled && s.context != nil {
 			response, lifecycleHandled, requestErr = s.context.HandleControl(ctx, request)
-		}
-		if !lifecycleHandled && s.files != nil {
-			response, lifecycleHandled, requestErr = s.files.HandleControl(ctx, request)
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)
