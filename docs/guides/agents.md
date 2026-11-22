@@ -116,7 +116,7 @@ args = ["mcp", "--identity", "codex"]
 env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28" }
 ```
 
-With either opt-in missing, Codex 0.167.1 sent a legacy `initialize`. Mesh refused it, and `codex exec` went on without the mesh tools and printed no error. Codex prints an "under-development features" warning while the feature is on. In `codex exec`, Codex refused to send `mesh_exec` ("MCP tool call requires approval, but approval policy is never") unless the server entry also set `default_tools_approval_mode = "approve"`.
+With either opt-in missing, Codex 0.167.1 sent a legacy `initialize`. Mesh refused it, and `codex exec` went on without the mesh tools and printed no error. For runs that depend on Mesh, set `required = true` in `[mcp_servers.mesh]`: the PR review saw Codex 0.167.1 then exit 1 and print Mesh's refusal, using a stub server rather than the runs below. Codex prints an "under-development features" warning while the feature is on. In `codex exec`, Codex refused to send `mesh_exec` ("MCP tool call requires approval, but approval policy is never") unless the server entry also set `default_tools_approval_mode = "approve"`.
 
 ### What was verified
 
