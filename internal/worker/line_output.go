@@ -147,6 +147,13 @@ func (o *lineOutput) attach(seq uint64) (func(), string) {
 	return o.detach, ""
 }
 
+// end is the sequence number the next stdout frame will receive.
+func (o *lineOutput) end() uint64 {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.next
+}
+
 func (o *lineOutput) detach() {
 	o.mu.Lock()
 	defer o.mu.Unlock()

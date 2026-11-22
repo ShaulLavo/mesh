@@ -39,7 +39,7 @@ class PipeFixture(LifecycleFixture):
 
     def request_worker_kill(self, connections, socket_path, deadline):
         ref = json.loads((socket_path.parent / ".reservation").read_text())
-        if ref.get("purpose") != "pipe-execution":
+        if ref.get("purpose") not in ("pipe-execution", "line-execution"):
             return super().request_worker_kill(connections, socket_path, deadline)
         conn = connections.enter_context(socket.socket(socket.AF_UNIX))
         conn.settimeout(deadline.remaining(1, "connect the pipe teardown"))

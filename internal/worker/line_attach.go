@@ -38,6 +38,9 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 		return
 	}
 	a.next = *req.LastSeq
+	if a.next == protocol.LineTail {
+		a.next = w.pipe.lines.end()
+	}
 	detach, fault := w.pipe.lines.attach(a.next)
 	if fault != "" {
 		reply.Type, reply.ErrorCode = protocol.TypeError, fault
@@ -45,7 +48,17 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 		return
 	}
 	defer detach()
-	if err := a.control(reply); err != nil {
+	// A recovering controller resumes at the reported frame and stdin offset
+	// instead of guessing, so it neither replays input nor waits on old output.
+	// Only the attach reply carries them, as copies: later acknowledgments
+	// reuse reply while the sender advances a.next.
+	attached, start := reply, a.next
+	attached.LastSeq = &start
+	if w.pipe.input != nil {
+		offset := w.pipe.input.nextOffset()
+		attached.InputOffset = &offset
+	}
+	if err := a.control(attached); err != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -66,6 +66,7 @@ func (a *application) mcpCommand() *cobra.Command {
 		return agentapi.Usage("mcp.serve", err.Error())
 	})
 	command.AddCommand(a.mcpIdentityCommand(), a.mcpTokenCommand())
+	command.AddCommand(a.mcpServiceCommands()...)
 	return command
 }
 

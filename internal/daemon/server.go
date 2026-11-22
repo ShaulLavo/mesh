@@ -37,6 +37,7 @@ type clientServer struct {
 	context      controlHandler
 	files        controlHandler
 	fleetProfile controlHandler
+	mcp          *mcpController
 }
 
 type controlHandler interface {
@@ -100,6 +101,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if ctx.Err() != nil {
 			return nil
+		}
+
+		if kind, ok := protocol.MCPControlType(frame); ok && s.mcp != nil {
+			if ended, err := s.mcp.serve(ctx, client, relay, frame, kind); ended || err != nil {
+				return err
+			}
+			continue
 		}
 
 		handled, requestErr := relay.HandleFrame(ctx, frame)

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/mcphost/mcpfixture"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
@@ -25,6 +26,9 @@ const pipeNativeFixture = "MESH_PIPE_NATIVE_FIXTURE"
 func runNativePipeDaemon(role string, args []string) error {
 	if len(args) != 0 && args[0] == "session-worker" {
 		return runNativePipeWorker(args[1:])
+	}
+	if len(args) != 0 && args[0] == mcpFixtureRole {
+		return executionBoundaryError("run MCP fixture", mcpfixture.Run(os.Stdin, os.Stdout, os.Stderr))
 	}
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
 }
