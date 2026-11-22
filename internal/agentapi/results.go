@@ -236,6 +236,7 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	CreatedAt          *time.Time       `json:"createdAt,omitempty"`
 	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`

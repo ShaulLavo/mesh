@@ -41,9 +41,16 @@ func (a *application) mcpCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("initialize MCP stdio server: %w", err)
 			}
-			return server.Serve(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+			// Protocol messages always go to the real stdout stream, while Cobra
+			// help/usage output is routed to stderr so non-protocol text never
+			// touches stdout.
+			return server.Serve(cmd.Context(), a.dependencies.Stdin, a.dependencies.Stdout)
 		},
 	}
+	// Route all Cobra help and usage text for `mesh mcp` to stderr so stdout
+	// stays strictly protocol-only.
+	command.SetOut(a.dependencies.Stderr)
+	command.SetErr(a.dependencies.Stderr)
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return agentapi.Usage("mcp.serve", err.Error())
 	})

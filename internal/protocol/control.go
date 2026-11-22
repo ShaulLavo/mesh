@@ -196,6 +196,7 @@ type HostInfo struct {
 	ExecutionPipeSupported  bool               `json:"executionPipeSupported,omitempty"`
 	ID                      string             `json:"id"`
 	MeshIdentity            string             `json:"meshIdentity"`
+	Account                 string             `json:"account,omitempty"`
 	TailscaleName           string             `json:"tailscaleName,omitempty"`
 	PrivateName             string             `json:"privateName,omitempty"`
 	Wake                    *wake.Grant        `json:"wake,omitempty"`
@@ -393,25 +394,28 @@ type Control struct {
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
 	// Keyed detached admission is distinct from legacy correlation IDs.
-	ExecutionKind     string                `json:"kind,omitempty"`
-	RequestKey        string                `json:"requestKey,omitempty"`
-	ExecutionReceipt  *ExecutionReceipt     `json:"executionReceipt,omitempty"`
-	ExecutionReceipts []ExecutionReceipt    `json:"executionReceipts,omitempty"`
-	Instance          string                `json:"instance,omitempty"`
-	Stream            string                `json:"stream,omitempty"`
-	Cursor            string                `json:"cursor,omitempty"`
-	MaxBytes          int                   `json:"maxBytes,omitempty"`
-	TimeoutMillis     int                   `json:"timeoutMillis,omitempty"`
-	ExecutionPage     *ExecutionPage        `json:"executionPage,omitempty"`
-	ExecutionWait     string                `json:"executionWait,omitempty"`
-	ExecutionDelivery string                `json:"executionDelivery,omitempty"`
-	Stdin             string                `json:"stdin,omitempty"`
-	WriteKey          string                `json:"writeKey,omitempty"`
-	InputOffset       *uint64               `json:"inputOffset,string,omitempty"`
-	InputBytes        []byte                `json:"inputBytes,omitempty"`
-	InputEOF          bool                  `json:"inputEOF,omitempty"`
-	InputReceipt      *session.InputReceipt `json:"inputReceipt,omitempty"`
-	LaunchDigest      string                `json:"launchDigest,omitempty"`
+	ExecutionKind      string                `json:"kind,omitempty"`
+	RequestKey         string                `json:"requestKey,omitempty"`
+	ExecutionReceipt   *ExecutionReceipt     `json:"executionReceipt,omitempty"`
+	ExecutionReceipts  []ExecutionReceipt    `json:"executionReceipts,omitempty"`
+	ExecutionListAll   bool                  `json:"listAll,omitempty"`
+	ExecutionListLimit int                   `json:"listLimit,omitempty"`
+	ExecutionNextPage  *string               `json:"executionNextPage,omitempty"`
+	Instance           string                `json:"instance,omitempty"`
+	Stream             string                `json:"stream,omitempty"`
+	Cursor             string                `json:"cursor,omitempty"`
+	MaxBytes           int                   `json:"maxBytes,omitempty"`
+	TimeoutMillis      int                   `json:"timeoutMillis,omitempty"`
+	ExecutionPage      *ExecutionPage        `json:"executionPage,omitempty"`
+	ExecutionWait      string                `json:"executionWait,omitempty"`
+	ExecutionDelivery  string                `json:"executionDelivery,omitempty"`
+	Stdin              string                `json:"stdin,omitempty"`
+	WriteKey           string                `json:"writeKey,omitempty"`
+	InputOffset        *uint64               `json:"inputOffset,string,omitempty"`
+	InputBytes         []byte                `json:"inputBytes,omitempty"`
+	InputEOF           bool                  `json:"inputEOF,omitempty"`
+	InputReceipt       *session.InputReceipt `json:"inputReceipt,omitempty"`
+	LaunchDigest       string                `json:"launchDigest,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

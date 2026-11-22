@@ -150,7 +150,7 @@ func nativeToolSpecs() []ToolSpec {
 		{
 			Name:        "mesh_host_wake",
 			Title:       "Wake a Mesh host",
-			Operation:   "",
+			Operation:   "hosts.wake",
 			Group:       groupHosts,
 			Description: "Send a wake-on-LAN request for an approved Mesh host through an online peer. Idempotent when the host is already online.",
 			InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["host"],"properties":{"host":{"type":"string","description":"Machine name or exact host ID."},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000,"description":"Hard deadline in milliseconds (100 to 60000, default 5000)."}}}`),
@@ -190,7 +190,7 @@ func nativeToolSpecs() []ToolSpec {
 		{
 			Name:        "mesh_service_inspect",
 			Title:       "Inspect one Mesh serve route",
-			Operation:   "",
+			Operation:   "services.inspect",
 			Group:       groupServices,
 			Description: "Inspect one Mesh serve route on a host without opening its URL or triggering on-demand startup.",
 			InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["host","name"],"properties":{"host":{"type":"string","description":"Machine name or exact host ID."},"name":{"type":"string","description":"Exact serve route name."},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000,"description":"Hard deadline in milliseconds (100 to 60000, default 5000)."}}}`),
@@ -240,7 +240,7 @@ func nativeToolSpecs() []ToolSpec {
 		{
 			Name:        "mesh_jobs_list",
 			Title:       "List keyed execution jobs on a host",
-			Operation:   "",
+			Operation:   "jobs.list",
 			Group:       groupJobs,
 			Description: "List keyed execution jobs on one Mesh host with their opaque mj1 handles and current states without touching any running process.",
 			InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["host"],"properties":{"host":{"type":"string","description":"Machine name or exact host ID."},"all":{"type":"boolean","description":"Include exited and interrupted jobs."},"limit":{"type":"integer","minimum":1,"maximum":500,"description":"Maximum jobs to return (1 to 500, default 100)."},"page":{"type":"string","description":"Opaque nextPage cursor from this host."},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000,"description":"Hard deadline in milliseconds (100 to 60000, default 5000)."}}}`),

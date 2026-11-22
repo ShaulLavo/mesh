@@ -248,8 +248,11 @@ def exercise_short_and_long_jobs(fixture):
         require(inspect_resp["result"]["structuredContent"]["data"]["host"]["hostId"] == host_id, f"host inspect: {inspect_resp}")
 
         jobs_resp = fresh.call_tool("mesh_jobs_list", {"host": host_id, "all": True})
-        listed_jobs = [j["job"] for j in jobs_resp["result"]["structuredContent"]["data"]["jobs"]]
+        listed_items = jobs_resp["result"]["structuredContent"]["data"]["jobs"]
+        listed_jobs = [j["job"] for j in listed_items]
         require(short_handle in listed_jobs, f"short job missing from mesh_jobs_list: {listed_jobs}")
+        short_item = next(j for j in listed_items if j["job"] == short_handle)
+        require(bool(short_item.get("createdAt")) and not str(short_item["createdAt"]).startswith("0001-"), f"invalid createdAt: {short_item}")
 
         sessions_resp = fresh.call_tool("mesh_sessions_list", {"host": host_id, "all": True})
         require(not sessions_resp["result"]["isError"], f"sessions list error: {sessions_resp}")
@@ -355,6 +358,12 @@ def exercise_host_mismatch_and_revocation(fixture):
         bad = mm_client.call_tool("mesh_job_receipt", {"host": host_id, "request_key": "mcp-short-1"})
         code = bad["result"]["structuredContent"]["errors"][0]["code"]
         require(bad["result"]["isError"] and code == "host.identity_mismatch", f"expected host.identity_mismatch, got: {bad}")
+
+        # Keyed input write with mismatched TLS pin must report host.identity_mismatch, not input.outcome_unknown.
+        dummy_handle = f"mj1.{host_id}.7K3D.0123456789abcdef0123456789abcdef"
+        bad_input = mm_client.call_tool("mesh_job_input", {"job": dummy_handle, "write_key": "pin-test", "offset": "0", "data": "x"})
+        input_code = bad_input["result"]["structuredContent"]["errors"][0]["code"]
+        require(bad_input["result"]["isError"] and input_code == "host.identity_mismatch", f"expected host.identity_mismatch on job_input, got: {bad_input}")
         mm_client.close_eof()
     finally:
         mm_client.terminate()

@@ -3,6 +3,7 @@
 package mcpnative
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,8 +13,9 @@ import (
 )
 
 const (
-	jobHandlePrefix      = "mj1"
-	maxHandleFieldLength = 128
+	jobHandlePrefix    = "mj1"
+	canonicalHostIDLen = 43 // 32-byte Ed25519 public key in unpadded base64url
+	maxJobHandleLength = 96
 )
 
 // ErrInvalidHandle marks a syntactically malformed opaque Mesh handle.
@@ -49,6 +51,9 @@ func FormatJobHandle(hostID, sessionID, instance string) (string, error) {
 
 // ParseJobHandle validates and decodes a mj1.<hostId>.<sessionId>.<instance> handle.
 func ParseJobHandle(raw string) (JobRef, error) {
+	if len(raw) == 0 || len(raw) > maxJobHandleLength {
+		return JobRef{}, fmt.Errorf("%w: expected mj1.<hostId>.<sessionId>.<instance>", ErrInvalidHandle)
+	}
 	parts := strings.Split(raw, ".")
 	if len(parts) != 4 || parts[0] != jobHandlePrefix {
 		return JobRef{}, fmt.Errorf("%w: expected mj1.<hostId>.<sessionId>.<instance>", ErrInvalidHandle)
@@ -66,9 +71,17 @@ func ParseJobHandle(raw string) (JobRef, error) {
 	return JobRef{HostID: parts[1], SessionID: parts[2], Instance: parts[3]}, nil
 }
 
-// ValidateHostID checks that id uses only base64url identifier bytes without dots.
+// ValidateHostID checks that id is a canonical 32-byte Ed25519 Mesh host ID
+// encoded in unpadded base64url (43 characters).
 func ValidateHostID(id string) error {
-	return validateHandleToken(id, "host ID")
+	if len(id) != canonicalHostIDLen {
+		return errors.New("expected a canonical 43-character Mesh host ID")
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(id)
+	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != id {
+		return errors.New("expected a canonical base64url Mesh host ID")
+	}
+	return nil
 }
 
 // ValidateHexID checks that value is a canonical 32-character lowercase hex ID (16 bytes).
@@ -81,20 +94,4 @@ func ValidateHexID(value string) error {
 		return errors.New("expected a canonical 32-character lowercase hex ID")
 	}
 	return nil
-}
-
-func validateHandleToken(value, label string) error {
-	if len(value) == 0 || len(value) > maxHandleFieldLength {
-		return fmt.Errorf("invalid %s length", label)
-	}
-	for i := 0; i < len(value); i++ {
-		if !isBase64URLChar(value[i]) {
-			return fmt.Errorf("invalid character in %s", label)
-		}
-	}
-	return nil
-}
-
-func isBase64URLChar(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-' || b == '_'
 }

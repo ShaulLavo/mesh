@@ -9,12 +9,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/hostprofile"
+	"github.com/shaul/mesh/internal/machinename"
 	"github.com/shaul/mesh/internal/mcpnative"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -37,6 +41,24 @@ func currentAccountName() string {
 		return u.Username
 	}
 	return os.Getenv("USER")
+}
+
+func (c *mcpControls) targetAccount(host HostRecord, info protocol.HostInfo) string {
+	if info.Account != "" {
+		return info.Account
+	}
+	if host.local {
+		return c.account
+	}
+	return ""
+}
+
+func (c *mcpControls) targetMeta(host HostRecord, info protocol.HostInfo) *mcpnative.TargetMeta {
+	return &mcpnative.TargetMeta{
+		HostID:   host.ID,
+		HostName: hostDisplayName(host, info),
+		Account:  c.targetAccount(host, info),
+	}
 }
 
 func hostCapabilitiesFromInfo(info protocol.HostInfo) *agentapi.HostCapabilities {
@@ -107,14 +129,92 @@ func collectMCPHosts(ctx context.Context, hosts []HostRecord, reader agentHostRe
 }
 
 func readMCPHost(ctx context.Context, host HostRecord, reader agentHostReader, pool *mcpHostPool) agentHostRead {
-	result := reader.read(ctx, host)
-	if reader.cached || !result.liveAccess {
-		return result
-	}
-	if info, err := pool.HostInfo(ctx, host); err == nil {
-		result.host.Capabilities = hostCapabilitiesFromInfo(info)
-	}
+	result, _ := readMCPHostWithInfo(ctx, host, reader, pool)
 	return result
+}
+
+func readMCPHostWithInfo(ctx context.Context, host HostRecord, reader agentHostReader, pool *mcpHostPool) (agentHostRead, protocol.HostInfo) {
+	if host.local {
+		return readMCPLocalHost(ctx, host, reader, pool)
+	}
+	cache := hostprofile.OpenContextCache(reader.state)
+	entry, cacheErr := cache.Read(host.ID, host.MeshIdentity)
+	result := reader.cachedResult(host, entry)
+	if cacheErr != nil {
+		result.errors = append(result.errors, reader.diagnostic(cacheErr, host.ID, agentapi.StateUnavailable))
+	}
+	if reader.cached {
+		return reader.finish(result), protocol.HostInfo{}
+	}
+	reply, info, err := pool.HostContext(ctx, host, reader.full)
+	at := reader.now().UTC()
+	var observation hostprofile.ContextObservation
+	var observedInfo protocol.HostInfo
+	if info != nil {
+		observedInfo = *info
+		observation = hostObservation(*info)
+		result.host.MachineName, result.host.NameShadowed = info.MachineName, machinename.ShadowedByCommand(info.MachineName)
+		result.host.Reachability, result.host.Observed = agentReachable, agentObservation(&observation, at, agentapi.FreshnessLive)
+		result.host.Capabilities = hostCapabilitiesFromInfo(*info)
+		result.useful = true
+	}
+	if err != nil {
+		if info == nil {
+			result.host.Reachability = "unreachable"
+		}
+		result.errors = append(result.errors, reader.diagnostic(err, host.ID, agentapi.HostUnreachable))
+		return reader.finish(result), observedInfo
+	}
+	result.host.Declared = contextDeclared(reply, agentapi.FreshnessLive, at)
+	result.liveAccess = true
+	result.errors = append(result.errors, reader.contextProblems(reply, host.ID)...)
+	reader.cacheLive(ctx, host, *info, hostprofile.CachedContext{HostID: host.ID, MeshIdentity: host.MeshIdentity, ReceivedAt: at, Observed: &observation, Context: reply}, &result)
+	return reader.finish(result), observedInfo
+}
+
+func readMCPLocalHost(ctx context.Context, host HostRecord, reader agentHostReader, pool *mcpHostPool) (agentHostRead, protocol.HostInfo) {
+	result := agentHostRead{host: agentHostBase(host), useful: true}
+	if host.ID == "" {
+		result.host.Reachability = "uninitialized"
+		result.errors = append(result.errors, reader.diagnostic(errors.New("This machine has no Mesh identity yet. Set up Mesh here first with mesh install."), "", agentapi.HostUninitialized))
+		return result, protocol.HostInfo{}
+	}
+	authority := &update.Authority{StateDir: reader.state, ID: host.ID}
+	reply := hostprofile.ReadContext(reader.config, reader.state, host.ID, authority.IsAdministrator, reader.full)
+	result.host.Declared = contextDeclared(reply, agentapi.FreshnessLive, reader.now().UTC())
+	result.errors = reader.contextProblems(reply, host.ID)
+	if reader.cached {
+		return result, protocol.HostInfo{}
+	}
+	probe, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	info, err := pool.HostInfo(probe, host)
+	if err != nil {
+		applyLocalProbeFailure(&result, host, reader, err)
+		return result, protocol.HostInfo{}
+	}
+	if err := validateContextObservation(info); err != nil {
+		result.errors = append(result.errors, reader.diagnostic(err, host.ID, agentapi.HostUnreachable))
+		return result, info
+	}
+	observation := hostObservation(info)
+	result.host.Observed = agentObservation(&observation, reader.now().UTC(), agentapi.FreshnessLive)
+	result.host.Capabilities = hostCapabilitiesFromInfo(info)
+	result.host.Reachability, result.liveAccess = agentReachable, true
+	return result, info
+}
+
+func applyLocalProbeFailure(result *agentHostRead, host HostRecord, reader agentHostReader, err error) {
+	at := reader.now().UTC()
+	daemon := agentUnknown
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		daemon = "not-running"
+	}
+	result.host.Observed = &agentapi.Observed{Platform: release.CurrentPlatform().String(), Daemon: daemon, ObservedAt: at, Freshness: agentapi.FreshnessLive}
+	result.host.Reachability = agentReachable
+	if daemon == agentUnknown {
+		result.errors = append(result.errors, reader.diagnostic(err, host.ID, agentapi.HostUnreachable))
+	}
 }
 
 func (c *mcpControls) InspectHost(ctx context.Context, req mcpnative.InspectHostRequest) (mcpnative.CallOutcome, error) {
@@ -128,15 +228,15 @@ func (c *mcpControls) InspectHost(ctx context.Context, req mcpnative.InspectHost
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	host, err := resolveAgentHost(ctx, req.Host, hosts, req.Cached, c.app.dependencies.DialPassive)
+	host, err := c.resolveMCPHost(ctx, req.Host, hosts, req.Cached)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	result := readMCPHost(ctx, host, reader, c.pool)
+	result, info := readMCPHostWithInfo(ctx, host, reader, c.pool)
 	if !result.useful && len(result.errors) == 0 {
 		result.errors = append(result.errors, reader.diagnostic(errors.New("No context observation is cached for this machine."), host.ID, agentapi.StateUnavailable))
 	}
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: result.host.MachineName, Account: c.account}
+	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: result.host.MachineName, Account: c.targetAccount(host, info)}
 	envelope := agentapi.Envelope{
 		Operation: "hosts.inspect",
 		Status:    agentapi.StatusOK,
@@ -159,11 +259,11 @@ func (c *mcpControls) WakeHost(ctx context.Context, req mcpnative.WakeHostReques
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	host, err := resolveAgentHost(ctx, req.Host, hosts, true, nil)
+	host, err := c.resolveMCPHost(ctx, req.Host, hosts, true)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: host.MachineName, Account: c.account}
+	target := c.targetMeta(host, protocol.HostInfo{})
 	if c.app.dependencies.Wake != nil {
 		if err := c.app.dependencies.Wake(ctx, host); err != nil {
 			return failOutcome("hosts.wake", target, agentError(err, "hosts.wake", host.ID, agentapi.HostUnreachable)), nil
@@ -193,11 +293,11 @@ func (c *mcpControls) ListSessions(ctx context.Context, req mcpnative.ListSessio
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	host, err := c.app.agentSessionTarget(ctx, req.Host)
+	host, err := c.resolveSessionHost(ctx, req.Host)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: host.MachineName, Account: c.account}
+	target := c.targetMeta(host, protocol.HostInfo{})
 	if cursor != nil && cursor.HostID != host.ID {
 		return failOutcome(agentSessionsList, target, agentapi.Usage(agentSessionsList, "page belongs to another host.").Err), nil
 	}
@@ -213,11 +313,11 @@ func (c *mcpControls) ListSessions(ctx context.Context, req mcpnative.ListSessio
 func (c *mcpControls) InspectSession(ctx context.Context, req mcpnative.InspectSessionRequest) (mcpnative.CallOutcome, error) {
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	host, err := c.app.agentSessionTarget(ctx, req.Host)
+	host, err := c.resolveSessionHost(ctx, req.Host)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: host.MachineName, Account: c.account}
+	target := c.targetMeta(host, protocol.HostInfo{})
 	snapshot, err := c.loadSessions(ctx, host, agentSessionsInspect)
 	if err != nil {
 		return failOutcome(agentSessionsInspect, target, agentError(err, agentSessionsInspect, host.ID, agentapi.HostUnreachable)), nil
@@ -259,12 +359,12 @@ func (c *mcpControls) ListServices(ctx context.Context, req mcpnative.ListServic
 	if strings.TrimSpace(req.Host) != "" {
 		resolveCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 		defer cancel()
-		host, err := resolveAgentHost(resolveCtx, req.Host, hosts, false, c.app.dependencies.DialPassive)
+		host, err := c.resolveMCPHost(resolveCtx, req.Host, hosts, false)
 		if err != nil {
 			return mcpnative.CallOutcome{}, err
 		}
 		hosts = []HostRecord{host}
-		target = &mcpnative.TargetMeta{HostID: host.ID, HostName: host.MachineName, Account: c.account}
+		target = c.targetMeta(host, protocol.HostInfo{})
 	}
 	envelope, err := c.collectServices(ctx, hosts, req.Timeout)
 	if err != nil {
@@ -280,11 +380,11 @@ func (c *mcpControls) InspectService(ctx context.Context, req mcpnative.InspectS
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	host, err := resolveAgentHost(resolveCtx, req.Host, hosts, false, c.app.dependencies.DialPassive)
+	host, err := c.resolveMCPHost(resolveCtx, req.Host, hosts, false)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: host.MachineName, Account: c.account}
+	target := c.targetMeta(host, protocol.HostInfo{})
 	envelope, err := c.collectServices(ctx, []HostRecord{host}, req.Timeout)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
@@ -367,28 +467,29 @@ func (c *mcpControls) JobStatus(ctx context.Context, req mcpnative.JobRefRequest
 }
 
 func (c *mcpControls) JobWait(ctx context.Context, req mcpnative.JobWaitRequest, notify func(mcpnative.ProgressUpdate)) (mcpnative.CallOutcome, error) {
-	waitTimeout := time.Duration(req.WaitMS)*time.Millisecond + 500*time.Millisecond
-	waitCtx, cancel := context.WithTimeout(ctx, waitTimeout)
-	defer cancel()
-	host, err := c.resolveHostID(waitCtx, req.Job.HostID)
+	deadline := time.Now().Add(time.Duration(req.WaitMS) * time.Millisecond)
+	host, err := c.resolveExactHostID(req.Job.HostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	stopProgress := startWaitProgress(waitCtx, req.Job, req.WaitMS, notify)
+	stopProgress := startWaitProgress(ctx, req.Job, req.WaitMS, notify)
 	defer stopProgress()
 
-	control := protocol.Control{
-		Type:          protocol.TypeExecutionWait,
-		SessionID:     req.Job.SessionID,
-		Instance:      req.Job.Instance,
-		TimeoutMillis: req.WaitMS,
-	}
-	response, info, err := c.pool.ExchangeStream(waitCtx, host, control)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	var sentControl protocol.Control
+	response, info, err := c.pool.ExchangeStreamBudgeted(ctx, host, deadline, func(timeoutMS int) protocol.Control {
+		sentControl = protocol.Control{
+			Type:          protocol.TypeExecutionWait,
+			SessionID:     req.Job.SessionID,
+			Instance:      req.Job.Instance,
+			TimeoutMillis: timeoutMS,
+		}
+		return sentControl
+	})
+	target := c.targetMeta(host, info)
 	if err != nil {
 		return failOutcome("sessions.wait", target, agentError(err, "sessions.wait", host.ID, agentapi.HostUnreachable)), nil
 	}
-	return c.jobStateOutcome("sessions.wait", control, response, host.ID, "", target)
+	return c.jobStateOutcome("sessions.wait", sentControl, response, host.ID, "", target)
 }
 
 func startWaitProgress(ctx context.Context, ref mcpnative.JobRef, waitMS int, notify func(mcpnative.ProgressUpdate)) func() {
@@ -399,28 +500,30 @@ func startWaitProgress(ctx context.Context, ref mcpnative.JobRef, waitMS int, no
 	total := float64(waitMS)
 	started := time.Now()
 	notify(mcpnative.ProgressUpdate{Progress: 0, Total: &total, Message: "waiting for " + ref.String()})
-	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				elapsed := min(float64(time.Since(started)/time.Millisecond), total)
-				notify(mcpnative.ProgressUpdate{Progress: elapsed, Total: &total, Message: "waiting for " + ref.String()})
-			}
-		}
-	}()
+	go runWaitProgressLoop(ctx, done, ref, started, total, notify)
 	return func() { close(done) }
+}
+
+func runWaitProgressLoop(ctx context.Context, done <-chan struct{}, ref mcpnative.JobRef, started time.Time, total float64, notify func(mcpnative.ProgressUpdate)) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			elapsed := min(float64(time.Since(started)/time.Millisecond), total)
+			notify(mcpnative.ProgressUpdate{Progress: elapsed, Total: &total, Message: "waiting for " + ref.String()})
+		}
+	}
 }
 
 func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequest) (mcpnative.CallOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	host, err := c.resolveHostID(callCtx, req.Job.HostID)
+	host, err := c.resolveExactHostID(req.Job.HostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
@@ -433,7 +536,7 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 		MaxBytes:  req.MaxBytes,
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	target := c.targetMeta(host, info)
 	if err != nil {
 		return failOutcome("sessions.logs", target, agentError(err, "sessions.logs", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -467,7 +570,7 @@ func (c *mcpControls) jobOutputOutcome(control, response protocol.Control, hostI
 func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRequest) (mcpnative.CallOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	host, err := c.app.agentSessionTarget(callCtx, req.Host)
+	host, err := c.resolveSessionHost(callCtx, req.Host)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
@@ -476,7 +579,7 @@ func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRe
 		RequestKey: req.RequestKey,
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	target := c.targetMeta(host, info)
 	if err != nil {
 		return failOutcome("sessions.request", target, agentError(err, "sessions.request", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -486,16 +589,18 @@ func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRe
 func (c *mcpControls) ListJobs(ctx context.Context, req mcpnative.ListJobsRequest) (mcpnative.CallOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	offset, err := parseJobListOffset(req.Page)
+	host, err := c.resolveSessionHost(callCtx, req.Host)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	host, err := c.app.agentSessionTarget(callCtx, req.Host)
-	if err != nil {
-		return mcpnative.CallOutcome{}, err
+	control := protocol.Control{
+		Type:               protocol.TypeExecutionList,
+		ExecutionListAll:   req.All,
+		ExecutionListLimit: req.Limit,
+		Cursor:             req.Page,
 	}
-	response, info, err := c.pool.ExchangeShort(callCtx, host, protocol.Control{Type: protocol.TypeExecutionList}, true)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	response, info, err := c.pool.ExchangeShort(callCtx, host, control, true)
+	target := c.targetMeta(host, info)
 	if err != nil {
 		return failOutcome("jobs.list", target, agentError(err, "jobs.list", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -505,30 +610,15 @@ func (c *mcpControls) ListJobs(ctx context.Context, req mcpnative.ListJobsReques
 	if response.Type != protocol.TypeExecutionListed {
 		return failOutcome("jobs.list", target, agentapi.Fail(agentapi.InternalError, "jobs.list", host.ID, "host did not return an execution job list").Err), nil
 	}
-	data := buildExecutionJobListPage(host.ID, response.ExecutionReceipts, req, offset)
+	data := buildExecutionJobListPage(host.ID, response.ExecutionReceipts, response.ExecutionNextPage)
 	return okOutcome("jobs.list", target, data), nil
 }
 
-func parseJobListOffset(token string) (int, error) {
-	if token == "" {
-		return 0, nil
-	}
-	n, err := strconv.Atoi(token)
-	if err != nil || n < 0 {
-		return 0, agentapi.Usage("jobs.list", "page must be a nextPage token from mesh_jobs_list.")
-	}
-	return n, nil
-}
-
-func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionReceipt, req mcpnative.ListJobsRequest, offset int) mcpnative.JobListData {
-	filtered := make([]mcpnative.JobListItem, 0, len(receipts))
+func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionReceipt, nextPage *string) mcpnative.JobListData {
+	items := make([]mcpnative.JobListItem, 0, len(receipts))
 	for i := range receipts {
 		rec, err := agentExecutionReceipt(&receipts[i], hostID, "")
 		if err != nil {
-			continue
-		}
-		state := mcpnative.JobStateFromReceipt(rec)
-		if !req.All && rec.Phase == "terminal" {
 			continue
 		}
 		var exitCode *int
@@ -540,32 +630,28 @@ func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionRecei
 		if err != nil {
 			continue
 		}
-		filtered = append(filtered, mcpnative.JobListItem{
+		items = append(items, mcpnative.JobListItem{
 			Job:       handle,
 			HostID:    rec.HostID,
 			SessionID: rec.SessionID,
 			Instance:  rec.Instance,
-			State:     state,
+			State:     mcpnative.JobStateFromReceipt(rec),
+			CreatedAt: rec.CreatedAt,
 			ExitCode:  exitCode,
 		})
 	}
-	page := mcpnative.JobListData{HostID: hostID, Freshness: agentapi.FreshnessLive, Jobs: []mcpnative.JobListItem{}}
-	if offset >= len(filtered) {
-		return page
+	return mcpnative.JobListData{
+		HostID:    hostID,
+		Freshness: agentapi.FreshnessLive,
+		Jobs:      items,
+		NextPage:  nextPage,
 	}
-	end := min(offset+req.Limit, len(filtered))
-	page.Jobs = filtered[offset:end]
-	if end < len(filtered) {
-		next := strconv.Itoa(end)
-		page.NextPage = &next
-	}
-	return page
 }
 
 func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputRequest) (mcpnative.CallOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	host, err := c.resolveHostID(callCtx, req.Job.HostID)
+	host, err := c.resolveExactHostID(req.Job.HostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
@@ -579,9 +665,9 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 		InputEOF:    req.EOF,
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	target := c.targetMeta(host, info)
 	if err != nil {
-		if req.Offset != nil {
+		if req.Offset != nil && !isPreDispatchError(err) {
 			return failOutcome(agentSessionInput, target, agentapi.Fail(agentapi.InputOutcomeUnknown, agentSessionInput, host.ID, "Look up the write_key without offset to recover its receipt.").Err), nil
 		}
 		return failOutcome(agentSessionInput, target, agentError(err, agentSessionInput, host.ID, agentapi.HostUnreachable)), nil
@@ -633,12 +719,12 @@ func (c *mcpControls) JobRemove(ctx context.Context, req mcpnative.JobRefRequest
 func (c *mcpControls) runJobStateControl(ctx context.Context, operation, hostID string, timeout time.Duration, control protocol.Control) (mcpnative.CallOutcome, error) {
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	host, err := c.resolveHostID(callCtx, hostID)
+	host, err := c.resolveExactHostID(hostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
-	target := &mcpnative.TargetMeta{HostID: host.ID, HostName: hostDisplayName(host, info), Account: c.account}
+	target := c.targetMeta(host, info)
 	if err != nil {
 		return failOutcome(operation, target, agentError(err, operation, host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -681,12 +767,94 @@ func (c *mcpControls) jobStateOutcome(operation string, control, response protoc
 	return okOutcome(operation, target, *stateData), nil
 }
 
-func (c *mcpControls) resolveHostID(ctx context.Context, hostID string) (HostRecord, error) {
+// resolveExactHostID resolves a host strictly by its exact host ID and never
+// falls back to machine names.
+func (c *mcpControls) resolveExactHostID(hostID string) (HostRecord, error) {
 	hosts, err := LoadHosts()
 	if err != nil {
 		return HostRecord{}, err
 	}
-	return resolveAgentHost(ctx, hostID, hosts, true, nil)
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return HostRecord{}, fmt.Errorf("locate passive target state: %w", err)
+	}
+	local, err := agentLocalHost(state)
+	if err != nil {
+		return HostRecord{}, err
+	}
+	if local.ID != "" {
+		hosts = agentHostsWithLocal(hosts, local)
+	}
+	for _, host := range hosts {
+		if host.ID != "" && host.ID == hostID {
+			return host, nil
+		}
+	}
+	return HostRecord{}, agentapi.Fail(agentapi.HostUnknown, "", hostID, "No configured host has this exact host ID.")
+}
+
+func (c *mcpControls) resolveSessionHost(ctx context.Context, value string) (HostRecord, error) {
+	hosts, err := LoadHosts()
+	if err != nil {
+		return HostRecord{}, err
+	}
+	return c.resolveMCPHost(ctx, value, hosts, false)
+}
+
+// resolveMCPHost resolves a machine name or exact host ID, routing any passive
+// name refresh through the per-host pool instead of raw unpooled dials.
+func (c *mcpControls) resolveMCPHost(ctx context.Context, value string, hosts []HostRecord, cached bool) (HostRecord, error) {
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return HostRecord{}, fmt.Errorf("locate passive target state: %w", err)
+	}
+	local, err := agentLocalHost(state)
+	if err != nil {
+		return HostRecord{}, err
+	}
+	known := append([]HostRecord(nil), hosts...)
+	if local.ID != "" {
+		known = agentHostsWithLocal(known, local)
+	}
+	host, err := matchAgentHost(value, known)
+	var failure *agentapi.Failure
+	if err == nil || cached || local.ID == "" || !errors.As(err, &failure) || failure.Err.Code != agentapi.HostUnknown {
+		return host, err
+	}
+	if _, finite := ctx.Deadline(); !finite {
+		return HostRecord{}, errors.New("passive name refresh requires a finite deadline")
+	}
+	refreshed := c.refreshMCPHostNames(ctx, known)
+	return matchAgentHost(value, refreshed)
+}
+
+func (c *mcpControls) refreshMCPHostNames(ctx context.Context, hosts []HostRecord) []HostRecord {
+	results := make(chan HostRecord, len(hosts))
+	for _, host := range hosts {
+		go c.refreshOneMCPHostName(ctx, host, results)
+	}
+	refreshed := make([]HostRecord, 0, len(hosts))
+	for range hosts {
+		select {
+		case host := <-results:
+			refreshed = append(refreshed, host)
+		case <-ctx.Done():
+			return refreshed
+		}
+	}
+	return refreshed
+}
+
+func (c *mcpControls) refreshOneMCPHostName(ctx context.Context, host HostRecord, results chan<- HostRecord) {
+	if host.local {
+		results <- host
+		return
+	}
+	host.targetName = ""
+	if info, err := c.pool.HostInfo(ctx, host); err == nil {
+		host.MachineName, host.NameRevision, host.NameVerified = info.MachineName, info.NameRevision, true
+	}
+	results <- host
 }
 
 func (c *mcpControls) loadSessions(ctx context.Context, host HostRecord, operation string) (agentSessionSnapshot, error) {

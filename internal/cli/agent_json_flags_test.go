@@ -10,7 +10,7 @@ import (
 
 func TestAgentJSONValueFlagsMatchCobra(t *testing.T) {
 	for _, operation := range agentapi.Operations {
-		if !operation.Implemented {
+		if !operation.Implemented || operation.MCPOnly {
 			continue
 		}
 		checkAgentJSONValueFlags(t, operation)

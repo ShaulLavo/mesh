@@ -442,7 +442,8 @@ func TestStdioOversizedClientAndReply(t *testing.T) {
 	}
 	out, reader, _, _ := startTestServer(t, ServerOptions{Version: "0.1.0-test", Controls: controls})
 
-	// Oversized client line (>3.5 MiB) is drained and answered with -32600 id:null.
+	// Oversized client line (>3.5 MiB) with a verifiable JSON-RPC request envelope
+	// preserves its ID in the -32600 fault.
 	huge := append([]byte(`{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"pad":"`), bytes.Repeat([]byte("x"), mcpwire.MaxMessage+1024)...)
 	huge = append(huge, []byte(`"}}`+"\n")...)
 	if _, err := out.Write(huge); err != nil {
@@ -452,8 +453,21 @@ func TestStdioOversizedClientAndReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(raw, []byte(`"id":null`)) || !bytes.Contains(raw, []byte(`"code":-32600`)) {
+	if !bytes.Contains(raw, []byte(`"id":1`)) || !bytes.Contains(raw, []byte(`"code":-32600`)) {
 		t.Fatalf("oversized client reply = %s", raw)
+	}
+
+	// Unverifiable oversized garbage gets id:null.
+	garbage := append(bytes.Repeat([]byte("z"), mcpwire.MaxMessage+1024), '\n')
+	if _, err := out.Write(garbage); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = reader.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"id":null`)) || !bytes.Contains(raw, []byte(`"code":-32600`)) {
+		t.Fatalf("oversized garbage reply = %s", raw)
 	}
 
 	// Oversized reply becomes correlated -31000 mcp.message_too_large.

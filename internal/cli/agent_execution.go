@@ -154,7 +154,7 @@ func agentExecutionReceipt(r *protocol.ExecutionReceipt, host, key string) (*age
 	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != r.Instance || r.HostID != host || (key != "" && r.RequestKey != key) || (r.Kind != execution.KindPTY && r.Kind != execution.KindPipe) {
 		return nil, fmt.Errorf("host returned an invalid execution receipt")
 	}
-	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
+	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason, CreatedAt: r.CreatedAt, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
 	if r.Result != nil {
 		t := r.Result.Termination
 		out.Result = &agentapi.ExecutionResult{Termination: agentapi.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: agentExecutionStreams(r.Result.Streams)}

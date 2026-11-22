@@ -58,6 +58,7 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	CreatedAt          *time.Time       `json:"createdAt,omitempty"`
 	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`
@@ -161,6 +162,12 @@ func (s *executionFields) takeField(decoder *json.Decoder) error {
 	return nil
 }
 func validateExecutionField(kind, name string, raw json.RawMessage) error {
+	// Keep execution.list on its own strict allowlist so caller, context, and
+	// administration fields are rejected explicitly until listing is wired to
+	// application-caller authorization.
+	if kind == TypeExecutionList {
+		return validateExecutionListField(name, raw)
+	}
 	switch name {
 	case executionTypeField, requestIDField:
 		return executionString(raw)
@@ -169,9 +176,6 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 			return fmt.Errorf("execution: unexpected request key")
 		}
 		return executionString(raw)
-	}
-	if kind == TypeExecutionList {
-		return fmt.Errorf("execution: unexpected field %s", name)
 	}
 	if kind != TypeExecutionCreate {
 		return validateExecutionBoundField(kind, name, raw)
@@ -183,6 +187,22 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		return executionArguments(raw)
 	case "cols", "rows", "depth":
 		return executionInteger(name, raw)
+	default:
+		return fmt.Errorf("execution: unexpected field %s", name)
+	}
+}
+
+func validateExecutionListField(name string, raw json.RawMessage) error {
+	switch name {
+	case executionTypeField, requestIDField, "cursor":
+		return executionString(raw)
+	case "listLimit":
+		return executionInteger(name, raw)
+	case "listAll":
+		if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
+			return nil
+		}
+		return fmt.Errorf("execution: invalid listAll")
 	default:
 		return fmt.Errorf("execution: unexpected field %s", name)
 	}

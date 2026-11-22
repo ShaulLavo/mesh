@@ -21,14 +21,18 @@ const (
 	defaultEOFDrainWait  = 2 * time.Second
 	reservedErrorBytes   = 4096
 	meshRPCErrorCode     = -31000
+	stderrQueueSize      = 16
 	discoverInstructions = "Call mesh_skill to read Mesh usage instructions, safety rules, and tool references before acting on a host."
 )
 
-var nativeMethods = mcpwire.Methods{
-	mcpwire.MethodDiscover:  nil,
-	mcpwire.MethodListTools: nil,
-	mcpwire.MethodCallTool:  nil,
-}
+var (
+	errOutputCapacity = errors.New("MCP output buffer capacity exceeded")
+	nativeMethods     = mcpwire.Methods{
+		mcpwire.MethodDiscover:  nil,
+		mcpwire.MethodListTools: nil,
+		mcpwire.MethodCallTool:  nil,
+	}
+)
 
 // ServerOptions configures the native stdio MCP frontend.
 type ServerOptions struct {
@@ -43,12 +47,18 @@ type ServerOptions struct {
 	OnShutdown       func()
 }
 
+type queuedFrame struct {
+	raw       []byte
+	releaseID *mcpwire.ID
+}
+
 // StdioServer runs the stateless MCP 2026-07-28 stdio frontend.
 type StdioServer struct {
 	registry   *Registry
 	controls   Controls
 	serverInfo json.RawMessage
 	stderr     io.Writer
+	stderrCh   chan string
 	maxReqs    int
 	maxBytes   int
 	connBytes  int
@@ -61,20 +71,26 @@ type StdioServer struct {
 	active        map[string]*activeRequest
 	inflightBytes int
 	queuedBytes   int
-	queuedFrames  [][]byte
+	writingBytes  int
+	queuedFrames  []queuedFrame
 	progressOrder []string
 	progressByKey map[string][]byte
 	writerClosed  bool
 	writerSignal  chan struct{}
 	writeFailed   chan struct{}
+	failOnce      sync.Once
 	writeErr      error
+	cancelRun     context.CancelFunc
 }
 
 type activeRequest struct {
-	id           mcpwire.ID
-	cancel       context.CancelFunc
-	cancelled    bool
-	requestBytes int
+	id            mcpwire.ID
+	key           string
+	cancel        context.CancelFunc
+	cancelled     bool
+	completed     bool
+	requestBytes  int
+	reservedBytes int
 }
 
 // NewStdioServer constructs a stateless native MCP stdio server.
@@ -116,6 +132,7 @@ func NewStdioServer(opts ServerOptions) (*StdioServer, error) {
 		controls:      opts.Controls,
 		serverInfo:    serverInfo,
 		stderr:        stderr,
+		stderrCh:      make(chan string, stderrQueueSize),
 		maxReqs:       maxReqs,
 		maxBytes:      maxBytes,
 		connBytes:     connBytes,
@@ -133,23 +150,47 @@ func NewStdioServer(opts ServerOptions) (*StdioServer, error) {
 func (s *StdioServer) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	s.mu.Lock()
+	s.cancelRun = cancelRun
+	s.mu.Unlock()
+
+	stopStderr := s.startStderrWriter()
+	defer stopStderr()
 
 	var workers sync.WaitGroup
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
-		s.writerLoop(out, cancelRun)
+		s.writerLoop(out)
 	}()
 
-	readErr := s.readerLoop(runCtx, in, &workers)
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- s.readerLoop(runCtx, in, &workers)
+	}()
+
+	var readErr error
+	select {
+	case readErr = <-readDone:
+	case <-s.writeFailed:
+		abortStream(in)
+	case <-ctx.Done():
+		abortStream(in)
+	}
+
+	deadline := time.Now().Add(s.drainWait)
 	cancelRun()
 	s.cancelAllActive()
-	if s.onShutdown != nil {
-		s.onShutdown()
-	}
-	s.waitWorkers(&workers)
+
+	shutdownDone := s.startShutdownHook()
+	waitBounded(deadline, func() { workers.Wait() })
 	s.closeWriter()
-	<-writerDone
+	if !waitChannelBounded(deadline, writerDone) {
+		abortStream(out)
+	}
+	waitChannelBounded(deadline, shutdownDone)
+	s.releaseRemainingIDs()
+
 	if readErr != nil {
 		return readErr
 	}
@@ -159,26 +200,121 @@ func (s *StdioServer) Serve(ctx context.Context, in io.Reader, out io.Writer) er
 	return writeErr
 }
 
+func (s *StdioServer) startShutdownHook() <-chan struct{} {
+	done := make(chan struct{})
+	if s.onShutdown == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		s.onShutdown()
+	}()
+	return done
+}
+
+func (s *StdioServer) startStderrWriter() func() {
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case line := <-s.stderrCh:
+				_, _ = io.WriteString(s.stderr, line)
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+	}
+}
+
+func (s *StdioServer) logStderr(line string) {
+	select {
+	case s.stderrCh <- line:
+	default:
+	}
+}
+
+func abortStream(stream any) {
+	type deadlineSetter interface {
+		SetDeadline(time.Time) error
+	}
+	if ds, ok := stream.(deadlineSetter); ok {
+		_ = ds.SetDeadline(time.Now())
+	}
+	if c, ok := stream.(io.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+func waitBounded(deadline time.Time, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	return waitChannelBounded(deadline, done)
+}
+
+func waitChannelBounded(deadline time.Time, done <-chan struct{}) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func (s *StdioServer) readerLoop(ctx context.Context, in io.Reader, workers *sync.WaitGroup) error {
 	reader := mcpwire.NewStdioReader(in)
 	for {
 		raw, err := reader.Read()
-		if errors.Is(err, mcpwire.ErrTooLarge) {
-			s.enqueueFault(&mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
-			continue
-		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
+			keepGoing, readErr := s.handleReadError(err)
+			if keepGoing {
+				continue
 			}
-			_, _ = fmt.Fprintf(s.stderr, "mesh mcp: %v\n", err)
-			return fmt.Errorf("read MCP stdio input: %w", err)
+			return readErr
 		}
 		if ctx.Err() != nil {
 			return nil //nolint:nilerr // Server shutdown cancels the reader cleanly.
 		}
 		s.dispatchLine(ctx, raw, workers)
 	}
+}
+
+func (s *StdioServer) handleReadError(err error) (bool, error) {
+	if errors.Is(err, mcpwire.ErrTooLarge) {
+		var id mcpwire.ID
+		var oversized *mcpwire.OversizedStdioRequest
+		if errors.As(err, &oversized) {
+			id = oversized.ID
+		}
+		s.enqueueUnadmittedFault(&mcpwire.Fault{ID: id, Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
+		return true, nil
+	}
+	if errors.Is(err, mcpwire.ErrFramingLost) {
+		s.logStderr(fmt.Sprintf("mesh mcp: %v\n", err))
+		return false, fmt.Errorf("read MCP stdio input: %w", err)
+	}
+	if errors.Is(err, io.EOF) {
+		return false, nil
+	}
+	s.logStderr(fmt.Sprintf("mesh mcp: %v\n", err))
+	return false, fmt.Errorf("read MCP stdio input: %w", err)
 }
 
 func (s *StdioServer) dispatchLine(ctx context.Context, raw []byte, workers *sync.WaitGroup) {
@@ -189,22 +325,22 @@ func (s *StdioServer) dispatchLine(ctx context.Context, raw []byte, workers *syn
 	}
 	if input.Ignored {
 		if input.Message.Kind() == mcpwire.Notification && input.Message.Method() != "" {
-			_, _ = fmt.Fprintf(s.stderr, "mesh mcp: ignored notification %s\n", input.Message.Method())
+			s.logStderr(fmt.Sprintf("mesh mcp: ignored notification %s\n", input.Message.Method()))
 		}
 		return
 	}
 	if input.Fault != nil {
-		s.enqueueFault(input.Fault)
+		s.enqueueUnadmittedFault(input.Fault)
 		return
 	}
 	if fault := s.activeIDs.Begin(input.Message); fault != nil {
-		s.enqueueFault(fault)
+		s.enqueueUnadmittedFault(fault)
 		return
 	}
 	reqCtx, entry, admitted := s.admitRequest(ctx, input.Message, len(raw))
 	if !admitted {
 		s.activeIDs.End(input.Message.ID())
-		s.enqueueMeshError(input.Message.ID(), agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish.")
+		s.enqueueUnadmittedFault(meshFault(input.Message.ID(), agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish."))
 		return
 	}
 	workers.Add(1)
@@ -214,42 +350,110 @@ func (s *StdioServer) dispatchLine(ctx context.Context, raw []byte, workers *syn
 	}()
 }
 
+func faultReservation(id mcpwire.ID) int {
+	raw, _ := id.MarshalJSON()
+	return reservedErrorBytes + len(raw)
+}
+
+func (s *StdioServer) usedBytesLocked() int {
+	return s.inflightBytes + s.queuedBytes + s.writingBytes
+}
+
+func (s *StdioServer) fitsBudgetLocked(delta int) bool {
+	if delta <= 0 {
+		return true
+	}
+	used := s.usedBytesLocked() + delta
+	return used <= s.connBytes && used <= s.maxBytes
+}
+
 func (s *StdioServer) admitRequest(ctx context.Context, msg mcpwire.Message, rawBytes int) (context.Context, *activeRequest, bool) {
-	key := idKey(msg.ID())
-	needed := rawBytes + reservedErrorBytes
+	id := msg.ID()
+	key := id.Key()
+	reserve := faultReservation(id)
+	needed := rawBytes + reserve
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.active) >= s.maxReqs || s.inflightBytes+s.queuedBytes+needed > s.maxBytes {
+	if s.writerClosed || len(s.active) >= s.maxReqs || !s.fitsBudgetLocked(needed) {
 		return nil, nil, false
 	}
 	reqCtx, cancel := context.WithCancel(ctx)
-	entry := &activeRequest{id: msg.ID(), cancel: cancel, requestBytes: needed}
+	entry := &activeRequest{
+		id:            id,
+		key:           key,
+		cancel:        cancel,
+		requestBytes:  rawBytes,
+		reservedBytes: reserve,
+	}
 	s.active[key] = entry
 	s.inflightBytes += needed
 	return reqCtx, entry, true
 }
 
 func (s *StdioServer) executeRequest(ctx context.Context, msg mcpwire.Message, entry *activeRequest) {
-	defer func() {
-		entry.cancel()
-		s.finishActive(entry)
-	}()
+	defer entry.cancel()
 	token := extractProgressToken(msg)
 	notify := func(update ProgressUpdate) {
-		if len(token) == 0 || s.isCancelled(entry) {
+		if len(token) == 0 {
 			return
 		}
-		s.enqueueProgress(idKey(msg.ID()), token, update)
+		s.enqueueProgress(entry, token, update)
 	}
 	reply, fault := s.handleMessage(ctx, msg, notify)
-	if s.isCancelled(entry) {
+	s.completeActive(entry, reply, fault)
+}
+
+func (s *StdioServer) completeActive(entry *activeRequest, reply []byte, fault *mcpwire.Fault) {
+	frame, fallback := s.prepareTerminalFrames(entry.id, reply, fault)
+
+	s.mu.Lock()
+	entry.completed = true
+	if current := s.active[entry.key]; current == entry {
+		delete(s.active, entry.key)
+		s.inflightBytes -= entry.requestBytes
+	}
+	if pending, ok := s.progressByKey[entry.key]; ok {
+		delete(s.progressByKey, entry.key)
+		s.queuedBytes -= len(pending)
+	}
+	if entry.cancelled || s.writerClosed {
+		s.inflightBytes -= entry.reservedBytes
+		s.mu.Unlock()
+		s.activeIDs.End(entry.id)
 		return
 	}
+	chosen := frame
+	if len(chosen) == 0 {
+		chosen = fallback
+	}
+	if !s.fitsBudgetLocked(len(chosen) - entry.reservedBytes) {
+		chosen = fallback
+	}
+	s.inflightBytes -= entry.reservedBytes
+	if !s.fitsBudgetLocked(len(chosen)) {
+		s.failChannelLocked(errOutputCapacity)
+		s.mu.Unlock()
+		s.activeIDs.End(entry.id)
+		return
+	}
+	releaseID := entry.id
+	s.queuedFrames = append(s.queuedFrames, queuedFrame{raw: chosen, releaseID: &releaseID})
+	s.queuedBytes += len(chosen)
+	s.signalWriterLocked()
+	s.mu.Unlock()
+}
+
+func (s *StdioServer) prepareTerminalFrames(id mcpwire.ID, reply []byte, fault *mcpwire.Fault) (primary, fallback []byte) {
+	fallback, _ = meshFault(id, agentapi.ResourceLimit, true, "Frontend output buffer limit exceeded.").Reply()
 	if fault != nil {
-		s.enqueueFault(fault)
-		return
+		primary, _ = fault.Reply()
+		return primary, fallback
 	}
-	s.enqueueFrame(reply, msg.ID())
+	if len(reply) > mcpwire.MaxMessage {
+		primary, _ = meshFault(id, agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit.").Reply()
+		return primary, fallback
+	}
+	return reply, fallback
 }
 
 func (s *StdioServer) handleMessage(ctx context.Context, msg mcpwire.Message, notify func(ProgressUpdate)) ([]byte, *mcpwire.Fault) {
@@ -321,19 +525,32 @@ func (s *StdioServer) toolHandlerError(msg mcpwire.Message, operation string, er
 	if errors.As(err, &badParam) || errors.Is(err, ErrInvalidHandle) {
 		return nil, &mcpwire.Fault{ID: id, Code: mcpwire.InvalidParams, Message: err.Error()}
 	}
+	var envelope agentapi.Envelope
 	var failure *agentapi.Failure
 	if errors.As(err, &failure) {
-		outcome := CallOutcome{
-			Envelope: errorEnvelope(operation, failure.Err.Target, failure.Err.Code, failure.Err.Message),
-			IsError:  true,
-		}
-		raw, encodeErr := buildToolResult(outcome, operation)
-		if encodeErr != nil {
-			return nil, meshFault(id, agentapi.InternalError, false, encodeErr.Error())
-		}
-		return s.completeResult(msg, raw, 0)
+		item := failure.Err
+		item.Operation = operation
+		item.Message = agentapi.CleanMessage(item.Message)
+		envelope = errorEnvelopeFromItem(operation, item)
+	} else {
+		envelope = errorEnvelope(operation, "", agentapi.StateUnavailable, agentapi.CleanMessage(err.Error()))
 	}
-	return nil, meshFault(id, agentapi.InternalError, false, err.Error())
+	raw, encodeErr := buildToolResult(CallOutcome{Envelope: envelope, IsError: true}, operation)
+	if encodeErr != nil {
+		return nil, meshFault(id, agentapi.InternalError, false, encodeErr.Error())
+	}
+	return s.completeResult(msg, raw, 0)
+}
+
+func errorEnvelopeFromItem(operation string, item agentapi.Error) agentapi.Envelope {
+	id, _ := agentapi.NewRequestID()
+	return agentapi.Envelope{
+		SchemaVersion: agentapi.SchemaVersion,
+		Operation:     operation,
+		Status:        agentapi.StatusError,
+		RequestID:     id,
+		Errors:        []agentapi.Error{item},
+	}
 }
 
 func (s *StdioServer) completeResult(req mcpwire.Message, result json.RawMessage, ttlMS int64) ([]byte, *mcpwire.Fault) {
@@ -356,44 +573,26 @@ func meshFault(id mcpwire.ID, code agentapi.Code, retryable bool, message string
 	}
 }
 
-func (s *StdioServer) enqueueMeshError(id mcpwire.ID, code agentapi.Code, retryable bool, message string) {
-	s.enqueueFault(meshFault(id, code, retryable, message))
-}
-
-func (s *StdioServer) enqueueFault(fault *mcpwire.Fault) {
+func (s *StdioServer) enqueueUnadmittedFault(fault *mcpwire.Fault) {
 	raw, err := fault.Reply()
 	if err != nil {
 		return
 	}
-	s.enqueueRaw(raw, true)
-}
-
-func (s *StdioServer) enqueueFrame(raw []byte, id mcpwire.ID) {
-	if len(raw) > mcpwire.MaxMessage {
-		s.enqueueMeshError(id, agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit.")
-		return
-	}
-	if !s.enqueueRaw(raw, false) {
-		s.enqueueMeshError(id, agentapi.ResourceLimit, true, "Frontend output buffer limit exceeded.")
-	}
-}
-
-func (s *StdioServer) enqueueRaw(raw []byte, reserved bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.writerClosed {
-		return false
+		return
 	}
-	if !reserved && (s.queuedBytes+len(raw) > s.connBytes || s.inflightBytes+s.queuedBytes+len(raw) > s.maxBytes) {
-		return false
+	if !s.fitsBudgetLocked(len(raw)) {
+		s.failChannelLocked(errOutputCapacity)
+		return
 	}
-	s.queuedFrames = append(s.queuedFrames, raw)
+	s.queuedFrames = append(s.queuedFrames, queuedFrame{raw: raw})
 	s.queuedBytes += len(raw)
 	s.signalWriterLocked()
-	return true
 }
 
-func (s *StdioServer) enqueueProgress(reqKey string, token json.RawMessage, update ProgressUpdate) {
+func (s *StdioServer) enqueueProgress(entry *activeRequest, token json.RawMessage, update ProgressUpdate) {
 	params := map[string]any{"progressToken": token, "progress": update.Progress}
 	if update.Total != nil {
 		params["total"] = *update.Total
@@ -411,18 +610,18 @@ func (s *StdioServer) enqueueProgress(reqKey string, token json.RawMessage, upda
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.writerClosed {
+	if s.writerClosed || entry.cancelled || entry.completed {
 		return
 	}
-	prev := s.progressByKey[reqKey]
+	prev := s.progressByKey[entry.key]
 	delta := len(raw) - len(prev)
-	if delta > 0 && (s.queuedBytes+delta > s.connBytes || s.inflightBytes+s.queuedBytes+delta > s.maxBytes) {
+	if delta > 0 && !s.fitsBudgetLocked(delta) {
 		return
 	}
 	if prev == nil {
-		s.progressOrder = append(s.progressOrder, reqKey)
+		s.progressOrder = append(s.progressOrder, entry.key)
 	}
-	s.progressByKey[reqKey] = raw
+	s.progressByKey[entry.key] = raw
 	s.queuedBytes += delta
 	s.signalWriterLocked()
 }
@@ -434,54 +633,99 @@ func (s *StdioServer) signalWriterLocked() {
 	}
 }
 
-func (s *StdioServer) writerLoop(out io.Writer, cancelRun context.CancelFunc) {
+func (s *StdioServer) failChannelLocked(err error) {
+	if s.writeErr == nil {
+		s.writeErr = err
+	}
+	s.writerClosed = true
+	s.signalWriterLocked()
+	s.failOnce.Do(func() {
+		close(s.writeFailed)
+	})
+	if s.cancelRun != nil {
+		s.cancelRun()
+	}
+}
+
+func (s *StdioServer) writerLoop(out io.Writer) {
 	for {
 		frame, ok := s.nextWriteFrame()
 		if !ok {
 			return
 		}
-		if err := mcpwire.WriteStdio(out, frame); err != nil {
+		err := mcpwire.WriteStdio(out, frame.raw)
+		s.finishWrite(frame)
+		if err != nil {
 			s.mu.Lock()
-			s.writeErr = fmt.Errorf("write MCP stdout: %w", err)
-			s.writerClosed = true
+			s.failChannelLocked(fmt.Errorf("write MCP stdout: %w", err))
 			s.mu.Unlock()
-			close(s.writeFailed)
-			cancelRun()
 			return
 		}
 	}
 }
 
-func (s *StdioServer) nextWriteFrame() ([]byte, bool) {
+func (s *StdioServer) finishWrite(frame queuedFrame) {
+	s.mu.Lock()
+	s.writingBytes -= len(frame.raw)
+	s.mu.Unlock()
+	if frame.releaseID != nil {
+		s.activeIDs.End(*frame.releaseID)
+	}
+}
+
+func (s *StdioServer) nextWriteFrame() (queuedFrame, bool) {
 	for {
 		s.mu.Lock()
-		if len(s.queuedFrames) > 0 {
-			frame := s.queuedFrames[0]
-			s.queuedFrames = s.queuedFrames[1:]
-			s.queuedBytes -= len(frame)
+		if frame, ok := s.popQueuedFrameLocked(); ok {
 			s.mu.Unlock()
 			return frame, true
 		}
-		if len(s.progressOrder) > 0 {
-			key := s.progressOrder[0]
-			s.progressOrder = s.progressOrder[1:]
-			frame := s.progressByKey[key]
-			delete(s.progressByKey, key)
-			if frame == nil {
-				s.mu.Unlock()
-				continue
-			}
-			s.queuedBytes -= len(frame)
+		if frame, ok := s.popProgressFrameLocked(); ok {
 			s.mu.Unlock()
 			return frame, true
 		}
 		if s.writerClosed {
 			s.mu.Unlock()
-			return nil, false
+			return queuedFrame{}, false
 		}
 		s.mu.Unlock()
 		<-s.writerSignal
 	}
+}
+
+func (s *StdioServer) popQueuedFrameLocked() (queuedFrame, bool) {
+	if len(s.queuedFrames) == 0 {
+		return queuedFrame{}, false
+	}
+	frame := s.queuedFrames[0]
+	s.queuedFrames[0] = queuedFrame{}
+	s.queuedFrames = s.queuedFrames[1:]
+	if len(s.queuedFrames) == 0 {
+		s.queuedFrames = nil
+	}
+	s.queuedBytes -= len(frame.raw)
+	s.writingBytes += len(frame.raw)
+	return frame, true
+}
+
+func (s *StdioServer) popProgressFrameLocked() (queuedFrame, bool) {
+	for len(s.progressOrder) > 0 {
+		key := s.progressOrder[0]
+		s.progressOrder[0] = ""
+		s.progressOrder = s.progressOrder[1:]
+		if len(s.progressOrder) == 0 {
+			s.progressOrder = nil
+		}
+		raw := s.progressByKey[key]
+		delete(s.progressByKey, key)
+		if raw == nil {
+			continue
+		}
+		s.queuedBytes -= len(raw)
+		s.writingBytes += len(raw)
+		return queuedFrame{raw: raw}, true
+	}
+	return queuedFrame{}, false
 }
 
 func (s *StdioServer) closeWriter() {
@@ -491,11 +735,27 @@ func (s *StdioServer) closeWriter() {
 	s.mu.Unlock()
 }
 
+func (s *StdioServer) releaseRemainingIDs() {
+	s.mu.Lock()
+	var ids []mcpwire.ID
+	for _, f := range s.queuedFrames {
+		if f.releaseID != nil {
+			ids = append(ids, *f.releaseID)
+		}
+	}
+	s.queuedFrames = nil
+	s.queuedBytes = 0
+	s.mu.Unlock()
+	for _, id := range ids {
+		s.activeIDs.End(id)
+	}
+}
+
 func (s *StdioServer) cancelRequest(id mcpwire.ID) {
-	key := idKey(id)
+	key := id.Key()
 	s.mu.Lock()
 	entry := s.active[key]
-	if entry != nil {
+	if entry != nil && !entry.completed {
 		entry.cancelled = true
 	}
 	s.mu.Unlock()
@@ -515,46 +775,6 @@ func (s *StdioServer) cancelAllActive() {
 	for _, cancel := range cancels {
 		cancel()
 	}
-}
-
-func (s *StdioServer) isCancelled(entry *activeRequest) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return entry.cancelled
-}
-
-func (s *StdioServer) finishActive(entry *activeRequest) {
-	key := idKey(entry.id)
-	s.mu.Lock()
-	if current := s.active[key]; current == entry {
-		delete(s.active, key)
-		s.inflightBytes -= entry.requestBytes
-	}
-	if pending, ok := s.progressByKey[key]; ok {
-		delete(s.progressByKey, key)
-		s.queuedBytes -= len(pending)
-	}
-	s.mu.Unlock()
-	s.activeIDs.End(entry.id)
-}
-
-func (s *StdioServer) waitWorkers(workers *sync.WaitGroup) {
-	done := make(chan struct{})
-	go func() {
-		workers.Wait()
-		close(done)
-	}()
-	timer := time.NewTimer(s.drainWait)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-	}
-}
-
-func idKey(id mcpwire.ID) string {
-	raw, _ := id.MarshalJSON()
-	return string(raw)
 }
 
 func extractProgressToken(msg mcpwire.Message) json.RawMessage {

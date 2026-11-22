@@ -17,6 +17,15 @@ type OversizedStdioReply struct {
 func (*OversizedStdioReply) Error() string { return ErrTooLarge.Error() }
 func (*OversizedStdioReply) Unwrap() error { return ErrTooLarge }
 
+// OversizedStdioRequest identifies an oversized client request whose ID and
+// envelope were verified within the stdio drain budget.
+type OversizedStdioRequest struct {
+	ID ID
+}
+
+func (*OversizedStdioRequest) Error() string { return ErrTooLarge.Error() }
+func (*OversizedStdioRequest) Unwrap() error { return ErrTooLarge }
+
 func (s *StdioReader) rejectOversize(prefix []byte, readErr error, reply bool) error {
 	if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, readErr)
@@ -29,11 +38,16 @@ func (s *StdioReader) rejectOversize(prefix []byte, readErr error, reply bool) e
 	var id ID
 	if reply {
 		id = oversizedReplyID(io.MultiReader(bytes.NewReader(prefix), tail))
+	} else {
+		id = oversizedRequestID(io.MultiReader(bytes.NewReader(prefix), tail))
 	}
 	if _, err := io.Copy(io.Discard, tail); err != nil {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, err)
 	}
 	if !reply {
+		if id.Valid() {
+			return &OversizedStdioRequest{ID: id}
+		}
 		return ErrTooLarge
 	}
 	if !id.Valid() {
@@ -111,16 +125,32 @@ type oversizedEnvelope struct {
 	id        ID
 	version   bool
 	hasResult bool
+	hasMethod bool
+	request   bool
 }
 
 func oversizedReplyID(r io.Reader) ID {
+	return oversizedEnvelopeID(r, false)
+}
+
+func oversizedRequestID(r io.Reader) ID {
+	return oversizedEnvelopeID(r, true)
+}
+
+func oversizedEnvelopeID(r io.Reader, request bool) ID {
 	source := &attributionReader{Reader: r}
-	m := oversizedEnvelope{source: source, decoder: jsontext.NewDecoder(source)}
+	m := oversizedEnvelope{source: source, decoder: jsontext.NewDecoder(source), request: request}
 	token, err := m.next()
 	if err != nil || token.Kind() != '{' {
 		return ID{}
 	}
-	if !m.readFields() || !m.version || !m.hasResult {
+	if !m.readFields() || !m.version {
+		return ID{}
+	}
+	if request && !m.hasMethod {
+		return ID{}
+	}
+	if !request && !m.hasResult {
 		return ID{}
 	}
 	if _, err := m.next(); !errors.Is(err, io.EOF) {
@@ -164,10 +194,20 @@ func (m *oversizedEnvelope) readField(name string) bool {
 		token, err := m.next()
 		m.version = err == nil && token.Kind() == '"' && token.String() == jsonRPCVersion
 		return m.version
-	case "method", "params":
-		return false
+	case "method":
+		if !m.request || m.hasMethod {
+			return false
+		}
+		token, err := m.next()
+		m.hasMethod = err == nil && token.Kind() == '"' && token.String() != ""
+		return m.hasMethod
+	case "params":
+		if !m.request {
+			return false
+		}
+		return m.skipValue(false)
 	case keyResult, "error":
-		if m.hasResult {
+		if m.request || m.hasResult {
 			return false
 		}
 		m.hasResult = true

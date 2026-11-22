@@ -198,6 +198,10 @@ func executionResponse(request protocol.Control, r execution.Receipt, err error)
 }
 func executionWireReceipt(r execution.Receipt) *protocol.ExecutionReceipt {
 	out := &protocol.ExecutionReceipt{HostID: r.Binding.Host, SessionID: r.Binding.Reservation.ID, Instance: r.Binding.Reservation.Instance, RequestKey: r.Key.Opaque, KeyScope: r.Key.Class, Kind: r.Binding.Mode(), Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.RetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
+	if !r.AcceptedAt.IsZero() {
+		created := r.AcceptedAt.UTC()
+		out.CreatedAt = &created
+	}
 	if r.Result != nil {
 		t := r.Result.Termination
 		out.Result = &protocol.ExecutionResult{Termination: protocol.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: wireExecutionStreams(r.Result.Streams)}
@@ -209,7 +213,7 @@ func executionCode(err error) string {
 		return code
 	}
 	var invalid *protocol.ExecutionValidationError
-	if errors.As(err, &invalid) {
+	if errors.As(err, &invalid) || errors.Is(err, execution.ErrListCursorInvalid) {
 		return executionUsageInvalidCode
 	}
 	switch {

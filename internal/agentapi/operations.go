@@ -29,10 +29,10 @@ type Flag struct {
 	Summary     string
 }
 type Operation struct {
-	Name, Command, Args           string
-	Flags                         []Flag
-	Mutates, Network, Implemented bool
-	Summary, Example              string
+	Name, Command, Args                    string
+	Flags                                  []Flag
+	Mutates, Network, Implemented, MCPOnly bool
+	Summary, Example                       string
 }
 
 var Operations = []Operation{
@@ -64,7 +64,12 @@ var Operations = []Operation{
 	{Name: "sessions.signal", Command: "mesh session signal", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("signal"), Summary: "Signal one exact keyed command instance.", Example: "mesh session signal --host HOST_ID 7K3D --instance INSTANCE --json"},
 	{Name: "sessions.kill", Command: "mesh session kill", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("kill"), Summary: "Stop one exact keyed command instance.", Example: "mesh session kill --host HOST_ID 7K3D --instance INSTANCE --json"},
 	{Name: "sessions.remove", Command: "mesh session rm", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("remove"), Summary: "Remove finished output while retaining the creation receipt.", Example: "mesh session rm --host HOST_ID 7K3D --instance INSTANCE --json"},
+	{Name: "hosts.wake", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Mutates: true, Summary: "Send a wake-on-LAN request for an approved host through an online peer.", Example: "mesh_host_wake"},
+	{Name: "services.inspect", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "Inspect one Mesh serve route on a host without opening its URL.", Example: "mesh_service_inspect"},
+	{Name: "jobs.list", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "List caller-owned keyed execution jobs on a host.", Example: "mesh_jobs_list"},
 }
+
+const mcpSurfaceCommand = "mesh mcp"
 
 var Legacy = []string{"mesh version --json", "mesh update --json", "mesh app --json", "mesh device identity --json", "mesh update-helper --json", "mesh wake arm --json"}
 
@@ -75,25 +80,35 @@ func Classify(args []string) string {
 		words[1] = "ls"
 	}
 	for _, operation := range Operations {
+		if operation.MCPOnly || !operation.Implemented {
+			continue
+		}
 		path := strings.Fields(strings.TrimPrefix(operation.Command, "mesh "))
-		if operation.Implemented && matchesPath(words, path) {
+		if matchesPath(words, path) {
 			return operation.Name
 		}
 	}
+	return classifyGroupFallback(words)
+}
+
+func classifyGroupFallback(words []string) string {
 	if len(words) >= 2 && words[0] == "device" && words[1] == "scope" {
 		return "scope.list"
 	}
-	// The implemented profile group attributes usage failures to its read operation.
-	if len(words) > 0 && words[0] == "profile" {
+	if len(words) == 0 {
+		return ""
+	}
+	// Implemented command groups attribute usage failures to their read operation.
+	switch words[0] {
+	case "profile":
 		return "profile.show"
-	}
-	if len(words) > 0 && words[0] == "skill" {
+	case "skill":
 		return "skill.status"
-	}
-	if len(words) > 0 && words[0] == "session" {
+	case "session":
 		return "sessions.list"
+	default:
+		return ""
 	}
-	return ""
 }
 
 func matchesPath(words, path []string) bool {

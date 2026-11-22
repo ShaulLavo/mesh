@@ -24,11 +24,9 @@ func TestRegistryLinksToAgentOperationsAndReferenceSync(t *testing.T) {
 	var names []string
 	for _, def := range defs {
 		names = append(names, def.Name)
-		if def.Operation != "" {
-			op, ok := ops[def.Operation]
-			if !ok || !op.Implemented {
-				t.Errorf("tool %s links to missing or unimplemented operation %q", def.Name, def.Operation)
-			}
+		op, ok := ops[def.Operation]
+		if def.Operation == "" || !ok || !op.Implemented {
+			t.Errorf("tool %s links to missing or unimplemented operation %q", def.Name, def.Operation)
 		}
 		var schema map[string]any
 		if err := json.Unmarshal(def.InputSchema, &schema); err != nil || schema["type"] != "object" {

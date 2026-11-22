@@ -201,15 +201,15 @@ type JobOutputData struct {
 
 // JobListItem describes one keyed execution job in mesh_jobs_list.
 type JobListItem struct {
-	Job       string    `json:"job"`
-	HostID    string    `json:"hostId"`
-	SessionID string    `json:"sessionId"`
-	Instance  string    `json:"instance"`
-	State     string    `json:"state"`
-	CreatedAt time.Time `json:"createdAt"`
-	ExitCode  *int      `json:"exitCode,omitempty"`
-	Command   []string  `json:"command,omitempty"`
-	Cwd       string    `json:"cwd,omitempty"`
+	Job       string     `json:"job"`
+	HostID    string     `json:"hostId"`
+	SessionID string     `json:"sessionId"`
+	Instance  string     `json:"instance"`
+	State     string     `json:"state"`
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+	ExitCode  *int       `json:"exitCode,omitempty"`
+	Command   []string   `json:"command,omitempty"`
+	Cwd       string     `json:"cwd,omitempty"`
 }
 
 // JobListData is the structured data returned by mesh_jobs_list.

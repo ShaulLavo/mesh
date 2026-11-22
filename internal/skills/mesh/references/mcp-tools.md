@@ -5,7 +5,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | Tool | Linked operation | Mode | Summary |
 | --- | --- | --- | --- |
 | `mesh_host_inspect` | `hosts.inspect` | read-only, idempotent | Inspect one Mesh host and its notes |
-| `mesh_host_wake` | `mcp-native` | idempotent | Wake a Mesh host |
+| `mesh_host_wake` | `hosts.wake` | idempotent | Wake a Mesh host |
 | `mesh_hosts_list` | `hosts.list` | read-only, idempotent | List Mesh hosts, reachability, and capabilities |
 | `mesh_job_cancel` | `sessions.kill` | destructive, idempotent | Cancel a running job |
 | `mesh_job_input` | `sessions.input` | destructive | Write keyed stdin bytes or EOF to a pipe job |
@@ -15,8 +15,8 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_job_signal` | `sessions.signal` | destructive | Send a POSIX signal to a job's process group |
 | `mesh_job_status` | `sessions.inspect` | read-only, idempotent | Read durable status of a job |
 | `mesh_job_wait` | `sessions.wait` | read-only, idempotent | Wait for a job to finish |
-| `mesh_jobs_list` | `mcp-native` | read-only, idempotent | List keyed execution jobs on a host |
-| `mesh_service_inspect` | `mcp-native` | read-only, idempotent | Inspect one Mesh serve route |
+| `mesh_jobs_list` | `jobs.list` | read-only, idempotent | List keyed execution jobs on a host |
+| `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
 | `mesh_services_list` | `services.list` | read-only, idempotent | List Mesh serve routes |
 | `mesh_session_inspect` | `sessions.inspect` | read-only, idempotent | Passively inspect a terminal session |
 | `mesh_sessions_list` | `sessions.list` | read-only, idempotent | List terminal sessions on a host |
@@ -37,6 +37,7 @@ Inspect one Mesh host for full owner notes, fleet notes, capabilities, and curre
 
 Send a wake-on-LAN request for an approved Mesh host through an online peer. Idempotent when the host is already online.
 
+- Linked operation: `hosts.wake`
 - Hints: idempotent
 - Arguments:
   - `host` (`string`, required): Machine name or exact host ID.
@@ -146,6 +147,7 @@ Wait up to 60 seconds for a job to reach a durable terminal result, returning ti
 
 List keyed execution jobs on one Mesh host with their opaque mj1 handles and current states without touching any running process.
 
+- Linked operation: `jobs.list`
 - Hints: read-only, idempotent
 - Arguments:
   - `all` (`boolean`, optional): Include exited and interrupted jobs.
@@ -158,6 +160,7 @@ List keyed execution jobs on one Mesh host with their opaque mj1 handles and cur
 
 Inspect one Mesh serve route on a host without opening its URL or triggering on-demand startup.
 
+- Linked operation: `services.inspect`
 - Hints: read-only, idempotent
 - Arguments:
   - `host` (`string`, required): Machine name or exact host ID.
