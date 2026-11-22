@@ -72,6 +72,9 @@ type ID struct {
 
 func (id ID) Valid() bool { return id.raw != "" }
 
+// Key returns the canonical JSON identity key (decoded string or exact integer).
+func (id ID) Key() string { return id.key }
+
 func (id ID) Equal(other ID) bool { return id.Valid() && id.key == other.key }
 
 func (id ID) MarshalJSON() ([]byte, error) {

@@ -39,6 +39,9 @@ func checkAgentNameReserved(t *testing.T, name string) {
 
 func checkAgentOperation(t *testing.T, command *Command, operation agentapi.Operation) {
 	t.Helper()
+	if operation.MCPOnly {
+		return
+	}
 	words := strings.Fields(strings.TrimPrefix(operation.Command, "mesh "))
 	found, rest, err := command.Find(words)
 	if !operation.Implemented {

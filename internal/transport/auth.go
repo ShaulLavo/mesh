@@ -34,6 +34,10 @@ const handshakeByteLimit = 64 << 10
 
 var ErrAuthentication = errors.New("transport: Mesh peer authentication failed")
 
+// ErrDestinationIdentityMismatch indicates the remote peer presented a different
+// Mesh identity than the one pinned for the destination.
+var ErrDestinationIdentityMismatch = errors.New("transport: destination Mesh identity changed")
+
 var ErrControlAuthenticationRequired = errors.New("transport: destination requires Mesh control authentication")
 
 var ErrAuthenticationRequired = errors.New("transport: peer requires a control-authentication upgrade")
@@ -184,7 +188,7 @@ func (a *Authentication) verifyPeer(server bool) func(tls.ConnectionState) error
 			return nil
 		}
 		if id != a.ExpectedIdentity {
-			return errors.New("transport: destination Mesh identity changed")
+			return ErrDestinationIdentityMismatch
 		}
 		return nil
 	}

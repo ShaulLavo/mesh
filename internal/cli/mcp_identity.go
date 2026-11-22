@@ -11,18 +11,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// mcpCommand is the group for agent frontends. The native MCP server joins
-// it as the group's own action.
-func (a *application) mcpCommand() *cobra.Command {
-	group := &cobra.Command{Use: "mcp", Short: "Configure agent frontends for Mesh's MCP tools", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return cmd.Help()
-	}}
+// mcpIdentityCommand is the `mesh mcp identity` subcommand group.
+func (a *application) mcpIdentityCommand() *cobra.Command {
 	identity := &cobra.Command{Use: "identity", Short: "Manage per-agent application identities", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return cmd.Help()
 	}}
+	identity.SetOut(a.dependencies.Stdout)
+	identity.SetErr(a.dependencies.Stderr)
 	identity.AddCommand(a.mcpIdentityCreateCommand(), a.mcpIdentityListCommand())
-	group.AddCommand(identity)
-	return group
+	return identity
 }
 
 // meshConfigDir is the directory holding hosts.json and identities.

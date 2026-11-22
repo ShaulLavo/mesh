@@ -42,7 +42,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh unserve`](#mesh-unserve) | Remove one private service |
 | [`mesh daemon`](#mesh-daemon) | Run this host's coordinator |
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
-| [`mesh mcp`](#mesh-mcp) | Configure agent frontends for Mesh's MCP tools |
+| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP stdio server |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
 | [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
@@ -125,7 +125,7 @@ SETUP
 
   daemon [command] [--flags]                            Run this host's coordinator
   device [command]                                      Approve device keys for this daemon's OS account
-  mcp [command]                                         Configure agent frontends for Mesh's MCP tools
+  mcp [command]                                         Run the stateless native MCP stdio server
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
   skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
@@ -2000,21 +2000,25 @@ FLAGS
 ## mesh mcp
 
 ```text
-Configure agent frontends for Mesh's MCP tools
+Run Mesh's stateless MCP 2026-07-28 server over stdio.
+stdout carries only newline-delimited JSON-RPC MCP messages;
+diagnostics and startup errors go to stderr.
 
-USAGE
+Usage:
+  mesh mcp [flags]
+  mesh mcp [command]
 
-  mesh mcp [command] [--flags]
+Available Commands:
+  identity    Manage per-agent application identities
 
-COMMANDS
+Flags:
+  -h, --help   help for mcp
 
-  identity [command]  Manage per-agent application identities
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
-FLAGS
-
-  -h --help           Help for mcp
-  --leave-key         Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy           Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Use "mesh mcp [command] --help" for more information about a command.
 ```
 
 ## mesh mcp identity
@@ -2022,20 +2026,22 @@ FLAGS
 ```text
 Manage per-agent application identities
 
-USAGE
+Usage:
+  mesh mcp identity [flags]
+  mesh mcp identity [command]
 
-  mesh mcp identity [command] [--flags]
+Available Commands:
+  create      Create a private application credential for one agent frontend
+  ls          List local application identities without their secrets
 
-COMMANDS
+Flags:
+  -h, --help   help for identity
 
-  create NAME [--flags]  Create a private application credential for one agent frontend
-  ls [--flags]           List local application identities without their secrets
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
-FLAGS
-
-  -h --help              Help for identity
-  --leave-key            Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy              Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Use "mesh mcp identity [command] --help" for more information about a command.
 ```
 
 ## mesh mcp identity create
@@ -2043,16 +2049,16 @@ FLAGS
 ```text
 Create a private application credential for one agent frontend
 
-USAGE
+Usage:
+  mesh mcp identity create NAME [flags]
 
-  mesh mcp identity create NAME [--flags]
+Flags:
+  -h, --help   help for create
+      --json   write one agent result
 
-FLAGS
-
-  -h --help    Help for create
-  --json       Write one agent result
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp identity ls
@@ -2060,16 +2066,19 @@ FLAGS
 ```text
 List local application identities without their secrets
 
-USAGE
+Usage:
+  mesh mcp identity ls [flags]
 
-  mesh mcp identity ls [--flags]
+Aliases:
+  ls, list
 
-FLAGS
+Flags:
+  -h, --help   help for ls
+      --json   write one agent result
 
-  -h --help    Help for ls
-  --json       Write one agent result
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh private-names

@@ -279,6 +279,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 	case protocol.TypeExecutionLogs, protocol.TypeExecutionWait, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove, protocol.TypeExecutionInput, protocol.TypeExecutionInspect:
 		response, err := l.boundExecutionControl(ctx, request)
 		return response, true, err
+	case protocol.TypeExecutionList:
+		response, err := l.executionListControl(ctx, request)
+		return response, true, err
 	case protocol.TypeExecutionCreate, protocol.TypeExecutionRequest:
 		response, err := l.executionControl(ctx, request)
 		return response, true, err
@@ -660,8 +663,8 @@ func (l *lifecycle) declaredHostInfo() protocol.HostInfo {
 		tailscaleName = *l.host.TailscaleName
 	}
 	host := protocol.HostInfo{
-		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true,
-		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, TailscaleName: tailscaleName, PrivateName: l.privateName(),
+		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true, ExecutionPipeSupported: true,
+		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, Account: currentDaemonAccount(), TailscaleName: tailscaleName, PrivateName: l.privateName(),
 	}
 	if l.updateSummary != nil {
 		host.HostUpdate = l.updateSummary()

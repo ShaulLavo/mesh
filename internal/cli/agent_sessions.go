@@ -292,6 +292,12 @@ func (a *application) loadAgentSessions(ctx context.Context, host HostRecord, op
 }
 
 func (a *application) loadAgentRemoteSessions(ctx context.Context, host HostRecord, operation string) (agentSessionSnapshot, error) {
+	return a.loadAgentRemoteSessionsBy(ctx, host, operation, func(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
+		return listAgentSessions(ctx, host, a.dependencies.DialPassive)
+	})
+}
+
+func (a *application) loadAgentRemoteSessionsBy(ctx context.Context, host HostRecord, operation string, list func(context.Context, HostRecord) ([]protocol.SessionInfo, error)) (agentSessionSnapshot, error) {
 	cache, cacheErr := openAgentCatalogCache(ctx)
 	if cache == nil {
 		cache = &SQLiteCatalogCache{}
@@ -305,7 +311,7 @@ func (a *application) loadAgentRemoteSessions(ctx context.Context, host HostReco
 	if readErr != nil {
 		cached = nil
 	}
-	rows, err := listAgentSessions(ctx, host, a.dependencies.DialPassive)
+	rows, err := list(ctx, host)
 	if err != nil {
 		failure := agentError(err, operation, host.ID, agentapi.HostUnreachable)
 		if failure.Code != agentapi.HostUnreachable || len(cached) == 0 {
