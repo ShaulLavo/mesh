@@ -19,7 +19,7 @@ var reservedNames = map[string]struct{}{
 }
 
 var laterCommandNames = map[string]struct{}{
-	"hosts": {}, "inspect": {}, "mcp": {}, "profile": {}, "session": {}, "skill": {},
+	"hosts": {}, "inspect": {}, "profile": {}, "session": {}, "skill": {}, "context": {}, "mcp": {},
 }
 
 func ShadowedByCommand(name string) bool {

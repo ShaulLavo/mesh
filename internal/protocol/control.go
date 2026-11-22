@@ -417,6 +417,18 @@ type Control struct {
 	InputReceipt       *session.InputReceipt `json:"inputReceipt,omitempty"`
 	LaunchDigest       string                `json:"launchDigest,omitempty"`
 
+	// Application callers (see internal/appcaller) and execution contexts.
+	// Caller is the encoded credential; it travels only inside this
+	// authenticated control and is never echoed. Administration marks an
+	// explicit whole-account CLI operation on application-owned work.
+	Caller           CallerCredential         `json:"caller,omitempty"`
+	Administration   bool                     `json:"administration,omitempty"`
+	ExecutionContext *ExecutionContextRequest `json:"executionContext,omitempty"`
+	ContextInfo      *ExecutionContextInfo    `json:"contextInfo,omitempty"`
+	ContextInfos     []ExecutionContextInfo   `json:"contextInfos,omitempty"`
+	// ContextNextCursor continues a context.list reply that did not fit.
+	ContextNextCursor string `json:"contextNextCursor,omitempty"`
+
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`
 	Message   string `json:"message,omitempty"`

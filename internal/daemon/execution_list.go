@@ -27,23 +27,15 @@ func (l *lifecycle) executionListControl(ctx context.Context, request protocol.C
 	if request.ExecutionListLimit < 0 || request.ExecutionListLimit > 500 {
 		return protocol.Control{}, &protocol.ExecutionValidationError{Err: fmt.Errorf("execution list limit must be between 1 and 500")}
 	}
-	key, err := l.executionKey(ctx, "list")
+	query, err := l.executionListQuery(ctx, request)
 	if err != nil {
-		return protocol.Control{}, err
+		return protocol.Control{}, executionFailure(protocol.Control{}, err)
 	}
 	journal, err := l.executionJournal()
 	if err != nil {
 		return protocol.Control{}, err
 	}
-	page, err := journal.ListPage(ctx, execution.ListQuery{
-		Host:         key.Host,
-		Class:        key.Class,
-		Principal:    key.Principal,
-		IncludeEnded: request.ExecutionListAll,
-		Limit:        request.ExecutionListLimit,
-		Cursor:       request.Cursor,
-		MaxBytes:     executionListMaxBytes,
-	}, func(r execution.Receipt) int {
+	page, err := journal.ListPage(ctx, query, func(r execution.Receipt) int {
 		raw, _ := json.Marshal(executionWireReceipt(r))
 		return len(raw) + 2
 	})
@@ -63,5 +55,61 @@ func (l *lifecycle) executionListControl(ctx context.Context, request protocol.C
 		RequestID:         request.RequestID,
 		ExecutionReceipts: wire,
 		ExecutionNextPage: page.NextCursor,
+	}, nil
+}
+
+func (l *lifecycle) executionListQuery(ctx context.Context, request protocol.Control) (execution.ListQuery, error) {
+	caller, present, err := applicationCaller(ctx, request)
+	if err != nil {
+		return execution.ListQuery{}, err
+	}
+	if !present {
+		return l.deviceExecutionListQuery(ctx, request)
+	}
+	if request.Administration {
+		return execution.ListQuery{}, errCallerDenied
+	}
+	contextID, err := executionListContextID(request)
+	if err != nil {
+		return execution.ListQuery{}, err
+	}
+	return execution.ListQuery{
+		Host:         string(l.host.ID),
+		Class:        execution.ApplicationClass,
+		Principal:    string(caller.ID),
+		Context:      contextID,
+		IncludeEnded: request.ExecutionListAll,
+		Limit:        request.ExecutionListLimit,
+		Cursor:       request.Cursor,
+		MaxBytes:     executionListMaxBytes,
+	}, nil
+}
+
+func executionListContextID(request protocol.Control) (string, error) {
+	if request.ExecutionContext == nil || request.ExecutionContext.ContextID == "" {
+		return "", nil
+	}
+	if !protocol.ValidContextID(request.ExecutionContext.ContextID) {
+		return "", contextUsage("executionContext.contextId must be a valid context ID")
+	}
+	return request.ExecutionContext.ContextID, nil
+}
+
+func (l *lifecycle) deviceExecutionListQuery(ctx context.Context, request protocol.Control) (execution.ListQuery, error) {
+	if request.ExecutionContext != nil {
+		return execution.ListQuery{}, &callerValidationError{err: errCallerRequired}
+	}
+	key, err := l.executionKey(ctx, "list")
+	if err != nil {
+		return execution.ListQuery{}, err
+	}
+	return execution.ListQuery{
+		Host:         key.Host,
+		Class:        key.Class,
+		Principal:    key.Principal,
+		IncludeEnded: request.ExecutionListAll,
+		Limit:        request.ExecutionListLimit,
+		Cursor:       request.Cursor,
+		MaxBytes:     executionListMaxBytes,
 	}, nil
 }

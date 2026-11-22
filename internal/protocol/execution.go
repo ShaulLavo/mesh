@@ -63,6 +63,11 @@ type ExecutionReceipt struct {
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`
 	Result             *ExecutionResult `json:"result"`
+	// ContextID and ContextRevision name the context and the revision a
+	// context job was reserved against. Replays return the reserved values
+	// even after the context changed or closed.
+	ContextID       string  `json:"contextId,omitempty"`
+	ContextRevision *uint64 `json:"contextRevision,string,omitempty"`
 }
 
 // validateExecutionRaw runs before Control decoding can discard request evidence.
@@ -171,6 +176,12 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 	switch name {
 	case executionTypeField, requestIDField:
 		return executionString(raw)
+	case callerField:
+		return executionString(raw)
+	case administrationField:
+		return executionBool(raw)
+	case executionContextField:
+		return executionObject(raw)
 	case "requestKey":
 		if kind != TypeExecutionCreate && kind != TypeExecutionRequest {
 			return fmt.Errorf("execution: unexpected request key")
@@ -194,8 +205,10 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 
 func validateExecutionListField(name string, raw json.RawMessage) error {
 	switch name {
-	case executionTypeField, requestIDField, "cursor":
+	case executionTypeField, requestIDField, callerField, "cursor":
 		return executionString(raw)
+	case executionContextField:
+		return executionObject(raw)
 	case "listLimit":
 		return executionInteger(name, raw)
 	case "listAll":
@@ -397,8 +410,12 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 	default:
 		required = append(required, sessionIDField, "instance")
 	}
-	if kind == TypeExecutionCreate {
+	// A job in a context may take its directory from the context and a shell
+	// command instead of argv; the daemon checks that exactly one is present.
+	if kind == TypeExecutionCreate && fields[executionContextField] == nil {
 		required = append(required, "kind", "command", "cwd")
+	} else if kind == TypeExecutionCreate {
+		required = append(required, "kind")
 	}
 	if kind == TypeExecutionInput || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire {
 		required = append(required, "writeKey")

@@ -15,6 +15,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh agent`](#mesh-agent) | Run a native agent with conversation recovery |
 | [`mesh attach`](#mesh-attach) | Attach to a session on this host |
 | [`mesh back`](#mesh-back) | Return this terminal to the session it last opened |
+| [`mesh context`](#mesh-context) | Open and manage durable working contexts for an agent |
 | [`mesh gc`](#mesh-gc) | Reclaim memory from sessions left detached and idle |
 | [`mesh hibernate`](#mesh-hibernate) | Stop an idle agent now; its conversation resumes on the next attach |
 | [`mesh kill`](#mesh-kill) | End a session and wait until it is gone |
@@ -88,6 +89,7 @@ SESSIONS
   agent PROVIDER -- ARG... [command]                    Run a native agent with conversation recovery
   attach session [--flags]                              Attach to a session on this host
   back [--flags]                                        Return this terminal to the session it last opened
+  context [command]                                     Open and manage durable working contexts for an agent
   gc [--flags]                                          Reclaim memory from sessions left detached and idle
   hibernate session...                                  Stop an idle agent now; its conversation resumes on the next attach
   kill session                                          End a session and wait until it is gone
@@ -123,7 +125,7 @@ SETUP
 
   daemon [command] [--flags]                            Run this host's coordinator
   device [command]                                      Approve device keys for this daemon's OS account
-  mcp                                                   Run the stateless native MCP stdio server
+  mcp [command]                                         Run the stateless native MCP stdio server
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
   skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
@@ -289,6 +291,163 @@ FLAGS
   --raw         Attach without changing terminal mode
   --shell       Open a shell in the saved directory
   --takeover    Take over if the session is already attached
+```
+
+## mesh context
+
+```text
+Open and manage durable working contexts for an agent
+
+USAGE
+
+  mesh context [command] [--flags]
+
+COMMANDS
+
+  close CONTEXT [--flags]   Stop new jobs in a context; running jobs keep going
+  get CONTEXT [--flags]     Read one context
+  ls [--flags]              List the application's contexts on a host
+  open [--flags]            Open a durable working context on a host
+  receipt [--flags]         Look up a context by the key that opened it
+  update CONTEXT [--flags]  Change a context at an expected revision
+
+FLAGS
+
+  -h --help                 Help for context
+  --leave-key               Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy                 Mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh context close
+
+```text
+Stop new jobs in a context; running jobs keep going
+
+USAGE
+
+  mesh context close CONTEXT [--flags]
+
+FLAGS
+
+  --expected-revision  Fail if the context changed since this revision
+  -h --help            Help for close
+  --host               Online machine name or exact host ID; implied by a context handle
+  --identity           Local application identity, required
+  --json               Write one agent result, required
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout            Hard deadline from 100ms to 60s (10s)
+```
+
+## mesh context get
+
+```text
+Read one context
+
+USAGE
+
+  mesh context get CONTEXT [--flags]
+
+FLAGS
+
+  -h --help    Help for get
+  --host       Online machine name or exact host ID; implied by a context handle
+  --identity   Local application identity, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline from 100ms to 60s (10s)
+```
+
+## mesh context ls
+
+```text
+List the application's contexts on a host
+
+USAGE
+
+  mesh context ls [--flags]
+
+FLAGS
+
+  -h --help    Help for ls
+  --host       Online machine name or exact host ID; implied by a context handle
+  --identity   Local application identity, required
+  --json       Write one agent result, required
+  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --timeout    Hard deadline from 100ms to 60s (10s)
+```
+
+## mesh context open
+
+```text
+Open a durable working context on a host
+
+USAGE
+
+  mesh context open [--flags]
+
+FLAGS
+
+  --cwd          Absolute directory on the target, required
+  --env          Overlay variable NAME=VALUE, repeatable
+  -h --help      Help for open
+  --host         Online machine name or exact host ID; implied by a context handle
+  --identity     Local application identity, required
+  --json         Write one agent result, required
+  --label        Display label
+  --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --request-key  Saved logical request key, required
+  --shell        Shell for command strings: login (default), sh or none
+  --timeout      Hard deadline from 100ms to 60s (10s)
+```
+
+## mesh context receipt
+
+```text
+Look up a context by the key that opened it
+
+USAGE
+
+  mesh context receipt [--flags]
+
+FLAGS
+
+  -h --help      Help for receipt
+  --host         Online machine name or exact host ID; implied by a context handle
+  --identity     Local application identity, required
+  --json         Write one agent result, required
+  --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --request-key  Request key used to open, required
+  --timeout      Hard deadline from 100ms to 60s (10s)
+```
+
+## mesh context update
+
+```text
+Change a context at an expected revision
+
+USAGE
+
+  mesh context update CONTEXT [--flags]
+
+FLAGS
+
+  --cwd                New absolute directory
+  --expected-revision  Revision before this change, required
+  -h --help            Help for update
+  --host               Online machine name or exact host ID; implied by a context handle
+  --identity           Local application identity, required
+  --json               Write one agent result, required
+  --label              New display label
+  --leave-key          Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy            Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --set-env            Set overlay variable NAME=VALUE, repeatable
+  --timeout            Hard deadline from 100ms to 60s (10s)
+  --unset-env          Remove overlay variable NAME, repeatable
 ```
 
 ## mesh gc
@@ -515,19 +674,22 @@ USAGE
 
 FLAGS
 
-  --cols         Initial terminal width (80)
-  --cwd          Absolute clean working directory on the target
-  -h --help      Help for create
-  --host         Machine name or exact host ID, required
-  --json         Write one agent result, required
-  --kind         Explicit session kind, pty or pipe
-  --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
-  --request-key  Saved logical request key, required
-  --rows         Initial terminal height (24)
-  --stdin        Pipe stdin mode, closed by default or open for keyed writes
-  --term         Target terminal type (dumb)
-  --timeout      Hard deadline from 100ms to 60s (40s)
+  --cols           Initial terminal width (80)
+  --context        With --identity, the context ID or handle of the job
+  --cwd            Absolute clean working directory on the target
+  -h --help        Help for create
+  --host           Machine name or exact host ID, required
+  --identity       Act as this local application identity
+  --json           Write one agent result, required
+  --kind           Explicit session kind, pty or pipe
+  --leave-key      Key that leaves all nested sessions, or none (ctrl+^)
+  --privacy        Mask personal data for recording and screen sharing (MESH_PRIVACY)
+  --request-key    Saved logical request key, required
+  --rows           Initial terminal height (24)
+  --shell-command  With --identity, a command string run through the context's shell
+  --stdin          Pipe stdin mode, closed by default or open for keyed writes
+  --term           Target terminal type (dumb)
+  --timeout        Hard deadline from 100ms to 60s (40s)
 ```
 
 ## mesh session input
@@ -542,10 +704,12 @@ USAGE
 FLAGS
 
   --base64     Write Base64-decoded bytes
+  --context    With --identity, the context ID or handle of the job
   --eof        Close pipe stdin after these bytes
   --file       Write up to 1 MiB from a local file, or - for stdin
   -h --help    Help for input
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -591,8 +755,10 @@ USAGE
 
 FLAGS
 
+  --context    With --identity, the context ID or handle of the job
   -h --help    Help for kill
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -634,9 +800,11 @@ USAGE
 
 FLAGS
 
+  --context    With --identity, the context ID or handle of the job
   --cursor     Saved independent output cursor
   -h --help    Help for logs
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -657,8 +825,10 @@ USAGE
 
 FLAGS
 
+  --context      With --identity, the context ID or handle of the job
   -h --help      Help for request
   --host         Machine name or exact host ID, required
+  --identity     Act as this local application identity
   --json         Write one agent result, required
   --leave-key    Key that leaves all nested sessions, or none (ctrl+^)
   --privacy      Mask personal data for recording and screen sharing (MESH_PRIVACY)
@@ -677,8 +847,10 @@ USAGE
 
 FLAGS
 
+  --context    With --identity, the context ID or handle of the job
   -h --help    Help for rm
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -697,8 +869,10 @@ USAGE
 
 FLAGS
 
+  --context    With --identity, the context ID or handle of the job
   -h --help    Help for signal
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -718,8 +892,10 @@ USAGE
 
 FLAGS
 
+  --context    With --identity, the context ID or handle of the job
   -h --help    Help for wait
   --host       Online machine name or exact host ID, required
+  --identity   Act as this local application identity
   --instance   Exact instance from the creation receipt, required
   --json       Write one agent result, required
   --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
@@ -1830,9 +2006,75 @@ diagnostics and startup errors go to stderr.
 
 Usage:
   mesh mcp [flags]
+  mesh mcp [command]
+
+Available Commands:
+  identity    Manage per-agent application identities
 
 Flags:
   -h, --help   help for mcp
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh mcp [command] --help" for more information about a command.
+```
+
+## mesh mcp identity
+
+```text
+Manage per-agent application identities
+
+Usage:
+  mesh mcp identity [flags]
+  mesh mcp identity [command]
+
+Available Commands:
+  create      Create a private application credential for one agent frontend
+  ls          List local application identities without their secrets
+
+Flags:
+  -h, --help   help for identity
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh mcp identity [command] --help" for more information about a command.
+```
+
+## mesh mcp identity create
+
+```text
+Create a private application credential for one agent frontend
+
+Usage:
+  mesh mcp identity create NAME [flags]
+
+Flags:
+  -h, --help   help for create
+      --json   write one agent result
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp identity ls
+
+```text
+List local application identities without their secrets
+
+Usage:
+  mesh mcp identity ls [flags]
+
+Aliases:
+  ls, list
+
+Flags:
+  -h, --help   help for ls
+      --json   write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

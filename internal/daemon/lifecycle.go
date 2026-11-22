@@ -285,6 +285,9 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 	case protocol.TypeExecutionCreate, protocol.TypeExecutionRequest:
 		response, err := l.executionControl(ctx, request)
 		return response, true, err
+	case protocol.TypeContextOpen, protocol.TypeContextGet, protocol.TypeContextUpdate, protocol.TypeContextList, protocol.TypeContextClose, protocol.TypeContextReceipt:
+		response, err := l.contextControl(ctx, request)
+		return response, true, err
 	case protocol.TypeRecover, protocol.TypeRecoveryRead, protocol.TypeRecoveryCommand:
 		response, err := l.recoveryControl(ctx, request)
 		return response, true, err

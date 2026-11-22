@@ -27,6 +27,7 @@ type ListQuery struct {
 	Host         string
 	Class        string
 	Principal    string
+	Context      string
 	IncludeEnded bool
 	Limit        int
 	Cursor       string
@@ -44,6 +45,7 @@ type listCursorPayload struct {
 	Host       string    `json:"host"`
 	Class      string    `json:"class"`
 	Principal  string    `json:"principal"`
+	Context    string    `json:"context,omitempty"`
 	All        bool      `json:"all"`
 	AcceptedAt time.Time `json:"acceptedAt"`
 	SessionID  string    `json:"sessionId"`
@@ -68,7 +70,7 @@ func (j *Journal) ListPage(ctx context.Context, query ListQuery, encodeSize func
 	if err != nil {
 		return ListPageResult{}, err
 	}
-	snapshots, err := j.listSnapshots(ctx, query.Host, query.Class, query.Principal)
+	snapshots, err := j.listSnapshots(ctx, query.Host, query.Class, query.Principal, query.Context)
 	if err != nil {
 		return ListPageResult{}, err
 	}
@@ -91,7 +93,7 @@ func decodeListCursor(query ListQuery) (*listCursorPayload, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, ErrListCursorInvalid
 	}
-	if c.Host != query.Host || c.Class != query.Class || c.Principal != query.Principal || c.All != query.IncludeEnded || c.SessionID == "" {
+	if c.Host != query.Host || c.Class != query.Class || c.Principal != query.Principal || c.Context != query.Context || c.All != query.IncludeEnded || c.SessionID == "" {
 		return nil, ErrListCursorInvalid
 	}
 	return &c, nil
@@ -102,6 +104,7 @@ func encodeListCursor(query ListQuery, last Receipt) string {
 		Host:       query.Host,
 		Class:      query.Class,
 		Principal:  query.Principal,
+		Context:    query.Context,
 		All:        query.IncludeEnded,
 		AcceptedAt: last.AcceptedAt.UTC(),
 		SessionID:  last.Binding.Reservation.ID,
@@ -178,7 +181,7 @@ func receiptSize(rec Receipt, encodeSize func(Receipt) int) int {
 	return len(raw) + 2
 }
 
-func (j *Journal) listSnapshots(ctx context.Context, host, class, principal string) ([]Receipt, error) {
+func (j *Journal) listSnapshots(ctx context.Context, host, class, principal, contextID string) ([]Receipt, error) {
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return nil, err
@@ -190,7 +193,7 @@ func (j *Journal) listSnapshots(ctx context.Context, host, class, principal stri
 	}
 	snapshots := make([]Receipt, 0, len(entries))
 	for _, entry := range entries {
-		r, ok := j.readOwnedSnapshot(entry.Name(), host, class, principal)
+		r, ok := j.readOwnedSnapshot(entry.Name(), host, class, principal, contextID)
 		if ok {
 			snapshots = append(snapshots, r)
 		}
@@ -198,7 +201,7 @@ func (j *Journal) listSnapshots(ctx context.Context, host, class, principal stri
 	return snapshots, nil
 }
 
-func (j *Journal) readOwnedSnapshot(name, host, class, principal string) (Receipt, bool) {
+func (j *Journal) readOwnedSnapshot(name, host, class, principal, contextID string) (Receipt, bool) {
 	if len(name) != 69 || !strings.HasSuffix(name, requestJSONSuffix) {
 		return Receipt{}, false
 	}
@@ -207,6 +210,9 @@ func (j *Journal) readOwnedSnapshot(name, host, class, principal string) (Receip
 		return Receipt{}, false
 	}
 	if r.Key.Host != host || r.Key.Class != class || r.Key.Principal != principal {
+		return Receipt{}, false
+	}
+	if contextID != "" && r.Key.Context != contextID {
 		return Receipt{}, false
 	}
 	return r, true

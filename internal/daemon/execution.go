@@ -50,7 +50,7 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 	if err := validateRequestID(request); err != nil {
 		return protocol.Control{}, err
 	}
-	key, err := l.executionKey(ctx, request.RequestKey)
+	key, err := l.executionKeyFor(ctx, request)
 	if err != nil {
 		return protocol.Control{}, err
 	}
@@ -65,6 +65,9 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 		}
 		return executionResponse(request, r, err)
 	}
+	if key.Class == execution.ApplicationClass {
+		return l.contextExecutionCreate(ctx, request, journal, key)
+	}
 	return l.executionCreateControl(ctx, request, journal, key)
 }
 func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key) (protocol.Control, error) {
@@ -78,10 +81,18 @@ func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol
 	if err != nil {
 		return protocol.Control{}, &protocol.ExecutionValidationError{Err: err}
 	}
-	return l.createExecution(ctx, request, journal, key, intent)
+	return l.createExecution(ctx, request, journal, key, func() (execution.Receipt, bool, []string, execution.Intent, error) {
+		r, owner, env, err := l.reserveExecution(ctx, journal, key, intent)
+		return r, owner, env, intent, err
+	})
 }
-func (l *lifecycle) createExecution(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key, intent execution.Intent) (protocol.Control, error) {
-	r, owner, env, err := l.reserveExecution(ctx, journal, key, intent)
+
+// executionReservation reserves one keyed job. It returns the launch intent,
+// which a context job resolves only while holding the journal lock.
+type executionReservation func() (execution.Receipt, bool, []string, execution.Intent, error)
+
+func (l *lifecycle) createExecution(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key, reserve executionReservation) (protocol.Control, error) {
+	r, owner, env, intent, err := reserve()
 	if !owner && (err == nil || errors.Is(err, execution.ErrProgress) || errors.Is(err, execution.ErrUnknown)) {
 		r, err = l.lookupExecution(ctx, journal, key)
 	}
@@ -202,6 +213,10 @@ func executionWireReceipt(r execution.Receipt) *protocol.ExecutionReceipt {
 		created := r.AcceptedAt.UTC()
 		out.CreatedAt = &created
 	}
+	if r.Context != nil {
+		revision := r.Context.Revision
+		out.ContextID, out.ContextRevision = r.Context.ID, &revision
+	}
 	if r.Result != nil {
 		t := r.Result.Termination
 		out.Result = &protocol.ExecutionResult{Termination: protocol.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: wireExecutionStreams(r.Result.Streams)}
@@ -242,7 +257,7 @@ func (l *lifecycle) restoreExecution(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return executionBoundaryError("execution.go restoreExecution", journal.Maintain(ctx))
+	return executionBoundaryError("execution.go restoreExecution", errors.Join(journal.Maintain(ctx), journal.MaintainContexts(ctx)))
 }
 func (l *lifecycle) closeExecution() {
 	if l.executionOutput != nil {
@@ -334,6 +349,7 @@ func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, r
 	reply, _, err := s.lifecycle.HandleControl(ctx, request)
 	if err != nil {
 		reply = clientRequestError(request, err)
+		decorateApplicationError(&reply, request, err)
 	}
 	frame, err := encodeClientControl(reply)
 	if err != nil {

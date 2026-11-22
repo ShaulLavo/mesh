@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/appcaller"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	meshserve "github.com/shaul/mesh/internal/serve"
@@ -26,16 +27,19 @@ import (
 )
 
 func TestExecutionListFramedOwnershipGrantsAndFieldRejection(t *testing.T) {
-	// 1. Protocol decoder rejects caller, executionContext, and administration on execution.list.
+	// 1. Protocol decoder rejects administration and unknown fields on execution.list,
+	// while accepting caller and executionContext so application callers are isolated.
 	for _, field := range []string{
-		`"caller":"secret-cred"`,
-		`"executionContext":{"contextId":"0123456789abcdef0123456789abcdef"}`,
 		`"administration":true`,
+		`"command":["/bin/true"]`,
 	} {
 		raw := []byte(fmt.Sprintf(`{"type":"execution.list","requestId":"r1",%s}`, field))
 		if _, err := protocol.DecodeControl(raw); err == nil {
 			t.Fatalf("DecodeControl accepted unexpected field %s on execution.list", field)
 		}
+	}
+	if _, err := protocol.DecodeControl([]byte(`{"type":"execution.list","requestId":"r1","caller":"mac1_test","executionContext":{"contextId":"0123456789abcdef0123456789abcdef"}}`)); err != nil {
+		t.Fatalf("DecodeControl rejected caller/executionContext on execution.list: %v", err)
 	}
 
 	// 2. Framed daemon test: owner full device, non-owner full device, and UpdateCarrier grant.
@@ -211,5 +215,106 @@ func TestExecutionListFramedOwnershipGrantsAndFieldRejection(t *testing.T) {
 	if updErr == nil && updResp.Type == protocol.TypeExecutionListed {
 		raw, _ := json.Marshal(updResp)
 		t.Fatalf("UpdateCarrier grant should not receive execution.listed: %s", raw)
+	}
+
+	// 3. Application caller isolation: caller A sees only its own application receipts
+	// (and optional context filter), never device receipts or caller B's receipts.
+	credA, err := appcaller.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	credB, err := appcaller.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerScope := appcaller.Scope{Class: appcaller.ScopeDevice, Principal: ownerID}
+	idA, err := appcaller.Derive(ownerScope, credA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := appcaller.Derive(ownerScope, credB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openCtx := func(principal appcaller.ID, opaque string) string {
+		openKey := execution.Key{
+			Host:      hostIdent.ID,
+			Class:     execution.ApplicationClass,
+			Principal: string(principal),
+			Opaque:    opaque,
+			Operation: execution.OperationContextOpen,
+		}
+		c, _, err := journal.OpenContext(t.Context(), openKey, execution.Digest(opaque), func() (execution.ContextSpec, error) {
+			return execution.ContextSpec{Cwd: "/tmp", Shell: "sh", ShellPath: "/bin/sh"}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.ID
+	}
+	ctxA1 := openCtx(idA, "open-a-1")
+	ctxA2 := openCtx(idA, "open-a-2")
+	ctxB1 := openCtx(idB, "open-b-1")
+	seedAppReceipt := func(principal appcaller.ID, ctxID, id, key string, instNum int) {
+		k := execution.Key{
+			Host:      hostIdent.ID,
+			Class:     execution.ApplicationClass,
+			Principal: string(principal),
+			Opaque:    key,
+			Context:   ctxID,
+			Operation: execution.OperationExec,
+		}
+		ref := session.Reservation{ID: id, Instance: fmt.Sprintf("%032x", instNum), BootID: worker.BootID(), Purpose: execution.PurposeForKind(execution.KindPipe)}
+		resolve := func(c execution.Context) (execution.Intent, map[string]string, error) {
+			return execution.Intent{Kind: execution.KindPipe, Command: []string{"/bin/true"}, Cwd: c.Cwd, Stdin: execution.StdinClosed}, c.Env, nil
+		}
+		if _, _, err := journal.ReserveInContext(t.Context(), k, execution.Digest(key), resolve, func(s execution.LaunchSnapshot) (execution.Binding, error) {
+			return execution.NewBinding(k, s.Intent, ref, nil), nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedAppReceipt(idA, ctxA1, "4A3A", "app-a-1", 11)
+	seedAppReceipt(idA, ctxA2, "4A3B", "app-a-2", 12)
+	seedAppReceipt(idB, ctxB1, "4B3C", "app-b-1", 13)
+
+	// Device peer without caller still sees ONLY its 2 device receipts, never application receipts.
+	devResp, err := exchange(ownerKey, transport.FullAdmission, protocol.Control{
+		Type: protocol.TypeExecutionList, RequestID: "dev-no-app", ExecutionListAll: true,
+	})
+	if err != nil || devResp.Type != protocol.TypeExecutionListed || len(devResp.ExecutionReceipts) != 2 {
+		t.Fatalf("device peer leaked application receipts: resp=%+v err=%v", devResp, err)
+	}
+
+	// Application caller A sees its 2 receipts across both contexts, and with context filter only ctxA1.
+	appAResp, err := exchange(ownerKey, transport.FullAdmission, protocol.Control{
+		Type: protocol.TypeExecutionList, RequestID: "app-a-all", Caller: protocol.CallerCredential(credA.Encode()), ExecutionListAll: true,
+	})
+	if err != nil || appAResp.Type != protocol.TypeExecutionListed || len(appAResp.ExecutionReceipts) != 2 {
+		t.Fatalf("caller A all: resp=%+v err=%v", appAResp, err)
+	}
+	appACtxResp, err := exchange(ownerKey, transport.FullAdmission, protocol.Control{
+		Type: protocol.TypeExecutionList, RequestID: "app-a-ctx", Caller: protocol.CallerCredential(credA.Encode()),
+		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxA1}, ExecutionListAll: true,
+	})
+	if err != nil || appACtxResp.Type != protocol.TypeExecutionListed || len(appACtxResp.ExecutionReceipts) != 1 || appACtxResp.ExecutionReceipts[0].SessionID != "4A3A" {
+		t.Fatalf("caller A ctxA1: resp=%+v err=%v", appACtxResp, err)
+	}
+
+	// Application caller B sees ONLY its own receipt 4B3C.
+	appBResp, err := exchange(ownerKey, transport.FullAdmission, protocol.Control{
+		Type: protocol.TypeExecutionList, RequestID: "app-b-all", Caller: protocol.CallerCredential(credB.Encode()), ExecutionListAll: true,
+	})
+	if err != nil || appBResp.Type != protocol.TypeExecutionListed || len(appBResp.ExecutionReceipts) != 1 || appBResp.ExecutionReceipts[0].SessionID != "4B3C" {
+		t.Fatalf("caller B all: resp=%+v err=%v", appBResp, err)
+	}
+
+	// executionContext without Caller is rejected as usage.invalid.
+	noCallerCtx, err := exchange(ownerKey, transport.FullAdmission, protocol.Control{
+		Type: protocol.TypeExecutionList, RequestID: "no-caller-ctx",
+		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxA1}, ExecutionListAll: true,
+	})
+	if err != nil || noCallerCtx.Type != protocol.TypeError || noCallerCtx.ErrorCode != "usage.invalid" {
+		t.Fatalf("expected usage.invalid for executionContext without caller: resp=%+v err=%v", noCallerCtx, err)
 	}
 }

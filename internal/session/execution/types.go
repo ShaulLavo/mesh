@@ -27,11 +27,29 @@ type Key struct {
 	Class     string `json:"class"`
 	Principal string `json:"principal"`
 	Opaque    string `json:"opaque"`
+	// Context and Operation scope an application caller's key: the same
+	// caller key in two contexts, or for two operations, names two receipts.
+	Context   string `json:"context,omitempty"`
+	Operation string `json:"operation,omitempty"`
 }
 
+// ApplicationClass keys belong to one verified application caller. Their
+// Principal is the caller's application ID.
+const ApplicationClass = "application"
+
+// Operation scopes of application keys: a job created in a context, and a
+// context opened on the host.
+const (
+	OperationExec        = "execution.create"
+	OperationContextOpen = "context.open"
+)
+
 func (k Key) Validate() error {
-	if k.Host == "" || k.Principal == "" || (k.Class != "device" && k.Class != "local-account" && k.Class != InternalServiceClass) {
+	if k.Host == "" || k.Principal == "" || (k.Class != "device" && k.Class != "local-account" && k.Class != InternalServiceClass && k.Class != ApplicationClass) {
 		return fmt.Errorf("execution: missing trusted namespace")
+	}
+	if (k.Class == ApplicationClass) != (k.Operation != "") || (k.Operation == OperationExec) != (k.Context != "") {
+		return fmt.Errorf("execution: application keys need an operation, and jobs a context")
 	}
 	if len(k.Opaque) < 1 || len(k.Opaque) > 128 {
 		return fmt.Errorf("execution: request key must contain 1 to 128 ASCII bytes")
@@ -48,7 +66,18 @@ func digest(value any) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
-func (k Key) Hash() string { return digest([]string{k.Host, k.Class, k.Principal, k.Opaque}) }
+
+// Hash keeps the four-field form for existing namespaces, so receipts stored
+// before contexts existed stay addressable.
+func (k Key) Hash() string {
+	if k.Context == "" && k.Operation == "" {
+		return digest([]string{k.Host, k.Class, k.Principal, k.Opaque})
+	}
+	return digest([]string{k.Host, k.Class, k.Principal, k.Opaque, k.Context, k.Operation})
+}
+
+// Digest is the canonical SHA-256 of a JSON value, used for intents.
+func Digest(value any) string { return digest(value) }
 
 type Intent struct {
 	Kind    string   `json:"kind"`
@@ -232,6 +261,37 @@ type Receipt struct {
 	Anchor            *ClockAnchor `json:"anchor"`
 	Result            *Result      `json:"result"`
 	Removal           string       `json:"removal"`
+	// Context and LaunchIntentDigest are set for context jobs. IntentDigest
+	// then covers the caller-supplied request, which decides replays, and
+	// LaunchIntentDigest the intent resolved against the reserved revision.
+	Context            *ContextUse `json:"context,omitempty"`
+	LaunchIntentDigest string      `json:"launchIntentDigest,omitempty"`
+}
+
+// ContextUse names the context revision a job was reserved against.
+type ContextUse struct {
+	ID       string `json:"id"`
+	Revision uint64 `json:"revision"`
+}
+
+func (r Receipt) launchIntentDigest() string {
+	if r.LaunchIntentDigest != "" {
+		return r.LaunchIntentDigest
+	}
+	return r.IntentDigest
+}
+
+func (r Receipt) validateContext() error {
+	if r.Key.Operation != OperationExec {
+		if r.Context != nil || r.LaunchIntentDigest != "" {
+			return fmt.Errorf("execution: context evidence outside a context job")
+		}
+		return nil
+	}
+	if r.Context == nil || r.Context.ID != r.Key.Context || r.Context.Revision == 0 || !validDigest(r.LaunchIntentDigest) {
+		return fmt.Errorf("execution: damaged context job receipt")
+	}
+	return nil
 }
 
 func (r Receipt) validate() error {
@@ -239,6 +299,9 @@ func (r Receipt) validate() error {
 		return err
 	}
 	if err := r.Key.Validate(); err != nil {
+		return err
+	}
+	if err := r.validateContext(); err != nil {
 		return err
 	}
 	if (r.Binding.Mode() == KindLine) != (r.Key.Class == InternalServiceClass) {

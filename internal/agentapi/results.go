@@ -241,6 +241,8 @@ type ExecutionReceipt struct {
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`
 	Result             *ExecutionResult `json:"result"`
+	ContextID          string           `json:"contextId,omitempty"`
+	ContextRevision    *uint64          `json:"contextRevision,string,omitempty"`
 }
 
 // ScopeSubject identifies the authenticated key without legacy output-bearing records.
