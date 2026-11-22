@@ -180,7 +180,8 @@ func TestHTTPResponseValidation(t *testing.T) {
 		{"data: " + good + "\n\n", sseMedia, 200, true},
 		{"data: " + good + "\n\ndata: " + good + "\n\n", sseMedia, 200, false},
 		{"event: endpoint\ndata: /messages\n\n", sseMedia, 200, false},
-		{"id: legacy-session\ndata: " + good + "\n\n", sseMedia, 200, false},
+		{"id: legacy-session\nretry: 5\ndata: " + good + "\n\n", sseMedia, 200, true},
+		{"id: 1\nevent: endpoint\ndata: " + good + "\n\n", sseMedia, 200, false},
 		{"data: " + good + "\n", sseMedia, 200, false},
 	} {
 		got := checkHTTPResponse(m, tc.status, tc.media, tc.body)
@@ -188,11 +189,17 @@ func TestHTTPResponseValidation(t *testing.T) {
 			t.Errorf("status %d %s body %q: %v", tc.status, tc.media, tc.body, got)
 		}
 	}
-	legacy := testHTTPResponse(200, jsonMedia, good)
-	defer func() { _ = legacy.Body.Close() }()
-	legacy.Header.Set("Mcp-Session-ID", "legacy")
-	if _, err := OpenHTTPResponse(m, legacy); err == nil {
-		t.Error("accepted a legacy session response")
+	// Session and resume headers are inert on receipt: the reply is delivered as if they were absent.
+	inert := testHTTPResponse(200, jsonMedia, good)
+	defer func() { _ = inert.Body.Close() }()
+	inert.Header.Set("Mcp-Session-ID", "added-by-middleware")
+	inert.Header.Set("Last-Event-ID", "7")
+	reader, err := OpenHTTPResponse(m, inert)
+	if err != nil {
+		t.Fatalf("refused a reply that carries inert session metadata: %v", err)
+	}
+	if event, err := reader.Next(); err != nil || !event.Terminal {
+		t.Errorf("inert session metadata changed delivery: %v, %v", event, err)
 	}
 }
 

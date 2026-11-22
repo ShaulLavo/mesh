@@ -235,9 +235,9 @@ func OpenHTTPResponse(request Message, response *http.Response) (*HTTPResponse, 
 	if len(headerValues(response.Header, ProtocolHeader)) != 0 && !headerMatches(response.Header, ProtocolHeader, Version, false) {
 		return nil, peerError("HTTP response declared a different protocol version")
 	}
-	if len(headerValues(response.Header, "Mcp-Session-Id")) != 0 {
-		return nil, peerError("HTTP response attempted to establish a protocol session")
-	}
+	// Mcp-Session-Id and Last-Event-ID are inert on receipt (ADR 012): a
+	// modern endpoint behind middleware may add them, and nothing here reads
+	// or echoes them.
 	r := &HTTPResponse{request: request, response: response, exchange: NewExchange(request, HTTPReply)}
 	if request.kind == Notification && response.StatusCode == http.StatusAccepted {
 		return r, nil
