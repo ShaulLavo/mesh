@@ -150,6 +150,12 @@ func (p *pipeInput) enqueue(receipt session.InputReceipt, data []byte) {
 	}
 }
 
+func (p *pipeInput) nextOffset() uint64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.offset
+}
+
 func (p *pipeInput) admissionUncertain() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
