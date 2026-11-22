@@ -296,7 +296,7 @@ Inspect one Mesh serve route on a host without opening its URL or triggering on-
 
 ## mesh_service_publish
 
-Publish one private, tailnet-only route on a host, the same as mesh serve HOST TARGET. target is a port, a URL, or a directory on that host. With run, the host starts the command on the first connection through Mesh and stops it when idle (idle_ms, default 15 minutes), or keeps it running with keep_running. run on another machine needs an absolute cwd on that machine. Replacing a route keeps its private hostname and recipe lifetime unless given. The host previews the definition first and publishes exactly what it previewed.
+Publish one private, tailnet-only route on a host, the same as mesh serve HOST TARGET. target is a port on that host, or a directory on it to serve as files. With run, the host starts the command on the first connection through Mesh and stops it when idle (idle_ms, default 15 minutes), or keeps it running with keep_running. run on another machine needs an absolute cwd on that machine. Replacing a route keeps its private hostname and recipe lifetime unless given. The host previews the definition first and publishes exactly what it previewed.
 
 - Linked operation: `services.publish`
 - Hints: destructive, open-world
@@ -313,7 +313,7 @@ Publish one private, tailnet-only route on a host, the same as mesh serve HOST T
   - `ready_timeout_ms` (`integer`, optional): How long a starting run holds connections before failing them (default 60000).
   - `route` (`string`, optional): Route path such as /blog (default from target).
   - `run` (`string`, optional): Command that serves the port; needs a port target.
-  - `target` (`string`, required): Port, URL or directory on the host.
+  - `target` (`string`, required): Port on the host, or a directory on it to serve.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 30000).
 
 ## mesh_service_start

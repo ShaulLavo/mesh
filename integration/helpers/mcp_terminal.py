@@ -123,13 +123,34 @@ def exercise_terminal(fixture):
             for tool, args in (("mesh_terminal_screen", {"job": job}), ("mesh_terminal_resize", {"job": job, "cols": 80, "rows": 24}),
                                ("mesh_terminal_input", {"job": job, "write_key": "x", "offset": str(writer.offset), "data": "x"})):
                 require(error_code(other.call_tool(tool, args)) == "access.denied", f"{tool} reached another identity's job")
+            # The human-session tools do not reach it either.
+            inspect = other.call_tool("mesh_session_inspect", {"host": host_id, "session_id": session_id, "preview": True})
+            require(error_code(inspect) == "session.not_found", f"session inspect reached another identity's job: {inspect}")
+            listed = data(other.call_tool("mesh_sessions_list", {"host": host_id, "all": True}))
+            require(all(row.get("id") != session_id for row in listed.get("sessions", [])), f"session list shows a terminal job: {listed}")
             other.close_eof()
         finally:
             other.terminate()
 
-        writer.type("exit\r")
+        # Passive discovery mode (no identity) never acts with the account's
+        # authority: terminal and mutating tools refuse before any host.
+        passive = MCPClient(fixture.binary, fixture.environment)
+        try:
+            for tool, args in (("mesh_terminal_screen", {"job": job}), ("mesh_terminal_resize", {"job": job, "cols": 80, "rows": 24}),
+                               ("mesh_terminal_input", {"job": job, "write_key": "p", "offset": str(writer.offset), "data": "x"}),
+                               ("mesh_service_start", {"host": host_id, "name": "/m5"}),
+                               ("mesh_session_hibernate", {"host": host_id, "session_id": session_id})):
+                require(error_code(passive.call_tool(tool, args)) == "usage.invalid", f"{tool} ran without an identity")
+            passive.close_eof()
+        finally:
+            passive.terminate()
+
+        writer.type("printf 'LAST-%s\\n' screen; exit\r")
         waited = data(agent.call_tool("mesh_job_wait", {"job": job, "context": ctx, "wait_ms": 10000}))
         require(waited["state"] == "exited", f"terminal job did not exit: {waited}")
+        # The last screen stays readable after exit, marked as saved.
+        retained = data(agent.call_tool("mesh_terminal_screen", {"job": job, "context": ctx}))["screen"]
+        require(retained["source"] == "saved" and any("LAST-screen" in line for line in retained["lines"]), f"retained screen: {retained}")
         require(error_code(writer.call("late", "echo late\r")) in ("terminal.closed", "input.outcome_unknown"), "input to an exited terminal was accepted")
         rc, _ = agent.close_eof()
         require(rc == 0, f"mesh mcp exit = {rc}")
@@ -180,7 +201,7 @@ def free_port():
 
 def exercise_services(fixture):
     host_id = fixture.remote_id
-    agent = MCPClient(fixture.binary, fixture.environment)
+    agent = MCPClient(fixture.binary, fixture.environment, args=("--identity", "term"))
     try:
         port = free_port()
         site = fixture.root / "m5-site"
