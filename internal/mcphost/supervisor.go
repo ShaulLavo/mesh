@@ -99,6 +99,9 @@ type Config struct {
 	JobActive func(ctx context.Context, account, app, job string) bool
 	// HostDefaultCwd is used for definitions without a working directory.
 	HostDefaultCwd string
+	// SweepInterval is how often leases and retired grants are swept; zero
+	// means 30 seconds.
+	SweepInterval time.Duration
 }
 
 type Supervisor struct {

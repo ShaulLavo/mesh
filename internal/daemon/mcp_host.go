@@ -28,6 +28,9 @@ const (
 	mcpServicesKey   = "services"
 )
 
+// mcpSweepInterval is the supervisor's default; in-process tests shorten it.
+var mcpSweepInterval time.Duration
+
 // mcpController serves the hosted MCP controls of this host.
 type mcpController struct {
 	l        *lifecycle
@@ -41,7 +44,7 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 	if err != nil {
 		home = "/"
 	}
-	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home})
+	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: configure MCP hosting: %w", err)
 	}

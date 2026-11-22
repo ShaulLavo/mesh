@@ -447,7 +447,11 @@ func (s *Supervisor) leasedLocked(inst *instance) bool {
 }
 
 func (s *Supervisor) sweepLoop(ctx context.Context) {
-	ticker := time.NewTicker(sweepInterval)
+	interval := s.cfg.SweepInterval
+	if interval <= 0 {
+		interval = sweepInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
