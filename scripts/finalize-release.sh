@@ -32,7 +32,11 @@ if [[ $latest_tag != "$version" ]]; then
   }
   python3 "$(dirname -- "${BASH_SOURCE[0]}")/verify-worker-publication.py" "$version" "$source_sha" \
     "${MESH_INSTALLED_COMPLETION:?missing post-sign installed completion}" \
-    "${MESH_PUBLICATION_DRAFT:?missing actual signed snapshot}" "${GITHUB_RUN_ID:?missing writer run}"
+    "${MESH_PUBLICATION_DRAFT:?missing actual signed snapshot}" "${GITHUB_RUN_ID:?missing writer run}" \
+    --platform-plan "${MESH_PUBLICATION_PLAN:?missing signed publication plan}" \
+    --plan-sha256 "${MESH_PUBLICATION_PLAN_SHA256:?missing signed publication plan digest}" \
+    --harness "${MESH_PUBLICATION_HARNESS:?missing immutable publication harness}" \
+    --attempts "${MESH_PUBLICATION_ATTEMPTS:?missing platform producer attempts}"
   gh release edit "$version" --draft=false --latest
 fi
 

@@ -24,6 +24,9 @@ permissions:
   checks: read
   contents: read
 
+env:
+  MESH_PUBLICATION_HARNESS: 156d9c865adf9aaaab09b069c4f4f2e794fbc2e0
+
 jobs:
   reserve:
     name: Reserve source and version
@@ -174,6 +177,8 @@ jobs:
       signed-draft-artifact: ${{ steps.signed-draft.outputs.artifact-id }}
       publication-input-artifact: ${{ steps.publication-input.outputs.artifact-id }}
       publication-trust-artifact: ${{ steps.publication-trust.outputs.artifact-id }}
+      publication-plan-artifact: ${{ steps.publication-plan-upload.outputs.artifact-id }}
+      publication-plan-sha256: ${{ steps.publication-plan.outputs.plan_sha }}
     env:
       MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
       MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
@@ -314,6 +319,40 @@ jobs:
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
         run: python3 scripts/prepare-draft-intake.py documents "$RUNNER_TEMP/release-signed-draft" "$VERSION" "$SOURCE" --run "$GITHUB_RUN_ID" --destination "$RUNNER_TEMP/release-captured-logical"
+      - id: publication-plan
+        name: Derive exact three-platform signed draft verification plan
+        env:
+          VERSION: ${{ needs.reserve.outputs.version }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R "$RUNNER_TEMP/mesh-policy/documents" "$RUNNER_TEMP/plan-documents"
+          rm -rf -- "$RUNNER_TEMP/plan-documents/$VERSION"
+          cp -R "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/plan-documents/$VERSION"
+          mkdir -p "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/publication-plan"
+          for native in linux/amd64 linux/arm64 darwin/arm64; do
+            key=${native//\//-}
+            "$RUNNER_TEMP/release-source-tools/linux-amd64/mesh-release-routes" -operation packets \
+              -input "$RUNNER_TEMP/mesh-policy/input.json" \
+              -documents "$RUNNER_TEMP/plan-documents" \
+              -platform "$native" \
+              -output-dir "$RUNNER_TEMP/reader-packets/$key"
+          done
+          plan_sha=$(python3 scripts/publication-jobs.py reduced-plan \
+            "$RUNNER_TEMP/release-captured-logical" \
+            "$RUNNER_TEMP/release-signed-draft" \
+            "$MESH_PUBLICATION_HARNESS" \
+            "$RUNNER_TEMP/reader-packets" \
+            "$RUNNER_TEMP/publication-plan/plan.json")
+          printf 'plan_sha=%s\n' "$plan_sha" >> "$GITHUB_OUTPUT"
+      - id: publication-plan-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publication-plan-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-plan/plan.json
+          if-no-files-found: error
+          retention-days: 7
       - id: signed-draft
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -340,15 +379,20 @@ jobs:
           retention-days: 7
       - name: Remove signed draft intake staging
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/release-bundle" "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/release-captured-logical.logical-inventory.json" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/proof-shards" "$RUNNER_TEMP/metadata-page.json"
+        run: rm -rf -- "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/release-candidate" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/release-bundle" "$RUNNER_TEMP/release-captured-logical" "$RUNNER_TEMP/release-captured-logical.logical-inventory.json" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/proof-shards" "$RUNNER_TEMP/metadata-page.json" "$RUNNER_TEMP/plan-documents" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/publication-plan"
 
-  verify-readers:
-    name: Verify original permitted readers (${{ matrix.platform }})
-    needs: [reserve, publish]
-    if: needs.reserve.outputs.action == 'publish'
+  publication-native:
+    name: Installed signed draft and reader gate (${{ matrix.platform }})
+    needs: [reserve, prove-transition, publish]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
       actions: read
+    timeout-minutes: 75
+    outputs:
+      linux-amd64: ${{ matrix.platform == 'linux/amd64' && steps.handoff.outputs.pin || '' }}
+      linux-arm64: ${{ matrix.platform == 'linux/arm64' && steps.handoff.outputs.pin || '' }}
+      darwin-arm64: ${{ matrix.platform == 'darwin/arm64' && steps.handoff.outputs.pin || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -364,22 +408,18 @@ jobs:
             runner: macos-15
     runs-on: ${{ matrix.runner }}
     env:
-      MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
-      MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
-      MESH_RELEASE_TOOL_ROLE: source
+      GOTOOLCHAIN: local
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.reserve.outputs.source }}
-      - name: Configure explicit trusted tool paths
-        run: |
-          echo "MESH_RELEASE_TOOL=$RUNNER_TEMP/release-source-tools/mesh-release-sign" >> "$GITHUB_ENV"
-          echo "MESH_RELEASE_TRUST_CACHE=$RUNNER_TEMP/mesh-release-trust" >> "$GITHUB_ENV"
-      - name: Acquire the exact same-run SOURCE release tool
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}
-        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source ${{ matrix.key }} "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
+          ref: ${{ env.MESH_PUBLICATION_HARNESS }}
+          persist-credentials: false
+      - uses: ./.github/actions/installed-go
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.publish.outputs.publication-plan-artifact || '0' }}
+          path: ${{ runner.temp }}/publication-plan
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           artifact-ids: ${{ needs.publish.outputs.policy-artifact || '0' }}
@@ -401,56 +441,163 @@ jobs:
         with:
           artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}
           path: ${{ runner.temp }}/publication-draft-input/${{ needs.reserve.outputs.version }}
-      - name: Require the original source verifier to accept each automatic edge
+      - name: Acquire the exact same-run SOURCE release tool
         env:
           GH_TOKEN: ${{ github.token }}
+          KEY: ${{ matrix.key }}
+          MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
+          MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+          MESH_RELEASE_TOOL_ROLE: source
+          ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}
+        run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source "$KEY" "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
+      - name: Generate native SOURCE reader packets for the signed draft
+        env:
           VERSION: ${{ needs.reserve.outputs.version }}
           SOURCE: ${{ needs.reserve.outputs.source }}
           PLATFORM: ${{ matrix.platform }}
+          KEY: ${{ matrix.key }}
+          MESH_RELEASE_TOOL: ${{ runner.temp }}/release-source-tools/mesh-release-sign
+          MESH_RELEASE_TOOL_SOURCE: ${{ needs.reserve.outputs.source }}
+          MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+          MESH_RELEASE_TOOL_ROLE: source
           MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
         shell: bash
         run: |
           set -euo pipefail
           test "$(PYTHONPATH=scripts python3 -c 'from fixtures.release_tool import native_target; p=native_target(); print(p["os"]+"/"+p["arch"])')" = "$PLATFORM"
-          scratch=$(mktemp -d /tmp/ms-XXXXXX)
-          trap 'rm -rf -- "$scratch"' EXIT
-          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" PYTHONDONTWRITEBYTECODE=1
           root="$RUNNER_TEMP/mesh-policy"
           python3 scripts/publication-workflow.py draft "$VERSION" "$SOURCE" "$root/documents/$VERSION" --intake "$RUNNER_TEMP/publication-draft-input/$VERSION" --run "$GITHUB_RUN_ID"
-          "$RUNNER_TEMP/release-source-tools/mesh-release-routes" -operation packets -input "$root/input.json" -documents "$root/documents" -platform "$PLATFORM" -output-dir "$RUNNER_TEMP/reader-packets"
-          python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets" "$PLATFORM" "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$RUNNER_TEMP/reader-evidence"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          mkdir -p "$RUNNER_TEMP/reader-packets/$KEY"
+          "$RUNNER_TEMP/release-source-tools/mesh-release-routes" -operation packets \
+            -input "$root/input.json" \
+            -documents "$root/documents" \
+            -platform "$PLATFORM" \
+            -output-dir "$RUNNER_TEMP/reader-packets/$KEY"
+      - name: Build reviewed immutable harness verifier and native helper
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          MESH_HARNESS_SOURCE: ${{ env.MESH_PUBLICATION_HARNESS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$MESH_HARNESS_SOURCE"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/harness.noindex"
+          go build -trimpath -o "$RUNNER_TEMP/harness.noindex/mesh-release-sign" ./cmd/mesh-release-sign
+          go build -trimpath -o "$RUNNER_TEMP/harness.noindex/native-helper" ./scripts/fixtures/native-helper
+          go test -c -tags mesh_installed_fixture -o "$RUNNER_TEMP/harness.noindex/publication-reader" ./internal/update
+          PYTHONPATH=scripts python3 -m fixtures.release_tool record "$RUNNER_TEMP/harness.noindex" "$MESH_HARNESS_SOURCE" "$GITHUB_RUN_ID" harness "$PLATFORM"
+      - name: Determine actual published updater availability
+        id: baseline
+        run: |
+          value=$(python3 -c 'import json; print(str(json.load(open("scripts/fixtures/fleet-baselines.json"))["firstPublishedUpdater"] is not None).lower())')
+          printf 'needed=%s\n' "$value" >> "$GITHUB_OUTPUT"
+      - name: Require and acquire the exact pinned same-run native worker archive
+        if: steps.baseline.outputs.needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN: ${{ needs.prove-transition.outputs.worker_artifact_run }}
+          PRODUCER_SOURCE: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+          MESH_PREPARATION_SOURCE: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+          PRODUCER_PREFIX: update-native
+          ARTIFACT_KEY: ${{ matrix.key }}
+          PLATFORM: ${{ matrix.platform }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/publication-control"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py set \
+            "$GITHUB_REPOSITORY" "$PRODUCER_RUN" "$PRODUCER_SOURCE" "$PRODUCER_PREFIX" "$RUNNER_TEMP/publication-control/producer-pin.json"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_storage.py \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/publication-control/worker-storage.json"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py download \
+            "$GITHUB_REPOSITORY" "$RUNNER_TEMP/publication-control/producer-pin.json" "$ARTIFACT_KEY" \
+            "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/publication-control/worker-download.json"
+          PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 scripts/fixtures/installed_artifacts.py native \
+            "$RUNNER_TEMP/native-worker-input.noindex" "$PRODUCER_SOURCE" "$PLATFORM"
+          chmod +x "$RUNNER_TEMP/native-worker-input.noindex/tools/worker-probe"
+      - name: Exercise signed draft native cases, original permitted readers, and record evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.reserve.outputs.version }}
+          SOURCE: ${{ needs.reserve.outputs.source }}
+          PLATFORM: ${{ matrix.platform }}
+          KEY: ${{ matrix.key }}
+          HAS_BASELINE: ${{ steps.baseline.outputs.needed }}
+          PRODUCER_SOURCE: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+          MESH_PREPARATION_SOURCE: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          MESH_HARNESS_SOURCE: ${{ env.MESH_PUBLICATION_HARNESS }}
+          PUBLICATION_PLAN: ${{ runner.temp }}/publication-plan/plan.json
+          PLAN_SHA: ${{ needs.publish.outputs.publication-plan-sha256 }}
+          MESH_RELEASE_TOOL: ${{ runner.temp }}/harness.noindex/mesh-release-sign
+          MESH_RELEASE_TOOL_SOURCE: ${{ env.MESH_PUBLICATION_HARNESS }}
+          MESH_RELEASE_TOOL_RUN: ${{ github.run_id }}
+          MESH_RELEASE_TOOL_ROLE: harness
+          MESH_RELEASE_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
+          MESH_PUBLICATION_TRUST_CACHE: ${{ runner.temp }}/mesh-release-trust
+          MESH_PUBLICATION_DRAFT: ${{ runner.temp }}/publication-draft-input/${{ needs.reserve.outputs.version }}
+          MESH_PUBLICATION_RUN: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch"
+          output="$RUNNER_TEMP/publication-evidence"
+          plan=(--publication-platform-plan "$PUBLICATION_PLAN" --publication-plan-sha256 "$PLAN_SHA")
+          extra=()
+          if [[ $HAS_BASELINE == true ]]; then
+            extra=(--worker-registry "$RUNNER_TEMP/native-worker-input.noindex/retained/workers.json" --worker-probe "$RUNNER_TEMP/native-worker-input.noindex/tools/worker-probe")
+          fi
+          python3 scripts/prove-installed-catchup.py "$output" --native-preflight \
+            --native-helper "$RUNNER_TEMP/harness.noindex/native-helper" \
+            --publication-version "$VERSION" --publication-source "$SOURCE" \
+            "${extra[@]}" "${plan[@]}"
+          python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets/$KEY" "$PLATFORM" \
+            "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$output/readers" "${plan[@]}"
+          python3 scripts/publication-jobs.py record-platform "$output" "$PLATFORM" "$PUBLICATION_PLAN" "$PLAN_SHA"
+      - name: Remove publication staging inputs and confirm removal
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/publication-plan" "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" \
+            "$RUNNER_TEMP/publication-draft-input" "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/reader-packets" \
+            "$RUNNER_TEMP/harness.noindex" "$RUNNER_TEMP/native-worker-input.noindex" "$RUNNER_TEMP/publication-control"
+          for path in publication-plan mesh-policy mesh-release-trust publication-draft-input release-source-tools reader-packets harness.noindex native-worker-input.noindex publication-control; do
+            test ! -e "$RUNNER_TEMP/$path"
+          done
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: original-update-readers-${{ matrix.key }}
-          path: ${{ runner.temp }}/reader-evidence
+          name: publication-platform-${{ matrix.key }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/publication-evidence
           retention-days: 7
-      - name: Remove original reader staging
+      - id: handoff
+        name: Hand off only successful native evidence
+        env:
+          ARTIFACT: ${{ steps.upload.outputs.artifact-id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/publication-evidence/publication-platform.json"
+          test -n "$ARTIFACT"
+          printf 'pin=%s:%s\n' "$ARTIFACT" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Remove uploaded native evidence
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/mesh-policy" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/reader-packets" "$RUNNER_TEMP/reader-evidence" "$RUNNER_TEMP/publication-draft-input" "$RUNNER_TEMP/release-source-tools"
-
-  publication-native:
-    name: Installed signed draft gate
-    needs: [reserve, prove-transition, publish]
-    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      actions: read
-    uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@9f30ad52593969dd9a6c49133885750fdb7f893a
-    with:
-      harness_source: 9f30ad52593969dd9a6c49133885750fdb7f893a
-      publication_only: true
-      release_version: ${{ needs.reserve.outputs.version }}
-      release_source: ${{ needs.reserve.outputs.source }}
-      release_run: ${{ fromJSON(github.run_id) }}
-      worker_artifact_prefix: update-native
-      worker_artifact_run: ${{ fromJSON(needs.prove-transition.outputs.worker_artifact_run) }}
-      worker_artifact_source: ${{ needs.prove-transition.outputs.worker_artifact_source }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf -- "$RUNNER_TEMP/publication-evidence"
+          test ! -e "$RUNNER_TEMP/publication-evidence"
 
   finalize:
     name: Publish verified release
-    needs: [reserve, publish, verify-readers, publication-native]
-    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main' && needs.verify-readers.result == 'success' && needs.publication-native.result == 'success'
+    needs: [reserve, publish, publication-native]
+    if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main' && needs.publication-native.result == 'success'
     permissions:
       actions: write
       statuses: write
@@ -477,6 +624,10 @@ jobs:
         run: PYTHONPATH="$GITHUB_WORKSPACE/scripts" python3 -m fixtures.release_tool download "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$MESH_RELEASE_TOOL_SOURCE" source linux-amd64 "$RUNNER_TEMP/release-source-tools" "$ARTIFACT"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
+          artifact-ids: ${{ needs.publish.outputs.publication-plan-artifact || '0' }}
+          path: ${{ runner.temp }}/publication-plan
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
           artifact-ids: ${{ needs.publish.outputs.publication-trust-artifact || '0' }}
           path: ${{ runner.temp }}/mesh-release-trust
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -490,10 +641,19 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/final-cask"
           gh release download "$VERSION" --pattern mesh.rb --dir "$RUNNER_TEMP/final-cask"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: installed-publication-*
-          path: ${{ runner.temp }}/installed-completion
+      - id: platform-evidence
+        name: Acquire exact same-run three-platform publication evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+          EVIDENCE_HANDOFF: ${{ format('{{"linux/amd64":"{0}","linux/arm64":"{1}","darwin/arm64":"{2}"}}', needs.publication-native.outputs.linux-amd64, needs.publication-native.outputs.linux-arm64, needs.publication-native.outputs.darwin-arm64) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          attempts=$(python3 scripts/publication-workflow.py fetch-platforms \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            "$EVIDENCE_HANDOFF" "$RUNNER_TEMP/installed-completion")
+          printf 'attempts=%s\n' "$attempts" >> "$GITHUB_OUTPUT"
       - name: Upload and publish after ancestry recheck
         env:
           GH_TOKEN: ${{ github.token }}
@@ -502,8 +662,11 @@ jobs:
           PREVIOUS_TAG: ${{ needs.reserve.outputs.previous_tag }}
           MESH_PUBLICATION_DRAFT: ${{ runner.temp }}/release-signed-draft
           MESH_INSTALLED_COMPLETION: ${{ runner.temp }}/installed-completion
+          MESH_PUBLICATION_PLAN: ${{ runner.temp }}/publication-plan/plan.json
+          MESH_PUBLICATION_PLAN_SHA256: ${{ needs.publish.outputs.publication-plan-sha256 }}
+          MESH_PUBLICATION_ATTEMPTS: ${{ steps.platform-evidence.outputs.attempts }}
         run: |
           scripts/finalize-release.sh "$VERSION" "$SOURCE" "$PREVIOUS_TAG" "$RUNNER_TEMP/final-cask/mesh.rb"
       - name: Remove finalization snapshot and tools
         if: always()
-        run: rm -rf -- "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/release-signed-draft"
+        run: rm -rf -- "$RUNNER_TEMP/release-source-tools" "$RUNNER_TEMP/mesh-release-trust" "$RUNNER_TEMP/release-signed-draft" "$RUNNER_TEMP/publication-plan" "$RUNNER_TEMP/installed-completion" "$RUNNER_TEMP/final-cask"

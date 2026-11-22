@@ -113,8 +113,7 @@ class QualificationTests(unittest.TestCase):
             self.assertNotIn(forbidden, replay)
         release = (workflows / "release.yml").read_text()
         final = release.split("\n  finalize:\n")[1]
-        self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", final)
-        self.assertIn("needs.verify-readers.result == 'success'", final)
+        self.assertIn("needs: [reserve, publish, publication-native]", final)
         self.assertIn("needs.publication-native.result == 'success'", final)
         self.assertNotIn("qualify-publication", release)
 
