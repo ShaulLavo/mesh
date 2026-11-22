@@ -50,7 +50,8 @@ mesh session request --host HOST_ID --identity codex --context CONTEXT_ID \
   --request-key build-1 --json
 ```
 
-Context jobs are pipe jobs. `--cwd` is optional and relative paths resolve
+Context jobs are pipe jobs (`--kind pipe`) or terminal jobs (`--kind pty`,
+with `--cols`, `--rows` and `--term`). `--cwd` is optional and relative paths resolve
 against the context's directory. The host reserves the job against the
 context's current revision, and the receipt records that revision. A later
 edit or closure never changes the job or its replay. A child's `cd` or
@@ -59,6 +60,25 @@ edit or closure never changes the job or its replay. A child's `cd` or
 Pass `--identity` and `--context` to `wait`, `logs`, `input`, `signal`, `kill`
 and `rm` as well. Another identity gets `access.denied`, even with the exact
 session ID and instance.
+
+## Terminal jobs
+
+```bash
+mesh session input SESSION_ID --host HOST_ID --identity codex --context CONTEXT_ID \
+  --instance INSTANCE --write-key k1 --offset 0 --text $'ls\r' --json
+mesh session screen SESSION_ID --host HOST_ID --identity codex --context CONTEXT_ID \
+  --instance INSTANCE --json
+mesh session resize SESSION_ID --host HOST_ID --identity codex --context CONTEXT_ID \
+  --instance INSTANCE --cols 120 --rows 40 --json
+```
+
+A terminal job takes keyed input with the same acknowledgment as pipe stdin,
+without an end of file. A person can attach with `mesh attach` on the job's
+host at any time and takes the terminal. While they are attached, input and
+resize return `terminal.attached` and change nothing; `screen` reads the
+rendered screen without resizing it and reports `attached`. Keyed jobs owned
+by an application are private: scoped `session-output` credentials and
+`mesh recover` never reach them.
 
 ## Change and close
 

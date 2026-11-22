@@ -121,6 +121,11 @@ func (c *mcpControls) UnpublishService(ctx context.Context, req mcpnative.Servic
 		if err != nil {
 			return nil, agentapi.Usage(operation, err.Error())
 		}
+		// Like mesh unserve, a route the host does not serve is an error,
+		// not a silent success.
+		if _, found, err := existingServiceVia(ctx, host, exchange, name); err != nil || !found {
+			return nil, errors.Join(err, routeNotFound(operation, host, req.Name, found))
+		}
 		if err := deleteServiceVia(ctx, host, exchange, name); err != nil {
 			return nil, err
 		}
@@ -148,6 +153,13 @@ func (c *mcpControls) PublishService(ctx context.Context, req mcpnative.PublishS
 		}
 		return c.serviceChange(host, publication.PrivateName, publication.Service, publication.Warning), nil
 	})
+}
+
+func routeNotFound(operation string, host HostRecord, route string, found bool) error {
+	if found {
+		return nil
+	}
+	return agentapi.Fail(agentapi.ServiceNotFound, operation, host.ID, fmt.Sprintf("route %s is not served by %s", safeRemoteText(route), HostLabel(host)))
 }
 
 func existingServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, name string) (protocol.ServiceInfo, bool, error) {
@@ -261,7 +273,12 @@ func (c *mcpControls) RecoverSession(ctx context.Context, req mcpnative.SessionL
 		if err != nil {
 			return nil, err
 		}
-		if result.Remote != nil || result.SessionID == "" {
+		// A live session is not recovered; mesh recover would attach to it,
+		// and an agent never takes a session it did not create.
+		if result.Existing {
+			return nil, agentapi.Fail(agentapi.UsageInvalid, operation, host.ID, fmt.Sprintf("session %s is %s; only an interrupted session can be recovered", req.SessionID, safeRemoteText(result.State)))
+		}
+		if result.Remote != nil || result.SessionID == "" || result.RecoveredFrom != req.SessionID {
 			return nil, fmt.Errorf("host %s returned no local replacement session", HostLabel(host))
 		}
 		return agentapi.SessionRecovery{HostID: host.ID, SessionID: result.SessionID, RecoveredFrom: result.RecoveredFrom, Action: req.Action, AgentStatus: result.AgentStatus}, nil
