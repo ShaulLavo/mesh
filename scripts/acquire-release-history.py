@@ -30,17 +30,36 @@ LIMITS["mesh-worker-groups.json"] = 1 << 20
 # objects are small, so asset pages stay at the API maximum.
 RELEASE_PAGE_SIZE = 30
 ASSET_PAGE_SIZE = 100
+LISTING_READS = 5
 SERVER_ERROR_RETRIES = (2, 5, 10)
 SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
 
 
 def api(endpoint, page_size):
-    items, page = [], 1
+    """List every item. The API pages by offset, so deleting an item between two
+    page reads moves later items into a page that was already read and one of
+    them is never returned (a published item is also read twice). A listing that
+    took more than one request is therefore read again until two consecutive
+    reads name the same items."""
+    items, paged = read_listing(endpoint, page_size)
+    if not paged:
+        return items
+    for _ in range(LISTING_READS - 1):
+        again, _ = read_listing(endpoint, page_size)
+        if [item["id"] for item in again] == [item["id"] for item in items]:
+            return again
+        items = again
+    raise RuntimeError(f"release API listing did not hold still across {LISTING_READS} reads: {endpoint}")
+
+
+def read_listing(endpoint, page_size):
+    items, seen, page = [], set(), 1
     while True:
         batch = api_page(f"{endpoint}?per_page={page_size}&page={page}")
-        items.extend(batch)
+        items.extend(item for item in batch if item["id"] not in seen)
+        seen.update(item["id"] for item in batch)
         if len(batch) < page_size:
-            return items
+            return items, page > 1
         page += 1
 
 
