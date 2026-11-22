@@ -278,7 +278,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 		_ = upstream.Close()
 		return nil, err
 	}
-	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: info}, nil
+	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info)}, nil
 }
 
 // failStart classifies an early exit, such as a missing runtime, by the
@@ -392,7 +392,7 @@ func probeResult(reply mcpwire.Message, err error) (json.RawMessage, error) {
 	if reply.ErrorObject() != nil {
 		return nil, failure(codeIncompatible, false, "server refused server/discover; it does not speak MCP %s", mcpwire.Version)
 	}
-	return member(reply.Result(), metaKey, mcpwire.ServerInfoKey), nil
+	return reply.Result(), nil
 }
 
 // watch notices a generation whose pipe faulted or whose process ended.

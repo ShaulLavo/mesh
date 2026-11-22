@@ -41,7 +41,7 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 		held = false
 		inner := emit
 		emit = func(raw []byte, terminal bool) error {
-			if !held && !terminal {
+			if !held && !terminal && backsFilter(raw) {
 				s.hold(inst, gen)
 				held = true
 			}
@@ -100,6 +100,25 @@ func (s *Supervisor) admit(gen *generation, listen bool) (func(), error) {
 		defer s.mu.Unlock()
 		*counter--
 	}, nil
+}
+
+// backsFilter reports whether a listen acknowledgment accepted at least one
+// filter. An empty acknowledgment watches nothing and must not hold the
+// instance; only the acknowledgment can start a hold.
+func backsFilter(raw []byte) bool {
+	if string(member(raw, "method")) != `"notifications/subscriptions/acknowledged"` {
+		return false
+	}
+	filters, err := decodeMembers(member(raw, paramsKey, "notifications"))
+	if err != nil {
+		return false
+	}
+	for name, value := range filters {
+		if string(value) == "true" || (name == "resourceSubscriptions" && string(value) != "[]" && string(value) != "null") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Supervisor) hold(inst *instance, gen *generation) {

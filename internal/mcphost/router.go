@@ -191,6 +191,13 @@ func (r *Router) restoreResponse(route Route, request, m mcpwire.Message) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("restore caller request ID: %w", err)
 	}
+	// Hosted routes cannot carry task handles, so discovery never offers them.
+	tasks := []string{resultKey, "capabilities", "extensions", tasksExtension}
+	if request.Method() == mcpwire.MethodDiscover && member(raw, tasks...) != nil {
+		if raw, err = setMember(raw, tasks, nil); err != nil {
+			return nil, err
+		}
+	}
 	return r.continuations.capture(route, request, raw)
 }
 

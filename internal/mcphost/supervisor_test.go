@@ -438,6 +438,7 @@ func TestDefinitionPolicy(t *testing.T) {
 	cases := map[string]Definition{
 		"per-user OAuth":            {Name: "a", Argv: []string{"x"}, AccountMode: AccountPerUser},
 		"credential without mode":   {Name: "a", Argv: []string{"x"}, SecretEnv: map[string]string{"T": "/s"}},
+		"empty plain and secret":    {Name: "a", Argv: []string{"x"}, Env: map[string]string{"T": ""}, SecretEnv: map[string]string{"T": "/s"}, AccountMode: AccountHostAccount, AccountLabel: "x"},
 		"host account without name": {Name: "a", Argv: []string{"x"}, AccountMode: AccountHostAccount},
 		"remote URL":                {Name: "a", URL: "http://10.0.0.1/mcp", InstancePolicy: PolicyShared},
 		"managed HTTP isolated":     {Name: "a", URL: "http://127.0.0.1:1/mcp", RunArgv: []string{"x"}},

@@ -107,7 +107,7 @@ func (c *continuations) resolve(route Route, request mcpwire.Message) (*upstream
 }
 
 func (b continuationBinding) matches(other continuationBinding) bool {
-	same := b.caller == other.caller && b.grant == other.grant && b.service == other.service &&
+	same := subtle.ConstantTimeCompare([]byte(b.caller), []byte(other.caller)) == 1 && b.grant == other.grant && b.service == other.service &&
 		b.revision == other.revision && b.account == other.account && b.instance == other.instance &&
 		b.generation == other.generation && b.method == other.method
 	return same && subtle.ConstantTimeCompare(b.digest[:], other.digest[:]) == 1

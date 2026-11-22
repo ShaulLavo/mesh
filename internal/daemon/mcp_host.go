@@ -244,6 +244,10 @@ func mcpResult(value any, err error) (json.RawMessage, error) {
 // notifications, then one mcp.result. The client closing its side cancels
 // the exact upstream request.
 func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame protocol.Frame) error {
+	// A connection whose grant lapsed gets no reply at all, not even a fault.
+	if err := workerExecutionAdmission(ctx); err != nil {
+		return err
+	}
 	route, request, err := mcpframe.DecodeForward(frame)
 	if err != nil {
 		return writeMCPFault(conn, request, err)

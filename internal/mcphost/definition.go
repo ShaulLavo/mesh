@@ -261,7 +261,7 @@ func validEnvironment(d Definition) error {
 		size += len(name) + len(value) + 1
 	}
 	for name, path := range d.SecretEnv {
-		if !envName.MatchString(name) || d.Env[name] != "" {
+		if _, plain := d.Env[name]; !envName.MatchString(name) || plain {
 			return invalid("secret variable %q is invalid or also set in plain form", name)
 		}
 		size += len(name) + len(path) + 1

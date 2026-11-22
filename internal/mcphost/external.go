@@ -35,11 +35,14 @@ func (s *Supervisor) connectExternal(ctx context.Context, inst *instance, d Defi
 		return nil, s.settle(ctx, inst, StateFailed, "connect to "+d.URL+": "+err.Error(), nil)
 	}
 	gen.upstream = upstream
-	if gen.serverInfo, err = s.probe(ctx, upstream, d.ReadyTimeout); err != nil {
+	discovered, err := s.probe(ctx, upstream, d.ReadyTimeout)
+	if err != nil {
 		_ = upstream.Close()
 		return nil, s.failExternal(ctx, inst, err)
 	}
-	if err := s.refreshTools(ctx, gen); err != nil {
+	gen.serverInfo = serverInfoOf(discovered)
+	// Only a server that advertises tools has schemas to mirror headers from.
+	if err := s.refreshToolsIfAdvertised(ctx, gen, discovered); err != nil {
 		_ = upstream.Close()
 		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
 	}
@@ -70,6 +73,17 @@ func secretHeaders(d Definition) (http.Header, error) {
 		headers.Set(name, value)
 	}
 	return headers, nil
+}
+
+func serverInfoOf(discovered json.RawMessage) json.RawMessage {
+	return member(discovered, metaKey, mcpwire.ServerInfoKey)
+}
+
+func (s *Supervisor) refreshToolsIfAdvertised(ctx context.Context, gen *generation, discovered json.RawMessage) error {
+	if member(discovered, "capabilities", "tools") == nil {
+		return nil
+	}
+	return s.refreshTools(ctx, gen)
 }
 
 func (g *generation) toolHeaders(tool string) (mcpwire.ParameterHeaders, bool) {
