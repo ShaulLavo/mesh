@@ -139,7 +139,11 @@ type Worker struct {
 	nesting     map[net.Conn]protocol.SessionIdentity
 	nestReaders sync.WaitGroup
 	input       *inputRelay
-	finished    bool
+	// agentInput holds keyed acknowledgments of input written by an agent
+	// while no person was attached, and attempt makes them durable.
+	agentInput *terminalInput
+	attempt    *execution.Attempt
+	finished   bool
 	// hibernating keeps the agent recipe active through the stop, and turns
 	// away attachments that would otherwise land on a session mid-shutdown.
 	hibernating bool
@@ -236,6 +240,34 @@ func (r *inputRelay) enqueue(owner *attachment, payload []byte) bool {
 	}
 }
 
+// reserve takes queue room for one write of size bytes, or reports that the
+// relay is closed or full. A reservation is committed or cancelled exactly
+// once, so an acknowledgment is published only for bytes that have a place
+// in the queue.
+func (r *inputRelay) reserve(size int) bool {
+	r.queueMu.Lock()
+	defer r.queueMu.Unlock()
+	if r.closed || r.queuedFrames >= inputQueueFrameLimit || size > inputQueueByteLimit-r.queuedBytes {
+		return false
+	}
+	r.queuedFrames++
+	r.queuedBytes += size
+	return true
+}
+
+// commitReserved queues a reserved write. Reserved frames never exceed the
+// queue's capacity, so the send cannot block.
+func (r *inputRelay) commitReserved(owner *attachment, payload []byte) {
+	r.queue <- inputFrame{owner: owner, payload: bytes.Clone(payload)}
+}
+
+func (r *inputRelay) cancelReserved(size int) {
+	r.queueMu.Lock()
+	r.queuedFrames--
+	r.queuedBytes -= size
+	r.queueMu.Unlock()
+}
+
 func (r *inputRelay) release(frame inputFrame) {
 	r.queueMu.Lock()
 	r.queuedFrames--
@@ -248,16 +280,7 @@ func (r *inputRelay) writeLoop() {
 	for {
 		select {
 		case frame := <-r.queue:
-			if !r.worker.ownsAttachment(frame.owner) {
-				r.release(frame)
-				continue
-			}
-			_, err := r.worker.pty.Write(frame.payload)
-			r.release(frame)
-			if err != nil {
-				r.worker.mu.Lock()
-				r.worker.dropLocked(frame.owner, "")
-				r.worker.mu.Unlock()
+			if !r.deliver(frame) {
 				r.stop()
 				return
 			}
@@ -265,6 +288,27 @@ func (r *inputRelay) writeLoop() {
 			return
 		}
 	}
+}
+
+// deliver writes one frame to the PTY and reports whether the relay can go
+// on. A frame without an owner is acknowledged agent input: it was admitted
+// before anyone attached, so it is written regardless.
+func (r *inputRelay) deliver(frame inputFrame) bool {
+	if frame.owner != nil && !r.worker.ownsAttachment(frame.owner) {
+		r.release(frame)
+		return true
+	}
+	_, err := r.worker.pty.Write(frame.payload)
+	r.release(frame)
+	if err == nil {
+		return true
+	}
+	if frame.owner != nil {
+		r.worker.mu.Lock()
+		r.worker.dropLocked(frame.owner, "")
+		r.worker.mu.Unlock()
+	}
+	return false
 }
 
 func (r *inputRelay) stop() {
@@ -503,6 +547,11 @@ func Run(cfg Config) (int, error) {
 		if err := childExitSupported(); err != nil {
 			return 0, err
 		}
+		// Keyed terminal input records its acknowledgments here. Prepare it
+		// before the child starts, so a failure is an honest unstarted result.
+		if err := attempt.PrepareInput(); err != nil {
+			return 0, fmt.Errorf("worker: prepare terminal input: %w", err)
+		}
 		capture, err = execution.OpenCapture(filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution, execution.KindPTY)
 		if err != nil {
 			return 0, fmt.Errorf("worker: initialize capture: %w", err)
@@ -552,6 +601,7 @@ func Run(cfg Config) (int, error) {
 		exited:         make(chan struct{}),
 		pumpDone:       make(chan struct{}),
 		attached:       make(chan struct{}),
+		attempt:        attempt,
 	}
 
 	meta := Meta{

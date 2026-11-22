@@ -18,6 +18,18 @@ var (
 	ErrInputClosed   = errors.New("stdin is closed")
 	ErrInputFull     = errors.New("stdin buffer is full")
 	ErrInputLimit    = errors.New("stdin receipt limit reached")
+	// ErrTerminalAttached refuses agent input and resizes while a person is
+	// attached to the terminal job. The person owns the terminal until they
+	// detach.
+	ErrTerminalAttached = errors.New("a person is attached to this terminal; wait until they detach")
+	// ErrTerminalClosed reports a terminal job whose process has ended.
+	ErrTerminalClosed = errors.New("terminal job has ended")
+)
+
+// Error codes shared by the worker, the daemon and both frontends.
+const (
+	CodeTerminalAttached = "terminal.attached"
+	CodeTerminalClosed   = "terminal.closed"
 )
 
 type inputEvidence struct {
@@ -100,6 +112,10 @@ func InputErrorCode(err error) string {
 		return "input.backpressure"
 	case errors.Is(err, ErrInputLimit):
 		return "resource.limit"
+	case errors.Is(err, ErrTerminalAttached):
+		return CodeTerminalAttached
+	case errors.Is(err, ErrTerminalClosed):
+		return CodeTerminalClosed
 	default:
 		return ""
 	}

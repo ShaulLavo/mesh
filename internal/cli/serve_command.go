@@ -138,51 +138,14 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	if err != nil {
 		return err
 	}
-	demand, err := serveDemandFromFlags(target, flags, isThisHost(host))
+	existing := func(ctx context.Context, name string) (protocol.ServiceInfo, bool, error) {
+		return a.existingService(ctx, host, name)
+	}
+	requested, err := serviceRequestFromFlags(cmd.Context(), host, target, flags, existing)
 	if err != nil {
 		return err
 	}
-	flags.privateHost = strings.ToLower(flags.privateHost)
-	if flags.privateHost != "" && domainpolicy.Primary() == "" {
-		return errors.New("--private-host requires a deployment domain in domains.json")
-	}
-	if flags.privateHost != "" && !strings.Contains(flags.privateHost, ".") {
-		flags.privateHost += "." + domainpolicy.Primary()
-	}
-	if flags.privateHost != "" && flags.route == "" {
-		label, _, _ := domainpolicy.Label(flags.privateHost, false)
-		flags.route = "/" + label
-	}
-	name, localOnly, err := serveRouteName(flags.route, target, demand.listens)
-	if err != nil {
-		return err
-	}
-
-	if flags.files && numericCLIServiceTarget(target) {
-		return errors.New("--files cannot be combined with a numeric proxy target")
-	}
-	kind := ""
-	if flags.files {
-		kind = string(meshserve.Files)
-	}
-	requested := protocol.ServiceInfo{
-		DisplayName: flags.displayName,
-		Name:        name, Kind: kind, Target: target, PrivateHost: flags.privateHost,
-		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
-	}
-	if err := a.inheritExisting(cmd.Context(), host, name, flags, &requested); err != nil {
-		return err
-	}
-	previewCtx, cancelPreview := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
-	preview, privateName, err := previewRemoteService(previewCtx, host, a.dependencies.DialControl, requested)
-	cancelPreview()
-	if err != nil {
-		return err
-	}
-
-	mutationCtx, cancelMutation := context.WithTimeout(cmd.Context(), serviceMutationTimeout)
-	publication, err := upsertRemoteService(mutationCtx, host, a.dependencies.DialControl, requested, preview, privateName)
-	cancelMutation()
+	publication, err := publishServiceVia(cmd.Context(), host, dialServiceExchange(host, a.dependencies.DialControl), requested)
 	if err != nil {
 		return err
 	}
@@ -201,17 +164,75 @@ func (a *application) runServe(cmd *cobra.Command, hostID, target string, flags 
 	return writeServeLifetime(cmd.OutOrStdout(), a.privacy, persisted.Run)
 }
 
+// existingServiceLookup reads one route as its host has it now.
+type existingServiceLookup func(ctx context.Context, name string) (protocol.ServiceInfo, bool, error)
+
+// serviceRequestFromFlags builds the definition of one route from serve
+// options. The CLI and mesh mcp both use it, so a route means the same thing
+// from either.
+func serviceRequestFromFlags(ctx context.Context, host HostRecord, target string, flags serveFlags, existing existingServiceLookup) (protocol.ServiceInfo, error) {
+	demand, err := serveDemandFromFlags(target, flags, isThisHost(host))
+	if err != nil {
+		return protocol.ServiceInfo{}, err
+	}
+	flags.privateHost = strings.ToLower(flags.privateHost)
+	if flags.privateHost != "" && domainpolicy.Primary() == "" {
+		return protocol.ServiceInfo{}, errors.New("--private-host requires a deployment domain in domains.json")
+	}
+	if flags.privateHost != "" && !strings.Contains(flags.privateHost, ".") {
+		flags.privateHost += "." + domainpolicy.Primary()
+	}
+	if flags.privateHost != "" && flags.route == "" {
+		label, _, _ := domainpolicy.Label(flags.privateHost, false)
+		flags.route = "/" + label
+	}
+	name, localOnly, err := serveRouteName(flags.route, target, demand.listens)
+	if err != nil {
+		return protocol.ServiceInfo{}, err
+	}
+	if flags.files && numericCLIServiceTarget(target) {
+		return protocol.ServiceInfo{}, errors.New("--files cannot be combined with a numeric proxy target")
+	}
+	kind := ""
+	if flags.files {
+		kind = string(meshserve.Files)
+	}
+	requested := protocol.ServiceInfo{
+		DisplayName: flags.displayName,
+		Name:        name, Kind: kind, Target: target, PrivateHost: flags.privateHost,
+		Isolate: flags.isolate, Listens: demand.listens, Run: demand.run, LocalOnly: localOnly,
+	}
+	if err := inheritExisting(ctx, name, flags, &requested, existing); err != nil {
+		return protocol.ServiceInfo{}, err
+	}
+	return requested, nil
+}
+
+// publishServiceVia previews a route on its host and then publishes exactly
+// the previewed definition.
+func publishServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, requested protocol.ServiceInfo) (remoteServicePublication, error) {
+	previewCtx, cancelPreview := context.WithTimeout(ctx, serviceMutationTimeout)
+	preview, privateName, err := previewServiceVia(previewCtx, host, exchange, requested)
+	cancelPreview()
+	if err != nil {
+		return remoteServicePublication{}, err
+	}
+	mutationCtx, cancelMutation := context.WithTimeout(ctx, serviceMutationTimeout)
+	defer cancelMutation()
+	return upsertServiceVia(mutationCtx, host, exchange, requested, preview, privateName)
+}
+
 // inheritExisting fills in what an edit of an existing route leaves out,
 // from the route as its host has it now: the private hostname and, for a
 // recipe, its lifetime and its ready timeout, each by its own flags. One live
 // read serves all of them; a new recipe keeps the defaults.
-func (a *application) inheritExisting(ctx context.Context, host HostRecord, name string, flags serveFlags, requested *protocol.ServiceInfo) error {
+func inheritExisting(ctx context.Context, name string, flags serveFlags, requested *protocol.ServiceInfo, lookup existingServiceLookup) error {
 	inheritHost := !flags.privateHostSet && flags.privateHost == ""
 	inheritRecipe := requested.Run != nil && (!flags.idleSet && !flags.keepSet || !flags.readySet)
 	if !inheritHost && !inheritRecipe {
 		return nil
 	}
-	existing, found, err := a.existingService(ctx, host, name)
+	existing, found, err := lookup(ctx, name)
 	if err != nil {
 		return err
 	}

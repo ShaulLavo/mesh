@@ -378,6 +378,16 @@ type Control struct {
 
 	// Inspect
 	Inspection *SessionInspection `json:"inspection,omitempty"`
+	// HumanSessionOnly limits session list, inspect and hibernate to
+	// sessions a person started. mesh mcp sets it, so an agent's
+	// human-session tools never reach keyed jobs, service workers or apps.
+	HumanSessionOnly bool `json:"humanSessionOnly,omitempty"`
+	// ScreenSource says where a terminal job's screen came from: "live"
+	// from its worker, or "saved" from its last checkpoint.
+	ScreenSource string `json:"screenSource,omitempty"`
+	// RecoveryRequireInterrupted refuses recovery of a live source under
+	// the host's recovery lock.
+	RecoveryRequireInterrupted bool `json:"recoveryRequireInterrupted,omitempty"`
 
 	// Logs
 	Output []byte `json:"output,omitempty"`

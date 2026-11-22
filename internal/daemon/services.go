@@ -234,6 +234,9 @@ func (c *serviceController) startOrStop(ctx context.Context, request protocol.Co
 	if service.Demand == nil {
 		return protocol.Control{}, fmt.Errorf("daemon: %s: route %s has no --run command", request.Type, service.Route())
 	}
+	if err := grantStillCurrent(ctx); err != nil {
+		return protocol.Control{}, fmt.Errorf("daemon: %s: %w", request.Type, err)
+	}
 	if request.Type == protocol.TypeServiceStart {
 		startCtx, cancel := context.WithTimeout(ctx, serviceStartTimeout)
 		err = c.demand.Start(startCtx, service.Name)
@@ -446,6 +449,10 @@ func (c *serviceController) acquire(ctx context.Context) error {
 
 func (c *serviceController) acquireMutation(ctx context.Context) error {
 	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	if err := grantStillCurrent(ctx); err != nil {
+		<-c.gate
 		return err
 	}
 	if err := c.beginRuntimeDefinition(ctx); err != nil {

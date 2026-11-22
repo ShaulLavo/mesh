@@ -201,7 +201,7 @@ func validateAgentExecutionState(r *protocol.ExecutionReceipt) error {
 		if r.Result != nil || r.ReceiptRetainUntil != nil {
 			return fmt.Errorf("host returned contradictory active receipt")
 		}
-	case "terminal":
+	case executionPhaseTerminal:
 		if r.Result == nil {
 			return fmt.Errorf("host omitted its terminal result")
 		}

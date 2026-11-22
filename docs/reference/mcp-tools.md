@@ -4,6 +4,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 
 | Tool | Linked operation | Mode | Summary |
 | --- | --- | --- | --- |
+| `mesh_apps_list` | `apps.list` | read-only, idempotent | List a host's temporary apps |
 | `mesh_context_close` | `contexts.close` | destructive, idempotent | Close an execution context |
 | `mesh_context_get` | `contexts.get` | read-only, idempotent | Read one durable execution context |
 | `mesh_context_list` | `contexts.list` | read-only, idempotent | List execution contexts on a host |
@@ -33,10 +34,30 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_profile_get` | `profile.show` | read-only, idempotent | Read this machine's host or fleet notes |
 | `mesh_profile_set` | `profile.set` | destructive | Replace this machine's host or fleet notes |
 | `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
+| `mesh_service_publish` | `services.publish` | destructive, open-world | Publish or replace a private route |
+| `mesh_service_start` | `services.start` | destructive, idempotent | Start an on-demand route |
+| `mesh_service_stop` | `services.stop` | destructive, idempotent | Stop an on-demand route |
+| `mesh_service_unpublish` | `services.unpublish` | destructive, idempotent | Remove a private route |
 | `mesh_services_list` | `services.list` | read-only, idempotent | List Mesh serve routes |
+| `mesh_session_hibernate` | `sessions.hibernate` | destructive, idempotent | Hibernate a detached agent session |
 | `mesh_session_inspect` | `sessions.inspect` | read-only, idempotent | Passively inspect a terminal session |
+| `mesh_session_recover` | `sessions.recover` | destructive | Start a detached replacement for an interrupted session |
 | `mesh_sessions_list` | `sessions.list` | read-only, idempotent | List terminal sessions on a host |
 | `mesh_skill` | `skill.show` | read-only, idempotent | Read embedded Mesh skill instructions |
+| `mesh_terminal_input` | `sessions.input` | destructive | Type keyed input into a terminal job |
+| `mesh_terminal_open` | `sessions.create` | destructive, open-world | Open a keyed terminal job in an execution context |
+| `mesh_terminal_resize` | `sessions.resize` | destructive, idempotent | Resize a terminal job |
+| `mesh_terminal_screen` | `sessions.screen` | read-only, idempotent | Read a terminal job's rendered screen |
+
+## mesh_apps_list
+
+List the temporary apps a host owns (at most 200), with state, expiry and URL. App owner operations run through the owning host's local socket, reached over Mesh SSH for another machine, the same as mesh app list.
+
+- Linked operation: `apps.list`
+- Hints: read-only, idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name, exact host ID, or local for this machine.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
 
 ## mesh_context_close
 
@@ -399,6 +420,61 @@ Inspect one Mesh serve route on a host without opening its URL or triggering on-
   - `name` (`string`, required): Exact serve route name.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
 
+## mesh_service_publish
+
+Publish one private, tailnet-only route on a host, the same as mesh serve HOST TARGET. target is a port on that host, or a directory on it to serve as files. With run, the host starts the command on the first connection through Mesh and stops it when idle (idle_ms, default 15 minutes), or keeps it running with keep_running. run on another machine needs an absolute cwd on that machine. Replacing a route keeps its private hostname and recipe lifetime unless given. The host previews the definition first and publishes exactly what it previewed.
+
+- Linked operation: `services.publish`
+- Hints: destructive, open-world
+- Arguments:
+  - `cwd` (`string`, optional): Directory run starts in, absolute on the host.
+  - `env` (`array`, optional): KEY=VALUE entries added to the environment of run.
+  - `files` (`boolean`, optional): Enable directory listings for a directory target.
+  - `host` (`string`, required): Machine name or exact host ID.
+  - `idle_ms` (`integer`, optional): Stop run after this long with no connection through Mesh.
+  - `isolate` (`boolean`, optional): Send cross-origin isolation headers.
+  - `keep_running` (`boolean`, optional): Start run now, never stop it for idleness, and restart it after it exits.
+  - `label` (`string`, optional): Display name shown in service lists.
+  - `listen` (`array`, optional): PUBLIC=UPSTREAM local port proxies on the host.
+  - `ready_timeout_ms` (`integer`, optional): How long a starting run holds connections before failing them (default 60000).
+  - `route` (`string`, optional): Route path such as /blog (default from target).
+  - `run` (`string`, optional): Command that serves the port; needs a port target.
+  - `target` (`string`, required): Port on the host, or a directory on it to serve.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 30000).
+
+## mesh_service_start
+
+Start a route that has a run command now and wait until it is ready (default 30 s, up to 120 s). This also ends the stop of a keep-running route.
+
+- Linked operation: `services.start`
+- Hints: destructive, idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name or exact host ID that owns the route.
+  - `name` (`string`, required): Route as mesh_services_list shows it, such as /dev or a service name.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds.
+
+## mesh_service_stop
+
+Stop a route's run command now. Its listeners stay bound. A route with an idle window starts again on its next connection through Mesh; a keep-running route stays stopped until mesh_service_start, a change of its definition, or a daemon restart.
+
+- Linked operation: `services.stop`
+- Hints: destructive, idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name or exact host ID that owns the route.
+  - `name` (`string`, required): Route as mesh_services_list shows it, such as /dev or a service name.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds.
+
+## mesh_service_unpublish
+
+Remove one route from its host, the same as mesh unserve, stopping its run command if it has one. Returns service.not_found only when the host's own route list shows the route absent; unlike mesh unserve --host, which succeeds then. A retry after a lost reply therefore reports service.not_found once the first attempt removed the route. Any other error leaves the route's state unknown; read it with mesh_service_inspect before retrying.
+
+- Linked operation: `services.unpublish`
+- Hints: destructive, idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name or exact host ID that owns the route.
+  - `name` (`string`, required): Route as mesh_services_list shows it, such as /dev or a service name.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds.
+
 ## mesh_services_list
 
 List live and cached Mesh serve routes across the fleet or on one host without opening service URLs (which could trigger on-demand startup).
@@ -408,6 +484,17 @@ List live and cached Mesh serve routes across the fleet or on one host without o
 - Arguments:
   - `host` (`string`, optional): Optional machine name or exact host ID filter.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_session_hibernate
+
+Stop a detached Claude or Codex session to free its memory while its conversation stays resumable; the next mesh attach resumes it. The host refuses plain shells and attached sessions. Never attaches.
+
+- Linked operation: `sessions.hibernate`
+- Hints: destructive, idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name or exact host ID.
+  - `session_id` (`string`, required): Canonical Mesh session ID.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 12000).
 
 ## mesh_session_inspect
 
@@ -420,6 +507,18 @@ Inspect live or saved details of a human terminal session without attaching, ste
   - `preview` (`boolean`, optional): Include a control-free screen preview capped at 80 by 24.
   - `session_id` (`string`, required): Canonical Mesh session ID.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_session_recover
+
+Start a replacement for an interrupted session (after a reboot) that keeps its previous output, without attaching to it: action command restarts the saved command, shell opens a shell in the saved directory, and agent resumes the saved agent conversation. Returns the new session ID; a person attaches with mesh attach. Application-owned jobs and pipe workers are never recovered this way.
+
+- Linked operation: `sessions.recover`
+- Hints: destructive
+- Arguments:
+  - `action` (`string`, required) (command, shell, agent): What the replacement runs.
+  - `host` (`string`, required): Machine name or exact host ID.
+  - `session_id` (`string`, required): Canonical ID of the interrupted session.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 12000).
 
 ## mesh_sessions_list
 
@@ -443,3 +542,62 @@ Read Mesh's embedded agent skill instructions and reference documents without re
 - Hints: read-only, idempotent
 - Arguments:
   - `file` (`string`, optional): Embedded skill file path such as SKILL.md, references/commands.md, references/safety.md, or references/mcp-tools.md. Defaults to SKILL.md.
+
+## mesh_terminal_input
+
+Write up to 1 MiB of keys to a terminal job created by this identity, at an expected decimal byte offset, or look up an earlier write_key acknowledgment when offset is omitted. Send control keys as bytes (for example \r for Enter, \u0003 for ctrl+c, \u0004 for ctrl+d). Exact retries return the original acknowledgment; conflicting keys or stale offsets fail without writing. Returns terminal.attached without writing while a person is attached. Refused for pipe jobs; use mesh_job_input for pipe stdin.
+
+- Linked operation: `sessions.input`
+- Hints: destructive
+- Arguments:
+  - `context` (`string`, optional): Optional opaque context handle (mc1.<hostId>.<contextId>) to verify context ownership.
+  - `data` (`string`, optional): UTF-8 text bytes to type (mutually exclusive with data_base64).
+  - `data_base64` (`string`, optional): Base64-encoded bytes to type (mutually exclusive with data).
+  - `job` (`string`, required): Opaque job handle (mj1.<hostId>.<sessionId>.<instance>).
+  - `offset` (`string`, optional): Expected nonnegative decimal byte offset; omit to look up write_key without writing.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+  - `write_key` (`string`, required): Caller-chosen logical write key.
+
+## mesh_terminal_open
+
+Start a keyed terminal (PTY) job inside a durable execution context (requires mesh mcp --identity NAME), for programs that need a real terminal. Pass exactly one of command (shell string, refused for shell=none) or argv. Returns the opaque mj1 job handle at once; read the screen with mesh_terminal_screen, type with mesh_terminal_input, and read raw output with mesh_job_output stream=pty. Replaying request_key with the same intent returns the same job; after a lost reply use mesh_job_receipt. A person can take the terminal with mesh attach at any time; while they are attached, input and resize return terminal.attached.
+
+- Linked operation: `sessions.create`
+- Hints: destructive, open-world
+- Arguments:
+  - `argv` (`array`, optional): Direct executable and arguments (mutually exclusive with command).
+  - `cols` (`integer`, optional): Initial terminal width (default 80).
+  - `command` (`string`, optional): Shell command string (mutually exclusive with argv; refused when context shell is none).
+  - `context` (`string`, required): Opaque context handle (mc1.<hostId>.<contextId>).
+  - `cwd` (`string`, optional): Optional absolute or context-relative working directory for this job only.
+  - `env` (`object`, optional): Optional per-job environment overlay.
+  - `request_key` (`string`, required): Caller-chosen logical request key for idempotent dispatch and recovery via mesh_job_receipt.
+  - `rows` (`integer`, optional): Initial terminal height (default 24).
+  - `term` (`string`, optional): TERM value for the program (default xterm-256color).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_terminal_resize
+
+Set the size of a terminal job created by this identity. Returns terminal.attached without resizing while a person is attached, because their terminal decides the size.
+
+- Linked operation: `sessions.resize`
+- Hints: destructive, idempotent
+- Arguments:
+  - `cols` (`integer`, required): Terminal width.
+  - `context` (`string`, optional): Optional opaque context handle (mc1.<hostId>.<contextId>) to verify context ownership.
+  - `job` (`string`, required): Opaque job handle (mj1.<hostId>.<sessionId>.<instance>).
+  - `rows` (`integer`, required): Terminal height.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_terminal_screen
+
+Read the rendered screen of a terminal job created by this identity, as plain text lines at most 160 by 24, without resizing it or disturbing anyone attached. attached reports whether a person holds the terminal. After the job ends, returns the last saved screen when one exists.
+
+- Linked operation: `sessions.screen`
+- Hints: read-only, idempotent
+- Arguments:
+  - `cols` (`integer`, optional): Preview width (default 80).
+  - `context` (`string`, optional): Optional opaque context handle (mc1.<hostId>.<contextId>) to verify context ownership.
+  - `job` (`string`, required): Opaque job handle (mj1.<hostId>.<sessionId>.<instance>).
+  - `rows` (`integer`, optional): Preview height (default 24).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).

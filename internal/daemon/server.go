@@ -217,7 +217,7 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			}
 			continue
 		}
-		if err := writeClientResponse(ctx, client, relay, responseFrames, response); err != nil {
+		if err := writeClientResponse(ctx, client, relay, responseFrames, response, replyAdmission(ctx, request.Type)); err != nil {
 			return clientOperationError(ctx, fmt.Sprintf("write %s response", request.Type), err)
 		}
 	}
@@ -229,9 +229,9 @@ func logClientStreamClose(ctx context.Context, attached bool, err error) {
 	}
 }
 
-func writeClientResponse(ctx context.Context, conn transport.Conn, relay *clientRelay, frames []protocol.Frame, response protocol.Control) error {
+func writeClientResponse(ctx context.Context, conn transport.Conn, relay *clientRelay, frames []protocol.Frame, response protocol.Control, admit func() error) error {
 	if len(frames) == 1 {
-		return relay.enqueueResponse(frames[0])
+		return relay.enqueueAdmittedResponse(frames[0], admit)
 	}
 	write := func(frame protocol.Frame) error { return relay.writeResponse(ctx, frame) }
 	for i, frame := range frames {
@@ -316,6 +316,12 @@ func clientErrorCode(err error) string {
 	}
 	if errors.Is(err, recovery.ErrUncertain) {
 		return protocol.ErrorCodeRecoveryUncertain
+	}
+	if errors.Is(err, recovery.ErrSourceLive) {
+		return executionUsageInvalidCode
+	}
+	if errors.Is(err, errAccessNotFound) {
+		return errAccessNotFound.Error()
 	}
 	switch {
 	case errors.Is(err, machinename.ErrRevision):
