@@ -258,34 +258,43 @@ func (c *mcpControls) ListApps(ctx context.Context, req mcpnative.ListAppsReques
 	const operation = "apps.list"
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	hostID, target, err := c.appHost(callCtx, req.Host)
+	host, err := c.appHost(callCtx, req.Host)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	transport, err := c.app.openApps(callCtx, hostID, bootstrap.DefaultSSHPort)
-	if err != nil {
-		return failOutcome(operation, target, boundedAgentError(err, operation, target.HostID)), nil
-	}
-	defer transport.close() //nolint:errcheck // the listing is authoritative
-	result, err := transport.request(callCtx, appspkg.Request{Action: appActionList})
+	target := c.targetMeta(host, protocol.HostInfo{})
+	var result appspkg.Result
+	err = c.pool.WithShortSlot(callCtx, host, func() error {
+		var listErr error
+		result, listErr = c.listAppsOn(callCtx, host)
+		return listErr
+	})
 	if err != nil {
 		return failOutcome(operation, target, boundedAgentError(err, operation, target.HostID)), nil
 	}
 	return okOutcome(operation, target, agentApps(target.HostID, result.Apps)), nil
 }
 
-func (c *mcpControls) appHost(ctx context.Context, value string) (string, *mcpnative.TargetMeta, error) {
-	if value == appLocalHost {
-		return appLocalHost, &mcpnative.TargetMeta{HostID: appLocalHost, Account: c.account}, nil
+// listAppsOn reaches this machine's daemon over its local socket, or another
+// machine's over Mesh SSH, where app owner operations stay local-only.
+func (c *mcpControls) listAppsOn(ctx context.Context, host HostRecord) (appspkg.Result, error) {
+	hostID := host.ID
+	if host.ID == appLocalHost || isThisHost(host) {
+		hostID = appLocalHost
 	}
-	host, err := c.resolveSessionHost(ctx, value)
+	transport, err := c.app.openApps(ctx, hostID, bootstrap.DefaultSSHPort)
 	if err != nil {
-		return "", nil, err
+		return appspkg.Result{}, err
 	}
-	if isThisHost(host) {
-		return appLocalHost, c.targetMeta(host, protocol.HostInfo{}), nil
+	defer transport.close() //nolint:errcheck // the listing is authoritative
+	return transport.request(ctx, appspkg.Request{Action: appActionList})
+}
+
+func (c *mcpControls) appHost(ctx context.Context, value string) (HostRecord, error) {
+	if value == appLocalHost {
+		return HostRecord{ID: appLocalHost}, nil
 	}
-	return host.ID, c.targetMeta(host, protocol.HostInfo{}), nil
+	return c.resolveSessionHost(ctx, value)
 }
 
 func agentApps(hostID string, records []appspkg.Record) agentapi.AppsData {

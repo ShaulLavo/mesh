@@ -15,15 +15,13 @@ import (
 	"github.com/shaul/mesh/internal/worker"
 )
 
-// terminalCreateTimeout covers a worker launch; the tool's own deadline is
-// for the reply, and a launch that is cut short is recovered by its key.
-const terminalCreateTimeout = 15 * time.Second
-
 func (c *mcpControls) TerminalOpen(ctx context.Context, req mcpnative.TerminalOpenRequest) (mcpnative.CallOutcome, error) {
 	if c.caller == "" {
 		return c.identityRequiredOutcome("sessions.create", req.Context.HostID), nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, max(req.Timeout, terminalCreateTimeout))
+	// The caller's deadline bounds the reply. A launch accepted after the
+	// deadline is recovered by its request key, never relaunched.
+	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveExactHostID(req.Context.HostID)
 	if err != nil {

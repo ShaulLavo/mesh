@@ -62,3 +62,18 @@ func (p *mcpHostPool) observeOn(ctx context.Context, entry *mcpPooledConn) (prot
 	}
 	return *resp.Host, nil
 }
+
+// WithShortSlot runs fn holding one of the host's short-control slots. App
+// owner operations reach their host over a separate local-only channel; they
+// still count against the same per-host budget as every other control.
+func (p *mcpHostPool) WithShortSlot(ctx context.Context, host HostRecord, fn func() error) error {
+	bucket, err := p.bucket(host)
+	if err != nil {
+		return &preDispatchError{err: err}
+	}
+	if err := acquireSlot(ctx, bucket.shortSlots); err != nil {
+		return &preDispatchError{err: err}
+	}
+	defer func() { <-bucket.shortSlots }()
+	return fn()
+}

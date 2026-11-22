@@ -3,12 +3,16 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/shaul/mesh/internal/agentapi"
+	appspkg "github.com/shaul/mesh/internal/apps"
 	"github.com/shaul/mesh/internal/mcpnative"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
@@ -152,5 +156,132 @@ func TestServiceStartFailureKeepsOwnerDiagnostic(t *testing.T) {
 	}
 	if failure.Code == agentapi.HostUnreachable {
 		t.Fatalf("a host refusal read as unreachable: %+v", failure)
+	}
+}
+
+// silentCreateConn answers host.info and accepts a create it never answers,
+// like a host that is slow to launch. Closing it ends the wait.
+type silentCreateConn struct {
+	host    HostRecord
+	replies chan protocol.Frame
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func (c *silentCreateConn) WriteFrame(frame protocol.Frame) error {
+	req, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return fmt.Errorf("decode fixture control: %w", err)
+	}
+	if req.Type != protocol.TypeHostInfo {
+		return nil
+	}
+	reply := protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: req.RequestID, Host: &protocol.HostInfo{ID: c.host.ID, MeshIdentity: c.host.MeshIdentity, MachineName: "pc", NameRevision: 1, ExecutionContextSupported: true}}
+	payload, err := reply.Encode()
+	if err != nil {
+		return fmt.Errorf("encode fixture reply: %w", err)
+	}
+	c.replies <- protocol.Frame{Kind: protocol.KindControl, Payload: payload}
+	return nil
+}
+
+func (c *silentCreateConn) ReadFrame() (protocol.Frame, error) {
+	select {
+	case frame := <-c.replies:
+		return frame, nil
+	case <-c.closed:
+		return protocol.Frame{}, io.EOF
+	}
+}
+
+func (c *silentCreateConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+// mesh_terminal_open answers within the caller's deadline. A host that has
+// not replied by then leaves the outcome to the request key.
+func TestTerminalOpenHonoursShortDeadline(t *testing.T) {
+	prepareCommandEnvironment(t)
+	host := HostRecord{ID: testTerminalHost, MeshIdentity: testTerminalHost, MachineName: "pc", NameRevision: 1, Endpoint: "ws://127.0.0.1:1/control/ws"}
+	if err := SaveHost(host); err != nil {
+		t.Fatal(err)
+	}
+	dial := func(context.Context, HostRecord) (transport.Conn, error) {
+		return &silentCreateConn{host: host, replies: make(chan protocol.Frame, 2), closed: make(chan struct{})}, nil
+	}
+	pool := newMCPHostPool(dial, time.Now)
+	t.Cleanup(pool.Close)
+	c := newMCPControls(&application{dependencies: Dependencies{Now: time.Now}}, pool, "mac1_test_cred")
+	started := time.Now()
+	out, err := c.TerminalOpen(t.Context(), mcpnative.TerminalOpenRequest{Context: mcpnative.ContextRef{HostID: testTerminalHost, ContextID: "fedcba9876543210fedcba9876543210"}, RequestKey: "t1", Argv: []string{"/bin/sh"}, Cols: 80, Rows: 24, Term: "xterm-256color", Timeout: 300 * time.Millisecond})
+	elapsed := time.Since(started)
+	if err != nil || !out.IsError || out.Envelope.Errors[0].Code != agentapi.RequestOutcomeUnknown {
+		t.Fatalf("unanswered open = %+v, %v; want request.outcome_unknown", out.Envelope, err)
+	}
+	t.Logf("open returned after %s with a 300ms deadline", elapsed)
+	if elapsed > 10*time.Second {
+		t.Fatalf("open took %s, ignoring its deadline", elapsed)
+	}
+}
+
+// App listings count against the per-host budget of short controls, and a
+// successful listing is bounded.
+func TestAppListingsShareTheHostBudget(t *testing.T) {
+	prepareCommandEnvironment(t)
+	host := HostRecord{ID: testTerminalHost, MeshIdentity: testTerminalHost, MachineName: "pc", NameRevision: 1, Endpoint: "ws://127.0.0.1:1/control/ws"}
+	if err := SaveHost(host); err != nil {
+		t.Fatal(err)
+	}
+	var running, peak atomic.Int32
+	release := make(chan struct{})
+	records := make([]appspkg.Record, 250)
+	for i := range records {
+		records[i] = appspkg.Record{ID: "abcd", Status: "ready"}
+	}
+	app := &application{dependencies: Dependencies{Now: time.Now, AppRequest: func(context.Context, string, appspkg.Request) (appspkg.Result, error) {
+		now := running.Add(1)
+		for {
+			old := peak.Load()
+			if now <= old || peak.CompareAndSwap(old, now) {
+				break
+			}
+		}
+		<-release
+		running.Add(-1)
+		return appspkg.Result{Apps: records}, nil
+	}}}
+	pool := newMCPHostPool(nil, time.Now)
+	t.Cleanup(pool.Close)
+	c := newMCPControls(app, pool, "")
+	var calls sync.WaitGroup
+	outcomes := make(chan mcpnative.CallOutcome, 12)
+	for range 12 {
+		calls.Add(1)
+		go func() {
+			defer calls.Done()
+			out, err := c.ListApps(context.Background(), mcpnative.ListAppsRequest{Host: testTerminalHost, Timeout: 30 * time.Second})
+			if err != nil {
+				t.Error(err)
+			}
+			outcomes <- out
+		}()
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for running.Load() < 8 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	calls.Wait()
+	close(outcomes)
+	if peak.Load() > 8 {
+		t.Fatalf("%d concurrent app listings on one host, budget is 8", peak.Load())
+	}
+	for out := range outcomes {
+		data, ok := out.Envelope.Data.(agentapi.AppsData)
+		if out.IsError || !ok || len(data.Apps) != agentapi.MaxAppRows || !data.Truncated {
+			t.Fatalf("listing = %+v", out.Envelope)
+		}
 	}
 }
