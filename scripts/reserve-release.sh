@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo 'usage: reserve-release.sh SOURCE-SHA [EXPLICIT-VERSION]' >&2
+if [[ $# -gt 2 ]]; then
+  echo 'usage: reserve-release.sh [SOURCE-SHA] [EXPLICIT-VERSION]' >&2
   exit 2
 fi
 [[ ${GITHUB_REPOSITORY:-} == ShaulLavo/mesh ]] || {
@@ -10,47 +10,112 @@ fi
   exit 1
 }
 
-requested_source=$1
-[[ $requested_source =~ ^[0-9a-f]{40}$ ]] || {
-  echo "release reservation: source must be an exact lowercase commit SHA" >&2
-  exit 1
-}
-source_sha=$(git rev-parse "$requested_source^{commit}")
-[[ $source_sha == "$requested_source" ]] || {
-  echo "release reservation: source $requested_source did not resolve exactly" >&2
-  exit 1
-}
+requested_source=${1:-}
 explicit_version=${2:-}
 git fetch --force origin main 'refs/tags/*:refs/tags/*'
-git merge-base --is-ancestor "$source_sha" origin/main || {
-  echo "release reservation: $source_sha is not on origin/main" >&2
-  exit 1
-}
 
-changed=$(git diff-tree --no-commit-id --name-only -r "$source_sha")
-if [[ -n $changed ]]; then
-  classifier_status=0
+temporary=$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-release-reserve.XXXXXX")
+trap 'rm -rf -- "$temporary"' EXIT
+
+has_non_cask_changes() {
+  local changed=$1
+  if [[ -z $changed ]]; then
+    return 0
+  fi
+  local classifier_status=0
   grep -Ev '^Casks/mesh\.rb$' <<<"$changed" >/dev/null || classifier_status=$?
   case "$classifier_status" in
-    0) ;;
-    1)
-      printf 'action=skip\nsource=%s\nreason=cask-only\n' "$source_sha"
-      exit 0
-      ;;
+    0) return 0 ;;
+    1) return 1 ;;
     *)
       printf 'release reservation: changed-file classifier failed with status %s\n' "$classifier_status" >&2
       exit "$classifier_status"
       ;;
   esac
+}
+
+has_green_gate() {
+  local source_sha=$1
+  local gate_count
+  gate_count=$(gh api \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/$GITHUB_REPOSITORY/commits/$source_sha/check-runs" \
+    --jq '[.check_runs[] | select(.name == "Complete CI gate" and .status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length')
+  [[ $gate_count =~ ^[0-9]+$ && $gate_count -gt 0 ]]
+}
+
+if [[ -n $requested_source ]]; then
+  [[ $requested_source =~ ^[0-9a-f]{40}$ ]] || {
+    echo "release reservation: source must be an exact lowercase commit SHA" >&2
+    exit 1
+  }
+  source_sha=$(git rev-parse "$requested_source^{commit}")
+  [[ $source_sha == "$requested_source" ]] || {
+    echo "release reservation: source $requested_source did not resolve exactly" >&2
+    exit 1
+  }
+  git merge-base --is-ancestor "$source_sha" origin/main || {
+    echo "release reservation: $source_sha is not on origin/main" >&2
+    exit 1
+  }
 fi
 
 latest_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
-temporary=$(mktemp -d "${RUNNER_TEMP:-/tmp}/mesh-release-reserve.XXXXXX")
-trap 'rm -rf -- "$temporary"' EXIT
 if gh release download "$latest_tag" --pattern mesh-release.json --dir "$temporary" >/dev/null 2>&1; then
   published_source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commit"])' "$temporary/mesh-release.json")
 else
   published_source=$(git rev-list -n 1 "$latest_tag")
+fi
+
+gate_verified=false
+if [[ -z $requested_source ]]; then
+  main_head=$(git rev-parse origin/main)
+  if [[ $main_head == "$published_source" ]]; then
+    if [[ -z $explicit_version || $explicit_version == "$latest_tag" ]] &&
+      gh release download "$latest_tag" --pattern mesh.rb --dir "$temporary" >/dev/null 2>&1; then
+      if ! git show "origin/main:Casks/mesh.rb" 2>/dev/null | cmp -s - "$temporary/mesh.rb"; then
+        printf 'action=reconcile\nsource=%s\nversion=%s\nprevious_tag=%s\nprevious_source=%s\n' \
+          "$published_source" "$latest_tag" "$latest_tag" "$published_source"
+        exit 0
+      fi
+    fi
+    printf 'action=skip\nsource=%s\nreason=already-published\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$main_head" "$latest_tag" "$published_source"
+    exit 0
+  fi
+  if git merge-base --is-ancestor "$main_head" "$published_source"; then
+    printf 'action=skip\nsource=%s\nreason=already-published\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$main_head" "$latest_tag" "$published_source"
+    exit 0
+  fi
+  if ! git merge-base --is-ancestor "$published_source" "$main_head"; then
+    echo "release reservation: origin/main ($main_head) diverges from published source $published_source" >&2
+    exit 1
+  fi
+  changed=$(git diff --name-only "$published_source..$main_head")
+  if ! has_non_cask_changes "$changed"; then
+    printf 'action=skip\nsource=%s\nreason=cask-only\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$main_head" "$latest_tag" "$published_source"
+    exit 0
+  fi
+  source_sha=
+  while IFS= read -r candidate; do
+    [[ -n $candidate ]] || continue
+    candidate_changed=$(git diff --name-only "$published_source..$candidate")
+    if ! has_non_cask_changes "$candidate_changed"; then
+      break
+    fi
+    if has_green_gate "$candidate"; then
+      source_sha=$candidate
+      gate_verified=true
+      break
+    fi
+  done < <(git rev-list --max-count=50 "$published_source..$main_head")
+  if [[ -z $source_sha ]]; then
+    printf 'action=skip\nsource=%s\nreason=no-green-commit\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$main_head" "$latest_tag" "$published_source"
+    exit 0
+  fi
 fi
 
 plan=$(scripts/plan-release.sh "$source_sha" "$published_source" "$latest_tag")
@@ -68,6 +133,15 @@ if [[ $action == skip ]]; then
   printf '%s\nprevious_tag=%s\nprevious_source=%s\n' "$plan" "$latest_tag" "$published_source"
   exit 0
 fi
+
+if [[ -n $requested_source ]]; then
+  changed=$(git diff --name-only "$published_source..$source_sha")
+  if ! has_non_cask_changes "$changed"; then
+    printf 'action=skip\nsource=%s\nreason=cask-only\n' "$source_sha"
+    exit 0
+  fi
+fi
+
 version=$(sed -n 's/^version=//p' <<<"$plan")
 if [[ -n $explicit_version ]]; then
   [[ $explicit_version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
@@ -97,14 +171,10 @@ if [[ -n $explicit_version ]]; then
   version=$explicit_version
 fi
 
-gate_count=$(gh api \
-  -H 'Accept: application/vnd.github+json' \
-  "repos/$GITHUB_REPOSITORY/commits/$source_sha/check-runs" \
-  --jq '[.check_runs[] | select(.name == "Complete CI gate" and .status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length')
-[[ $gate_count =~ ^[0-9]+$ && $gate_count -gt 0 ]] || {
+if [[ $gate_verified != true ]] && ! has_green_gate "$source_sha"; then
   echo "release reservation: $source_sha has no successful Complete CI gate check" >&2
   exit 1
-}
+fi
 
 if [[ -z $explicit_version ]]; then
   gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \

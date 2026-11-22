@@ -23,10 +23,20 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALLS"
 case " $* " in
   *'/releases/latest '*) printf '%s\n' "${GH_LATEST_TAG:-v0.1.38}" ;;
-  *'/check-runs '*) printf '%s\n' "${GH_GATE_COUNT:-1}" ;;
+  *'/check-runs '*)
+    if [[ -n ${GH_GREEN_SHAS:-} ]]; then
+      commit=$(sed -n 's|.*commits/\([0-9a-f]\{40\}\)/check-runs.*|\1|p' <<<"$*")
+      if grep -Fq "$commit" <<<"$GH_GREEN_SHAS"; then printf '1\n'; else printf '0\n'; fi
+    else
+      printf '%s\n' "${GH_GATE_COUNT:-1}"
+    fi ;;
   *'/releases?per_page=100 '*)
     [[ -f $GH_LOG ]] || exit 0
     awk '$1 == "release" && $2 == "create" {for(i=4;i<=NF;i++) if($i == "--target") print $3 "\t" $(i+1)}' "$GH_LOG" ;;
+  *' release download '*' --pattern mesh.rb '*)
+    [[ -n ${GH_PUBLISHED_CASK:-} ]] || exit 1
+    dir=$(awk '{for(i=1;i<=NF;i++) if($i=="--dir") print $(i+1)}' <<<"$*")
+    cp "$GH_PUBLISHED_CASK" "$dir/mesh.rb" ;;
   *' release download '*) exit 1 ;;
   *' release view '*" --json assets "*) printf '\n' ;;
   *' release view '*" --json targetCommitish "*)
@@ -90,9 +100,8 @@ source_sha=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
 assert_classifier_failure() {
   local source=$1 expected_status=$2 status=0
-  local tags calls
+  local tags
   tags=$(git --git-dir="$remote" show-ref --tags) || return 1
-  calls=$(cat "$test_root/gh.calls") || return 1
   GREP_CLASSIFIER_STATUS=$expected_status run_reserve "$source" \
     >"$test_root/classifier.out" 2>"$test_root/classifier.err" || status=$?
   if [[ $status != "$expected_status" ]]; then
@@ -105,9 +114,8 @@ assert_classifier_failure() {
   grep -Fqx "release reservation: changed-file classifier failed with status $expected_status" "$test_root/classifier.err" || return 1
   [[ $(tail -n 1 "$test_root/classifier.log") == "$expected_status" ]] || return 1
   [[ $(git --git-dir="$remote" show-ref --tags) == "$tags" ]] || return 1
-  [[ $(cat "$test_root/gh.calls") == "$calls" ]] || return 1
   [[ ! -e $test_root/gh.log ]] || return 1
-  printf 'PASS: classifier status %s for %s fails before release access or tag changes\n' "$expected_status" "$source"
+  printf 'PASS: classifier status %s for %s fails before release creation or tag changes\n' "$expected_status" "$source"
 }
 
 classifier_failures=0
@@ -215,7 +223,7 @@ fi
 git -C "$checkout" commit -q --allow-empty -m empty
 empty_source=$(git -C "$checkout" rev-parse HEAD)
 git -C "$checkout" push -q origin main
-result=$(GREP_CLASSIFIER_STATUS=2 run_reserve "$empty_source")
+result=$(GH_LATEST_TAG=v0.1.42 GREP_CLASSIFIER_STATUS=2 run_reserve "$empty_source")
 grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx "source=$empty_source" <<<"$result"
 grep -Fqx 'version=v0.1.43' <<<"$result"
@@ -230,4 +238,48 @@ grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx 'version=v0.1.44' <<<"$result"
 [[ $(git --git-dir="$remote" rev-list -n 1 v0.1.44) == "$mixed_source" ]]
 
-echo 'PASS: release reservation rejects classifier errors, requires tested source, preserves retries, and advances past failed reservations'
+# Batched / scheduled auto-selection (empty SOURCE_SHA).
+# 1. Already published and Cask matches -> skip (no release jobs).
+cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask.rb"
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask.rb" run_reserve "" "")
+grep -Fqx 'action=skip' <<<"$result"
+grep -Fqx 'reason=already-published' <<<"$result"
+
+# 2. Already published but Cask differs -> reconcile.
+printf 'different cask\n' >"$test_root/stale-cask.rb"
+result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/stale-cask.rb" run_reserve "" "")
+grep -Fqx 'action=reconcile' <<<"$result"
+grep -Fqx 'version=v0.1.44' <<<"$result"
+
+# 3. Only Casks/mesh.rb changed since last release -> skip cask-only.
+printf 'cask-only followup\n' >>"$checkout/Casks/mesh.rb"
+git -C "$checkout" commit -qam 'cask-only followup'
+git -C "$checkout" push -q origin main
+result=$(GH_LATEST_TAG=v0.1.44 run_reserve "" "")
+grep -Fqx 'action=skip' <<<"$result"
+grep -Fqx 'reason=cask-only' <<<"$result"
+
+# 4. Feature followed by cask-only commit -> NOT skipped; batches feature + cask!
+printf 'batched feature\n' >>"$checkout/source"
+git -C "$checkout" commit -qam 'batched feature'
+batched_feature=$(git -C "$checkout" rev-parse HEAD)
+printf 'later cask update\n' >>"$checkout/Casks/mesh.rb"
+git -C "$checkout" commit -qam 'later cask update'
+batched_head=$(git -C "$checkout" rev-parse HEAD)
+git -C "$checkout" push -q origin main
+# None green yet -> clean no-green-commit skip (no red scheduled failure).
+result=$(GH_LATEST_TAG=v0.1.44 GH_GATE_COUNT=0 run_reserve "" "")
+grep -Fqx 'action=skip' <<<"$result"
+grep -Fqx 'reason=no-green-commit' <<<"$result"
+# Head untested, older feature green -> selects the older green commit!
+result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$batched_feature" run_reserve "" "")
+grep -Fqx 'action=publish' <<<"$result"
+grep -Fqx "source=$batched_feature" <<<"$result"
+grep -Fqx 'version=v0.1.45' <<<"$result"
+# Head green (even though head commit only touched Casks/mesh.rb) -> publishes head!
+result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$batched_head" run_reserve "" "")
+grep -Fqx 'action=publish' <<<"$result"
+grep -Fqx "source=$batched_head" <<<"$result"
+grep -Fqx 'version=v0.1.46' <<<"$result"
+
+echo 'PASS: release reservation rejects classifier errors, requires tested source, preserves retries, advances past failed reservations, and supports batched auto-selection'

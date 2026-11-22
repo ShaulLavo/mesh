@@ -1,30 +1,24 @@
 name: Publish tested release
 
 on:
-  workflow_call:
+  schedule:
+    # Cut batched releases up to three times a day when main has unpublished
+    # commits with a green Complete CI gate.
+    - cron: '0 2,10,18 * * *'
+  workflow_dispatch:
     inputs:
       source_sha:
-        description: Exact main commit whose complete CI gate passed
-        required: true
+        description: Exact tested commit on main (defaults to latest green commit on main)
+        required: false
         type: string
       version:
         description: Optional explicit stable version for a non-patch release
         required: false
         type: string
-  workflow_dispatch:
-    inputs:
-      source_sha:
-        description: Exact tested commit on main
-        required: true
-        type: string
-      version:
-        description: Optional explicit stable version
-        required: false
-        type: string
 
 concurrency:
   group: mesh-stable-publication
-  queue: max
+  cancel-in-progress: false
 
 permissions:
   checks: read
@@ -33,6 +27,7 @@ permissions:
 jobs:
   reserve:
     name: Reserve source and version
+    if: github.ref == 'refs/heads/main'
     permissions:
       checks: read
       contents: write
@@ -47,7 +42,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ inputs.source_sha || 'refs/heads/main' }}
       - id: reserve
         name: Reserve a monotonic release
         env:

@@ -29,7 +29,7 @@ JOB = CONTRACT["job"]
 STATUS = CONTRACT["status"]
 CODE = "needs.changes.outputs.code == 'true'"
 MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-MAIN_DRAFT = "inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'"
+MAIN_DRAFT = "inputs.draft && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'"
 MAC_ROUTE = "${{ matrix.runner == 'macos-15' && " + MAIN_PUSH + " && fromJSON('[\"self-hosted\",\"macOS\",\"ARM64\",\"mesh-mac\"]') || matrix.runner }}"
 MAC_SHARED_ROUTE = MAC_ROUTE.replace(MAIN_PUSH, MAIN_DRAFT).replace('"mesh-mac"', '"mesh-mac-shared"')
 MAC_FIFO_MINUTES = 45
@@ -52,48 +52,26 @@ def check_phase(ci, name, command):
     return phase
 
 
-def publication_allowed(condition, environment, ancestors):
-    # GitHub inserts success() unless the expression has a status function.
-    if not re.search(r"\b(?:always|cancelled|failure|success)\(\)", condition):
-        if any(result != "success" for result in ancestors):
-            return False
-    expression = condition.removeprefix("${{").removesuffix("}}")
-    for original, replacement in (
-        ("cancelled()", '( "$CANCELLED" == true )'),
-        ("needs.gate.result", '"$GATE"'),
-        ("github.event_name", '"$EVENT"'),
-        ("github.ref", '"$REF"'),
-    ):
-        expression = expression.replace(original, replacement)
-    return STATUS("[[ " + expression + " ]]", dict(os.environ, **environment)) == 0
+def check_release_cadence(ci, release):
+    assert "\n  publish:\n" not in ci and "uses: ./.github/workflows/release.yml" not in ci, \
+        "CI must not trigger release publication on every push to main"
+    triggers = release[:release.index("\nconcurrency:\n")]
+    assert "\n  schedule:\n" in triggers and "\n  workflow_dispatch:\n" in triggers, \
+        "release.yml must trigger only on schedule and workflow_dispatch"
+    assert "\n  push:" not in triggers and "\n  workflow_call:" not in triggers, \
+        "release.yml must not trigger on push or workflow_call"
+    assert "\nconcurrency:\n  group: mesh-stable-publication\n  cancel-in-progress: false\n" in release, \
+        "release.yml must serialize publications without cancelling an active release"
+    reserve = JOB(release, "reserve")
+    assert re.findall(r"^    if: (.+)$", reserve, re.M) == ["github.ref == 'refs/heads/main'"], \
+        "release reservation must run only on refs/heads/main"
+    assert "ref: ${{ inputs.source_sha || 'refs/heads/main' }}" in reserve
+    for name in ("publish", "publication-native", "finalize"):
+        assert "github.ref == 'refs/heads/main'" in JOB(release, name), \
+            f"{name} must remain restricted to refs/heads/main"
 
 
-def check_publication_schedule(ci):
-    publication = JOB(ci, "publish")
-    assert re.findall(r"^    needs: (.+)$", publication, re.M) == ["gate"]
-    conditions = re.findall(r"^    if: (.+)$", publication, re.M)
-    assert conditions == [CONTRACT["PUBLICATION_FILTER"]]
-    condition = conditions[0]
-    main = dict(CANCELLED="false", GATE="success", EVENT="push", REF="refs/heads/main")
-    for ancestors in (("success",), ("success", "skipped", "skipped")):
-        assert publication_allowed(condition, main, ancestors), ancestors
-    for draft in ("true", "false"):
-        environment = dict(main, EVENT="pull_request", DRAFT=draft)
-        assert not publication_allowed(condition, environment, ("success", "skipped")), draft
-    for variable, rejected in (
-        ("GATE", ("failure", "cancelled", "skipped", "pending", "")),
-        ("CANCELLED", ("true",)),
-        ("EVENT", ("pull_request", "workflow_dispatch", "pull_request_target")),
-        ("REF", ("refs/heads/topic", "refs/pull/1/merge", "refs/tags/v0.1.400")),
-    ):
-        for value in rejected:
-            assert not publication_allowed(condition, dict(main, **{variable: value}), ("success", "skipped")), (variable, value)
-    legacy = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-    assert publication_allowed(legacy, main, ("success",))
-    assert not publication_allowed(legacy, main, ("success", "skipped", "skipped"))
-
-
-def check_schedule(ci):
+def check_schedule(ci, release):
     race = check_phase(ci, "race", "go test -race ./...")
     integration = check_phase(ci, "integration", "./scripts/verify.sh")
     assert "      - name: Require a tidy module graph\n" in race
@@ -104,27 +82,38 @@ def check_schedule(ci):
         ("MESH_INTEGRATION_TIMEOUT", "60s")]
     assert "python3 -B scripts/test-ci-scheduling.py" in JOB(ci, "quality")
     assert "mac-turn" not in ci and "wait-for-main-ci.py" not in ci
-    check_publication_schedule(ci)
+    check_release_cadence(ci, release)
 
 
-def check_mutations(ci):
-    publication = JOB(ci, "publish")
-    mutations = (
+def check_mutations(ci, release):
+    ci_mutations = (
         ci.replace("  integration:\n    needs: changes", "  integration:\n    needs: race", 1),
         ci.replace("          cache: true", "          cache: false"),
         ci.replace("go test -race ./...", "go test -race ./internal/cli", 1),
         ci.replace("        run: ./scripts/verify.sh", "        run: ./scripts/verify.sh\n      - run: ./scripts/verify.sh", 1),
         ci.replace("        run: ./scripts/verify.sh", "        if: false\n        run: ./scripts/verify.sh", 1),
+        ci + "\n  publish:\n    uses: ./.github/workflows/release.yml\n",
     )
-    for condition in ("!cancelled() && ", "needs.gate.result == 'success' && ", MAIN_PUSH):
-        mutations += (ci.replace(publication, publication.replace(condition, "", 1), 1),)
-    for mutated in mutations:
-        assert mutated != ci, "negative control did not change the workflow"
+    for mutated in ci_mutations:
+        assert mutated != ci, "negative control did not change CI workflow"
         try:
-            check_schedule(mutated)
+            check_schedule(mutated, release)
         except AssertionError:
             continue
-        raise AssertionError("unsafe test schedule accepted")
+        raise AssertionError("unsafe CI schedule accepted")
+    release_mutations = (
+        release.replace("  schedule:\n", "  push:\n    branches: [main]\n  schedule:\n", 1),
+        release.replace("  schedule:\n", "  workflow_call:\n  schedule:\n", 1),
+        release.replace("  cancel-in-progress: false\n", "  cancel-in-progress: true\n", 1),
+        release.replace("    if: github.ref == 'refs/heads/main'\n", "", 1),
+    )
+    for mutated in release_mutations:
+        assert mutated != release, "negative control did not change release workflow"
+        try:
+            check_schedule(ci, mutated)
+        except AssertionError:
+            continue
+        raise AssertionError("unsafe release cadence accepted")
 
 
 def check_apt_workflows(workflows, action):
@@ -400,12 +389,12 @@ def reject_mktemp_templates(sources):
 
 
 def main():
-    ci = (ROOT / ".github/workflows/ci.yml").read_text()
+    workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
+    ci, release = workflows["ci.yml"], workflows["release.yml"]
     check_concurrency(ci)
     reject_concurrency(ci)
-    check_schedule(ci)
-    check_mutations(ci)
-    workflows = {path.name: path.read_text() for path in sorted((ROOT / ".github/workflows").glob("*.yml"))}
+    check_schedule(ci, release)
+    check_mutations(ci, release)
     check_mac_routing(workflows)
     reject_mac_routing(workflows)
     check_release_proof_matrix(workflows)
@@ -417,7 +406,7 @@ def main():
     check_apt_workflows(workflows, action)
     reject_apt_mutations(workflows, action)
     check_apt_install((ROOT / ".github/actions/apt-packages/install.sh").read_text())
-    print("PASS independent tests, blocking aggregates, main publication after skipped ancestors, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, all Darwin proof shards on release, hosted PR Mac legs, offline apt cache, one never-cancelled main CI group and mutation controls")
+    print("PASS independent tests, blocking aggregates, decoupled batched release cadence, failure/cancel/PR refusal, guarded exclusive and shared Mac routing, all Darwin proof shards on release, hosted PR Mac legs, offline apt cache, one never-cancelled main CI group and mutation controls")
 
 
 if __name__ == "__main__":

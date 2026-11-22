@@ -21,7 +21,6 @@ PLATFORM_OUTPUTS = {
     "darwin/arm64": "darwin_arm64",
 }
 NATIVE_ENV = {f"NATIVE_{output.upper()}": output for output in PLATFORM_OUTPUTS.values()}
-PUBLICATION_FILTER = "${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}"
 
 
 def job(source, name):
@@ -171,10 +170,8 @@ def check_gate(ci):
     assert re.findall(r"^        if: (.+)$", readiness, re.M) == [DRAFT_FILTER]
     assert status(run_script(readiness), os.environ) != 0, "draft readiness script succeeds"
     check_outcomes(run_script(aggregate), results)
-    publication = job(ci, "publish")
-    assert "needs: gate" in publication and "uses: ./.github/workflows/release.yml" in publication
-    assert "source_sha: ${{ github.sha }}" in publication
-    assert re.findall(r"^    if: (.+)$", publication, re.M) == [PUBLICATION_FILTER]
+    assert "\n  publish:\n" not in ci and "uses: ./.github/workflows/release.yml" not in ci, \
+        "CI must not invoke release publication on every push to main"
     check_cask_status(gate)
 
 
