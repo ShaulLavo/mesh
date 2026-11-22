@@ -65,7 +65,7 @@ func (c *Capture) initialize() error {
 	if err := s.files.Confirm(s.path("stream.lock")); err != nil {
 		return executionBoundaryError("capture", err)
 	}
-	if err := s.createReaderLock(); err != nil {
+	if err := s.createTurnLocks(); err != nil {
 		return err
 	}
 	generation, err := freshToken()
