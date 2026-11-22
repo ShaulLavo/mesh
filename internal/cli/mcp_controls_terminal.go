@@ -3,12 +3,16 @@ package cli
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpnative"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 // terminalCreateTimeout covers a worker launch; the tool's own deadline is
@@ -167,4 +171,29 @@ func sameExecutionInstance(response, request protocol.Control) error {
 		return fmt.Errorf("host returned another execution instance")
 	}
 	return nil
+}
+
+// localPersonSession and localPersonSessions apply the host's human-session
+// rule to this machine's session directory, which mesh mcp reads without the
+// daemon. Keyed jobs, service and app workers, and damaged sessions are not
+// a person's.
+func localPersonSession(id string) bool {
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return false
+	}
+	if parsed, err := session.ParseID(id); err != nil || parsed != id {
+		return false
+	}
+	return worker.PersonSession(filepath.Join(state, "s", id))
+}
+
+func localPersonSessions(rows []protocol.SessionInfo) []protocol.SessionInfo {
+	kept := make([]protocol.SessionInfo, 0, len(rows))
+	for _, row := range rows {
+		if localPersonSession(row.ID) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }

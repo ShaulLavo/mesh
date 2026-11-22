@@ -378,6 +378,10 @@ type Control struct {
 
 	// Inspect
 	Inspection *SessionInspection `json:"inspection,omitempty"`
+	// HumanSessionOnly limits session list, inspect and hibernate to
+	// sessions a person started. mesh mcp sets it, so an agent's
+	// human-session tools never reach keyed jobs, service workers or apps.
+	HumanSessionOnly bool `json:"humanSessionOnly,omitempty"`
 
 	// Logs
 	Output []byte `json:"output,omitempty"`

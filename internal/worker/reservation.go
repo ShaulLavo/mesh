@@ -136,6 +136,25 @@ func ReservedPurpose(dir string) session.Purpose {
 	return ref.Purpose
 }
 
+// PersonSession reports a session a person started: a generic or recovery
+// allocation, or an older session with no allocation and no worker evidence
+// of one. Keyed jobs, managed service and app workers, and sessions whose
+// evidence cannot be read are not, so routes that serve only people's
+// sessions fail closed.
+func PersonSession(dir string) bool {
+	if ref, ok := ReservedAllocation(dir); ok {
+		return ref.Purpose == session.Generic || ref.Purpose == session.Recovery
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".reservation")); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	meta, err := ReadMeta(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return err == nil && meta.Reservation == nil && meta.ExecutionKind == "" && meta.Label == ""
+}
+
 // ReservedAllocation reads the durable allocation of dir, including the
 // instance that names its execution attempt.
 func ReservedAllocation(dir string) (session.Reservation, bool) {

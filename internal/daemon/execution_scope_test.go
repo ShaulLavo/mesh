@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,6 +157,99 @@ func assertScopedOutputHidden(t *testing.T, f *scopedFixture, id string) {
 		result := scopedOutput(t, f, request)
 		if result.ErrorCode != "session.not_found" || result.Result != nil {
 			t.Fatalf("private worker admitted to scoped output: %+v", result)
+		}
+	}
+}
+
+// Managed service and app workers are Mesh's own: a scoped reader gets
+// neither their live nor their saved output, and generic recovery never
+// restarts one as a detached session.
+func TestScopedOutputAndRecoveryExcludeManagedWorkers(t *testing.T) {
+	for _, state := range []storage.SessionState{storage.StateDetached, storage.StateExited} {
+		t.Run(string(state), func(t *testing.T) {
+			f := newScopedFixture(t.Context(), t, false)
+			enableScopedOutput(t, f)
+			sessions := compactSocketTempDir(t)
+			f.server.lifecycle.sessionsDir = sessions
+			ref, err := worker.Reserve(sessions, session.Managed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.catalog.rows[0].ID = storage.SessionID(ref.ID)
+			f.catalog.rows[0].State = state
+			if err := os.WriteFile(paths.Log(filepath.Join(sessions, ref.ID)), []byte(disclosureSentinel), 0600); err != nil {
+				t.Fatal(err)
+			}
+			assertScopedOutputHidden(t, f, ref.ID)
+			assertRecoveryRefused(t, f.server.lifecycle, ref.ID)
+		})
+	}
+}
+
+// Damaged ownership evidence is never read as a person's session: an
+// unreadable allocation, or worker metadata naming one that is missing.
+func TestScopedOutputHidesDamagedOwnershipEvidence(t *testing.T) {
+	damage := map[string]func(t *testing.T, dir string){
+		"unreadable allocation": func(t *testing.T, dir string) {
+			if err := os.WriteFile(filepath.Join(dir, ".reservation"), []byte("{broken"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"metadata names an allocation": func(t *testing.T, dir string) {
+			meta := worker.Meta{ID: filepath.Base(dir), Reservation: &session.Reservation{ID: filepath.Base(dir), Purpose: session.Execution}, ExecutionKind: execution.KindPTY}
+			if err := worker.WriteMeta(dir, meta); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, apply := range damage {
+		t.Run(name, func(t *testing.T) {
+			f := newScopedFixture(t.Context(), t, false)
+			enableScopedOutput(t, f)
+			sessions := compactSocketTempDir(t)
+			f.server.lifecycle.sessionsDir = sessions
+			dir := filepath.Join(sessions, "4R8X")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			apply(t, dir)
+			f.catalog.rows[0].ID = "4R8X"
+			f.catalog.rows[0].State = storage.StateExited
+			if err := os.WriteFile(paths.Log(dir), []byte(disclosureSentinel), 0600); err != nil {
+				t.Fatal(err)
+			}
+			assertScopedOutputHidden(t, f, "4R8X")
+		})
+	}
+}
+
+// A person's own session keeps the documented scoped-output policy.
+func TestScopedOutputServesPersonSessions(t *testing.T) {
+	f := newScopedFixture(t.Context(), t, false)
+	enableScopedOutput(t, f)
+	sessions := compactSocketTempDir(t)
+	f.server.lifecycle.sessionsDir = sessions
+	ref, err := worker.Reserve(sessions, session.Generic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.catalog.rows[0].ID = storage.SessionID(ref.ID)
+	f.catalog.rows[0].State = storage.StateExited
+	if err := os.WriteFile(paths.Log(filepath.Join(sessions, ref.ID)), []byte(disclosureSentinel), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result := scopedOutput(t, f, protocol.AccessOutput{SessionID: ref.ID, Format: "tail"})
+	if result.Result == nil || result.Result.BytesBase64 == nil {
+		t.Fatalf("person session tail = %+v", result)
+	}
+}
+
+func assertRecoveryRefused(t *testing.T, l *lifecycle, id string) {
+	t.Helper()
+	for _, kind := range []string{protocol.TypeRecover, protocol.TypeRecoveryRead} {
+		_, err := l.recoveryControl(t.Context(), protocol.Control{Type: kind, RequestID: "recover", SessionID: id, RecoveryAction: "command"})
+		if !errors.Is(err, errAccessNotFound) {
+			t.Fatalf("%s of a private worker = %v, want not found", kind, err)
 		}
 	}
 }

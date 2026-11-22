@@ -275,6 +275,10 @@ func (l *lifecycle) HandleControl(ctx context.Context, request protocol.Control)
 			return protocol.Control{}, true, err
 		}
 	}
+	if request.HumanSessionOnly {
+		response, err := l.humanSessionControl(ctx, request)
+		return response, true, err
+	}
 	switch request.Type {
 	case protocol.TypeExecutionLogs, protocol.TypeExecutionWait, protocol.TypeExecutionSignal, protocol.TypeExecutionKill, protocol.TypeExecutionRemove, protocol.TypeExecutionInput, protocol.TypeExecutionInspect, protocol.TypeExecutionResize, protocol.TypeExecutionScreen:
 		response, err := l.boundExecutionControl(ctx, request)

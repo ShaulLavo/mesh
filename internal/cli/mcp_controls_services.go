@@ -258,7 +258,7 @@ func agentApps(hostID string, records []appspkg.Record) agentapi.AppsData {
 // accepts only a detached agent session, and nothing attaches to it.
 func (c *mcpControls) HibernateSession(ctx context.Context, req mcpnative.SessionLifecycleRequest) (mcpnative.CallOutcome, error) {
 	const operation = "sessions.hibernate"
-	return c.sessionLifecycle(ctx, operation, req, protocol.Control{Type: protocol.TypeHibernate, SessionID: req.SessionID}, func(host HostRecord, response protocol.Control) (any, error) {
+	return c.sessionLifecycle(ctx, operation, req, protocol.Control{Type: protocol.TypeHibernate, SessionID: req.SessionID, HumanSessionOnly: true}, func(host HostRecord, response protocol.Control) (any, error) {
 		if response.Type != protocol.TypeOK || response.SessionID != req.SessionID {
 			return nil, fmt.Errorf("host %s returned an unexpected %s response", HostLabel(host), protocol.TypeHibernate)
 		}

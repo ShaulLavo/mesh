@@ -309,6 +309,9 @@ func clientErrorCode(err error) string {
 	if errors.Is(err, recovery.ErrUncertain) {
 		return protocol.ErrorCodeRecoveryUncertain
 	}
+	if errors.Is(err, errAccessNotFound) {
+		return errAccessNotFound.Error()
+	}
 	switch {
 	case errors.Is(err, machinename.ErrRevision):
 		return "host.name_revision"

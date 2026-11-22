@@ -275,22 +275,20 @@ const executionWaitCompleted = "completed"
 
 // privateSession reports a worker whose output belongs to its caller or to
 // Mesh itself, which public-session routes such as scoped output and
-// recovery never serve: pipe and framed workers, and keyed terminal jobs
-// owned by an application or an internal service. A keyed terminal job whose
-// owner cannot be read is private too, so a damaged journal never widens
-// access.
+// recovery never serve: pipe and framed workers, managed service and app
+// workers, keyed terminal jobs owned by an application or an internal
+// service, and any session whose ownership evidence cannot be read. Only a
+// person's session and a terminal job proven to be account- or device-owned
+// stay public.
 func (l *lifecycle) privateSession(ctx context.Context, id string) bool {
 	if !isCanonicalSessionID(id) {
 		return false
 	}
-	ref, ok := worker.ReservedAllocation(filepath.Join(l.sessionsDir, id))
-	if !ok || ref.Purpose.IsPipe() {
-		return ok
+	dir := filepath.Join(l.sessionsDir, id)
+	if ref, ok := worker.ReservedAllocation(dir); ok && ref.Purpose == session.Execution {
+		return !l.accountOwnedExecution(ctx, ref)
 	}
-	if ref.Purpose != session.Execution {
-		return false
-	}
-	return !l.accountOwnedExecution(ctx, ref)
+	return !worker.PersonSession(dir)
 }
 
 // accountOwnedExecution reads the owner of a keyed terminal job. Only jobs
