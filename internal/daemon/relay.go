@@ -21,6 +21,11 @@ const (
 	relayOutputControlReserve     = 8
 	relayOutputQueueByteLimit     = 8 << 20
 	relayOutputControlByteReserve = 64 << 10
+
+	// How long a lane whose worker stopped accepting input keeps reading for the
+	// worker's final frame. It is a hang cap: a worker closes its socket right
+	// after the exit frame.
+	relayWorkerDrainTimeout = 30 * time.Second
 )
 
 var (
@@ -83,6 +88,10 @@ type relayLane struct {
 	queuedBytes  int
 	draining     bool
 	closed       bool
+	// inputStopped means the worker no longer accepts input, so later client
+	// frames are dropped while the reader finishes the worker's stream.
+	inputStopped bool
+	drainTimer   *time.Timer
 
 	closeOnce sync.Once
 	closeErr  error
@@ -395,6 +404,9 @@ func (l *relayLane) enqueue(frame protocol.Frame, closeAfter bool) error {
 	if l.closed || l.draining {
 		return fmt.Errorf("daemon: session %s attachment closed", l.id.String())
 	}
+	if l.inputStopped {
+		return nil
+	}
 	if l.queuedFrames >= relayInputQueueFrameLimit || bytes > relayInputQueueByteLimit-l.queuedBytes {
 		return fmt.Errorf("%w for session %s", errRelayInputQueueFull, l.id.String())
 	}
@@ -432,7 +444,7 @@ func (l *relayLane) writeLoop() {
 				if l.relay.isClosed() {
 					return
 				}
-				l.relay.retire(l)
+				l.stopInput()
 				return
 			}
 			if queued.closeAfter {
@@ -445,17 +457,57 @@ func (l *relayLane) writeLoop() {
 	}
 }
 
+// stopInput handles a failed write to the worker. A worker that exited closes
+// its socket after queueing its exit frame, so the write fails while that
+// frame is still waiting to be read. Closing the lane now would discard it;
+// instead the lane drops further input and the reader finishes the stream.
+func (l *relayLane) stopInput() {
+	l.queueMu.Lock()
+	defer l.queueMu.Unlock()
+	if l.closed || l.inputStopped {
+		return
+	}
+	l.inputStopped = true
+	l.drainTimer = time.AfterFunc(relayWorkerDrainTimeout, func() { l.relay.retire(l) })
+}
+
+func (l *relayLane) inputWasStopped() bool {
+	l.queueMu.Lock()
+	defer l.queueMu.Unlock()
+	return l.inputStopped
+}
+
+// reportInterruption tells the client that the worker's stream ended without a
+// final frame, which a lane with working input would only discover on the
+// next request.
+func (l *relayLane) reportInterruption(cause error) {
+	frame, err := encodeClientControl(protocol.Control{
+		Type:      protocol.TypeError,
+		SessionID: l.id.String(),
+		Message:   fmt.Sprintf("daemon: session %s worker connection ended before the session reported its end: %v", l.id.String(), cause),
+	})
+	if err != nil {
+		return
+	}
+	_ = l.relay.enqueueResponse(frame)
+}
+
 func (l *relayLane) readLoop() {
 	defer l.relay.wg.Done()
+	sawFinal := false
 	for {
 		frame, err := l.worker.ReadFrame()
 		if err != nil {
 			if l.relay.isClosed() {
 				return
 			}
+			if !sawFinal && l.inputWasStopped() {
+				l.reportInterruption(err)
+			}
 			l.relay.retire(l)
 			return
 		}
+		sawFinal = sawFinal || isFinalWorkerFrame(frame)
 		if err := validateWorkerFrame(l.id, frame); err != nil {
 			if l.relay.isClosed() {
 				return
@@ -611,6 +663,9 @@ func (l *relayLane) close() error {
 		l.queueMu.Lock()
 		l.closed = true
 		close(l.done)
+		if l.drainTimer != nil {
+			l.drainTimer.Stop()
+		}
 		l.queueMu.Unlock()
 		l.closeErr = l.worker.Close()
 	})
@@ -740,6 +795,19 @@ func validateWorkerFrame(id protocol.SessionID, frame protocol.Frame) error {
 	default:
 		return fmt.Errorf("daemon: session %s worker sent invalid frame kind %d", id.String(), frame.Kind)
 	}
+}
+
+// isFinalWorkerFrame reports whether the frame ends the worker's attachment:
+// the session exited, another client took it over, or it reported an error.
+func isFinalWorkerFrame(frame protocol.Frame) bool {
+	if frame.Kind != protocol.KindControl {
+		return false
+	}
+	message, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return false
+	}
+	return message.Type == protocol.TypeExit || message.Type == protocol.TypeDetach || message.Type == protocol.TypeError
 }
 
 func cloneFrame(frame protocol.Frame) protocol.Frame {
