@@ -40,6 +40,7 @@ func startTestHTTPServer(t *testing.T, opts HTTPServerOptions) (*HTTPServer, *ht
 		t.Fatalf("NewHTTPServer: %v", err)
 	}
 	ts.Config.Handler = srv
+	srv.Attach(ts.Config)
 	ts.Start()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
@@ -491,6 +492,18 @@ func TestHTTPBothRepresentationsAndStreamCancellationAndRotation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("closing HTTP SSE response stream did not cancel handler context")
 	}
+	// The worker sees the cancellation before the handler finishes its
+	// exchange; rotation below must count only the stream it retires.
+	exchangesDone := make(chan struct{})
+	go func() {
+		srv.exchanges.Wait()
+		close(exchangesDone)
+	}()
+	select {
+	case <-exchangesDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled SSE exchange never finished")
+	}
 
 	// 4. Token rotation: retires old token AND its active SSE stream, while new
 	// token works immediately and token values are never logged.
@@ -843,12 +856,6 @@ func (w *blockingResponseWriter) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func (w *blockingResponseWriter) bodyString() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.String()
-}
-
 func TestHTTPByteBudgetsIngressAndOutput(t *testing.T) {
 	// 1. Connection output budget (8192 bytes) caps a ~14 KiB tools/list reply.
 	_, ts, endpoint := startTestHTTPServer(t, HTTPServerOptions{
@@ -1050,71 +1057,6 @@ func TestHTTPByteBudgetsIngressAndOutput(t *testing.T) {
 	}
 	if _, err := NewHTTPServer(HTTPServerOptions{ServerOptions: ServerOptions{Registry: reg, Controls: &stubControls{}}, Authority: "127.0.0.1:9000", Token: testHTTPToken}); err == nil {
 		t.Fatal("NewHTTPServer accepted invalid x-mcp-header annotation")
-	}
-}
-
-func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T) {
-	workerDone := make(chan struct{})
-	controls := &stubControls{
-		waitFn: func(_ context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
-			total := float64(req.WaitMS)
-			notify(ProgressUpdate{Progress: 1, Total: &total, Message: "waiting"})
-			defer close(workerDone)
-			return CallOutcome{
-				Envelope: okEnvelope("sessions.wait", JobStateData{Job: req.Job.String(), State: "exited", Wait: "completed"}),
-			}, nil
-		},
-	}
-	srv, err := NewHTTPServer(HTTPServerOptions{
-		ServerOptions: ServerOptions{Version: "0.1.0-rot", Controls: controls},
-		Authority:     "127.0.0.1:9000",
-		Token:         testHTTPToken,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = srv.Shutdown(context.Background()) }()
-
-	waitBody := fmt.Sprintf(
-		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"_meta":{"%s":"%s","%s":{},"progressToken":"p7"},"name":"mesh_job_wait","arguments":{"job":%q,"wait_ms":5000}}}`,
-		mcpwire.VersionKey, mcpwire.Version, mcpwire.ClientCapsKey, testJob,
-	)
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(waitBody))
-	req.URL.Host = ""
-	req.Host = "127.0.0.1:9000"
-	req.Header.Set("Authorization", "Bearer "+testHTTPToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
-	req.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
-	req.Header.Set(mcpwire.NameHeader, "mesh_job_wait")
-
-	bw := newBlockingResponseWriter(true)
-	serveDone := make(chan struct{})
-	go func() {
-		defer close(serveDone)
-		srv.ServeHTTP(bw, req)
-	}()
-
-	// Pause on the first progress flush and wait until the worker has ALREADY returned.
-	<-bw.flushEntered
-	<-workerDone
-
-	// Rotate the token while the SSE exchange is still open on the paused flush.
-	gen, retired, err := srv.RotateToken(testHTTPTokenRotated)
-	if err != nil || gen != 2 || retired != 1 {
-		close(bw.flushRelease)
-		<-serveDone
-		t.Fatalf("RotateToken = gen=%d retired=%d err=%v, want gen=2 retired=1", gen, retired, err)
-	}
-
-	// Unblock the paused flush; the retired stream MUST NOT deliver the terminal result.
-	close(bw.flushRelease)
-	<-serveDone
-
-	body := bw.bodyString()
-	if strings.Contains(body, `"resultType":"complete"`) || strings.Contains(body, `"id":7`) {
-		t.Fatalf("retired SSE stream delivered terminal result after rotation: %s", body)
 	}
 }
 

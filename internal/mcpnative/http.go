@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -25,17 +26,20 @@ const (
 	// DefaultHTTPPath is the exact endpoint path for the loopback HTTP frontend.
 	DefaultHTTPPath = "/mcp"
 
-	httpJSONMedia       = "application/json"
-	httpSSEMedia        = "text/event-stream"
-	httpHeaderAllow     = "Allow"
-	httpHeaderAuth      = "Authorization"
-	httpHeaderCache     = "Cache-Control"
-	httpHeaderContent   = "Content-Type"
-	httpHeaderWWWAuth   = "WWW-Authenticate"
-	httpBearerPrefix    = "Bearer "
-	sseFrameOverhead    = len("event: message\ndata: \n\n")
-	defaultReadTimeout  = 15 * time.Second
-	defaultWriteTimeout = 15 * time.Second
+	httpJSONMedia        = "application/json"
+	httpSSEMedia         = "text/event-stream"
+	httpHeaderAllow      = "Allow"
+	httpHeaderAuth       = "Authorization"
+	httpHeaderCache      = "Cache-Control"
+	httpHeaderContent    = "Content-Type"
+	httpHeaderConnection = "Connection"
+	httpHeaderLength     = "Content-Length"
+	httpHeaderTransfer   = "Transfer-Encoding"
+	httpHeaderWWWAuth    = "WWW-Authenticate"
+	httpBearerPrefix     = "Bearer "
+	sseFrameOverhead     = len("event: message\ndata: \n\n")
+	defaultReadTimeout   = 15 * time.Second
+	defaultWriteTimeout  = 15 * time.Second
 )
 
 var (
@@ -72,16 +76,34 @@ type HTTPServer struct {
 	drainWait      time.Duration
 	onShutdown     func()
 
+	// rotateMu keeps rotations one at a time, so at most one retired
+	// generation is draining outside the admission accounting.
+	rotateMu sync.Mutex
+
 	mu            sync.Mutex
 	token         string
 	generation    uint64
 	active        map[*httpActiveRequest]struct{}
+	conns         map[net.Conn]*httpConn
 	inflightBytes int
 	closed        bool
 
 	workers   sync.WaitGroup
 	exchanges sync.WaitGroup
 }
+
+// httpConn tracks the handlers on one client connection of an http.Server
+// this frontend is attached to. Its fields are guarded by HTTPServer.mu.
+type httpConn struct {
+	// pendingGen is the token generation that authenticated the request
+	// on this connection whose reply is not yet fully written, or 0.
+	pendingGen uint64
+	handlers   int
+	closing    bool
+	drained    chan struct{}
+}
+
+type httpConnKey struct{}
 
 type httpActiveRequest struct {
 	generation    uint64
@@ -91,6 +113,9 @@ type httpActiveRequest struct {
 	reservedBytes int
 	progressBytes int
 	terminalBytes int
+	// detached marks a retired exchange whose bytes left the admission
+	// accounting at rotation; guarded by HTTPServer.mu.
+	detached bool
 
 	deadlineMu sync.Mutex
 	rc         *http.ResponseController
@@ -170,6 +195,9 @@ type httpBudgetedBody struct {
 	precharged  int
 	readSoFar   int
 	budgetError bool
+	// sawEOF reports that the whole body was read; replies sent before then
+	// must not leave net/http draining the rest.
+	sawEOF bool
 }
 
 func (b *httpBudgetedBody) Read(p []byte) (int, error) {
@@ -184,6 +212,9 @@ func (b *httpBudgetedBody) Read(p []byte) (int, error) {
 			}
 			b.precharged = b.readSoFar
 		}
+	}
+	if errors.Is(err, io.EOF) {
+		b.sawEOF = true
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, fmt.Errorf("read MCP HTTP body: %w", err)
@@ -271,6 +302,7 @@ func NewHTTPServer(opts HTTPServerOptions) (*HTTPServer, error) {
 		token:          opts.Token,
 		generation:     1,
 		active:         make(map[*httpActiveRequest]struct{}),
+		conns:          make(map[net.Conn]*httpConn),
 	}, nil
 }
 
@@ -330,30 +362,139 @@ func (s *HTTPServer) httpPolicy() mcpwire.HTTPPolicy {
 	}
 }
 
-// RotateToken replaces the active bearer token and cancels every in-flight
-// request exchange authenticated under an earlier token generation, interrupting
-// any blocked writes and suppressing queued frames.
+// Attach registers the frontend's connection hooks on hs, the server that
+// will serve it. Rotation can only guarantee that old-token output stops at
+// the socket for connections it has seen this way.
+func (s *HTTPServer) Attach(hs *http.Server) {
+	hs.ConnContext = s.connContext
+	hs.ConnState = s.connState
+}
+
+func (s *HTTPServer) connContext(ctx context.Context, c net.Conn) context.Context {
+	hc := &httpConn{}
+	s.mu.Lock()
+	s.conns[c] = hc
+	s.mu.Unlock()
+	return context.WithValue(ctx, httpConnKey{}, hc)
+}
+
+func (s *HTTPServer) connState(c net.Conn, state http.ConnState) {
+	if state != http.StateClosed && state != http.StateHijacked {
+		return
+	}
+	s.mu.Lock()
+	delete(s.conns, c)
+	s.mu.Unlock()
+}
+
+// enterConn counts a handler on its connection. A connection that rotation
+// is closing takes no new handlers: whatever they wrote could only be
+// old-token output.
+func (s *HTTPServer) enterConn(r *http.Request) (*httpConn, bool) {
+	hc, _ := r.Context().Value(httpConnKey{}).(*httpConn)
+	if hc == nil {
+		return nil, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if hc.closing {
+		return nil, false
+	}
+	hc.handlers++
+	return hc, true
+}
+
+func (s *HTTPServer) leaveConn(hc *httpConn) {
+	if hc == nil {
+		return
+	}
+	s.mu.Lock()
+	hc.handlers--
+	hc.pendingGen = 0
+	if hc.handlers == 0 && hc.drained != nil {
+		close(hc.drained)
+		hc.drained = nil
+	}
+	s.mu.Unlock()
+}
+
+// RotateToken replaces the active bearer token and retires everything served
+// under the old one. It closes each connection still writing a reply that the
+// old token authorized: a closed socket carries no late frame, and an old
+// request's deadlines cannot reach a reused connection. Authenticated replies
+// are completed inside the handler (exact lengths, close-delimited SSE, a final
+// flush), so net/http writes nothing for them after the handler returns. It
+// returns once every handler on the closed connections has returned, so no
+// output for an old-token request happens afterwards; bytes the kernel
+// accepted before then cannot be recalled. Other connections stay open. Waits
+// are cancelled; the Mesh jobs behind them are not. retired counts the
+// admitted exchanges.
 func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired int, err error) {
 	if newToken == "" {
 		return 0, 0, errors.New("HTTP MCP bearer token must not be empty")
 	}
+	s.rotateMu.Lock()
+	defer s.rotateMu.Unlock()
+
 	s.mu.Lock()
 	s.token = newToken
 	s.generation++
 	generation = s.generation
-	targets := make([]*httpActiveRequest, 0, len(s.active))
-	for entry := range s.active {
-		if entry.generation < generation {
-			entry.retired.Store(true)
-			targets = append(targets, entry)
-		}
-	}
+	targets := s.detachOlderLocked(generation)
+	conns, drained := s.closingConnsLocked(generation)
 	s.mu.Unlock()
+
 	for _, entry := range targets {
 		entry.cancel()
-		entry.abortIO()
+	}
+	for _, c := range conns {
+		_ = c.Close()
+	}
+	for _, ch := range drained {
+		<-ch
 	}
 	return generation, len(targets), nil
+}
+
+// detachOlderLocked retires exchanges from earlier generations and releases
+// their admission slots and bytes at once, so new-token requests are not
+// refused while retired work drains. That memory stays bounded by one
+// generation's budget because rotations run one at a time and each waits for
+// its retired handlers.
+func (s *HTTPServer) detachOlderLocked(generation uint64) []*httpActiveRequest {
+	var targets []*httpActiveRequest
+	for entry := range s.active {
+		if entry.generation >= generation {
+			continue
+		}
+		entry.retired.Store(true)
+		entry.detached = true
+		s.inflightBytes -= entry.totalBytesLocked()
+		delete(s.active, entry)
+		targets = append(targets, entry)
+	}
+	return targets
+}
+
+// closingConnsLocked picks the connections whose reply was authorized by an
+// earlier generation and is not fully written. A connection between requests,
+// or reading one that is not yet authenticated, stays open: its next request
+// is checked against the new token.
+func (s *HTTPServer) closingConnsLocked(generation uint64) ([]net.Conn, []chan struct{}) {
+	conns := make([]net.Conn, 0, len(s.conns))
+	var drained []chan struct{}
+	for c, hc := range s.conns {
+		if hc.pendingGen == 0 || hc.pendingGen >= generation {
+			continue
+		}
+		hc.closing = true
+		conns = append(conns, c)
+		if hc.handlers > 0 {
+			hc.drained = make(chan struct{})
+			drained = append(drained, hc.drained)
+		}
+	}
+	return conns, drained
 }
 
 // Shutdown stops admitting new requests, cancels in-flight HTTP waits (never
@@ -401,6 +542,13 @@ func startHook(fn func()) <-chan struct{} {
 // ingress admission before reading, section 2.2 validation, output budgets,
 // and JSON/SSE delivery.
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	hc, ok := s.enterConn(r)
+	if !ok {
+		// Rotation is closing this connection; drop it without a status
+		// rather than let net/http answer with an implicit 200.
+		panic(http.ErrAbortHandler)
+	}
+	defer s.leaveConn(hc)
 	if status := mcpwire.EndpointStatus(r, s.authority, s.path, s.originAllowed); status != http.StatusOK {
 		if status == http.StatusMethodNotAllowed {
 			w.Header().Set(httpHeaderAllow, http.MethodPost)
@@ -408,11 +556,60 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		return
 	}
-	authGen, ok := s.authenticate(r.Header)
+	authGen, ok := s.authenticate(r.Header, hc)
 	if !ok {
 		writeUnauthorized(w)
 		return
 	}
+	rw := &httpReplyWriter{ResponseWriter: w}
+	defer s.completeReply(rw, hc)
+	s.serveAuthenticated(rw, r, authGen)
+}
+
+// httpReplyWriter records whether an authenticated reply has started.
+type httpReplyWriter struct {
+	http.ResponseWriter
+	started bool
+}
+
+func (w *httpReplyWriter) WriteHeader(code int) {
+	w.started = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *httpReplyWriter) Write(p []byte) (int, error) {
+	w.started = true
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write MCP HTTP reply: %w", err)
+	}
+	return n, nil
+}
+
+// Unwrap lets http.ResponseController reach the connection's flush and
+// deadlines.
+func (w *httpReplyWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// completeReply finishes an authenticated reply inside the handler, so
+// net/http has nothing left to write for it after the handler returns, and
+// then clears the connection's pending generation: rotation leaves a
+// connection alone once its reply is fully written.
+func (s *HTTPServer) completeReply(rw *httpReplyWriter, hc *httpConn) {
+	if hc == nil {
+		return
+	}
+	if !rw.started {
+		// The client left or the wait was cancelled. Abort rather than let
+		// net/http send an implicit 200 after the handler returns.
+		panic(http.ErrAbortHandler)
+	}
+	_ = http.NewResponseController(rw).Flush()
+	s.mu.Lock()
+	hc.pendingGen = 0
+	s.mu.Unlock()
+}
+
+func (s *HTTPServer) serveAuthenticated(w http.ResponseWriter, r *http.Request, authGen uint64) {
 	if r.ContentLength > mcpwire.MaxMessage {
 		s.writeBoundedFaultJSON(w, &mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
 		return
@@ -436,20 +633,22 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.executeHTTPRequest(reqCtx, w, r, entry, input.Message)
 }
 
-func (s *HTTPServer) authenticate(headers http.Header) (uint64, bool) {
+// authenticate checks the bearer token and, under the same lock rotation
+// takes, latches the generation it authorized onto the connection.
+func (s *HTTPServer) authenticate(headers http.Header, hc *httpConn) (uint64, bool) {
 	token, ok := bearerToken(headers)
 	if !ok {
 		return 0, false
 	}
 	s.mu.Lock()
-	expected := s.token
-	gen := s.generation
-	closed := s.closed
-	s.mu.Unlock()
-	if closed || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+	defer s.mu.Unlock()
+	if s.closed || subtle.ConstantTimeCompare([]byte(token), []byte(s.token)) != 1 {
 		return 0, false
 	}
-	return gen, true
+	if hc != nil {
+		hc.pendingGen = s.generation
+	}
+	return s.generation, true
 }
 
 func bearerToken(headers http.Header) (string, bool) {
@@ -521,8 +720,16 @@ func (s *HTTPServer) setIngressBytes(entry *httpActiveRequest, exact int) {
 	s.mu.Lock()
 	delta := exact - entry.ingressBytes
 	entry.ingressBytes = exact
-	s.inflightBytes += delta
+	s.addInflightLocked(entry, delta)
 	s.mu.Unlock()
+}
+
+// addInflightLocked moves the frontend byte total with entry, unless rotation
+// already took the entry's bytes out of it.
+func (s *HTTPServer) addInflightLocked(entry *httpActiveRequest, delta int) {
+	if !entry.detached {
+		s.inflightBytes += delta
+	}
 }
 
 func (s *HTTPServer) chargeProgress(entry *httpActiveRequest, size int) bool {
@@ -543,7 +750,7 @@ func (s *HTTPServer) chargeProgress(entry *httpActiveRequest, size int) bool {
 func (s *HTTPServer) releaseProgress(entry *httpActiveRequest) {
 	s.mu.Lock()
 	if entry.progressBytes > 0 {
-		s.inflightBytes -= entry.progressBytes
+		s.addInflightLocked(entry, -entry.progressBytes)
 		entry.progressBytes = 0
 	}
 	s.mu.Unlock()
@@ -587,6 +794,11 @@ func (s *HTTPServer) readBudgetedHTTP(w http.ResponseWriter, r *http.Request, rc
 	}
 	if input.Status != http.StatusOK {
 		s.setIngressBytes(entry, 0)
+		if !budgetBody.sawEOF {
+			// An over-cap or unsupported body was not read to its end; a
+			// chunked sender that stalls would hold the drain forever.
+			skipRequestBody(w)
+		}
 		s.writeHTTPInputResponse(w, entry, input)
 		return mcpwire.HTTPInput{}, false
 	}
@@ -596,6 +808,9 @@ func (s *HTTPServer) readBudgetedHTTP(w http.ResponseWriter, r *http.Request, rc
 
 func (s *HTTPServer) handleReadHTTPError(w http.ResponseWriter, r *http.Request, entry *httpActiveRequest, body *httpBudgetedBody, err error) {
 	s.setIngressBytes(entry, 0)
+	// The body ended in an error, so the rest of it is never read: without
+	// this, net/http would drain it after the reply with no deadline.
+	skipRequestBody(w)
 	if entry.retired.Load() {
 		writeUnauthorized(w)
 		return
@@ -605,7 +820,7 @@ func (s *HTTPServer) handleReadHTTPError(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if r.Context().Err() == nil {
-		w.WriteHeader(http.StatusBadRequest)
+		writeStatusReply(w, http.StatusBadRequest)
 	}
 }
 
@@ -716,6 +931,9 @@ func (s *HTTPServer) writeSSEEvent(w http.ResponseWriter, entry *httpActiveReque
 	if !*started {
 		w.Header().Set(httpHeaderContent, httpSSEMedia)
 		w.Header().Set(httpHeaderCache, "no-store")
+		// Close-delimited rather than chunked: a chunked stream ends with a
+		// terminator net/http writes after the handler returns.
+		w.Header().Set(httpHeaderTransfer, "identity")
 		w.WriteHeader(http.StatusOK)
 		*started = true
 	}
@@ -758,13 +976,25 @@ func (s *HTTPServer) writeTerminalHTTP(w http.ResponseWriter, entry *httpActiveR
 		return
 	}
 	defer entry.clearWriteDeadline()
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(status)
-	_, _ = w.Write(frame)
+	writeJSONReply(w, status, frame)
 	if entry.rc != nil {
 		_ = entry.rc.Flush()
 	}
+}
+
+// writeJSONReply and writeStatusReply declare the exact length, so the reply
+// is complete once flushed and needs no chunk terminator after the handler.
+func writeJSONReply(w http.ResponseWriter, status int, raw []byte) {
+	w.Header().Set(httpHeaderContent, httpJSONMedia)
+	w.Header().Set(httpHeaderCache, "no-store")
+	w.Header().Set(httpHeaderLength, strconv.Itoa(len(raw)))
+	w.WriteHeader(status)
+	_, _ = w.Write(raw)
+}
+
+func writeStatusReply(w http.ResponseWriter, status int) {
+	w.Header().Set(httpHeaderLength, "0")
+	w.WriteHeader(status)
 }
 
 func (s *HTTPServer) reserveTerminalBytes(entry *httpActiveRequest, frame, fallback []byte, status int, useSSE bool) ([]byte, int) {
@@ -776,7 +1006,7 @@ func (s *HTTPServer) reserveTerminalBytes(entry *httpActiveRequest, frame, fallb
 	defer s.mu.Unlock()
 	// Worker has finished with the decoded request bytes; switch the exchange's
 	// reservation from ingress + fallback reserve to the exact outgoing frame.
-	s.inflightBytes -= entry.ingressBytes + entry.reservedBytes
+	s.addInflightLocked(entry, -(entry.ingressBytes + entry.reservedBytes))
 	entry.ingressBytes = 0
 	entry.reservedBytes = 0
 
@@ -787,37 +1017,41 @@ func (s *HTTPServer) reserveTerminalBytes(entry *httpActiveRequest, frame, fallb
 		wireSize = len(frame) + overhead
 	}
 	entry.terminalBytes = wireSize
-	s.inflightBytes += wireSize
+	s.addInflightLocked(entry, wireSize)
 	return frame, status
 }
 
+// skipRequestBody prepares a reply sent without reading the request body.
+// net/http would otherwise drain that body around the reply, waiting without
+// a deadline on a client that declared a body and never sent it. Closing the
+// connection skips the drain before the reply, and an expired read deadline
+// ends the one after it at once.
+func skipRequestBody(w http.ResponseWriter) {
+	w.Header().Set(httpHeaderConnection, "close")
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+}
+
 func writeUnauthorized(w http.ResponseWriter) {
+	skipRequestBody(w)
 	w.Header().Set(httpHeaderWWWAuth, "Bearer")
-	w.WriteHeader(http.StatusUnauthorized)
+	writeStatusReply(w, http.StatusUnauthorized)
 }
 
 func (s *HTTPServer) writeHTTPInputResponse(w http.ResponseWriter, entry *httpActiveRequest, input mcpwire.HTTPInput) {
 	if input.Fault == nil {
-		w.WriteHeader(input.Status)
+		writeStatusReply(w, input.Status)
 		return
 	}
 	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
 		return
 	}
 	defer entry.clearWriteDeadline()
-	raw := encodeBoundedFault(input.Fault, min(mcpwire.MaxMessage, s.connBytes))
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(input.Status)
-	_, _ = w.Write(raw)
+	writeJSONReply(w, input.Status, encodeBoundedFault(input.Fault, min(mcpwire.MaxMessage, s.connBytes)))
 }
 
 func (s *HTTPServer) writeBoundedFaultJSON(w http.ResponseWriter, fault *mcpwire.Fault) {
-	raw := encodeBoundedFault(fault, min(mcpwire.MaxMessage, s.connBytes))
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(faultHTTPStatus(fault.Code))
-	_, _ = w.Write(raw)
+	skipRequestBody(w)
+	writeJSONReply(w, faultHTTPStatus(fault.Code), encodeBoundedFault(fault, min(mcpwire.MaxMessage, s.connBytes)))
 }
 
 // wantsSSE reports whether the server should prefer text/event-stream even when

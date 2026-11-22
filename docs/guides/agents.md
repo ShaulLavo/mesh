@@ -133,13 +133,15 @@ mesh mcp --http 127.0.0.1:8765 --identity codex
 
 Mesh exposes the same native tool catalog (including contexts and `mesh_exec`) through the shared dispatch core, listening only on the given loopback IP and port at `/mcp`. It matches the exact configured `Host` and port, accepts an absent `Origin` or an explicitly configured exact loopback origin (`--allow-origin http://127.0.0.1:3000`), rejects `GET` and `DELETE` with `405`, and ignores incoming `Mcp-Session-Id` and `Last-Event-ID` headers.
 
-Every `POST /mcp` requires `Authorization: Bearer TOKEN` from the private `0600` token file tied to that listener and identity (path printed on stderr; the token value is never logged). Responses use `application/json` or request-scoped `text/event-stream` (`Accept` must include both). Closing the response stream cancels the in-flight HTTP request and never cancels an accepted Mesh job.
+Every `POST /mcp` requires `Authorization: Bearer TOKEN` from the private `0600` token file tied to that listener and identity (path printed on stderr; the token value is never logged). Responses use `application/json` with an exact length, or request-scoped `text/event-stream` that ends when the server closes the connection (`Accept` must include both). Closing the response stream cancels the in-flight HTTP request and never cancels an accepted Mesh job.
 
 To rotate the bearer token and immediately retire active streams using the old token:
 
 ```sh
 mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
 ```
+
+Rotation closes each connection still writing a reply that the old token authorized, and returns once those replies have stopped; their waits end, but the Mesh jobs behind them keep running. Other connections stay open, and their next request is checked against the new token. Two edge cases at the moment of rotation: a request sent on a connection whose old-token reply was just finishing can be dropped with the connection, so the client retries it; and a client that reads the new token file before the listener switches can get one `401`, so it retries.
 
 Read the updated private token file to configure the client with the new token. Standard HTTP endpoints stay local and private on loopback; do not expose `mesh mcp --http` through `mesh serve` or any public port.
 
