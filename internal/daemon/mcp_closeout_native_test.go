@@ -9,7 +9,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -61,9 +65,18 @@ func mcpHTTPFixtureHandler(pid int) http.Handler {
 				"jsonrpc": "2.0", "id": req.ID(),
 				"result": map[string]any{
 					"resultType": "complete", "supportedVersions": []string{"2026-07-28"},
-					"capabilities": map[string]any{"tools": map[string]any{}},
-					"ttlMs":        60000, "cacheScope": "private",
-					"_meta": map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "managed-http", "version": "1"}},
+					"capabilities": map[string]any{
+						"tools":      map[string]any{},
+						"privateCap": map[string]any{"note": "PROBE_CAP_EXTENSION_SENTINEL"},
+					},
+					"ttlMs": 60000, "cacheScope": "private",
+					"_meta": map[string]any{
+						"io.modelcontextprotocol/serverInfo": map[string]any{
+							"name":       "managed-http",
+							"version":    "1",
+							"privateExt": "PROBE_INFO_EXTENSION_SENTINEL",
+						},
+					},
 				},
 			}
 		case mcpwire.MethodListTools:
@@ -124,10 +137,40 @@ func TestHostedMCPOversizedStdioReplyKeepsInstanceAlive(t *testing.T) {
 		t.Fatalf("oversized stdio reply = %s, want mcp.message_too_large", oversized.Raw())
 	}
 
+	// Concurrent in-flight request beside an oversized reply: only the oversized
+	// call fails with mcp.message_too_large while the concurrent request succeeds.
+	var wg sync.WaitGroup
+	var bigReply, okReply mcpwire.Message
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		bigReply = f.mcpCall(t, cred, "big", fmt.Sprintf(`{"bytes":%d}`, 4<<20))
+	}()
+	go func() {
+		defer wg.Done()
+		okReply = f.mcpCall(t, cred, "echo", `{"text":"concurrent-ok"}`)
+	}()
+	wg.Wait()
+	if errorCode(bigReply) != "mcp.message_too_large" {
+		t.Fatalf("concurrent oversized reply = %s, want mcp.message_too_large", bigReply.Raw())
+	}
+	if got := resultText(t, okReply); got != "concurrent-ok" {
+		t.Fatalf("concurrent normal reply = %q, want concurrent-ok", got)
+	}
 	after := fixtureInstance(t, resultText(t, f.mcpCall(t, cred, "whoami", `{}`)))
 	if after != before {
 		t.Fatalf("oversized reply faulted the instance: before=%s after=%s", before, after)
 	}
+
+	// Malformed stdout framing must fault the channel and restart on next call.
+	bad := f.mcpCall(t, cred, "garbage", `{}`)
+	if bad.ErrorObject() == nil {
+		t.Fatalf("malformed framing call unexpectedly succeeded: %s", bad.Raw())
+	}
+	pipeEventually(t, func() bool {
+		reply := f.mcpCall(t, cred, "whoami", `{}`)
+		return reply.ErrorObject() == nil && fixtureInstance(t, resultText(t, reply)) != before
+	})
 }
 
 // TestHostedMCPManagedHTTPNative exercises a Mesh-managed HTTP MCP server on a
@@ -182,6 +225,7 @@ func TestHostedMCPManagedHTTPNative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkedWorkers := 0
 	for _, entry := range entries {
 		metaBytes, err := os.ReadFile(filepath.Join(f.sessions, entry.Name(), "meta.json"))
 		if err != nil {
@@ -196,6 +240,7 @@ func TestHostedMCPManagedHTTPNative(t *testing.T) {
 		if json.Unmarshal(metaBytes, &meta) != nil || meta.ID == "" || meta.Reservation.Instance == "" {
 			continue
 		}
+		checkedWorkers++
 		reply, err := f.exchange(protocol.Control{
 			Type:      protocol.TypeExecutionLogs,
 			RequestID: "raw-logs",
@@ -206,6 +251,9 @@ func TestHostedMCPManagedHTTPNative(t *testing.T) {
 		if err != nil || reply.Type != protocol.TypeError {
 			t.Fatalf("raw execution.logs reached managed HTTP worker %s: %+v (%v)", meta.ID, reply, err)
 		}
+	}
+	if checkedWorkers == 0 {
+		t.Fatal("expected at least one managed HTTP worker directory to verify raw execution isolation")
 	}
 
 	// Restart replaces the plain pipe worker with a new PID at generation 2.
@@ -255,6 +303,18 @@ func TestHostedMCPExternalHTTPControlsNative(t *testing.T) {
 	if probe.Type != protocol.TypeMCPServiceResult || !strings.Contains(string(probe.Result), `"state":"ready"`) {
 		t.Fatalf("probe external HTTP: %+v", probe)
 	}
+	// Finding 7: raw wire probe response must contain only allowlisted discovery fields.
+	for _, forbidden := range []string{"PROBE_CAP_EXTENSION_SENTINEL", "PROBE_INFO_EXTENSION_SENTINEL", "privateCap", "privateExt"} {
+		if strings.Contains(string(probe.Result), forbidden) {
+			t.Fatalf("probe wire response leaked unprojected discovery field %q: %s", forbidden, probe.Result)
+		}
+	}
+	if !strings.Contains(string(probe.Result), `"name":"managed-http"`) || !strings.Contains(string(probe.Result), `"tools"`) {
+		t.Fatalf("probe wire response missing allowlisted discovery fields: %s", probe.Result)
+	}
+	if got := f.liveWorkers(t); got != 0 {
+		t.Fatalf("external HTTP spawned %d workers, want 0", got)
+	}
 	for _, kind := range []string{protocol.TypeMCPServiceStart, protocol.TypeMCPServiceStop, protocol.TypeMCPServiceRestart, protocol.TypeMCPServiceLogs} {
 		reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: kind, RequestID: kind, Service: "external"})
 		if reply.Type != protocol.TypeError || reply.ErrorCode != executionUsageInvalidCode {
@@ -277,5 +337,108 @@ func TestHostedMCPExternalHTTPControlsNative(t *testing.T) {
 	_, reader2 := f.mcpStream(t, mcpframe.Route{Service: "external", Caller: cred}, mcpToolCall(`"e2"`, "info", `{}`))
 	if got := resultText(t, readMCP(t, reader2)[0]); !strings.Contains(got, "pid=9999") {
 		t.Fatalf("forward after enable: %q", got)
+	}
+}
+
+// TestHostedMCPManagedHTTPOwnerGuardNative proves against real Linux/macOS
+// sockets and workers that managed HTTP refuses an occupied port before spawn
+// and refuses to send credentials to a rogue listener that takes over after
+// the managed worker exits.
+func TestHostedMCPManagedHTTPOwnerGuardNative(t *testing.T) {
+	f := newMCPDaemon(t)
+	secret := filepath.Join(f.root, "guard-secret")
+	if err := os.WriteFile(secret, []byte("Bearer native-guard-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Case 1: occupied port must fail before spawning any worker or sending credentials.
+	var incumbentHits atomic.Int32
+	var incumbentAuth atomic.Value
+	incumbent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		incumbentHits.Add(1)
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			incumbentAuth.Store(auth)
+		}
+		mcpHTTPFixtureHandler(7777).ServeHTTP(w, r)
+	}))
+	t.Cleanup(incumbent.Close)
+	incAddr := strings.TrimPrefix(incumbent.URL, "http://")
+	f.publishMCP(t, mcphost.Definition{
+		Name:           "occupied",
+		URL:            incumbent.URL + "/mcp",
+		RunArgv:        []string{f.executable, mcpHTTPFixtureRole, incAddr},
+		RunCwd:         f.root,
+		InstancePolicy: mcphost.PolicyShared,
+		AccountMode:    mcphost.AccountHostAccount,
+		AccountLabel:   "guard bot",
+		HeaderSecrets:  map[string]string{"Authorization": secret},
+	})
+	if reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceStart, RequestID: "start-occ", Service: "occupied"}); reply.Type != protocol.TypeError {
+		t.Fatalf("managed HTTP started on occupied port: %+v", reply)
+	}
+	if f.liveWorkers(t) != 0 {
+		t.Fatalf("managed HTTP spawned %d workers on occupied port, want 0", f.liveWorkers(t))
+	}
+	if incumbentHits.Load() != 0 || incumbentAuth.Load() != nil {
+		t.Fatalf("incumbent received %d hits (auth=%v), want 0", incumbentHits.Load(), incumbentAuth.Load())
+	}
+
+	// Case 2: after managed worker exits, a rogue listener taking over the port
+	// must never receive credentials.
+	addr := freeTestLoopbackAddr(t)
+	f.publishMCP(t, mcphost.Definition{
+		Name:           "takeover",
+		URL:            "http://" + addr + "/mcp",
+		RunArgv:        []string{f.executable, mcpHTTPFixtureRole, addr},
+		RunCwd:         f.root,
+		InstancePolicy: mcphost.PolicyShared,
+		AccountMode:    mcphost.AccountHostAccount,
+		AccountLabel:   "guard bot",
+		HeaderSecrets:  map[string]string{"Authorization": secret},
+	})
+	if reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceStart, RequestID: "start-ok", Service: "takeover"}); reply.Type != protocol.TypeMCPServiceResult {
+		t.Fatalf("start managed takeover fixture: %+v", reply)
+	}
+	cred := newCredential(t)
+	_, reader := f.mcpStream(t, mcpframe.Route{Service: "takeover", Caller: cred}, mcpToolCall(`"t1"`, "info", `{}`))
+	first := resultText(t, readMCP(t, reader)[0])
+	pidStr := strings.TrimPrefix(strings.Fields(first)[0], "pid=")
+	childPID, err := strconv.Atoi(pidStr)
+	if err != nil || childPID <= 1 {
+		t.Fatalf("parse managed fixture pid from %q: %v", first, err)
+	}
+	// Kill the fixture child directly and immediately bind a rogue listener on addr.
+	_ = syscall.Kill(childPID, syscall.SIGKILL)
+	var rogueLn net.Listener
+	pipeEventually(t, func() bool {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return false
+		}
+		rogueLn = ln
+		return true
+	})
+	var rogueHits atomic.Int32
+	var rogueAuth atomic.Value
+	rogueSrv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rogueHits.Add(1)
+			if auth := r.Header.Get("Authorization"); auth != "" {
+				rogueAuth.Store(auth)
+			}
+			mcpHTTPFixtureHandler(8888).ServeHTTP(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() { _ = rogueSrv.Serve(rogueLn) }()
+	t.Cleanup(func() { _ = rogueSrv.Close() })
+
+	_, reader2 := f.mcpStream(t, mcpframe.Route{Service: "takeover", Caller: cred}, mcpToolCall(`"t2"`, "info", `{}`))
+	reply2 := readMCP(t, reader2)[0]
+	if reply2.ErrorObject() == nil {
+		t.Fatalf("call against rogue listener succeeded: %s", reply2.Raw())
+	}
+	if rogueHits.Load() != 0 || rogueAuth.Load() != nil {
+		t.Fatalf("rogue listener received %d hits (auth=%v) after worker exit", rogueHits.Load(), rogueAuth.Load())
 	}
 }

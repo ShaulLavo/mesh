@@ -386,11 +386,22 @@ class ConnectClient:
         return req_id
 
     def read_message(self, timeout=20.0):
-        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        require(bool(ready), f"timed out reading MCP stdout after {timeout}s")
-        line = self.proc.stdout.readline()
-        require(bool(line), "MCP connect closed stdout unexpectedly")
-        return json.loads(line.decode("utf-8"))
+        buf = getattr(self, "_stdout_buf", b"")
+        deadline = time.monotonic() + timeout
+        fd = self.proc.stdout.fileno()
+        while True:
+            nl = buf.find(b"\n")
+            if nl >= 0:
+                line = buf[: nl + 1]
+                self._stdout_buf = buf[nl + 1 :]
+                return json.loads(line.decode("utf-8"))
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, f"timed out reading MCP stdout after {timeout}s")
+            ready, _, _ = select.select([fd], [], [], remaining)
+            require(bool(ready), f"timed out reading MCP stdout after {timeout}s")
+            chunk = os.read(fd, 65536)
+            require(bool(chunk), "MCP connect closed stdout unexpectedly")
+            buf += chunk
 
     def call_tool(self, name, arguments=None, timeout=20.0):
         req_id = self.request("tools/call", {"name": name, "arguments": arguments or {}})

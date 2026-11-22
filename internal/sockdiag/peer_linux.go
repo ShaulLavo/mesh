@@ -12,12 +12,29 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// PeerInfo identifies the live established peer socket's kernel owner UID and inode.
+type PeerInfo struct {
+	UID   uint32
+	Inode uint32
+}
+
 // PeerUID identifies the live client socket, not the accepted server socket.
 func PeerUID(peer, local netip.AddrPort) (uint32, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	info, err := Peer(ctx, peer, local)
+	if err != nil {
+		return 0, err
+	}
+	return info.UID, nil
+}
+
+// Peer identifies the live established peer socket's UID and inode.
+func Peer(ctx context.Context, peer, local netip.AddrPort) (PeerInfo, error) {
 	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
 	local = netip.AddrPortFrom(local.Addr().Unmap(), local.Port())
 	if !peer.IsValid() || !local.IsValid() || peer.Addr().Is4() != local.Addr().Is4() {
-		return 0, errors.New("peer and local socket addresses must have the same valid family")
+		return PeerInfo{}, errors.New("peer and local socket addresses must have the same valid family")
 	}
 	family := uint8(unix.AF_INET6)
 	if peer.Addr().Is4() {
@@ -26,20 +43,20 @@ func PeerUID(peer, local netip.AddrPort) (uint32, error) {
 	id := peerDiagID(peer, local, family)
 	request, err := marshalPeerDiagRequest(id, family)
 	if err != nil {
-		return 0, err
+		return PeerInfo{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	var uid uint32
+	var info PeerInfo
 	err = exchange(ctx, request, func(raw []byte) (bool, error) {
 		var err error
-		uid, err = parsePeerDiagReply(raw, id, family)
+		info, err = parsePeerDiagReply(raw, id, family)
 		return true, err
 	})
 	if err != nil {
-		return 0, err
+		return PeerInfo{}, err
 	}
-	return uid, nil
+	return info, nil
 }
 
 func peerDiagID(peer, local netip.AddrPort, family uint8) inetDiagSockID {
@@ -60,23 +77,23 @@ func marshalPeerDiagRequest(id inetDiagSockID, family uint8) ([]byte, error) {
 	return marshalDiagRequest(inetDiagReqV2{Family: family, Protocol: unix.IPPROTO_TCP, States: 1 << tcpEstablished, ID: id}, false)
 }
 
-func parsePeerDiagReply(raw []byte, id inetDiagSockID, family uint8) (uint32, error) {
+func parsePeerDiagReply(raw []byte, id inetDiagSockID, family uint8) (PeerInfo, error) {
 	header, data, err := diagMessage(raw)
 	if err != nil {
-		return 0, err
+		return PeerInfo{}, err
 	}
 	if uint64(header.Len) != uint64(len(raw)) || header.Flags&unix.NLM_F_MULTI != 0 {
-		return 0, errors.New("invalid peer socket diagnostic header")
+		return PeerInfo{}, errors.New("invalid peer socket diagnostic header")
 	}
 	if header.Type == unix.NLMSG_ERROR {
-		return 0, diagError(data)
+		return PeerInfo{}, diagError(data)
 	}
 	if header.Type != unix.SOCK_DIAG_BY_FAMILY {
-		return 0, errors.New("unexpected peer socket diagnostic message")
+		return PeerInfo{}, errors.New("unexpected peer socket diagnostic message")
 	}
 	var socket inetDiagMsg
 	if _, err := binary.Decode(data, binary.NativeEndian, &socket); err != nil {
-		return 0, fmt.Errorf("decode peer socket diagnostics: %w", err)
+		return PeerInfo{}, fmt.Errorf("decode peer socket diagnostics: %w", err)
 	}
 	// AF_INET can find a mapped IPv6 socket, but the kernel replies in the
 	// socket's native family. Compare the same tuple in that representation.
@@ -87,11 +104,11 @@ func parsePeerDiagReply(raw []byte, id inetDiagSockID, family uint8) (uint32, er
 	}
 	if socket.Family != family || socket.ID.SourcePort != id.SourcePort || socket.ID.DestinationPort != id.DestinationPort ||
 		socket.ID.Source != id.Source || socket.ID.Destination != id.Destination {
-		return 0, errors.New("peer socket diagnostic tuple does not match")
+		return PeerInfo{}, errors.New("peer socket diagnostic tuple does not match")
 	}
 	// TIME_WAIT diagnostics may name UID zero but have no owning socket.
 	if socket.State != tcpEstablished || socket.Inode == 0 {
-		return 0, errors.New("live established peer socket owner not found")
+		return PeerInfo{}, errors.New("live established peer socket owner not found")
 	}
-	return socket.UID, nil
+	return PeerInfo{UID: socket.UID, Inode: socket.Inode}, nil
 }

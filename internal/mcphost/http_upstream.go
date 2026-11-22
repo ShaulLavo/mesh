@@ -45,6 +45,7 @@ func openHTTPUpstream(config HTTPUpstreamConfig) (Upstream, error) {
 	if err != nil {
 		return nil, err
 	}
+	endpoint.verifyDial = config.VerifyDial
 	credentials, err := validCredentials(config.Headers)
 	if err != nil {
 		return nil, err

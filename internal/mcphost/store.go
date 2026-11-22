@@ -57,9 +57,13 @@ type InstanceRecord struct {
 	ExitCode     *int    `json:"exitCode,omitempty"`
 	Leases       []Lease `json:"leases,omitempty"`
 	// Worker is the exact reservation of the current generation.
-	Worker    *WorkerRef `json:"worker,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	Worker *WorkerRef `json:"worker,omitempty"`
+	// StopPending records a worker reservation whose termination was requested
+	// but not yet confirmed. Recovery finishes stopping it before any new
+	// generation may launch.
+	StopPending *WorkerRef `json:"stopPending,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
 // Lease holds an instance for a bounded time, optionally until a co-located

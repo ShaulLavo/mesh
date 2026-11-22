@@ -9,12 +9,14 @@ import (
 	"sync"
 
 	"github.com/shaul/mesh/internal/mcpwire"
-	"github.com/shaul/mesh/internal/session"
 )
 
 const lineOutputBytes = 8 << 20
 const lineOutputFrames = 4096
 const lineFrameGap = "frame_gap"
+
+// maxFramedLine allows mcpwire.MaxMessage JSON bytes plus a CRLF delimiter.
+const maxFramedLine = mcpwire.MaxMessage + 2
 
 type lineFrame struct {
 	data       []byte
@@ -71,19 +73,30 @@ var errLineTooLarge = errors.New("line exceeds worker frame limit")
 func readLineFrame(reader *bufio.Reader) (lineFrame, error) {
 	line, err := reader.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
-		return lineFrame{data: bytes.Clone(line)}, workerExecutionError("read line", err)
+		return finishLineFrame(reader, bytes.Clone(line), err)
 	}
 	total := bytes.Clone(line)
 	for {
 		line, err = reader.ReadSlice('\n')
-		if len(line) > session.MaxLineBytes-len(total) {
+		if len(line) > maxFramedLine-len(total) {
 			return recoverOversizedLine(reader, total, line, err)
 		}
 		total = append(total, line...)
 		if !errors.Is(err, bufio.ErrBufferFull) {
-			return lineFrame{data: total}, workerExecutionError("read line", err)
+			return finishLineFrame(reader, total, err)
 		}
 	}
+}
+
+func finishLineFrame(reader *bufio.Reader, total []byte, err error) (lineFrame, error) {
+	if err != nil {
+		return lineFrame{data: total}, workerExecutionError("read line", err)
+	}
+	body := bytes.TrimSuffix(total[:len(total)-1], []byte("\r"))
+	if len(body) > mcpwire.MaxMessage {
+		return recoverOversizedLine(reader, total, nil, nil)
+	}
+	return lineFrame{data: total}, nil
 }
 
 func recoverOversizedLine(reader *bufio.Reader, total, tail []byte, readErr error) (lineFrame, error) {

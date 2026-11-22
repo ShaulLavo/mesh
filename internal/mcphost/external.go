@@ -40,8 +40,7 @@ func (s *Supervisor) connectExternal(ctx context.Context, inst *instance, d Defi
 		_ = upstream.Close()
 		return nil, s.failExternal(ctx, inst, err)
 	}
-	gen.serverInfo = serverInfoOf(discovered)
-	gen.capabilities = capabilitiesOf(discovered)
+	gen.setDiscovery(serverInfoOf(discovered), capabilitiesOf(discovered))
 	// Only a server that advertises tools has schemas to mirror headers from.
 	if err := s.refreshToolsIfAdvertised(ctx, gen, discovered); err != nil {
 		_ = upstream.Close()

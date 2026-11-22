@@ -22,7 +22,10 @@ type mcpLauncher struct {
 	l *lifecycle
 }
 
-var _ mcphost.Launcher = mcpLauncher{}
+var (
+	_ mcphost.Launcher         = mcpLauncher{}
+	_ mcphost.ManagedHTTPGuard = mcpLauncher{}
+)
 
 func (m mcpLauncher) key(k mcphost.LaunchKey) execution.Key {
 	return execution.Key{Host: string(m.l.host.ID), Class: execution.InternalServiceClass, Principal: k.Principal(), Opaque: k.Opaque()}
@@ -205,32 +208,11 @@ func (m mcpLauncher) Stderr(ctx context.Context, ref mcphost.WorkerRef, limit in
 	if err != nil {
 		return nil, err
 	}
-	var tail []byte
-	cursor := ""
-	for range 16 {
-		page, err := m.l.executionOutput.Page(ctx, b, execution.StreamStderr, cursor, limit)
-		if err != nil {
-			return nil, fmt.Errorf("read MCP worker %s stderr: %w", ref.SessionID, err)
-		}
-		tail = appendTail(tail, page.Bytes, limit)
-		if page.NextCursor == "" || page.NextCursor == cursor || len(page.Bytes) == 0 {
-			break
-		}
-		cursor = page.NextCursor
+	tail, err := m.l.executionOutput.Tail(ctx, b, execution.StreamStderr, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read MCP worker %s stderr: %w", ref.SessionID, err)
 	}
 	return tail, nil
-}
-
-func appendTail(tail, chunk []byte, limit int) []byte {
-	if len(chunk) >= limit {
-		return append(tail[:0], chunk[len(chunk)-limit:]...)
-	}
-	tail = append(tail, chunk...)
-	if len(tail) > limit {
-		copy(tail, tail[len(tail)-limit:])
-		tail = tail[:limit]
-	}
-	return tail
 }
 
 func (m mcpLauncher) Dial(ctx context.Context, ref mcphost.WorkerRef) (mcphost.LineConn, error) {

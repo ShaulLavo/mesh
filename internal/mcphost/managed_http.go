@@ -4,29 +4,103 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
+	"slices"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/storage"
 )
 
 const (
-	managedHTTPProbePoll  = 25 * time.Millisecond
-	managedHTTPWatchPoll  = 100 * time.Millisecond
-	managedHTTPDrainPause = 5 * time.Second
+	managedHTTPProbePoll = 25 * time.Millisecond
+	managedHTTPWatchPoll = 100 * time.Millisecond
 )
 
+// prepareManagedHTTPLaunch runs all pre-spawn invariants for a Mesh-managed
+// HTTP service: credential file validation, predecessor drain completion,
+// endpoint claim coordination across competing definitions, and preflight
+// checks proving no process already listens on the target loopback port.
+func (s *Supervisor) prepareManagedHTTPLaunch(ctx context.Context, inst *instance, d Definition) error {
+	if _, err := secretHeaders(d); err != nil {
+		return s.settle(ctx, inst, StateFailed, err.Error(), nil)
+	}
+	endpoint, err := parseHTTPEndpoint(d.URL)
+	if err != nil {
+		return s.settle(ctx, inst, StateFailed, err.Error(), nil)
+	}
+	guard, ok := s.cfg.Launcher.(ManagedHTTPGuard)
+	if !ok {
+		return s.settle(ctx, inst, StateFailed, "managed HTTP listener ownership verification is unavailable", nil)
+	}
+	drainCtx, drainCancel := context.WithTimeout(ctx, drainGrace+stopTimeout)
+	defer drainCancel()
+	if err := s.awaitDrainingManaged(drainCtx, inst); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	cur, exists := s.services[d.ID]
+	if !exists || cur.Disabled || cur.Revision != d.Revision {
+		s.mu.Unlock()
+		return failure(codeUnavailable, true, "service %s changed before launch", d.Name)
+	}
+	claimErr := s.claimEndpointsLocked(inst.rec.ID, endpoint.targets)
+	s.mu.Unlock()
+	if claimErr != nil {
+		return s.settle(ctx, inst, StateFailed, claimErr.Error(), nil)
+	}
+	checkCtx, checkCancel := context.WithTimeout(ctx, stopTimeout)
+	defer checkCancel()
+	if err := checkLoopbackTargetsFree(endpoint.targets); err != nil {
+		return s.settle(ctx, inst, StateFailed, err.Error(), nil)
+	}
+	if err := guard.CheckPortFree(checkCtx, endpoint.targets); err != nil {
+		return s.settle(ctx, inst, StateFailed, err.Error(), nil)
+	}
+	return nil
+}
+
+func checkLoopbackTargetsFree(targets []netip.AddrPort) error {
+	for _, target := range targets {
+		network := "tcp4"
+		if target.Addr().Is6() {
+			network = "tcp6"
+		}
+		ln, err := net.Listen(network, target.String())
+		if err != nil {
+			if target.Addr().Is6() && len(targets) > 1 && isIPv6Unavailable(err) {
+				continue
+			}
+			return fmt.Errorf("managed HTTP endpoint %s is already occupied: %w", target, err)
+		}
+		_ = ln.Close()
+	}
+	return nil
+}
+
+func isIPv6Unavailable(err error) bool {
+	return errors.Is(err, syscall.EAFNOSUPPORT) || errors.Is(err, syscall.EPROTONOSUPPORT) || errors.Is(err, syscall.EADDRNOTAVAIL)
+}
+
 // connectManagedHTTP attaches an HTTP upstream to a Mesh-managed plain pipe
-// worker listening at d.URL. Because the process may need a moment after spawn
-// to bind its loopback port, connection refusals are retried until ReadyTimeout
-// unless the worker exits or answers with an incompatible protocol.
+// worker listening at d.URL. Every TCP connection is verified to belong to ref
+// before any HTTP request or credential header is written.
 func (s *Supervisor) connectManagedHTTP(ctx context.Context, inst *instance, d Definition, key LaunchKey, ref WorkerRef) (*generation, error) {
 	headers, err := secretHeaders(d)
 	if err != nil {
 		return nil, s.failStart(ctx, inst, key, ref, err.Error())
 	}
+	guard, ok := s.cfg.Launcher.(ManagedHTTPGuard)
+	if !ok {
+		return nil, s.failStart(ctx, inst, key, ref, "managed HTTP listener ownership verification is unavailable")
+	}
 	gen := &generation{number: key.Generation, revision: d.Revision, ref: ref}
 	budget := &byteBudget{limit: instanceQueueBytes, parent: s.router.budget}
-	upstream, err := DialHTTP(HTTPUpstreamConfig{URL: d.URL, Headers: headers, ToolHeaders: gen.toolHeaders, budget: budget})
+	verify := func(dialCtx context.Context, target netip.AddrPort, dial func() (net.Conn, error)) (net.Conn, error) {
+		return guard.VerifyManagedDial(dialCtx, ref, target, dial)
+	}
+	upstream, err := DialHTTP(HTTPUpstreamConfig{URL: d.URL, Headers: headers, ToolHeaders: gen.toolHeaders, VerifyDial: verify, budget: budget})
 	if err != nil {
 		return nil, s.failStart(ctx, inst, key, ref, "connect to "+d.URL+": "+err.Error())
 	}
@@ -36,8 +110,7 @@ func (s *Supervisor) connectManagedHTTP(ctx context.Context, inst *instance, d D
 		_ = upstream.Close()
 		return nil, err
 	}
-	gen.serverInfo = serverInfoOf(discovered)
-	gen.capabilities = capabilitiesOf(discovered)
+	gen.setDiscovery(serverInfoOf(discovered), capabilitiesOf(discovered))
 	if err := s.refreshToolsIfAdvertised(ctx, gen, discovered); err != nil {
 		_ = upstream.Close()
 		return nil, s.failStart(ctx, inst, key, ref, err.Error())
@@ -66,21 +139,38 @@ func (s *Supervisor) probeManagedHTTP(ctx context.Context, inst *instance, d Def
 		if err == nil {
 			return discovered, nil
 		}
-		var f *Failure
-		if errors.As(err, &f) && f.Code == codeIncompatible {
-			_ = s.stopWorker(ctx, ref)
-			return nil, s.settle(ctx, inst, StateIncompatible, f.Err.Error(), nil)
-		}
-		if _, status, code, _ := s.cfg.Launcher.Locate(ctx, key); status == WorkerEnded {
-			return nil, s.settle(ctx, inst, StateFailed, exitReason(code), code)
-		}
-		if !errors.Is(err, ErrNotSent) || probeCtx.Err() != nil {
-			return nil, s.failStart(ctx, inst, key, ref, err.Error())
+		retry, finalErr := s.handleManagedProbeError(ctx, probeCtx, inst, key, ref, err)
+		if !retry {
+			return nil, finalErr
 		}
 		if err := waitManagedRetry(probeCtx); err != nil {
 			return nil, s.failStart(ctx, inst, key, ref, "server did not answer server/discover before the ready timeout")
 		}
 	}
+}
+
+func (s *Supervisor) handleManagedProbeError(ctx, probeCtx context.Context, inst *instance, key LaunchKey, ref WorkerRef, err error) (bool, error) {
+	var f *Failure
+	if errors.As(err, &f) && f.Code == codeIncompatible {
+		if stopErr := s.stopWorker(ctx, ref); stopErr != nil {
+			s.mu.Lock()
+			refCopy := ref
+			inst.rec.StopPending = &refCopy
+			s.mu.Unlock()
+			return false, s.settle(ctx, inst, StateUncertain, "incompatible worker termination is unresolved: "+stopErr.Error(), nil)
+		}
+		return false, s.settle(ctx, inst, StateIncompatible, f.Err.Error(), nil)
+	}
+	if errors.Is(err, ErrManagedListenerMismatch) {
+		return false, s.failStart(ctx, inst, key, ref, err.Error())
+	}
+	if _, status, code, _ := s.cfg.Launcher.Locate(ctx, key); status == WorkerEnded {
+		return false, s.settle(ctx, inst, StateFailed, exitReason(code), code)
+	}
+	if !errors.Is(err, ErrNotSent) || probeCtx.Err() != nil {
+		return false, s.failStart(ctx, inst, key, ref, err.Error())
+	}
+	return true, nil
 }
 
 func waitManagedRetry(ctx context.Context) error {
@@ -147,20 +237,35 @@ func (s *Supervisor) pollWorkerExit(ctx context.Context, key LaunchKey, ref Work
 	}
 }
 
-// awaitDrainingManaged waits for a replaced generation of a managed HTTP
-// instance to release its loopback port before launching a new worker.
-func (s *Supervisor) awaitDrainingManaged(ctx context.Context, inst *instance) {
-	s.mu.Lock()
-	done := inst.drainingDone
-	s.mu.Unlock()
-	if done == nil {
-		return
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, managedHTTPDrainPause)
-	defer cancel()
-	select {
-	case <-done:
-	case <-waitCtx.Done():
+// awaitDrainingManaged waits until every replaced generation of inst has been
+// confirmed exited. If termination failed or ctx expires first, it refuses to
+// launch a replacement on the same port.
+func (s *Supervisor) awaitDrainingManaged(ctx context.Context, inst *instance) error {
+	for {
+		s.mu.Lock()
+		if inst.rec.StopPending != nil {
+			reason := inst.rec.Reason
+			s.mu.Unlock()
+			return failure(codeUnavailable, true, "instance %s: previous worker termination is unresolved (%s)", inst.rec.ID, reason)
+		}
+		pending := slices.Clone(inst.draining)
+		s.mu.Unlock()
+		if len(pending) == 0 {
+			return nil
+		}
+		for _, dg := range pending {
+			select {
+			case <-dg.done:
+			case <-ctx.Done():
+				return failure(codeUnavailable, true, "instance %s: previous generation is still draining", inst.rec.ID)
+			}
+			s.mu.Lock()
+			err := dg.err
+			s.mu.Unlock()
+			if err != nil {
+				return failure(codeUnavailable, true, "instance %s: previous generation did not stop: %v", inst.rec.ID, err)
+			}
+		}
 	}
 }
 
@@ -225,62 +330,74 @@ func (s *Supervisor) toggleServiceLocked(ctx context.Context, ref string, disabl
 }
 
 // Probe performs a read-only server/discover check (and HTTP tool schema
-// validation) for an external HTTP or owned service without disrupting calls.
-func (s *Supervisor) Probe(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+// validation) for an external HTTP or owned service without disrupting active
+// calls. It returns the host-projected, allowlisted CatalogInstance.
+func (s *Supervisor) Probe(ctx context.Context, caller Caller, target Target) (CatalogInstance, error) {
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
 	inst, d, err := s.pick(ctx, caller, target)
 	if err != nil {
-		return InstanceView{}, err
+		return CatalogInstance{}, err
 	}
 	s.mu.Lock()
-	alreadyReady := inst.current != nil && inst.current.revision == d.Revision && inst.current.upstream.Err() == nil
+	needsStart := inst.current == nil || inst.current.revision != d.Revision || inst.current.upstream.Err() != nil
 	s.mu.Unlock()
-	if !alreadyReady {
+	if needsStart {
 		s.resettle(ctx, inst)
 	}
-	gen, err := s.acquire(ctx, inst)
+	gen, cur, reused, err := s.acquireFor(ctx, inst, d.Revision)
 	if err != nil {
-		return s.viewOf(caller, inst), err
+		return s.catalogViewOf(caller, inst), err
 	}
 	defer s.release(inst, gen)
-	if !alreadyReady {
-		// acquire just probed server/discover and refreshed HTTP tool schemas.
-		return s.viewOf(caller, inst), nil
+	if !reused {
+		// acquireFor just probed server/discover and refreshed HTTP tool schemas.
+		return s.catalogViewOf(caller, inst), nil
 	}
-	if err := s.reprobeWarm(ctx, inst, d, gen); err != nil {
-		return s.viewOf(caller, inst), err
-	}
-	return s.viewOf(caller, inst), nil
+	return s.reprobeWarm(ctx, caller, inst, cur, gen)
 }
 
-func (s *Supervisor) reprobeWarm(ctx context.Context, inst *instance, d Definition, gen *generation) error {
+func (s *Supervisor) catalogViewOf(caller Caller, inst *instance) CatalogInstance {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.catalogInstanceLocked(caller, inst)
+}
+
+// reprobeWarm checks protocol health on an already-running generation without
+// closing its upstream, stopping its worker, or interrupting in-flight calls.
+func (s *Supervisor) reprobeWarm(ctx context.Context, caller Caller, inst *instance, d Definition, gen *generation) (CatalogInstance, error) {
 	discovered, err := s.probe(ctx, gen.upstream, d.ReadyTimeout)
-	if err != nil {
-		return s.failWarmProbe(ctx, inst, d, gen, err)
+	if err == nil && d.Transport == TransportHTTP {
+		err = s.refreshToolsIfAdvertised(ctx, gen, discovered)
 	}
-	if d.Transport == TransportHTTP {
-		if err := s.refreshToolsIfAdvertised(ctx, gen, discovered); err != nil {
-			return s.failWarmProbe(ctx, inst, d, gen, err)
-		}
+	if err == nil {
+		gen.setDiscovery(serverInfoOf(discovered), capabilitiesOf(discovered))
+		s.mu.Lock()
+		inst.lastProbeState = ""
+		inst.lastProbeReason = ""
+		view := s.catalogInstanceLocked(caller, inst)
+		s.mu.Unlock()
+		return view, nil
 	}
+	if ctx.Err() != nil {
+		return s.catalogViewOf(caller, inst), fmt.Errorf("probe %s: %w", d.Name, err)
+	}
+	probeState, probeErr := classifyWarmProbeError(inst.rec.ID, err)
 	s.mu.Lock()
-	gen.serverInfo = serverInfoOf(discovered)
-	gen.capabilities = capabilitiesOf(discovered)
+	inst.lastProbeState = probeState
+	inst.lastProbeReason = err.Error()
+	view := s.catalogInstanceLocked(caller, inst)
 	s.mu.Unlock()
-	return nil
+	view.State = probeState
+	view.Reason = err.Error()
+	return view, probeErr
 }
 
-func (s *Supervisor) failWarmProbe(ctx context.Context, inst *instance, d Definition, gen *generation, err error) error {
-	s.mu.Lock()
-	if inst.current == gen {
-		inst.current = nil
+func classifyWarmProbeError(instanceID string, err error) (string, error) {
+	var f *Failure
+	if errors.As(err, &f) && f.Code == codeIncompatible {
+		return StateIncompatible, failure(codeIncompatible, false, "instance %s: %s", instanceID, f.Err.Error())
 	}
-	s.mu.Unlock()
-	_ = gen.upstream.Close()
-	if d.Owned() {
-		_ = s.stopWorker(ctx, gen.ref)
-	}
-	return s.failExternal(ctx, inst, err)
+	return StateFailed, failure(codeFailed, true, "instance %s: %s", instanceID, err.Error())
 }

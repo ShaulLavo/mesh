@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,7 @@ type managedHTTPLauncher struct {
 	legacy   bool
 	exitCode *int
 	launches int
+	onCall   func(generation int)
 	servers  map[string]*managedFakeServer
 	stderr   map[string]string
 }
@@ -83,37 +85,99 @@ func (l *managedHTTPLauncher) Launch(_ context.Context, spec LaunchSpec) (Worker
 		return WorkerRef{SessionID: key, Instance: key, LaunchDigest: key}, nil
 	}
 
-	go func() {
-		if delay > 0 {
-			select {
-			case <-time.After(delay):
-			case <-ms.ended:
-				return
-			}
-		}
-		ln, err := net.Listen("tcp", addr)
-		if err != nil {
-			code := 1
-			ms.stop(&code)
-			return
-		}
-		srv := &http.Server{Handler: managedHTTPHandler(n, legacy), ReadHeaderTimeout: 5 * time.Second}
-		l.mu.Lock()
-		select {
-		case <-ms.ended:
-			l.mu.Unlock()
-			_ = ln.Close()
-			return
-		default:
-			ms.ln, ms.srv = ln, srv
-		}
-		l.mu.Unlock()
-		_ = srv.Serve(ln)
-	}()
+	go l.serveFakeManaged(ms, addr, delay, n, legacy)
 	return WorkerRef{SessionID: key, Instance: key, LaunchDigest: key}, nil
 }
 
-func managedHTTPHandler(generation int, legacy bool) http.Handler {
+func (l *managedHTTPLauncher) serveFakeManaged(ms *managedFakeServer, addr string, delay time.Duration, generation int, legacy bool) {
+	if !waitBindOrStop(delay, ms.ended) {
+		return
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		code := 1
+		ms.stop(&code)
+		return
+	}
+	srv := &http.Server{Handler: managedHTTPHandlerWithHook(generation, legacy, l.onCall), ReadHeaderTimeout: 5 * time.Second}
+	l.mu.Lock()
+	select {
+	case <-ms.ended:
+		l.mu.Unlock()
+		_ = ln.Close()
+		return
+	default:
+		ms.ln, ms.srv = ln, srv
+	}
+	l.mu.Unlock()
+	_ = srv.Serve(ln)
+}
+
+func waitBindOrStop(delay time.Duration, ended <-chan struct{}) bool {
+	if delay <= 0 {
+		return true
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ended:
+		return false
+	}
+}
+
+func (l *managedHTTPLauncher) CheckPortFree(_ context.Context, targets []netip.AddrPort) error {
+	return checkLoopbackTargetsFree(targets)
+}
+
+func (l *managedHTTPLauncher) VerifyManagedDial(_ context.Context, ref WorkerRef, target netip.AddrPort, dial func() (net.Conn, error)) (net.Conn, error) {
+	ln, err := l.ownedListener(ref, target)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	after, err := l.ownedListener(ref, target)
+	if err != nil || after != ln {
+		_ = conn.Close()
+		return nil, ErrManagedListenerMismatch
+	}
+	return conn, nil
+}
+
+func (l *managedHTTPLauncher) ownedListener(ref WorkerRef, target netip.AddrPort) (net.Listener, error) {
+	l.mu.Lock()
+	ms := l.servers[ref.SessionID]
+	var ln net.Listener
+	if ms != nil {
+		ln = ms.ln
+	}
+	l.mu.Unlock()
+	if ms == nil {
+		return nil, ErrManagedListenerMismatch
+	}
+	select {
+	case <-ms.ended:
+		return nil, ErrManagedListenerMismatch
+	default:
+	}
+	if ln == nil {
+		return nil, ErrManagedListenerNotReady
+	}
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); !ok || tcpAddr.AddrPort() != target {
+		return nil, ErrManagedListenerMismatch
+	}
+	return ln, nil
+}
+
+func managedHTTPHandler(generation int) http.Handler {
+	return managedHTTPHandlerWithHook(generation, false, nil)
+}
+
+func managedHTTPHandlerWithHook(generation int, legacy bool, onCall func(int)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -137,6 +201,9 @@ func managedHTTPHandler(generation int, legacy bool) http.Handler {
 		case mcpwire.MethodListTools:
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","tools":[{"name":"gen","inputSchema":{"type":"object"}}],"ttlMs":60000,"cacheScope":"private"}}`, id)
 		case mcpwire.MethodCallTool:
+			if onCall != nil {
+				onCall(generation)
+			}
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"managed-gen=%d"}]}}`, id, generation)
 		default:
 			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unknown"}}`, id)
@@ -491,7 +558,7 @@ func TestExternalHTTPWarmProbeDetectsUnavailable(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		managedHTTPHandler(1, false).ServeHTTP(w, r)
+		managedHTTPHandler(1).ServeHTTP(w, r)
 	}))
 	f.publish(t, Definition{Name: "ext", Argv: []string{}, URL: endpoint, InstancePolicy: PolicyShared})
 	admin := Caller{Account: "local", Admin: true}

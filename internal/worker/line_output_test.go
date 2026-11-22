@@ -7,8 +7,63 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shaul/mesh/internal/mcpwire"
 	"github.com/shaul/mesh/internal/session"
 )
+
+func TestLineReadMaxSizeLFAndCRLF(t *testing.T) {
+	// Exactly mcpwire.MaxMessage (3,670,016) JSON bytes framed with LF or CRLF
+	// must be accepted as a normal frame, while MaxMessage+1 bytes must be
+	// rejected as oversized on both LF and CRLF.
+	prefix := `{"jsonrpc":"2.0","id":"exact","result":{"t":"`
+	suffix := `"}}`
+	exactPayload := prefix + strings.Repeat("a", mcpwire.MaxMessage-len(prefix)-len(suffix)) + suffix
+	if len(exactPayload) != mcpwire.MaxMessage {
+		t.Fatalf("setup len = %d, want %d", len(exactPayload), mcpwire.MaxMessage)
+	}
+	for _, tc := range []struct {
+		name  string
+		delim string
+	}{
+		{"LF", "\n"},
+		{"CRLF", "\r\n"},
+	} {
+		t.Run("exact_"+tc.name, func(t *testing.T) {
+			raw := []byte(exactPayload + tc.delim)
+			reader := bufio.NewReaderSize(bytes.NewReader(raw), 32<<10)
+			frame, err := readLineFrame(reader)
+			if err != nil {
+				t.Fatalf("exact %s frame error: %v", tc.name, err)
+			}
+			if len(frame.oversizeID) != 0 {
+				t.Fatalf("exact %s frame misclassified as oversized: id=%s", tc.name, frame.oversizeID)
+			}
+			trimmed := bytes.TrimSuffix(bytes.TrimSuffix(frame.data, []byte("\n")), []byte("\r"))
+			if string(trimmed) != exactPayload {
+				t.Fatalf("exact %s payload length = %d, want %d", tc.name, len(trimmed), len(exactPayload))
+			}
+		})
+		t.Run("over_by_one_"+tc.name, func(t *testing.T) {
+			overPayload := prefix + strings.Repeat("a", mcpwire.MaxMessage-len(prefix)-len(suffix)+1) + suffix
+			if len(overPayload) != mcpwire.MaxMessage+1 {
+				t.Fatalf("setup len = %d, want %d", len(overPayload), mcpwire.MaxMessage+1)
+			}
+			next := `{"jsonrpc":"2.0","id":"next","result":{"ok":true}}` + tc.delim
+			reader := bufio.NewReaderSize(strings.NewReader(overPayload+tc.delim+next), 32<<10)
+			frame, err := readLineFrame(reader)
+			if err != nil {
+				t.Fatalf("over-by-one %s JSON reply faulted framing: %v", tc.name, err)
+			}
+			if string(frame.oversizeID) != `"exact"` || len(frame.data) != 0 {
+				t.Fatalf("over-by-one %s frame = %+v, want oversizeID \"exact\"", tc.name, frame)
+			}
+			following, err := readLineFrame(reader)
+			if err != nil || string(following.data) != next {
+				t.Fatalf("following %s frame = %q, %v", tc.name, following.data, err)
+			}
+		})
+	}
+}
 
 func TestLineReadBoundsAndPartialInput(t *testing.T) {
 	raw := append(bytes.Repeat([]byte{'x'}, session.MaxLineBytes-1), '\n')

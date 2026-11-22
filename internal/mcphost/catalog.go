@@ -209,9 +209,10 @@ func (s *Supervisor) catalogInstanceLocked(caller Caller, inst *instance) Catalo
 		UpdatedAt:  r.UpdatedAt,
 	}
 	if gen := inst.current; gen != nil {
+		serverInfo, capabilities := gen.discoveryInfo()
 		v.Active = gen.active
-		v.ServerInfo = ProjectServerInfo(gen.serverInfo)
-		v.Capabilities = ProjectCapabilities(gen.capabilities)
+		v.ServerInfo = ProjectServerInfo(serverInfo)
+		v.Capabilities = ProjectCapabilities(capabilities)
 		if stdio, ok := gen.upstream.(*StdioUpstream); ok {
 			v.LateReplies = stdio.LateReplies()
 		}
