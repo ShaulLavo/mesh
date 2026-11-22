@@ -25,7 +25,7 @@ const mcpControlTimeout = 2 * time.Minute
 
 // mcpServiceCommands manage MCP servers hosted by this machine's daemon.
 func (a *application) mcpServiceCommands() []*cobra.Command {
-	return []*cobra.Command{
+	commands := []*cobra.Command{
 		a.mcpPublishCommand(),
 		a.mcpListCommand(),
 		a.mcpShowCommand(),
@@ -35,6 +35,12 @@ func (a *application) mcpServiceCommands() []*cobra.Command {
 		a.mcpLogsCommand(),
 		a.mcpRemoveCommand(),
 	}
+	// The mcp group sends its own output to stderr to keep the MCP server's
+	// stdout protocol-only. These commands print their results to stdout.
+	for _, command := range commands {
+		command.SetOut(a.dependencies.Stdout)
+	}
+	return commands
 }
 
 type mcpPublishOptions struct {

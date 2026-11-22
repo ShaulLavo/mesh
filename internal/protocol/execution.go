@@ -24,6 +24,8 @@ const (
 	TypeExecutionRemove  = "execution.remove"
 	TypeExecutionInput   = "execution.input"
 	TypeExecutionInspect = "execution.inspect"
+	TypeExecutionList    = "execution.list"
+	TypeExecutionListed  = "execution.listed"
 	TypeWorkerPipeProbe  = "worker.pipe.probe"
 	TypeWorkerLineAttach = "worker.line.attach"
 	TypeWorkerLineInput  = "worker.line.input"
@@ -56,6 +58,7 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	CreatedAt          *time.Time       `json:"createdAt,omitempty"`
 	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`
@@ -164,6 +167,12 @@ func (s *executionFields) takeField(decoder *json.Decoder) error {
 	return nil
 }
 func validateExecutionField(kind, name string, raw json.RawMessage) error {
+	// Keep execution.list on its own strict allowlist so caller, context, and
+	// administration fields are rejected explicitly until listing is wired to
+	// application-caller authorization.
+	if kind == TypeExecutionList {
+		return validateExecutionListField(name, raw)
+	}
 	switch name {
 	case executionTypeField, requestIDField:
 		return executionString(raw)
@@ -189,6 +198,24 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		return executionArguments(raw)
 	case "cols", "rows", "depth":
 		return executionInteger(name, raw)
+	default:
+		return fmt.Errorf("execution: unexpected field %s", name)
+	}
+}
+
+func validateExecutionListField(name string, raw json.RawMessage) error {
+	switch name {
+	case executionTypeField, requestIDField, callerField, "cursor":
+		return executionString(raw)
+	case executionContextField:
+		return executionObject(raw)
+	case "listLimit":
+		return executionInteger(name, raw)
+	case "listAll":
+		if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
+			return nil
+		}
+		return fmt.Errorf("execution: invalid listAll")
 	default:
 		return fmt.Errorf("execution: unexpected field %s", name)
 	}
@@ -317,7 +344,7 @@ type ExecutionPage struct {
 // controls are admitted by the worker socket.
 func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionList:
 		return true
 	default:
 		return false
@@ -376,9 +403,11 @@ func validateExecutionInputField(name string, raw json.RawMessage) error {
 
 func validateExecutionRequired(kind string, fields map[string]json.RawMessage) error {
 	required := []string{executionTypeField, "requestId"}
-	if kind == TypeExecutionCreate || kind == TypeExecutionRequest {
+	switch kind {
+	case TypeExecutionList:
+	case TypeExecutionCreate, TypeExecutionRequest:
 		required = append(required, "requestKey")
-	} else {
+	default:
 		required = append(required, sessionIDField, "instance")
 	}
 	// A job in a context may take its directory from the context and a shell

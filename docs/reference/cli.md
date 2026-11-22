@@ -42,7 +42,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh unserve`](#mesh-unserve) | Remove one private service |
 | [`mesh daemon`](#mesh-daemon) | Run this host's coordinator |
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
-| [`mesh mcp`](#mesh-mcp) | Configure agent frontends and host MCP servers |
+| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP stdio server |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
 | [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
@@ -125,7 +125,7 @@ SETUP
 
   daemon [command] [--flags]                            Run this host's coordinator
   device [command]                                      Approve device keys for this daemon's OS account
-  mcp [command]                                         Configure agent frontends and host MCP servers
+  mcp [command]                                         Run the stateless native MCP stdio server
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
   skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
@@ -2000,29 +2000,33 @@ FLAGS
 ## mesh mcp
 
 ```text
-Configure agent frontends and host MCP servers
+Run Mesh's stateless MCP 2026-07-28 server over stdio.
+stdout carries only newline-delimited JSON-RPC MCP messages;
+diagnostics and startup errors go to stderr.
 
-USAGE
+Usage:
+  mesh mcp [flags]
+  mesh mcp [command]
 
-  mesh mcp [command] [--flags]
+Available Commands:
+  identity    Manage per-agent application identities
+  logs        Print a hosted MCP server instance's recent stderr
+  ls          List MCP servers hosted on this machine
+  publish     Publish an MCP server hosted on this machine
+  restart     Replace a hosted MCP server instance's process
+  rm          Remove a hosted MCP server and stop its processes
+  show        Show one hosted MCP server and its instances
+  start       Start a hosted MCP server's instance now
+  stop        Stop a hosted MCP server's processes and keep its definition
 
-COMMANDS
+Flags:
+  -h, --help   help for mcp
 
-  identity [command]                            Manage per-agent application identities
-  logs NAME [--flags]                           Print a hosted MCP server instance's recent stderr
-  ls [--flags]                                  List MCP servers hosted on this machine
-  publish NAME [-- COMMAND [ARG...]] [--flags]  Publish an MCP server hosted on this machine
-  restart NAME [--flags]                        Replace a hosted MCP server instance's process
-  rm NAME                                       Remove a hosted MCP server and stop its processes
-  show NAME [--flags]                           Show one hosted MCP server and its instances
-  start NAME [--flags]                          Start a hosted MCP server's instance now
-  stop NAME [--flags]                           Stop a hosted MCP server's processes and keep its definition
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
-FLAGS
-
-  -h --help                                     Help for mcp
-  --leave-key                                   Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy                                     Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Use "mesh mcp [command] --help" for more information about a command.
 ```
 
 ## mesh mcp identity
@@ -2030,20 +2034,22 @@ FLAGS
 ```text
 Manage per-agent application identities
 
-USAGE
+Usage:
+  mesh mcp identity [flags]
+  mesh mcp identity [command]
 
-  mesh mcp identity [command] [--flags]
+Available Commands:
+  create      Create a private application credential for one agent frontend
+  ls          List local application identities without their secrets
 
-COMMANDS
+Flags:
+  -h, --help   help for identity
 
-  create NAME [--flags]  Create a private application credential for one agent frontend
-  ls [--flags]           List local application identities without their secrets
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 
-FLAGS
-
-  -h --help              Help for identity
-  --leave-key            Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy              Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Use "mesh mcp identity [command] --help" for more information about a command.
 ```
 
 ## mesh mcp identity create
@@ -2051,16 +2057,16 @@ FLAGS
 ```text
 Create a private application credential for one agent frontend
 
-USAGE
+Usage:
+  mesh mcp identity create NAME [flags]
 
-  mesh mcp identity create NAME [--flags]
+Flags:
+  -h, --help   help for create
+      --json   write one agent result
 
-FLAGS
-
-  -h --help    Help for create
-  --json       Write one agent result
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp identity ls
@@ -2068,16 +2074,19 @@ FLAGS
 ```text
 List local application identities without their secrets
 
-USAGE
+Usage:
+  mesh mcp identity ls [flags]
 
-  mesh mcp identity ls [--flags]
+Aliases:
+  ls, list
 
-FLAGS
+Flags:
+  -h, --help   help for ls
+      --json   write one agent result
 
-  -h --help    Help for ls
-  --json       Write one agent result
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp logs
@@ -2085,16 +2094,16 @@ FLAGS
 ```text
 Print a hosted MCP server instance's recent stderr
 
-USAGE
+Usage:
+  mesh mcp logs NAME [flags]
 
-  mesh mcp logs NAME [--flags]
+Flags:
+  -h, --help              help for logs
+      --instance string   instance ID, required when the server has several instances
 
-FLAGS
-
-  -h --help    Help for logs
-  --instance   Instance ID, required when the server has several instances
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp ls
@@ -2102,52 +2111,50 @@ FLAGS
 ```text
 List MCP servers hosted on this machine
 
-USAGE
+Usage:
+  mesh mcp ls [flags]
 
-  mesh mcp ls [--flags]
+Flags:
+  -h, --help   help for ls
+      --json   write the services as JSON
 
-FLAGS
-
-  -h --help    Help for ls
-  --json       Write the services as JSON
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp publish
 
 ```text
-Publish stores a server definition on this machine. A stdio server runs COMMAND; an HTTP server is reached at --url,
-optionally started with --run. Each application caller gets its own isolated instance unless --shared is given.
+Publish stores a server definition on this machine. A stdio server runs COMMAND; an HTTP server is reached at --url, optionally started with --run. Each application caller gets its own isolated instance unless --shared is given.
 
-USAGE
+Usage:
+  mesh mcp publish NAME [flags] [-- COMMAND [ARG...]]
 
-  mesh mcp publish NAME [-- COMMAND [ARG...]] [--flags]
+Examples:
+mesh mcp publish repo-tools --cwd /work/app -- ./repo-mcp
+mesh mcp publish search --url http://127.0.0.1:8080/mcp --shared
 
-EXAMPLES
+Flags:
+      --account-label string        non-secret name of the host account, shown to callers
+      --account-mode string         none, or host-account when the server uses this machine's credentials
+      --cwd string                  working directory on this machine for a stdio server
+      --env stringArray             NAME=VALUE for the server's environment; repeat as needed
+      --header-secret stringArray   HEADER=/absolute/file sent to the HTTP server
+  -h, --help                        help for publish
+      --idle duration               stop an on-demand instance after this long unused (default 15m)
+      --json                        write the stored definition as JSON
+      --kept                        keep the server running instead of starting it on demand
+      --ready-timeout duration      how long the server has to answer server/discover (default 30s)
+      --run string                  command that starts the HTTP server at --url
+      --run-cwd string              working directory for --run
+      --secret-env stringArray      NAME=/absolute/file read into NAME at launch; the file must be mode 0600
+      --shared                      give every caller one shared instance
+      --url string                  loopback Streamable HTTP endpoint of an HTTP server
 
-  mesh mcp publish repo-tools --cwd /work/app -- ./repo-mcp
-  mesh mcp publish search --url http://127.0.0.1:8080/mcp --shared
-
-FLAGS
-
-  --account-label  Non-Secret name of the host account, shown to callers
-  --account-mode   None, or host-account when the server uses this machine's credentials
-  --cwd            Working directory on this machine for a stdio server
-  --env            Name=Value for the server's environment; repeat as needed
-  --header-secret  Header=/Absolute/File sent to the HTTP server
-  -h --help        Help for publish
-  --idle           Stop an on-demand instance after this long unused (default 15m) (0s)
-  --json           Write the stored definition as JSON
-  --kept           Keep the server running instead of starting it on demand
-  --leave-key      Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy        Mask personal data for recording and screen sharing (MESH_PRIVACY)
-  --ready-timeout  How long the server has to answer server/discover (default 30s) (0s)
-  --run            Command that starts the HTTP server at --url
-  --run-cwd        Working directory for --run
-  --secret-env     Name=/Absolute/File read into NAME at launch; the file must be mode 0600
-  --shared         Give every caller one shared instance
-  --url            Loopback Streamable HTTP endpoint of an HTTP server
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp restart
@@ -2155,16 +2162,16 @@ FLAGS
 ```text
 Replace a hosted MCP server instance's process
 
-USAGE
+Usage:
+  mesh mcp restart NAME [flags]
 
-  mesh mcp restart NAME [--flags]
+Flags:
+  -h, --help              help for restart
+      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
 
-FLAGS
-
-  -h --help    Help for restart
-  --instance   Instance ID; without it, start and restart use your own instance and stop stops all of them
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp rm
@@ -2172,15 +2179,15 @@ FLAGS
 ```text
 Remove a hosted MCP server and stop its processes
 
-USAGE
+Usage:
+  mesh mcp rm NAME [flags]
 
-  mesh mcp rm NAME [--flags]
+Flags:
+  -h, --help   help for rm
 
-FLAGS
-
-  -h --help    Help for rm
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp show
@@ -2188,16 +2195,16 @@ FLAGS
 ```text
 Show one hosted MCP server and its instances
 
-USAGE
+Usage:
+  mesh mcp show NAME [flags]
 
-  mesh mcp show NAME [--flags]
+Flags:
+  -h, --help   help for show
+      --json   write the service as JSON
 
-FLAGS
-
-  -h --help    Help for show
-  --json       Write the service as JSON
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp start
@@ -2205,16 +2212,16 @@ FLAGS
 ```text
 Start a hosted MCP server's instance now
 
-USAGE
+Usage:
+  mesh mcp start NAME [flags]
 
-  mesh mcp start NAME [--flags]
+Flags:
+  -h, --help              help for start
+      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
 
-FLAGS
-
-  -h --help    Help for start
-  --instance   Instance ID; without it, start and restart use your own instance and stop stops all of them
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh mcp stop
@@ -2222,16 +2229,16 @@ FLAGS
 ```text
 Stop a hosted MCP server's processes and keep its definition
 
-USAGE
+Usage:
+  mesh mcp stop NAME [flags]
 
-  mesh mcp stop NAME [--flags]
+Flags:
+  -h, --help              help for stop
+      --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
 
-FLAGS
-
-  -h --help    Help for stop
-  --instance   Instance ID; without it, start and restart use your own instance and stop stops all of them
-  --leave-key  Key that leaves all nested sessions, or none (ctrl+^)
-  --privacy    Mask personal data for recording and screen sharing (MESH_PRIVACY)
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
 ```
 
 ## mesh private-names

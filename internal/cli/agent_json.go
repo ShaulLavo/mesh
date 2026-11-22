@@ -76,7 +76,7 @@ func agentError(err error, operation, target string, fallback agentapi.Code) age
 	switch {
 	case errors.As(err, &rejected):
 		code = controlAgentCode(rejected.Code)
-	case errors.As(err, &mismatch):
+	case errors.As(err, &mismatch), errors.Is(err, transport.ErrDestinationIdentityMismatch):
 		code = agentapi.HostIdentityMismatch
 	case errors.Is(err, transport.ErrAuthentication):
 		code = agentapi.HostAuthenticationFailed
