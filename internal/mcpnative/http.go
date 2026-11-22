@@ -93,6 +93,10 @@ type HTTPServer struct {
 // httpConn tracks the handlers on one client connection of an http.Server
 // this frontend is attached to. Its fields are guarded by HTTPServer.mu.
 type httpConn struct {
+	// busy is net/http's StateActive: from reading a request until its
+	// response, including anything net/http writes after the handler, is
+	// finished.
+	busy     bool
 	handlers int
 	closing  bool
 	drained  chan struct{}
@@ -368,12 +372,15 @@ func (s *HTTPServer) connContext(ctx context.Context, c net.Conn) context.Contex
 }
 
 func (s *HTTPServer) connState(c net.Conn, state http.ConnState) {
-	if state != http.StateClosed && state != http.StateHijacked {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if state == http.StateClosed || state == http.StateHijacked {
+		delete(s.conns, c)
 		return
 	}
-	s.mu.Lock()
-	delete(s.conns, c)
-	s.mu.Unlock()
+	if hc := s.conns[c]; hc != nil {
+		hc.busy = state == http.StateActive
+	}
 }
 
 // enterConn counts a handler on its connection. A connection that rotation
@@ -407,13 +414,14 @@ func (s *HTTPServer) leaveConn(hc *httpConn) {
 }
 
 // RotateToken replaces the active bearer token and retires everything served
-// under the old one. It closes every open connection: a closed socket cannot
-// carry a late frame, an SSE terminator, an implicit status or a body drain,
-// and an old request's deadlines cannot reach a reused connection. Clients
-// reconnect with the new token. It returns once every handler on those
-// connections has returned, so no output for an old-token request happens
-// afterwards. Waits are cancelled; the Mesh jobs behind them are not.
-// retired counts the admitted exchanges.
+// under the old one. It closes every connection in the middle of a request or
+// response: a closed socket cannot carry a late frame, an SSE terminator, an
+// implicit status or a body drain, and an old request's deadlines cannot reach
+// a reused connection. Idle keep-alive connections stay open for pooled
+// clients, since their next request is authenticated against the new token.
+// It returns once every handler on the closed connections has returned, so no
+// output for an old-token request happens afterwards. Waits are cancelled; the
+// Mesh jobs behind them are not. retired counts the admitted exchanges.
 func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired int, err error) {
 	if newToken == "" {
 		return 0, 0, errors.New("HTTP MCP bearer token must not be empty")
@@ -465,6 +473,9 @@ func (s *HTTPServer) closingConnsLocked() ([]net.Conn, []chan struct{}) {
 	conns := make([]net.Conn, 0, len(s.conns))
 	var drained []chan struct{}
 	for c, hc := range s.conns {
+		if !hc.busy {
+			continue
+		}
 		hc.closing = true
 		conns = append(conns, c)
 		if hc.handlers > 0 {

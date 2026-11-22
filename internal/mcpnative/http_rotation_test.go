@@ -625,6 +625,23 @@ func TestHTTPRotationNeverInterruptsNewTokenRequest(t *testing.T) {
 	assertListReply(t, br)
 }
 
+// A pooled client keeps its idle keep-alive connection across rotation; Go's
+// client does not retry a POST on a connection the server closed under it.
+func TestHTTPRotationKeepsIdleConnectionForNewToken(t *testing.T) {
+	gate := newRotationGate("")
+	h := startRotationHarness(t, gate, ServerOptions{Controls: &stubControls{}})
+	body := rotationListBody()
+	client := h.dial(t, []byte(rawRequestHead(testHTTPToken, mcpwire.MethodListTools, "", len(body))+body))
+	br := bufio.NewReader(client)
+	assertListReply(t, br)
+
+	waitRotation(t, h.rotate(), 0)
+	if _, err := client.Write(newTokenListRequest()); err != nil {
+		t.Fatalf("new-token request on the idle connection failed to send: %v", err)
+	}
+	assertListReply(t, br)
+}
+
 func assertListSucceeds(t *testing.T, client net.Conn) {
 	t.Helper()
 	assertListReply(t, bufio.NewReader(client))
