@@ -50,12 +50,15 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 	defer detach()
 	// A recovering controller resumes at the reported frame and stdin offset
 	// instead of guessing, so it neither replays input nor waits on old output.
-	reply.LastSeq = &a.next
+	// Only the attach reply carries them, as copies: later acknowledgments
+	// reuse reply while the sender advances a.next.
+	attached, start := reply, a.next
+	attached.LastSeq = &start
 	if w.pipe.input != nil {
 		offset := w.pipe.input.nextOffset()
-		reply.InputOffset = &offset
+		attached.InputOffset = &offset
 	}
-	if err := a.control(reply); err != nil {
+	if err := a.control(attached); err != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
