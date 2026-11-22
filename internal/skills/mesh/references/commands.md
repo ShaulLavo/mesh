@@ -268,6 +268,9 @@ mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work -
 - `--term TERM`: terminal type.
 - `--cols N`: terminal width.
 - `--rows N`: terminal height.
+- `--shell-command TEXT`: with --identity, run through the context's shell.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 
 ## mesh session request
 
@@ -281,6 +284,8 @@ mesh session request --host HOST_ID --request-key job-17 --json
 - `--request-key KEY`: saved logical request key.
 - `--json`: write one agent result.
 - `--timeout D`: finite request deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 
 ## mesh session wait
 
@@ -294,6 +299,8 @@ mesh session wait --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 
 ## mesh session logs
 
@@ -307,6 +314,8 @@ mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 - `--stream STREAM`: pty, stdout or stderr.
 - `--cursor TOKEN`: independent output cursor.
 - `--max-bytes N`: page size from 1 to 1048576.
@@ -323,6 +332,8 @@ mesh session input --host HOST_ID 7K3D --instance INSTANCE --write-key eof --off
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 - `--write-key KEY`: saved logical write key.
 - `--offset N`: expected byte offset, omitted for lookup.
 - `--text TEXT`: exact text bytes.
@@ -342,6 +353,8 @@ mesh session signal --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 - `--signal SIGNAL`: process group signal.
 
 ## mesh session kill
@@ -356,6 +369,8 @@ mesh session kill --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
 
 ## mesh session rm
 
@@ -369,3 +384,115 @@ mesh session rm --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
+
+## mesh mcp identity create
+
+Create a private application credential for one agent frontend.
+
+```sh
+mesh mcp identity create codex --json
+```
+
+- `--json`: write one agent result.
+
+## mesh mcp identity ls
+
+List local application identities without their secrets.
+
+```sh
+mesh mcp identity ls --json
+```
+
+- `--json`: write one agent result.
+
+## mesh context open
+
+Open a durable working context on a host for one application.
+
+```sh
+mesh context open --host HOST_ID --identity codex --request-key ctx-1 --cwd /work --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+- `--request-key KEY`: saved logical request key.
+- `--cwd PATH`: absolute directory on the target.
+- `--shell SHELL`: login, sh or none.
+- `--env NAME=VALUE`: overlay variable, repeatable.
+- `--label TEXT`: display label.
+
+## mesh context get
+
+Read one context owned by the application.
+
+```sh
+mesh context get --identity codex mc1.HOST_ID.CONTEXT_ID --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+
+## mesh context ls
+
+List the application's contexts on a host.
+
+```sh
+mesh context ls --host HOST_ID --identity codex --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+
+## mesh context update
+
+Change a context's directory, environment or label at an expected revision.
+
+```sh
+mesh context update --identity codex mc1.HOST_ID.CONTEXT_ID --expected-revision 1 --cwd /work/app --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+- `--expected-revision N`: revision before this change.
+- `--cwd PATH`: new absolute directory.
+- `--set-env NAME=VALUE`: set an overlay variable, repeatable.
+- `--unset-env NAME`: remove an overlay variable, repeatable.
+- `--label TEXT`: new display label.
+
+## mesh context close
+
+Stop new jobs in a context; running jobs keep going.
+
+```sh
+mesh context close --identity codex mc1.HOST_ID.CONTEXT_ID --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+- `--expected-revision N`: fail if the context changed.
+
+## mesh context receipt
+
+Look up a context by the key that opened it, after a lost reply.
+
+```sh
+mesh context receipt --host HOST_ID --identity codex --request-key ctx-1 --json
+```
+
+- `--json`: write one agent result.
+- `--identity NAME`: local application identity.
+- `--host HOST`: online target; implied by a context handle.
+- `--timeout D`: finite request deadline.
+- `--request-key KEY`: request key used to open.

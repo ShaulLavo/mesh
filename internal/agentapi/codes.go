@@ -38,6 +38,9 @@ const (
 	InputClosed              Code = "input.closed"
 	InputBackpressure        Code = "input.backpressure"
 	InternalError            Code = "internal.error"
+	ContextNotFound          Code = "context.not_found"
+	ContextClosed            Code = "context.closed"
+	ContextConflict          Code = "context.conflict"
 )
 
 type ErrorClass struct {
@@ -59,4 +62,5 @@ var Codes = map[Code]ErrorClass{
 	InputOutcomeUnknown: {Exit: 1}, InputKeyConflict: {Exit: 1}, InputOffsetMismatch: {Exit: 1},
 	InputClosed: {Exit: 1}, InputBackpressure: {Exit: 1, Retryable: true},
 	ResultExpired: {Exit: 1}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
+	ContextNotFound: {Exit: 1}, ContextClosed: {Exit: 1}, ContextConflict: {Exit: 1},
 }

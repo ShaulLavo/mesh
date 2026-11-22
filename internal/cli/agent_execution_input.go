@@ -50,6 +50,7 @@ func (a *application) sessionInputCommand() *cobra.Command {
 	flags.StringVar(&o.base64, "base64", "", "write Base64-decoded bytes")
 	flags.StringVar(&o.file, "file", "", "write up to 1 MiB from a local file, or - for stdin")
 	flags.BoolVar(&o.eof, "eof", false, "close pipe stdin after these bytes")
+	applicationExecutionFlags(cmd, &o.agentExecutionOptions)
 	cmd.MarkFlagsMutuallyExclusive("text", "base64", "file")
 	return cmd
 }

@@ -16,6 +16,7 @@ import (
 
 type agentExecutionOptions struct {
 	host, key, kind, cwd, term, stdin string
+	identity, context, shellCommand   string
 	json                              bool
 	timeout                           time.Duration
 	cols, rows                        int
@@ -26,6 +27,9 @@ func (a *application) sessionCreateCommand() *cobra.Command {
 	command := &cobra.Command{Use: "create -- command [args...]", Short: "Start a keyed detached command on an online host", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if err := o.validate("sessions.create"); err != nil {
 			return err
+		}
+		if o.identity != "" {
+			return a.runContextJobCreate(cmd, *o, args)
 		}
 		if cmd.ArgsLenAtDash() != 0 {
 			return agentapi.Usage("sessions.create", "Put command arguments after --.")
@@ -43,6 +47,7 @@ func (a *application) sessionCreateCommand() *cobra.Command {
 	command.Flags().StringVar(&o.term, "term", "dumb", "target terminal type")
 	command.Flags().IntVar(&o.cols, "cols", 80, "initial terminal width")
 	command.Flags().IntVar(&o.rows, "rows", 24, "initial terminal height")
+	command.Flags().StringVar(&o.shellCommand, "shell-command", "", "with --identity, a command string run through the context's shell")
 	return command
 }
 func (o agentExecutionOptions) createIntent(cmd *cobra.Command, args []string) (execution.Intent, error) {
@@ -75,6 +80,14 @@ func agentExecutionFlags(cmd *cobra.Command, o *agentExecutionOptions, budget ti
 	cmd.Flags().StringVar(&o.key, "request-key", "", "saved logical request key, required")
 	cmd.Flags().BoolVar(&o.json, "json", false, "write one agent result, required")
 	cmd.Flags().DurationVar(&o.timeout, "timeout", budget, "hard deadline from 100ms to 60s")
+	applicationExecutionFlags(cmd, o)
+}
+
+// applicationExecutionFlags act as one application caller. Without them the
+// CLI administers the whole account explicitly.
+func applicationExecutionFlags(cmd *cobra.Command, o *agentExecutionOptions) {
+	cmd.Flags().StringVar(&o.identity, "identity", "", "act as this local application identity")
+	cmd.Flags().StringVar(&o.context, "context", "", "with --identity, the context ID or handle of the job")
 }
 func (o agentExecutionOptions) validate(operation string) error {
 	if !o.json || strings.TrimSpace(o.host) == "" {
@@ -100,6 +113,9 @@ func (a *application) runAgentExecution(cmd *cobra.Command, o agentExecutionOpti
 		return agentapi.Fail(agentError(err, a.agent.operation, host.ID, agentapi.HostUnreachable).Code, a.agent.operation, host.ID, err.Error())
 	}
 	defer func() { _ = conn.Close() }()
+	if err := attachApplicationCaller(a.agent.operation, o, &request); err != nil {
+		return err
+	}
 	request.RequestID = a.agent.requestID
 	if request.RequestID == "" {
 		request.RequestID, err = newDaemonRequestID()
@@ -155,6 +171,7 @@ func agentExecutionReceipt(r *protocol.ExecutionReceipt, host, key string) (*age
 		return nil, fmt.Errorf("host returned an invalid execution receipt")
 	}
 	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}
+	out.ContextID, out.ContextRevision = r.ContextID, r.ContextRevision
 	if r.Result != nil {
 		t := r.Result.Termination
 		out.Result = &agentapi.ExecutionResult{Termination: agentapi.ExecutionTermination{Kind: t.Kind, Code: t.Code, Signal: t.Signal, Reason: t.Reason}, EndedAt: r.Result.EndedAt, Capture: r.Result.Capture, Streams: agentExecutionStreams(r.Result.Streams)}
@@ -170,7 +187,7 @@ func executionBoundaryError(operation string, err error) error {
 }
 
 func validateAgentExecutionState(r *protocol.ExecutionReceipt) error {
-	if r.KeyScope != executionDeviceScope && r.KeyScope != "local-account" {
+	if r.KeyScope != executionDeviceScope && r.KeyScope != "local-account" && r.KeyScope != execution.ApplicationClass {
 		return fmt.Errorf("host returned an invalid key scope")
 	}
 	switch r.Acceptance {

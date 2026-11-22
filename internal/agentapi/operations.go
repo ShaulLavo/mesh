@@ -35,7 +35,9 @@ type Operation struct {
 	Summary, Example              string
 }
 
-var Operations = []Operation{
+var Operations = append(coreOperations, applicationOperations...)
+
+var coreOperations = []Operation{
 	{Name: "scope.keygen", Command: "mesh device scope keygen", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: keyDirFlag, Value: pathFlagValue, Required: true, Summary: "explicit dedicated credential directory"}}, Summary: "Create a separate metadata credential without enrolling it.", Example: "mesh device scope keygen --key-dir KEY_DIRECTORY --json"},
 	{Name: "scope.grant", Command: "mesh device scope grant", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: identityFlag, Value: "ID", Required: true}, {Name: "--permissions", Value: "PERMISSIONS", Required: true}, {Name: expectedRevisionFlag, Value: "N", Required: true}, {Name: "--expires-at", Value: "TIME"}, {Name: "--expires-in", Value: "D"}}, Summary: "Grant host-wide metadata or metadata plus session-output locally.", Example: "mesh device scope grant --identity PUBLIC_ID --permissions metadata --expected-revision 0 --json"},
 	{Name: "scope.revoke", Command: "mesh device scope revoke", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: identityFlag, Value: "ID", Required: true}, {Name: expectedRevisionFlag, Value: "N", Required: true}}, Summary: "Remove a scoped key from local target policy.", Example: "mesh device scope revoke --identity PUBLIC_ID --expected-revision 1 --json"},
@@ -133,7 +135,7 @@ func valueFlag(arg string) bool {
 	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", fileFlag, expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, cursorFlag, limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", maxBytesFlag, colsFlag, rowsFlag, instanceFlag, "--stream", "--signal", "--stdin", "--offset", "--write-key", "--base64", "--text":
 		return true
 	}
-	return false
+	return applicationValueFlag(arg)
 }
 
 func sessionReadFlags(list bool) []Flag {
@@ -147,13 +149,13 @@ func sessionReadFlags(list bool) []Flag {
 func executionFlags(create bool) []Flag {
 	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: "--request-key", Value: "KEY", Required: true, Summary: "saved logical request key"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "finite request deadline"}}
 	if create {
-		return append(flags, Flag{Name: "--kind", Value: "KIND", Required: true, Summary: "pty or pipe"}, Flag{Name: "--cwd", Value: pathFlagValue, Required: true, Summary: "absolute target directory"}, Flag{Name: "--stdin", Value: "MODE", Summary: "pipe stdin, closed or open"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: colsFlag, Value: "N", Summary: "terminal width"}, Flag{Name: rowsFlag, Value: "N", Summary: "terminal height"})
+		flags = append(flags, Flag{Name: "--kind", Value: "KIND", Required: true, Summary: "pty or pipe"}, Flag{Name: "--cwd", Value: pathFlagValue, Required: true, Summary: "absolute target directory"}, Flag{Name: "--stdin", Value: "MODE", Summary: "pipe stdin, closed or open"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: colsFlag, Value: "N", Summary: "terminal width"}, Flag{Name: rowsFlag, Value: "N", Summary: "terminal height"}, Flag{Name: "--shell-command", Value: textValue, Summary: "with --identity, run through the context's shell"})
 	}
-	return flags
+	return append(flags, applicationExecutionFlags()...)
 }
 
 func executionControlFlags(kind string) []Flag {
-	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: instanceFlag, Value: "INSTANCE", Required: true, Summary: "exact creation receipt instance"}, {Name: timeoutFlag, Value: "D", Summary: "finite deadline"}}
+	flags := append([]Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: instanceFlag, Value: "INSTANCE", Required: true, Summary: "exact creation receipt instance"}, {Name: timeoutFlag, Value: "D", Summary: "finite deadline"}}, applicationExecutionFlags()...)
 	if kind == "logs" {
 		flags = append(flags, Flag{Name: "--stream", Value: "STREAM", Summary: "pty, stdout or stderr"}, Flag{Name: cursorFlag, Value: tokenValue, Summary: "independent output cursor"}, Flag{Name: maxBytesFlag, Value: "N", Summary: "page size from 1 to 1048576"})
 	}
