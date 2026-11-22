@@ -339,8 +339,52 @@ class PublicationWorkflowTests(unittest.TestCase):
         self.assertIn("publication-trust", aggregate)
         pin = importlib.import_module("test-installed-gate-wiring").PIN
         caller = (ROOT / ".github/workflows/release.yml").read_text()
-        self.assertEqual(re.findall(r"uses: ShaulLavo/mesh/.github/workflows/installed-catchup.yml@([0-9a-f]{40})", caller), [pin])
-        self.assertIn("harness_source: " + pin, caller)
+        self.assertEqual(re.findall(r"^  MESH_PUBLICATION_HARNESS: ([0-9a-f]{40})$", caller, re.M), [pin])
+        self.assertNotIn("installed-catchup.yml@", caller)
+        self.assertIn("scripts/publication-workflow.py fetch-platforms", caller)
+
+    def test_fetch_platforms_accepts_mixed_rerun_attempts_and_rejects_bad_handoffs(self):
+        handoff = {"linux/amd64": "11:1", "linux/arm64": "12:1", "darwin/arm64": "13:2"}
+        archives, items = {}, {}
+        for platform, value in handoff.items():
+            ident, attempt = map(int, value.split(":"))
+            name = f"publication-platform-{platform.replace('/', '-')}-attempt-{attempt}"
+            archive = self.root / f"{name}.zip"
+            with zipfile.ZipFile(archive, "w") as package:
+                package.writestr("publication-platform.json", json.dumps({"platform": platform, "attempt": attempt}))
+            archives[ident] = archive
+            items[f"repos/ShaulLavo/mesh/actions/artifacts/{ident}"] = {
+                "id": ident, "name": name, "size_in_bytes": archive.stat().st_size,
+                "digest": "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest(),
+                "expired": False, "workflow_run": {"id": 42}}
+        destination = self.root / "platform-evidence"
+        with patch.object(workflow.installed_artifacts, "api", side_effect=items.__getitem__), \
+                patch.object(workflow.installed_storage, "archive_url", side_effect=lambda _r, ident: archives[ident].as_uri()):
+            attempts = workflow.fetch_platforms("ShaulLavo/mesh", 42, 2, handoff, destination)
+        self.assertEqual(attempts, {"linux/amd64": 1, "linux/arm64": 1, "darwin/arm64": 2})
+        self.assertEqual(sorted(p.name for p in destination.iterdir()), sorted(item["name"] for item in items.values()))
+        self.check_rejected_platform_handoffs(handoff, items)
+
+    def check_rejected_platform_handoffs(self, handoff, items):
+        bad_handoffs = (
+            {"linux/amd64": "11:1", "linux/arm64": "12:1"},
+            handoff | {"darwin/arm64": "13:3"},
+            handoff | {"darwin/arm64": "bad"},
+            handoff | {"darwin/arm64": "11:1"},
+        )
+        for bad in bad_handoffs:
+            with patch.object(workflow.installed_artifacts, "api", side_effect=items.__getitem__), \
+                    patch.object(workflow, "fetch_child") as transfer, self.assertRaises(ValueError):
+                workflow.fetch_platforms("ShaulLavo/mesh", 42, 2, bad, self.root / "bad-handoff")
+            transfer.assert_not_called()
+        bad_items = ({"expired": True}, {"workflow_run": {"id": 99}}, {"name": "wrong-name"})
+        for change in bad_items:
+            mutated = copy.deepcopy(items)
+            mutated["repos/ShaulLavo/mesh/actions/artifacts/13"].update(change)
+            with patch.object(workflow.installed_artifacts, "api", side_effect=mutated.__getitem__), \
+                    patch.object(workflow, "fetch_child") as transfer, self.assertRaises(ValueError):
+                workflow.fetch_platforms("ShaulLavo/mesh", 42, 2, handoff, self.root / "bad-item")
+            transfer.assert_not_called()
 
     def test_actual_native_shell_forwards_one_complete_task_and_propagates_failure(self):
         command = wiring.step(wiring.job(WORKFLOW, "publication-native"), "Exercise the actual signed draft through native services")

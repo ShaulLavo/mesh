@@ -212,7 +212,7 @@ else:
     def test_workflows_keep_read_only_proofs_and_mandatory_publication_gates(self):
         self.assertNotIn(": write", PROOFS)
         self.assertNotIn("write", GATE.job(RELEASE, "prove-transition"))
-        self.assertNotIn("write", GATE.job(RELEASE, "verify-readers"))
+        self.assertNotIn("write", GATE.job(RELEASE, "publication-native"))
         prepare = GATE.job(PROOFS, "prepare")
         self.assertIn("if: inputs.draft\n        uses: actions/download-artifact@", prepare)
         self.assertNotIn("gh release download", prepare)
@@ -224,9 +224,9 @@ else:
         self.assertLess(publish.index('scripts/upload-signed-draft.py'), publish.index('name: release-signed-draft'))
         self.assertIn('capture "$RUNNER_TEMP/release-signed-draft"', publish)
         self.assertIn('--signed --candidate "$RUNNER_TEMP/release-candidate"', publish)
-        self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", GATE.job(RELEASE, "finalize"))
-        self.assertIn("artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}", GATE.job(RELEASE, "verify-readers"))
-        self.assertNotIn("gh release download", GATE.job(RELEASE, "verify-readers"))
+        self.assertIn("needs: [reserve, publish, publication-native]", GATE.job(RELEASE, "finalize"))
+        self.assertIn("artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}", GATE.job(RELEASE, "publication-native"))
+        self.assertNotIn("gh release download", GATE.job(RELEASE, "publication-native"))
 
     def test_new_code_keeps_at_most_three_nesting_levels(self):
         for path in (Path(INTAKE.__file__), Path(__file__), ROOT / "scripts/prepare-draft-intake.py"):
