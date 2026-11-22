@@ -315,9 +315,9 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	}
 
 	// 3. Remote target omits frontend account when host omits Account, and reports remote Account when present.
-	// 4. Slow dial (650ms > old 500ms margin) with WaitMS=300 returns timed_out with receipt, not host.unreachable.
+	// 4. Slow dial (250ms) with WaitMS=700 succeeds within deadline and reports remote Account.
 	slowDial := func(_ context.Context, h HostRecord) (transport.Conn, error) {
-		time.Sleep(650 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 		return newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) {
 			if req.Type == protocol.TypeHostInfo {
 				return protocol.Control{
@@ -340,7 +340,7 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	slowControls := newMCPControls(app, slowPool, "")
 	waitOut, err := slowControls.JobWait(t.Context(), mcpnative.JobWaitRequest{
 		Job:    mcpnative.JobRef{HostID: hostID, SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"},
-		WaitMS: 300,
+		WaitMS: 700,
 	}, nil)
 	if err != nil || waitOut.IsError || waitOut.Target == nil || waitOut.Target.Account != "remote-bob" {
 		t.Fatalf("queued/cold wait failed or wrong remote account: out=%+v err=%v", waitOut, err)

@@ -263,22 +263,29 @@ func parseExecOutputBytes(value *int) (int, error) {
 	return *value, nil
 }
 
-func parseExecCommand(command *string, argv []string) (string, []string, error) {
-	hasCmd := command != nil && *command != ""
-	hasArgv := len(argv) > 0
+func parseExecCommand(command *string, argv *[]string) (string, []string, error) {
+	hasCmd := command != nil
+	hasArgv := argv != nil
 	if hasCmd == hasArgv {
 		return "", nil, invalidParam("pass exactly one of command or argv")
 	}
 	if hasCmd {
+		if *command == "" {
+			return "", nil, invalidParam("command must be non-empty")
+		}
 		return *command, nil, nil
 	}
-	if len(argv) > 1024 {
+	list := *argv
+	if len(list) == 0 {
+		return "", nil, invalidParam("argv must be non-empty")
+	}
+	if len(list) > 1024 {
 		return "", nil, invalidParam("argv exceeds 1024 entries")
 	}
-	if argv[0] == "" {
+	if list[0] == "" {
 		return "", nil, invalidParam("argv[0] must be non-empty")
 	}
-	return "", argv, nil
+	return "", list, nil
 }
 
 func parseEnvMap(env map[string]string, field string) error {

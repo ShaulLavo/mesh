@@ -592,13 +592,16 @@ func BuildJobOutputData(page *agentapi.ExecutionPage, target TargetMeta) JobOutp
 	}
 }
 
+// JobStateRunning is the canonical MCP job state string for a live job.
+const JobStateRunning = "running"
+
 // JobStateFromReceipt maps an execution receipt's phase and termination to a concise job state.
 func JobStateFromReceipt(receipt *agentapi.ExecutionReceipt) string {
 	if receipt == nil {
 		return "unknown"
 	}
 	if receipt.Phase == "live" {
-		return "running"
+		return JobStateRunning
 	}
 	if receipt.Phase == "terminal" && receipt.Result != nil && receipt.Result.Termination.Kind != "" {
 		if receipt.Result.Termination.Kind == "exit" {

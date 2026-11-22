@@ -393,11 +393,11 @@ func (s *StdioServer) admitRequest(ctx context.Context, msg mcpwire.Message, raw
 func (s *StdioServer) executeRequest(ctx context.Context, msg mcpwire.Message, entry *activeRequest) {
 	defer entry.cancel()
 	token := extractProgressToken(msg)
-	notify := func(update ProgressUpdate) {
-		if len(token) == 0 {
-			return
+	var notify func(ProgressUpdate)
+	if len(token) > 0 {
+		notify = func(update ProgressUpdate) {
+			s.enqueueProgress(entry, token, update)
 		}
-		s.enqueueProgress(entry, token, update)
 	}
 	reply, fault := s.handleMessage(ctx, msg, notify)
 	s.completeActive(entry, reply, fault)
