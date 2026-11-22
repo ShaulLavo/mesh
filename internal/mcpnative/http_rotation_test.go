@@ -272,6 +272,9 @@ type rotationHarness struct {
 	gate *rotationGate
 	srv  *HTTPServer
 	ts   *httptest.Server
+	// idle receives when net/http marks a connection idle, which happens
+	// after the client may already have read the whole response.
+	idle chan struct{}
 }
 
 func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) *rotationHarness {
@@ -287,6 +290,18 @@ func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) 
 	}
 	ts := httptest.NewUnstartedServer(srv)
 	srv.Attach(ts.Config)
+	idle := make(chan struct{}, 16)
+	track := ts.Config.ConnState
+	ts.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		track(c, state)
+		if state != http.StateIdle {
+			return
+		}
+		select {
+		case idle <- struct{}{}:
+		default:
+		}
+	}
 	ts.Listener = &gatedListener{Listener: ts.Listener, gate: gate}
 	ts.Start()
 	t.Cleanup(func() {
@@ -295,7 +310,7 @@ func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) 
 		_ = srv.Shutdown(context.Background())
 		ts.Close()
 	})
-	return &rotationHarness{gate: gate, srv: srv, ts: ts}
+	return &rotationHarness{gate: gate, srv: srv, ts: ts, idle: idle}
 }
 
 func (h *rotationHarness) dial(t *testing.T, request []byte) net.Conn {
@@ -634,6 +649,7 @@ func TestHTTPRotationKeepsIdleConnectionForNewToken(t *testing.T) {
 	client := h.dial(t, []byte(rawRequestHead(testHTTPToken, mcpwire.MethodListTools, "", len(body))+body))
 	br := bufio.NewReader(client)
 	assertListReply(t, br)
+	waitPhase(t, h.idle, "the connection to go idle")
 
 	waitRotation(t, h.rotate(), 0)
 	if _, err := client.Write(newTokenListRequest()); err != nil {
