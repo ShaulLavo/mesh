@@ -767,6 +767,17 @@ func (w *Worker) enqueueInput(owner *attachment, payload []byte) bool {
 	return relay.enqueue(owner, payload)
 }
 
+// hasExited reports whether the command already ended and finish has started
+// handing its exit frame to the attached client.
+func (w *Worker) hasExited() bool {
+	select {
+	case <-w.exited:
+		return true
+	default:
+		return false
+	}
+}
+
 func (w *Worker) ownsAttachment(owner *attachment) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

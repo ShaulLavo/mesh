@@ -48,6 +48,7 @@ func (c *streamConn) WriteFrame(frame protocol.Frame) error {
 
 func (c *streamConn) Close() error {
 	c.closeOnce.Do(func() {
+		discardQueuedInput(c.stream)
 		c.closeErr = c.stream.Close()
 	})
 	return c.closeErr
