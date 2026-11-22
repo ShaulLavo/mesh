@@ -39,6 +39,9 @@ func (r RecoveryRuntime) Inspect(ctx context.Context, id string) (recovery.Sourc
 	if err != nil {
 		return recovery.Source{}, fmt.Errorf("session %s: read recovery metadata: %w", id, err)
 	}
+	if meta.Reservation != nil && meta.Reservation.Purpose.IsPipe() {
+		return recovery.Source{}, fmt.Errorf("session %s has no terminal to recover: %w", id, os.ErrNotExist)
+	}
 	if meta.ID != id {
 		return recovery.Source{}, fmt.Errorf("session %s: metadata belongs to %s", id, meta.ID)
 	}

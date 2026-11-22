@@ -8,9 +8,9 @@ import (
 
 func (w *Worker) executionControl(conn net.Conn, req protocol.Control) {
 	response := protocol.Control{Type: protocol.TypeOK, RequestID: req.RequestID, SessionID: w.cfg.ID, Instance: req.Instance}
-	if req.SessionID != w.cfg.ID || req.Instance == "" || w.cfg.Execution == nil || req.Instance != w.cfg.Execution.Reservation.Instance {
+	if !w.exactExecution(req) {
 		response.Type = protocol.TypeError
-		response.ErrorCode = "session.instance_mismatch"
+		response.ErrorCode = protocol.ErrorCodeInstanceMismatch
 		response.Message = "execution instance does not match"
 		_ = protocol.NewWriter(conn).WriteControlMsg(response)
 		return
@@ -29,6 +29,9 @@ func (w *Worker) executionControl(conn net.Conn, req protocol.Control) {
 	name := req.Signal
 	if req.Type == protocol.TypeExecutionKill {
 		name = "hup"
+		if w.pipe != nil {
+			w.pipe.cancelling.Store(true)
+		}
 	}
 	delivery, err := w.deliverSignal(req.Instance, name)
 	response.ExecutionDelivery = delivery
@@ -37,8 +40,24 @@ func (w *Worker) executionControl(conn net.Conn, req protocol.Control) {
 		response.Message = err.Error()
 	}
 	if err == nil && req.Type == protocol.TypeExecutionKill && delivery == "delivered" {
-		w.kill()
+		if w.pipe == nil {
+			w.kill()
+		} else {
+			w.escalatePipe(req.Instance)
+		}
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(attachmentWriteTimeout))
 	_ = protocol.NewWriter(conn).WriteControlMsg(response)
+}
+
+func (w *Worker) escalatePipe(instance string) {
+	timer := time.NewTimer(killGrace)
+	defer timer.Stop()
+	select {
+	case <-w.exited:
+		return
+	case <-timer.C:
+	}
+	_, _ = w.deliverSignal(instance, "kill")
+	<-w.exited
 }

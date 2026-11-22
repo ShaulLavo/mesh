@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -243,4 +244,69 @@ func (c *closeUnblocksConn) Close() error {
 	c.closeCalls.Add(1)
 	c.closeOnce.Do(func() { close(c.closed) })
 	return nil
+}
+
+type pausedBatchSink struct {
+	recordingConn
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (c *pausedBatchSink) WriteFrame(frame protocol.Frame) error {
+	if frame.Kind == protocol.KindData {
+		close(c.entered)
+		<-c.release
+	}
+	if err := c.recordingConn.WriteFrame(frame); err != nil {
+		return fmt.Errorf("record fixture batch: %w", err)
+	}
+	return nil
+}
+
+func TestAdmittedControlRechecksAfterPendingDataFlush(t *testing.T) {
+	release := make(chan struct{})
+	var unblock sync.Once
+	resume := func() { unblock.Do(func() { close(release) }) }
+	defer resume()
+	sink := &pausedBatchSink{entered: make(chan struct{}), release: release}
+	batch, err := NewBatchingConn(sink, BatchOptions{FlushInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { resume(); _ = batch.Close() }()
+	terminal := protocol.Frame{Kind: protocol.KindData, Payload: []byte("pending terminal data")}
+	if err := batch.WriteFrame(terminal); err != nil {
+		t.Fatal(err)
+	}
+	revoked := errors.New("fixture grant revoked")
+	var current atomic.Bool
+	current.Store(true)
+	control := protocol.Frame{Kind: protocol.KindControl, Payload: []byte("protected result")}
+	wrote := make(chan error, 1)
+	go func() {
+		wrote <- WriteAdmittedControl(batch, control, func() error {
+			if !current.Load() {
+				return revoked
+			}
+			return nil
+		})
+	}()
+	select {
+	case <-sink.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("guarded control did not flush the preceding terminal frame")
+	}
+	current.Store(false)
+	resume()
+	select {
+	case err := <-wrote:
+		if !errors.Is(err, revoked) {
+			t.Fatalf("guarded write returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("guarded control write did not return")
+	}
+	if got := sink.snapshot(); len(got) != 1 || got[0].Kind != protocol.KindData {
+		t.Fatalf("unexpected frames after revocation: %+v", got)
+	}
 }

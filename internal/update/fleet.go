@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/release"
 )
 
@@ -162,14 +164,11 @@ func ReadFleet(path string) (Fleet, error) {
 func IsLocal(h Host) bool { return strings.HasPrefix(h.Endpoint, "unix:") }
 
 func CacheDir() (string, error) {
-	if configured := os.Getenv("MESH_UPDATE_CACHE_DIR"); configured != "" {
-		return configured, nil
-	}
-	base, err := os.UserCacheDir()
+	cache, err := paths.UpdateCacheDir(runtime.GOOS, os.Getenv)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("update: %w", err)
 	}
-	return base + "/mesh/updates", nil
+	return cache, nil
 }
 
 // Label is presentation only; fleet membership and persistence use stable identity.

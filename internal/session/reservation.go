@@ -10,11 +10,21 @@ import (
 type Purpose string
 
 const (
-	Generic   Purpose = "generic"
-	Managed   Purpose = "managed"
-	Recovery  Purpose = "recovery"
-	Execution Purpose = "execution"
+	Generic       Purpose = "generic"
+	Managed       Purpose = "managed"
+	Recovery      Purpose = "recovery"
+	Execution     Purpose = "execution"
+	PipeExecution Purpose = "pipe-execution"
+	LineExecution Purpose = "line-execution"
 )
+
+func (p Purpose) IsExecution() bool {
+	return p == Execution || p == PipeExecution || p == LineExecution
+}
+
+func (p Purpose) IsPipe() bool {
+	return p == PipeExecution || p == LineExecution
+}
 
 // Reservation identifies one allocation. It is never inferred from a directory.
 type Reservation struct {
@@ -43,11 +53,11 @@ func (r Reservation) Validate() error {
 		return fmt.Errorf("invalid reservation instance")
 	}
 	switch r.Purpose {
-	case Generic, Managed, Recovery, Execution:
+	case Generic, Managed, Recovery, Execution, PipeExecution, LineExecution:
 	default:
 		return fmt.Errorf("invalid reservation purpose")
 	}
-	if (r.Purpose == Managed || r.Purpose == Recovery || r.Purpose == Execution) && r.BootID == "" {
+	if (r.Purpose == Managed || r.Purpose == Recovery || r.Purpose.IsExecution()) && r.BootID == "" {
 		return fmt.Errorf("reservation requires a known boot")
 	}
 	return nil

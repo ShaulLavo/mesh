@@ -1,11 +1,12 @@
 package daemon
 
 import (
+	"testing"
+
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
-	"testing"
 )
 
 func TestBoundExecutionMismatchKeepsItsPublicCode(t *testing.T) {
@@ -22,7 +23,7 @@ func TestBoundExecutionLostAcknowledgementKeepsUnknownDelivery(t *testing.T) {
 	r := execution.Receipt{Binding: execution.Binding{Host: "host", Reservation: ref}, Phase: "live"}
 	l := &lifecycle{sessionsDir: t.TempDir()}
 	request := protocol.Control{Type: protocol.TypeExecutionSignal, RequestID: "no-ack", SessionID: ref.ID, Instance: ref.Instance, Signal: "term"}
-	observed, err := l.boundExecution(t.Context(), request, nil, r)
+	observed, err := l.boundExecution(localServerContext(t.Context()), request, nil, r)
 	if err == nil || observed.ExecutionDelivery != "unknown" {
 		t.Fatal("delivery uncertainty control did not arm", observed, err)
 	}

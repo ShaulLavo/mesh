@@ -120,6 +120,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 
+		if protocol.IsExecutionControl(request.Type) {
+			if err := s.replyExecution(ctx, relay, request); err != nil {
+				return clientOperationError(ctx, "reply to execution request", err)
+			}
+			continue
+		}
+
 		if request.Type == protocol.TypeStateWatch && s.state != nil {
 			if terminalUsed {
 				if err := writeClientRequestError(relay, request, errWatchMode); err != nil {

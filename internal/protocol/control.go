@@ -10,6 +10,7 @@ import (
 	"github.com/shaul/mesh/internal/hostmetrics"
 	"github.com/shaul/mesh/internal/recovery"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/wake"
 )
 
@@ -390,18 +391,25 @@ type Control struct {
 	CertificateProfile     string              `json:"certificateProfile,omitempty"`
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
-	// Keyed detached PTY admission is distinct from legacy correlation IDs.
-	ExecutionKind     string            `json:"kind,omitempty"`
-	RequestKey        string            `json:"requestKey,omitempty"`
-	ExecutionReceipt  *ExecutionReceipt `json:"executionReceipt,omitempty"`
-	Instance          string            `json:"instance,omitempty"`
-	Stream            string            `json:"stream,omitempty"`
-	Cursor            string            `json:"cursor,omitempty"`
-	MaxBytes          int               `json:"maxBytes,omitempty"`
-	TimeoutMillis     int               `json:"timeoutMillis,omitempty"`
-	ExecutionPage     *ExecutionPage    `json:"executionPage,omitempty"`
-	ExecutionWait     string            `json:"executionWait,omitempty"`
-	ExecutionDelivery string            `json:"executionDelivery,omitempty"`
+	// Keyed detached admission is distinct from legacy correlation IDs.
+	ExecutionKind     string                `json:"kind,omitempty"`
+	RequestKey        string                `json:"requestKey,omitempty"`
+	ExecutionReceipt  *ExecutionReceipt     `json:"executionReceipt,omitempty"`
+	Instance          string                `json:"instance,omitempty"`
+	Stream            string                `json:"stream,omitempty"`
+	Cursor            string                `json:"cursor,omitempty"`
+	MaxBytes          int                   `json:"maxBytes,omitempty"`
+	TimeoutMillis     int                   `json:"timeoutMillis,omitempty"`
+	ExecutionPage     *ExecutionPage        `json:"executionPage,omitempty"`
+	ExecutionWait     string                `json:"executionWait,omitempty"`
+	ExecutionDelivery string                `json:"executionDelivery,omitempty"`
+	Stdin             string                `json:"stdin,omitempty"`
+	WriteKey          string                `json:"writeKey,omitempty"`
+	InputOffset       *uint64               `json:"inputOffset,string,omitempty"`
+	InputBytes        []byte                `json:"inputBytes,omitempty"`
+	InputEOF          bool                  `json:"inputEOF,omitempty"`
+	InputReceipt      *session.InputReceipt `json:"inputReceipt,omitempty"`
+	LaunchDigest      string                `json:"launchDigest,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

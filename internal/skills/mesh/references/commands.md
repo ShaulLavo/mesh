@@ -148,6 +148,7 @@ mesh session inspect --host HOST_ID SESSION_ID --json
 - `--json`: write one agent result.
 - `--timeout D`: hard deadline from 100ms to 60s.
 - `--preview`: include a preview at most 80 by 24.
+- `--instance INSTANCE`: inspect an exact keyed command receipt.
 
 ## mesh profile show
 
@@ -251,7 +252,7 @@ mesh skill uninstall --dir ROOT --json
 
 ## mesh session create
 
-Start one keyed detached PTY command on an online host.
+Start one keyed detached command on an online host.
 
 ```sh
 mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true
@@ -261,8 +262,9 @@ mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work -
 - `--request-key KEY`: saved logical request key.
 - `--json`: write one agent result.
 - `--timeout D`: finite request deadline.
-- `--kind pty`: explicit PTY kind.
+- `--kind KIND`: pty or pipe.
 - `--cwd PATH`: absolute target directory.
+- `--stdin MODE`: pipe stdin, closed or open.
 - `--term TERM`: terminal type.
 - `--cols N`: terminal width.
 - `--rows N`: terminal height.
@@ -295,7 +297,7 @@ mesh session wait --host HOST_ID 7K3D --instance INSTANCE --json
 
 ## mesh session logs
 
-Read exact bounded PTY bytes with independent cursors.
+Read exact bounded output bytes with independent cursors.
 
 ```sh
 mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json
@@ -305,9 +307,28 @@ mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json
 - `--json`: write one agent result.
 - `--instance INSTANCE`: exact creation receipt instance.
 - `--timeout D`: finite deadline.
-- `--stream pty`: exact PTY stream.
+- `--stream STREAM`: pty, stdout or stderr.
 - `--cursor TOKEN`: independent output cursor.
 - `--max-bytes N`: page size from 1 to 1048576.
+
+## mesh session input
+
+Write pipe stdin once or look up a saved write key.
+
+```sh
+mesh session input --host HOST_ID 7K3D --instance INSTANCE --write-key eof --offset 0 --eof --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--write-key KEY`: saved logical write key.
+- `--offset N`: expected byte offset, omitted for lookup.
+- `--text TEXT`: exact text bytes.
+- `--base64 DATA`: Base64-encoded bytes.
+- `--file PATH`: read local bytes, or use - for stdin.
+- `--eof`: close pipe stdin after these bytes.
 
 ## mesh session signal
 

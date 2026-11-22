@@ -9,6 +9,7 @@ import (
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +56,7 @@ func (a *application) sessionExecutionCommand(name, kind string) *cobra.Command 
 	command.Flags().DurationVar(&o.timeout, "timeout", 5*time.Second, "finite deadline from 100ms to 60s")
 	command.Flags().StringVar(&o.instance, "instance", "", "exact instance from the creation receipt, required")
 	if kind == protocol.TypeExecutionLogs {
-		command.Flags().StringVar(&o.stream, "stream", executionPTYKind, "exact stream, currently pty")
+		command.Flags().StringVar(&o.stream, "stream", execution.KindPTY, "exact stream, pty, stdout or stderr")
 		command.Flags().StringVar(&o.cursor, "cursor", "", "saved independent output cursor")
 		command.Flags().IntVar(&o.maxBytes, "max-bytes", 65536, "decoded page size from 1 to 1048576 bytes")
 	}
@@ -69,7 +70,7 @@ func executionControlSummary(kind string) string {
 	case protocol.TypeExecutionWait:
 		return "Wait for a durable result without stopping the command"
 	case protocol.TypeExecutionLogs:
-		return "Read exact bounded PTY bytes with an independent cursor"
+		return "Read exact bounded output bytes with an independent cursor"
 	case protocol.TypeExecutionSignal:
 		return "Signal the exact keyed command instance"
 	case protocol.TypeExecutionKill:
@@ -93,8 +94,8 @@ func (o executionControlOptions) validateControl(operation, id, kind string) err
 	if kind == protocol.TypeExecutionSignal && !worker.SupportsSignal(o.signal) {
 		return agentapi.Usage(operation, "Pass a supported --signal.")
 	}
-	if kind == protocol.TypeExecutionLogs && (o.stream != executionPTYKind || o.maxBytes < 1 || o.maxBytes > 1<<20 || len(o.cursor) > 2048) {
-		return agentapi.Usage(operation, "Use --stream pty and --max-bytes from 1 to 1048576.")
+	if kind == protocol.TypeExecutionLogs && (!validExecutionStream(o.stream) || o.maxBytes < 1 || o.maxBytes > 1<<20 || len(o.cursor) > 2048) {
+		return agentapi.Usage(operation, "Use --stream pty, stdout or stderr and --max-bytes from 1 to 1048576.")
 	}
 	return nil
 }
@@ -106,12 +107,15 @@ func agentExecutionStreams(streams []protocol.ExecutionStream) []agentapi.Execut
 	return out
 }
 func agentExecutionPage(p *protocol.ExecutionPage, host string, request protocol.Control) (*agentapi.ExecutionPage, error) {
-	if p.HostID != host || p.SessionID != request.SessionID || p.Instance != request.Instance || p.Stream != executionPTYKind || len(p.Bytes) > request.MaxBytes {
+	if p.HostID != host || p.SessionID != request.SessionID || p.Instance != request.Instance || p.Stream != request.Stream || len(p.Bytes) > request.MaxBytes {
 		return nil, fmt.Errorf("host returned an invalid exact page")
 	}
 	return &agentapi.ExecutionPage{HostID: p.HostID, SessionID: p.SessionID, Instance: p.Instance, Stream: p.Stream, Generation: p.Generation, Bytes: p.Bytes, StartCursor: p.StartCursor, NextCursor: p.NextCursor, EarliestCursor: p.EarliestCursor, EndCursor: p.EndCursor, ObservedEnd: p.ObservedEnd, StreamClosed: p.StreamClosed, EOF: p.EOF, CloseReason: p.CloseReason, Loss: p.Loss, Available: p.Available, Gap: p.Gap, Reason: p.Reason}, nil
 }
 func executionAgentData(response, request protocol.Control, host, key string) (any, error) {
+	if request.Type == protocol.TypeExecutionInput {
+		return agentExecutionInputData(response, request)
+	}
 	if response.ExecutionPage != nil {
 		return agentExecutionPage(response.ExecutionPage, host, request)
 	}
@@ -140,4 +144,6 @@ func exactExecutionArgs(operation string) cobra.PositionalArgs {
 	}
 }
 
-const executionPTYKind = "pty"
+func validExecutionStream(stream string) bool {
+	return stream == execution.KindPTY || stream == execution.StreamStdout || stream == execution.StreamStderr
+}

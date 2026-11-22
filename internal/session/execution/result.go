@@ -86,6 +86,10 @@ func (a *Attempt) Finish(result Result) error {
 	_, err := a.files.Publish(attempt(a.binding, "result.json"), result, true)
 	return err
 }
+func (a *Attempt) Started() error {
+	_, err := a.files.Publish(attempt(a.binding, "started.json"), a.binding, true)
+	return err
+}
 func (a *Attempt) Published() error {
 	return a.files.Remove("s/"+a.binding.Reservation.ID+"/.launching", attempt(a.binding, "reference.json"))
 }
@@ -114,7 +118,7 @@ func ProtectedSession(sessions, id string) bool {
 	if errors.Is(err, os.ErrNotExist) {
 		return metadataExecutionOrigin(f, id)
 	}
-	return err != nil || r.Validate() != nil || r.ID != id || r.Purpose == session.Execution
+	return err != nil || r.Validate() != nil || r.ID != id || r.Purpose.IsExecution()
 }
 
 func (a *Attempt) currentReservation() error {
@@ -149,5 +153,5 @@ func metadataExecutionOrigin(f *Files, id string) bool {
 	if err := json.Unmarshal(raw, &ref); err != nil {
 		return true
 	}
-	return ref.Validate() != nil || ref.ID != id || ref.Purpose == session.Execution
+	return ref.Validate() != nil || ref.ID != id || ref.Purpose.IsExecution()
 }

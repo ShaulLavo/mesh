@@ -279,7 +279,7 @@ func (j *Journal) recoveryPinned(r Receipt) bool {
 }
 
 func (j *Journal) confirmRetiringResult(ctx context.Context, b Binding) error {
-	output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+	output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
 	_, err := output.Result(ctx, b)
 	if IsResultPending(err) {
 		return nil
@@ -295,7 +295,7 @@ func (j *Journal) retirementBinding(sessions, id string, expected *Binding) (Bin
 	if err := ref.Validate(); err != nil {
 		return Binding{}, executionBoundaryError("retention.go RetireSession", err)
 	}
-	if ref.ID != id || ref.Purpose != session.Execution {
+	if ref.ID != id || !ref.Purpose.IsExecution() {
 		return Binding{}, ErrProtected
 	}
 	var binding Binding

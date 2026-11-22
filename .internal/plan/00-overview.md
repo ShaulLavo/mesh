@@ -3,8 +3,8 @@
 Mesh is a Go application that gives you direct, resumable terminal sessions across
 your Tailscale-connected computers.
 
-It is not a VPN, scheduler, coding agent, MCP platform, deployment system, or
-personal assistant — yet. Those can consume Mesh later.
+Projects such as VPNs, schedulers, coding agents, deployment systems and
+personal assistants can consume Mesh.
 
 ```mermaid
 flowchart TD
@@ -156,7 +156,7 @@ interfaces so API churn stays contained.
 
 ## Explicitly later
 
-MCP/tools · coding-agent knowledge · job scheduling · personal assistant ·
+Coding-agent knowledge · job scheduling · personal assistant ·
 native mobile app · GUI editor · collaborative writers · sharing meshes with
 other users · replacing Tailscale · arbitrary proxying through the Pi.
 
@@ -174,8 +174,17 @@ A general build and deployment pipeline remains outside this work.
 
 Agent use is Approved as [the agent interface plan](05-agent-interface.md): one
 generic skill embedded in the binary, host and fleet profiles read live, and
-structured, restart-safe session operations. Mesh still runs no MCP server and
-holds no coding-agent knowledge.
+structured, restart-safe session operations. Mesh holds no coding-agent knowledge.
+
+MCP is Approved under [#318], [#319] and [#320]. Mesh will expose its native
+tools over stdio, host explicitly authorized MCP services at the owning host,
+and aggregate those tools at the local frontend. Local Streamable HTTP is a
+separate milestone. All MCP hops use stateless revision 2026-07-28. See
+[ADR 012](../../docs/adr/012-stateless-mcp.md).
+
+[#318]: https://github.com/ShaulLavo/mesh/issues/318
+[#319]: https://github.com/ShaulLavo/mesh/issues/319
+[#320]: https://github.com/ShaulLavo/mesh/issues/320
 
 Serving (step 8) is deliberately scoped proxying through the VPS, not the general
 case.

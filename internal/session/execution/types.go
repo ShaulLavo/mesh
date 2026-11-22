@@ -30,7 +30,7 @@ type Key struct {
 }
 
 func (k Key) Validate() error {
-	if k.Host == "" || k.Principal == "" || (k.Class != "device" && k.Class != "local-account") {
+	if k.Host == "" || k.Principal == "" || (k.Class != "device" && k.Class != "local-account" && k.Class != InternalServiceClass) {
 		return fmt.Errorf("execution: missing trusted namespace")
 	}
 	if len(k.Opaque) < 1 || len(k.Opaque) > 128 {
@@ -57,23 +57,29 @@ type Intent struct {
 	Cols    int      `json:"cols"`
 	Rows    int      `json:"rows"`
 	Term    string   `json:"term"`
+	Stdin   string   `json:"stdin,omitempty"`
 }
+
+const InternalServiceClass = "internal-service"
+
+const (
+	KindPTY      = "pty"
+	KindPipe     = "pipe"
+	KindLine     = "line"
+	StdinOpen    = "open"
+	StdinClosed  = "closed"
+	StreamStdout = "stdout"
+	StreamStderr = "stderr"
+)
 
 func Normalize(i Intent) (Intent, error) {
 	if err := validateIntentInput(i); err != nil {
 		return Intent{}, err
 	}
-	if i.Cols == 0 {
-		i.Cols = 80
-	}
-	if i.Rows == 0 {
-		i.Rows = 24
-	}
-	if i.Term == "" {
-		i.Term = "dumb"
-	}
-	if i.Cols < 1 || i.Rows < 1 || i.Cols > 2048 || i.Rows > 2048 || i.Cols > (256<<10)/i.Rows {
-		return Intent{}, fmt.Errorf("execution: invalid terminal dimensions")
+	if i.Kind == KindPTY {
+		i = terminalDefaults(i)
+	} else if i.Stdin == "" {
+		i.Stdin = StdinClosed
 	}
 	data, _ := json.Marshal(i)
 	if len(data) > 32<<10 {
@@ -83,15 +89,33 @@ func Normalize(i Intent) (Intent, error) {
 	return i, nil
 }
 
+func terminalDefaults(i Intent) Intent {
+	if i.Cols == 0 {
+		i.Cols = 80
+	}
+	if i.Rows == 0 {
+		i.Rows = 24
+	}
+	if i.Term == "" {
+		i.Term = "dumb"
+	}
+	return i
+}
+
 type Binding struct {
 	Host         string              `json:"host"`
 	Reservation  session.Reservation `json:"reservation"`
 	RequestHash  string              `json:"requestHash"`
 	LaunchDigest string              `json:"launchDigest"`
+	Kind         string              `json:"kind,omitempty"`
+	Stdin        string              `json:"stdin,omitempty"`
 }
 
 func NewBinding(key Key, intent Intent, r session.Reservation, env []string) Binding {
 	b := Binding{Host: key.Host, Reservation: r, RequestHash: key.Hash()}
+	if intent.Kind != KindPTY {
+		b.Kind, b.Stdin = intent.Kind, intent.Stdin
+	}
 	b.LaunchDigest = digest(struct {
 		Key    Key
 		Intent Intent
@@ -104,10 +128,39 @@ func (b Binding) Validate() error {
 	if err := b.Reservation.Validate(); err != nil {
 		return executionBoundaryError("types.go Validate", err)
 	}
-	if b.Host == "" || b.Reservation.Purpose != session.Execution || !validDigest(b.RequestHash) || !validDigest(b.LaunchDigest) {
+	if b.Host == "" || b.Reservation.Purpose != PurposeForKind(b.Mode()) || !validDigest(b.RequestHash) || !validDigest(b.LaunchDigest) {
 		return fmt.Errorf("execution: invalid binding")
 	}
-	return nil
+	return validateStdin(b.Mode(), b.Stdin)
+}
+
+func PurposeForKind(kind string) session.Purpose {
+	switch kind {
+	case KindPipe:
+		return session.PipeExecution
+	case KindLine:
+		return session.LineExecution
+	default:
+		return session.Execution
+	}
+}
+
+func (b Binding) Mode() string {
+	if b.Kind == "" {
+		return KindPTY
+	}
+	return b.Kind
+}
+
+func (b Binding) Streams() []string {
+	switch b.Mode() {
+	case KindPipe:
+		return []string{StreamStdout, StreamStderr}
+	case KindLine:
+		return []string{StreamStderr}
+	default:
+		return []string{KindPTY}
+	}
 }
 func validDigest(s string) bool {
 	raw, err := hex.DecodeString(s)
@@ -150,7 +203,7 @@ func validateTermination(t Termination) error {
 		if t.Signal == nil || *t.Signal <= 0 || t.Code != nil {
 			return fmt.Errorf("execution: invalid signal")
 		}
-	case notStarted, "interrupted":
+	case notStarted, interrupted:
 		if t.Code != nil || t.Signal != nil || t.Reason == "" {
 			return fmt.Errorf("execution: invalid non-exit")
 		}
@@ -187,6 +240,9 @@ func (r Receipt) validate() error {
 	}
 	if err := r.Key.Validate(); err != nil {
 		return err
+	}
+	if (r.Binding.Mode() == KindLine) != (r.Key.Class == InternalServiceClass) {
+		return fmt.Errorf("execution: invalid internal request namespace")
 	}
 	if r.Binding.RequestHash != r.Key.Hash() || r.Binding.Host != r.Key.Host || !validDigest(r.IntentDigest) || r.Owner == "" || r.AcceptedAt.IsZero() {
 		return fmt.Errorf("execution: damaged receipt")
@@ -231,8 +287,9 @@ const (
 	phaseLive            = "live"
 	phaseUncertain       = "uncertain"
 	phaseTerminal        = "terminal"
-	captureNotRecorded   = "not_recorded"
+	CaptureNotRecorded   = "not_recorded"
 	notStarted           = "not_started"
+	interrupted          = "interrupted"
 	outcomeUnknown       = "unknown"
 	outcomeStarted       = "started"
 	removalPresent       = "present"
@@ -246,9 +303,11 @@ func validIntentText(value string) bool {
 }
 
 func validateIntentInput(i Intent) error {
-
-	if i.Kind != ptyStream {
-		return fmt.Errorf("execution: only explicit kind pty is supported")
+	if err := validateStdin(i.Kind, i.Stdin); err != nil {
+		return err
+	}
+	if err := validateIntentTerminal(i); err != nil {
+		return err
 	}
 	if len(i.Command) == 0 || len(i.Command) > 1024 || i.Command[0] == "" {
 		return fmt.Errorf("execution: require 1 to 1024 command arguments")
@@ -267,27 +326,70 @@ func validateIntentInput(i Intent) error {
 	return nil
 }
 
+func validateIntentTerminal(i Intent) error {
+	if i.Kind != KindPTY {
+		if i.Cols != 0 || i.Rows != 0 || i.Term != "" {
+			return fmt.Errorf("execution: terminal settings require kind pty")
+		}
+		return nil
+	}
+	i = terminalDefaults(i)
+	if i.Cols < 1 || i.Rows < 1 || i.Cols > 2048 || i.Rows > 2048 || i.Cols > (256<<10)/i.Rows {
+		return fmt.Errorf("execution: invalid terminal dimensions")
+	}
+	return nil
+}
+
+func validateStdin(kind, mode string) error {
+	switch kind {
+	case KindPTY:
+		if mode == "" {
+			return nil
+		}
+	case KindPipe:
+		if mode == "" || mode == StdinOpen || mode == StdinClosed {
+			return nil
+		}
+	case KindLine:
+		if mode == StdinOpen {
+			return nil
+		}
+	default:
+		return fmt.Errorf("execution: invalid kind")
+	}
+	return fmt.Errorf("execution: invalid stdin mode")
+}
+
 func (r Result) validateCapture() error {
-	if r.Capture == captureNotRecorded && len(r.Streams) == 0 {
+	if r.Capture == CaptureNotRecorded && len(r.Streams) == 0 {
 		return nil
 	}
 	if r.Capture != "complete" && r.Capture != "incomplete" {
 		return fmt.Errorf("execution: invalid capture result")
 	}
-	if len(r.Streams) != 1 {
-		return fmt.Errorf("execution: missing PTY stream result")
+	streams := r.Binding.Streams()
+	if len(r.Streams) != len(streams) {
+		return fmt.Errorf("execution: missing stream result")
 	}
-	s := r.Streams[0]
+	for index, stream := range streams {
+		if err := validateFinalStream(r.Streams[index], stream, r.Capture == "complete"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateFinalStream(s StreamResult, stream string, complete bool) error {
 	earliest, e1 := parseOffset(s.Earliest)
 	end, e2 := parseOffset(s.End)
 	observed, e3 := parseOffset(s.ObservedEnd)
-	if e1 != nil || e2 != nil || e3 != nil || earliest > end || end > observed || !validToken(s.Generation) || s.Stream != ptyStream {
+	if e1 != nil || e2 != nil || e3 != nil || earliest > end || end > observed || !validToken(s.Generation) || s.Stream != stream {
 		return fmt.Errorf("execution: invalid final capture range")
 	}
 	if err := validStreamClosure(true, s.EOF, s.CloseReason, s.Loss); err != nil {
 		return err
 	}
-	if r.Capture == "complete" && (!s.EOF || (s.Loss != "" && s.Loss != captureRetention)) {
+	if complete && (!s.EOF || (s.Loss != "" && s.Loss != captureRetention)) {
 		return fmt.Errorf("execution: contradictory complete capture")
 	}
 	return nil

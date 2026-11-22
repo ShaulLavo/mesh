@@ -15,35 +15,50 @@ import (
 )
 
 type agentExecutionOptions struct {
-	host, key, kind, cwd, term string
-	json                       bool
-	timeout                    time.Duration
-	cols, rows                 int
+	host, key, kind, cwd, term, stdin string
+	json                              bool
+	timeout                           time.Duration
+	cols, rows                        int
 }
 
 func (a *application) sessionCreateCommand() *cobra.Command {
 	o := &agentExecutionOptions{}
-	command := &cobra.Command{Use: "create -- command [args...]", Short: "Start a keyed detached PTY command on an online host", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "create -- command [args...]", Short: "Start a keyed detached command on an online host", Args: cobra.ArbitraryArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		if err := o.validate("sessions.create"); err != nil {
 			return err
 		}
 		if cmd.ArgsLenAtDash() != 0 {
 			return agentapi.Usage("sessions.create", "Put command arguments after --.")
 		}
-		intent, err := execution.Normalize(execution.Intent{Kind: o.kind, Command: args, Cwd: o.cwd, Cols: o.cols, Rows: o.rows, Term: o.term})
+		intent, err := o.createIntent(cmd, args)
 		if err != nil {
 			return agentapi.Usage("sessions.create", err.Error())
 		}
-		return a.runAgentExecution(cmd, *o, protocol.Control{Type: protocol.TypeExecutionCreate, ExecutionKind: intent.Kind, RequestKey: o.key, Command: intent.Command, Cwd: intent.Cwd, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term})
+		return a.runAgentExecution(cmd, *o, protocol.Control{Type: protocol.TypeExecutionCreate, ExecutionKind: intent.Kind, RequestKey: o.key, Command: intent.Command, Cwd: intent.Cwd, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Stdin: intent.Stdin})
 	}}
 	agentExecutionFlags(command, o, 40*time.Second)
-	command.Flags().StringVar(&o.kind, "kind", "", "explicit session kind, currently pty")
+	command.Flags().StringVar(&o.kind, "kind", "", "explicit session kind, pty or pipe")
+	command.Flags().StringVar(&o.stdin, "stdin", "", "pipe stdin mode, closed by default or open for keyed writes")
 	command.Flags().StringVar(&o.cwd, "cwd", "", "absolute clean working directory on the target")
 	command.Flags().StringVar(&o.term, "term", "dumb", "target terminal type")
 	command.Flags().IntVar(&o.cols, "cols", 80, "initial terminal width")
 	command.Flags().IntVar(&o.rows, "rows", 24, "initial terminal height")
 	return command
 }
+func (o agentExecutionOptions) createIntent(cmd *cobra.Command, args []string) (execution.Intent, error) {
+	intent := execution.Intent{Kind: o.kind, Command: args, Cwd: o.cwd, Stdin: o.stdin}
+	if o.kind != execution.KindPTY && o.kind != execution.KindPipe {
+		return intent, fmt.Errorf("choose --kind pty or --kind pipe")
+	}
+	if o.kind == execution.KindPTY {
+		intent.Cols, intent.Rows, intent.Term = o.cols, o.rows, o.term
+	} else if cmd.Flags().Changed("cols") || cmd.Flags().Changed("rows") || cmd.Flags().Changed("term") {
+		return intent, fmt.Errorf("terminal settings require --kind pty")
+	}
+	normalized, err := execution.Normalize(intent)
+	return normalized, executionBoundaryError("normalize execution intent", err)
+}
+
 func (a *application) sessionRequestCommand() *cobra.Command {
 	o := &agentExecutionOptions{}
 	command := &cobra.Command{Use: "request", Short: "Look up a retained creation receipt without launching work", Args: profileArgs("sessions.request"), RunE: func(cmd *cobra.Command, _ []string) error {
@@ -98,14 +113,25 @@ func (a *application) runAgentExecution(cmd *cobra.Command, o agentExecutionOpti
 	}
 	response, err := controlRequest(ctx, conn, request)
 	if err != nil {
-		return err
+		return a.executionExchangeError(request, host.ID, err)
 	}
-	data, err := executionAgentData(response, request, host.ID, o.key)
+	return a.writeExecutionReply(cmd, request, response, host.ID, o.key)
+}
+
+func (a *application) executionExchangeError(request protocol.Control, host string, err error) error {
+	if request.Type == protocol.TypeExecutionInput && request.InputOffset != nil {
+		return agentapi.Fail(agentapi.InputOutcomeUnknown, a.agent.operation, host, "Look up the write key on the same session to recover its receipt.")
+	}
+	return err
+}
+
+func (a *application) writeExecutionReply(cmd *cobra.Command, request, response protocol.Control, host, key string) error {
+	data, err := executionAgentData(response, request, host, key)
 	if err != nil {
 		return err
 	}
 	if response.Type == protocol.TypeError {
-		failure := agentapi.Fail(controlAgentCode(response.ErrorCode), a.agent.operation, host.ID, response.Message).Err
+		failure := agentapi.Fail(controlAgentCode(response.ErrorCode), a.agent.operation, host, response.Message).Err
 		if data == nil {
 			return &agentapi.Failure{Err: failure}
 		}
@@ -125,7 +151,7 @@ func agentExecutionReceipt(r *protocol.ExecutionReceipt, host, key string) (*age
 		return nil, err
 	}
 	raw, err := hex.DecodeString(r.Instance)
-	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != r.Instance || r.HostID != host || (key != "" && r.RequestKey != key) || r.Kind != executionPTYKind {
+	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != r.Instance || r.HostID != host || (key != "" && r.RequestKey != key) || (r.Kind != execution.KindPTY && r.Kind != execution.KindPipe) {
 		return nil, fmt.Errorf("host returned an invalid execution receipt")
 	}
 	out := &agentapi.ExecutionReceipt{HostID: r.HostID, SessionID: r.SessionID, Instance: r.Instance, RequestKey: r.RequestKey, KeyScope: r.KeyScope, Kind: r.Kind, Phase: r.Phase, Acceptance: r.Acceptance, LaunchOutcome: r.LaunchOutcome, Publication: r.Publication, Removal: r.Removal, ReceiptRetainUntil: r.ReceiptRetainUntil, RetentionReason: r.RetentionReason, OutputRetainUntil: r.OutputRetainUntil, OutputExpired: r.OutputExpired, KillRequested: r.KillRequested}

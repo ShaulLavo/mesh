@@ -25,7 +25,7 @@ func TestLookupDuringResultPublication(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := 7
-	result := Result{Binding: r.Binding, Termination: Termination{Kind: "exit", Code: &code}, Capture: captureNotRecorded}
+	result := Result{Binding: r.Binding, Termination: Termination{Kind: "exit", Code: &code}, Capture: CaptureNotRecorded}
 	observed := false
 	a.files.fault = func(operation string) error {
 		if operation != "publication_visible" {

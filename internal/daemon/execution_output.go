@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"path/filepath"
+	"slices"
 	"time"
 
-	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
@@ -30,6 +29,9 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if err != nil {
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
+	if b.Mode() == execution.KindLine {
+		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
+	}
 	r, err := journal.Exact(ctx, b)
 	if err != nil {
 		return executionResponse(req, r, err)
@@ -47,6 +49,13 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {
 	response, _ := executionResponse(req, r, nil)
 	switch req.Type {
+	case protocol.TypeExecutionInput:
+		return l.executionInput(ctx, req, r, response)
+	case protocol.TypeExecutionInspect:
+		if r.Phase == "uncertain" {
+			return response, execution.ErrUnknown
+		}
+		return response, nil
 	case protocol.TypeExecutionLogs:
 		return l.executionLogs(ctx, req, r, response)
 	case protocol.TypeExecutionWait:
@@ -55,6 +64,9 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 		if r.Phase == executionTerminalPhase {
 			response.ExecutionDelivery = executionAlreadyRetired
 			return response, nil
+		}
+		if err := workerExecutionAdmission(ctx); err != nil {
+			return response, err
 		}
 		if err := markExecutionKill(ctx, req.Type, j, r.Binding); err != nil {
 			return response, err
@@ -79,21 +91,33 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 	}
 }
 func (l *lifecycle) executionLogs(ctx context.Context, req protocol.Control, r execution.Receipt, response protocol.Control) (protocol.Control, error) {
-	var page execution.Page
-	var err error
-	if r.OutputExpired || r.Removal != "present" {
-		if r.Result == nil || len(r.Result.Streams) != 1 {
-			return response, fmt.Errorf("execution: no durable stream identity")
-		}
-		page, err = execution.ExpiredPage(r.Binding, r.Result.Streams[0])
-	} else {
-		page, err = l.executionOutput.Page(ctx, r.Binding, req.Stream, req.Cursor, req.MaxBytes)
-	}
+	page, err := l.executionLogPage(ctx, req, r)
 	if page.Generation != "" {
+		if r.Binding.Mode() == execution.KindPipe && r.Result != nil && r.Result.Capture == execution.CaptureNotRecorded && !page.StreamClosed {
+			page.StreamClosed, page.CloseReason = true, "interrupted"
+		}
 		response.ExecutionPage = wireExecutionPage(page)
+		if r.Binding.Mode() == execution.KindPipe && !page.Available && errors.Is(err, execution.ErrCursorExpired) {
+			err = execution.ErrResultExpired
+		}
 	}
 	return response, executionBoundaryError("execution control", err)
 }
+func (l *lifecycle) executionLogPage(ctx context.Context, req protocol.Control, r execution.Receipt) (execution.Page, error) {
+	if !r.OutputExpired && r.Removal == "present" {
+		page, err := l.executionOutput.Page(ctx, r.Binding, req.Stream, req.Cursor, req.MaxBytes)
+		return page, executionBoundaryError("read execution page", err)
+	}
+	if r.Result != nil {
+		index := slices.IndexFunc(r.Result.Streams, func(s execution.StreamResult) bool { return s.Stream == req.Stream })
+		if index >= 0 {
+			page, err := execution.ExpiredPage(r.Binding, r.Result.Streams[index])
+			return page, executionBoundaryError("read expired execution page", err)
+		}
+	}
+	return execution.Page{}, execution.ErrResultExpired
+}
+
 func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {
 	if req.TimeoutMillis < 1 || req.TimeoutMillis > 60000 {
 		return executionResponse(req, r, fmt.Errorf("execution: invalid wait deadline"))
@@ -104,7 +128,7 @@ func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *
 	defer ticker.Stop()
 	for {
 		response, err := l.executionWaitResult(ctx, req, j, r)
-		if err != nil || response.ExecutionWait == "completed" {
+		if err != nil || response.ExecutionWait == executionWaitCompleted {
 			return response, executionBoundaryError("execution control", err)
 		}
 		select {
@@ -120,6 +144,10 @@ func (l *lifecycle) executionWaitResult(ctx context.Context, req protocol.Contro
 	if r.Removal != "present" {
 		return response, execution.ErrResultExpired
 	}
+	if r.Phase == executionTerminalPhase {
+		response.ExecutionWait = executionWaitCompleted
+		return response, nil
+	}
 	if _, err := l.executionOutput.Result(ctx, r.Binding); err != nil {
 		if execution.IsResultPending(err) {
 			return response, nil
@@ -129,7 +157,7 @@ func (l *lifecycle) executionWaitResult(ctx context.Context, req protocol.Contro
 	r, err := j.Exact(ctx, r.Binding)
 	response, _ = executionResponse(req, r, nil)
 	if err == nil {
-		response.ExecutionWait = "completed"
+		response.ExecutionWait = executionWaitCompleted
 	}
 	return response, executionBoundaryError("execution control", err)
 }
@@ -140,29 +168,9 @@ func (l *lifecycle) executionDeliver(ctx context.Context, req protocol.Control, 
 	if req.Type == protocol.TypeExecutionSignal && !worker.SupportsSignal(req.Signal) {
 		return "failed", fmt.Errorf("execution: invalid signal")
 	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", paths.Socket(filepath.Join(l.sessionsDir, b.Reservation.ID)))
+	answer, err := worker.ExchangeExecution(ctx, l.sessionsDir, req)
 	if err != nil {
 		return executionUnknownOutcome, executionBoundaryError("execution delivery", err)
-	}
-	defer func() { _ = conn.Close() }()
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	if err := protocol.NewWriter(conn).WriteControlMsg(req); err != nil {
-		return executionUnknownOutcome, executionBoundaryError("execution delivery", err)
-	}
-	frame, err := protocol.NewReader(conn).ReadFrame()
-	if err != nil {
-		return executionUnknownOutcome, executionBoundaryError("execution delivery", err)
-	}
-	if frame.Kind != protocol.KindControl {
-		return executionUnknownOutcome, fmt.Errorf("execution: invalid worker acknowledgement")
-	}
-	answer, err := protocol.DecodeControl(frame.Payload)
-	if err != nil {
-		return executionUnknownOutcome, executionBoundaryError("execution delivery", err)
-	}
-	if answer.RequestID != req.RequestID || answer.SessionID != req.SessionID || answer.Instance != req.Instance {
-		return executionUnknownOutcome, execution.ErrInstance
 	}
 	if answer.Type != protocol.TypeOK {
 		return answer.ExecutionDelivery, fmt.Errorf("execution: signal failed: %s", answer.Message)
@@ -196,6 +204,9 @@ func (c *Catalog) RemoveExecution(ctx context.Context, b execution.Binding) erro
 }
 
 func executionOutputCode(err error) string {
+	if code := execution.InputErrorCode(err); code != "" {
+		return code
+	}
 	switch {
 	case errors.Is(err, execution.ErrCursorExpired):
 		return "logs.cursor_expired"
@@ -206,7 +217,7 @@ func executionOutputCode(err error) string {
 	case errors.Is(err, execution.ErrResultExpired):
 		return "result.expired"
 	case errors.Is(err, execution.ErrInstance):
-		return "session.instance_mismatch"
+		return protocol.ErrorCodeInstanceMismatch
 	default:
 		return ""
 	}
@@ -234,3 +245,11 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 }
 
 const executionTerminalPhase = "terminal"
+const executionWaitCompleted = "completed"
+
+func (l *lifecycle) pipeSession(id string) bool {
+	if !isCanonicalSessionID(id) {
+		return false
+	}
+	return worker.ReservedPurpose(filepath.Join(l.sessionsDir, id)).IsPipe()
+}

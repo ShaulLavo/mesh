@@ -11,7 +11,8 @@ mkdir -p "$1"
 output=$(cd -- "$1" && pwd)
 # Native Unix sockets need a short path on Darwin's hosted runner.
 root=$(mktemp -d "${MESH_SHORT_TMP:-/tmp}/mesh-auth-cutover.XXXXXX")
-trap 'rm -rf -- "$root"' EXIT
+source "$repo_root/scripts/fixtures/update-proof-cleanup.sh"
+trap 'update_proof_cleanup "$root"' EXIT
 mkdir -p "$root/build"
 (cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.160' -o "$root/build/candidate-mesh" ./cmd/mesh)
 (cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.161' -o "$root/build/fleet-mesh" ./cmd/mesh)
@@ -27,6 +28,8 @@ preserve_published_evidence() {
   done < <(find "$root/proof/published" -type f -name '*.json')
 }
 # The external providers run only fixture-owned processes; no installed Mesh or services.
+mkdir -p "$root/proof"
+touch "$root/proof/cleanup-pending"
 python3 "$repo_root/scripts/prove-device-auth-cutover.py" "$root/proof" \
   "$root/build/candidate-mesh" "$root/build/fleet-mesh" "$root/build/control-client" >"$output/proof.log" 2>&1 || {
   mkdir -p "$output/failed-fixture"

@@ -18,7 +18,7 @@ func TestAgentExecutionUsageDoesNotInitializeState(t *testing.T) {
 	absent := t.TempDir() + "/absent"
 	t.Setenv("MESH_STATE_DIR", absent)
 	t.Setenv("MESH_CONFIG_DIR", absent)
-	cases := [][]string{{"create", "--host", "host", "--json"}, {"create", "--host", "host", "--kind", "pipe", "--cwd", "/work", "--request-key", "k", "--json", "--", "/bin/true"}, {"request", "--host", "host", "--request-key", "has space", "--json"}, {"request", "--json"}, {"create", "--json", "--host", "host", "--request-key", "k", "--cwd", "/work", "--kind", "pty", "/bin/true"}}
+	cases := [][]string{{"create", "--host", "host", "--json"}, {"create", "--host", "host", "--kind", "pipe", "--cwd", "/work", "--request-key", "k", "--rows", "10", "--json", "--", "/bin/true"}, {"request", "--host", "host", "--request-key", "has space", "--json"}, {"request", "--json"}, {"create", "--json", "--host", "host", "--request-key", "k", "--cwd", "/work", "--kind", "pty", "/bin/true"}}
 	for _, args := range cases {
 		operation := "sessions.request"
 		if args[0] == "create" {

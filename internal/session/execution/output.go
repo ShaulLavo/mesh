@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -13,7 +14,12 @@ import (
 type Output struct {
 	files   *Files
 	mu      sync.Mutex
-	streams map[Binding]*streamStore
+	streams map[streamKey]*streamStore
+}
+
+type streamKey struct {
+	binding Binding
+	name    string
 }
 
 func OpenOutput(state string) (*Output, error) {
@@ -21,22 +27,23 @@ func OpenOutput(state string) (*Output, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Output{files: f, streams: make(map[Binding]*streamStore)}, nil
+	return &Output{files: f, streams: make(map[streamKey]*streamStore)}, nil
 }
 func (o *Output) Close() error { return o.files.Close() }
-func (o *Output) stream(b Binding) (*streamStore, error) {
+func (o *Output) stream(b Binding, stream string) (*streamStore, error) {
 	if err := b.Validate(); err != nil {
 		return nil, err
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	s := o.streams[b]
+	key := streamKey{b, stream}
+	s := o.streams[key]
 	if s == nil {
 		if len(o.streams) >= 128 {
 			clear(o.streams)
 		}
-		s = newStreamStore(o.files, b)
-		o.streams[b] = s
+		s = newStreamStore(o.files, b, stream)
+		o.streams[key] = s
 	}
 	return s, nil
 }
@@ -45,10 +52,10 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	if err != nil {
 		return Page{}, err
 	}
-	if stream != ptyStream {
-		return Page{}, fmt.Errorf("execution: stream must be pty")
+	if !slices.Contains(b.Streams(), stream) {
+		return Page{}, fmt.Errorf("execution: stream unavailable for this kind")
 	}
-	s, err := o.stream(b)
+	s, err := o.stream(b, stream)
 	if err != nil {
 		return Page{}, err
 	}
@@ -59,11 +66,15 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	return s.readPage(ctx, value, size)
 }
 func (s *streamStore) readPage(ctx context.Context, value string, size int) (Page, error) {
-	gate, err := s.files.lockShared(ctx, streamPath(s.binding, "stream.lock"))
+	gate, err := s.files.lockShared(ctx, s.path("stream.lock"))
 	if err != nil {
 		return Page{}, err
 	}
 	m, err := s.load()
+	if err == nil && s.binding.Mode() != KindPTY {
+		defer func() { _ = gate.Close() }()
+		return s.pipePage(m, value, size)
+	}
 	if err == nil && s.confirmedManifest(m) {
 		defer func() { _ = gate.Close() }()
 		return s.pageData(m, value, size)
@@ -72,7 +83,7 @@ func (s *streamStore) readPage(ctx context.Context, value string, size int) (Pag
 	if err != nil {
 		return Page{}, err
 	}
-	gate, err = s.files.LockExisting(ctx, streamPath(s.binding, "stream.lock"))
+	gate, err = s.files.LockExisting(ctx, s.path("stream.lock"))
 	if err != nil {
 		return Page{}, err
 	}
@@ -86,6 +97,17 @@ func (s *streamStore) readPage(ctx context.Context, value string, size int) (Pag
 	}
 	return s.pageData(m, value, size)
 }
+func (s *streamStore) pipePage(m manifest, value string, size int) (Page, error) {
+	name := s.path("manifest.json")
+	identity, err := s.confirmManifest(name)
+	if err != nil {
+		return Page{}, err
+	}
+	s.confirmed[name] = identity
+	// Each selected segment is verified while the shared lock protects it.
+	return s.pageData(m, value, size)
+}
+
 func (s *streamStore) pageData(m manifest, value string, size int) (Page, error) {
 	p, start, err := m.page(s.binding, value)
 	if err != nil {
@@ -103,7 +125,7 @@ func (s *streamStore) pageData(m manifest, value string, size int) (Page, error)
 	if uint64(len(p.Bytes)) != end-start {
 		return Page{}, fmt.Errorf("execution: incomplete capture page")
 	}
-	p.NextCursor = makeCursor(s.binding, m.Generation, end)
+	p.NextCursor = makeCursor(s.binding, s.stream, m.Generation, end)
 	p.EOF = m.EOF && end == m.End
 	return p, nil
 }
@@ -124,8 +146,8 @@ func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	if err := r.validate(b); err != nil {
 		return Result{}, err
 	}
-	if len(r.Streams) > 0 {
-		if err := o.confirmFinal(ctx, b, r.Streams[0]); err != nil {
+	for _, stream := range r.Streams {
+		if err := o.confirmFinal(ctx, b, stream); err != nil {
 			return Result{}, err
 		}
 	}
@@ -135,7 +157,7 @@ func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	return r, nil
 }
 func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamResult) error {
-	s, err := o.stream(b)
+	s, err := o.stream(b, expected.Stream)
 	if err != nil {
 		return err
 	}
@@ -143,7 +165,7 @@ func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamRes
 		return err
 	}
 	defer s.leave()
-	gate, err := s.files.LockExisting(ctx, streamPath(b, "stream.lock"))
+	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
 	if err != nil {
 		return err
 	}
@@ -214,7 +236,7 @@ func ExpiredPage(b Binding, s StreamResult) (Page, error) {
 	if err != nil || !validToken(s.Generation) {
 		return Page{}, fmt.Errorf("execution: missing expired stream identity")
 	}
-	m := manifest{Generation: s.Generation, Earliest: earliest, End: end, Observed: observed, Closed: true, EOF: s.EOF, CloseReason: s.CloseReason, Loss: s.Loss, Expired: true}
+	m := manifest{Stream: s.Stream, Generation: s.Generation, Earliest: earliest, End: end, Observed: observed, Closed: true, EOF: s.EOF, CloseReason: s.CloseReason, Loss: s.Loss, Expired: true}
 	p, _, err := m.page(b, "")
 	return p, err
 }

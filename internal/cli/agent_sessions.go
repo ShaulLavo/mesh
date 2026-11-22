@@ -76,7 +76,7 @@ func (a *application) sessionCommand() *cobra.Command {
 		return nil
 	}}
 	group.Flags().Bool("json", false, "write one agent result")
-	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand(), a.sessionCreateCommand(), a.sessionRequestCommand(), a.sessionWaitCommand(), a.sessionLogsCommand(), a.sessionSignalCommand(), a.sessionKillCommand(), a.sessionRemoveCommand())
+	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand(), a.sessionCreateCommand(), a.sessionRequestCommand(), a.sessionWaitCommand(), a.sessionInputCommand(), a.sessionLogsCommand(), a.sessionSignalCommand(), a.sessionKillCommand(), a.sessionRemoveCommand())
 	return group
 }
 
@@ -108,6 +108,7 @@ func (a *application) sessionListCommand() *cobra.Command {
 
 func (a *application) sessionInspectCommand() *cobra.Command {
 	options := &agentSessionOptions{}
+	var instance string
 	command := &cobra.Command{Use: "inspect SESSION_ID", Short: "Read live or saved session details without attaching", Long: "Read a session's launch metadata and live or saved inspection.\nWithout --preview, Mesh reads one cell internally and discards its preview.\nWith --preview, Mesh reads at most 80 columns by 24 rows. Neither changes\nterminal size or attachment.", Args: func(_ *cobra.Command, args []string) error {
 		if len(args) != 1 {
 			return agentapi.Usage(agentSessionsInspect, "Pass one exact session ID.")
@@ -121,9 +122,20 @@ func (a *application) sessionInspectCommand() *cobra.Command {
 		if err := options.validate(agentSessionsInspect); err != nil {
 			return err
 		}
+		if instance != "" {
+			exact := executionControlOptions{agentExecutionOptions: agentExecutionOptions{host: options.host, json: options.json, timeout: options.timeout}, instance: instance}
+			if err := exact.validateControl(agentSessionsInspect, args[0], protocol.TypeExecutionInspect); err != nil {
+				return err
+			}
+			if options.preview {
+				return agentapi.Usage(agentSessionsInspect, "Use session logs for a keyed command's output.")
+			}
+			return a.runAgentExecution(cmd, exact.agentExecutionOptions, protocol.Control{Type: protocol.TypeExecutionInspect, SessionID: args[0], Instance: instance})
+		}
 		return a.runAgentSessionInspect(cmd, *options, args[0])
 	}}
 	agentSessionFlags(command, options)
+	command.Flags().StringVar(&instance, "instance", "", "read the exact keyed command receipt")
 	command.Flags().BoolVar(&options.preview, "preview", false, "include a control-free preview, at most 80 by 24")
 	return command
 }

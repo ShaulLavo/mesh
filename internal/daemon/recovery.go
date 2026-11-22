@@ -27,6 +27,9 @@ func (l *lifecycle) recoveryControl(ctx context.Context, request protocol.Contro
 		return protocol.Control{}, err
 	}
 	request.SessionID = id
+	if l.pipeSession(id) {
+		return protocol.Control{}, errAccessNotFound
+	}
 	switch request.Type {
 	case protocol.TypeRecover:
 		return l.recover(ctx, request)
