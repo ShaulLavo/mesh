@@ -1,0 +1,83 @@
+{
+  "mesh": [
+    "v0.1.354-0.20261122140903-c6d68ea54d09+dirty",
+    "c6d68ea54d09fdf396249357426184c1ae06c7c5"
+  ],
+  "claudeCode": "2.1.322 (Claude Code)",
+  "codex": "codex-cli 0.167.1",
+  "transport": "stdio",
+  "models": {
+    "claude-code": "claude-sonnet-5-5",
+    "codex": "gpt-6.1-terra"
+  },
+  "runAt": "2026-11-22T14:34:20Z",
+  "clientEvents": {
+    "claude-code/run3": {
+      "name": "mesh",
+      "status": "connected",
+      "source": "project"
+    },
+    "codex/noapprove": [
+      "MCP tool call requires approval, but approval policy is never"
+    ]
+  },
+  "checks": {
+    "claude-code/run1": {
+      "context": "mc1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.0cee5a3a7e1f91ea62d8ca09dac431e9",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.JABN.d7e1c47aebb637b472c6c933a3c05ea9",
+      "stdout": "hello from Linux\n$PRIVATE/fleet\n",
+      "callSeconds": {
+        "mesh_hosts_list": 2.031,
+        "mesh_context_open": 2.306,
+        "mesh_exec": 8.892
+      }
+    },
+    "claude-code/run2": {
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.JABN.d7e1c47aebb637b472c6c933a3c05ea9",
+      "callSeconds": {
+        "mesh_job_receipt": 0.539,
+        "mesh_job_output": 0.12
+      }
+    },
+    "codex/run1": {
+      "context": "mc1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.6f7e9c2f76a39382f175bb954257d4dc",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.MM1Q.d89fc31c2f377951310fda73bb5ee623",
+      "stdout": "hello from Linux\n$PRIVATE/fleet\n",
+      "callSeconds": {
+        "mesh_hosts_list": 1.271,
+        "mesh_context_open": 1.925,
+        "mesh_exec": 8.067
+      }
+    },
+    "codex/run2": {
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.MM1Q.d89fc31c2f377951310fda73bb5ee623",
+      "callSeconds": {
+        "mesh_job_receipt": 0.159,
+        "mesh_job_output": 0.218
+      }
+    },
+    "claude-code/run3": {
+      "server": "connected from .mcp.json"
+    },
+    "codex/legacy-none": {
+      "initializeRequests": 2,
+      "refusedWith": -32601
+    },
+    "codex/legacy-feature-only": {
+      "initializeRequests": 2,
+      "refusedWith": -32601
+    },
+    "codex/legacy-env-only": {
+      "initializeRequests": 2,
+      "refusedWith": -32601
+    },
+    "codex/noapprove": {
+      "mesh_execOnWire": false,
+      "codexError": "MCP tool call requires approval, but approval policy is never"
+    },
+    "retriedAttempts": {
+      "claude-code/trace-run1.jsonl:mesh_context_open": 1,
+      "codex/trace-run1.jsonl:mesh_exec": 1
+    }
+  }
+}
