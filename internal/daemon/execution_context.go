@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,19 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
 )
+
+// contextListPage bounds one list reply: a page of records, and a byte
+// budget well inside the frame cap even for records with maximal overlays.
+const (
+	contextListPage   = 64
+	contextListBudget = 1 << 20
+)
+
+// admittedContext rechecks the connection's grant whenever the journal has
+// waited for its lock, before any effect.
+func admittedContext(ctx context.Context) context.Context {
+	return execution.WithAdmission(ctx, func() error { return workerExecutionAdmission(ctx) })
+}
 
 // contextControl serves the context.* family. Every request needs a verified
 // application caller, and every record it reaches is bound to that caller.
@@ -29,22 +43,18 @@ func (l *lifecycle) contextControl(ctx context.Context, request protocol.Control
 	if err != nil {
 		return protocol.Control{}, err
 	}
+	ctx = admittedContext(ctx)
 	params := protocol.ExecutionContextRequest{}
 	if request.ExecutionContext != nil {
 		params = *request.ExecutionContext
 	}
 	response := protocol.Control{Type: protocol.TypeContextResult, RequestID: request.RequestID}
 	if request.Type == protocol.TypeContextList {
-		list, err := journal.ListContexts(ctx, string(caller.ID))
-		response.ContextInfos = make([]protocol.ExecutionContextInfo, 0, len(list))
-		for _, c := range list {
-			response.ContextInfos = append(response.ContextInfos, wireContext(c))
-		}
-		return response, contextError("list contexts", err)
+		return l.listContexts(ctx, journal, string(caller.ID), params.Cursor, response)
 	}
 	c, err := l.contextOperation(ctx, journal, caller, request, params)
 	if c.ID != "" {
-		info := wireContext(c)
+		info := l.observedContext(ctx, journal, c)
 		response.ContextInfo = &info
 	}
 	if err != nil {
@@ -53,19 +63,40 @@ func (l *lifecycle) contextControl(ctx context.Context, request protocol.Control
 	return response, nil
 }
 
+func (l *lifecycle) listContexts(ctx context.Context, journal *execution.Journal, owner, cursor string, response protocol.Control) (protocol.Control, error) {
+	if cursor != "" && !protocol.ValidContextID(cursor) {
+		return response, contextUsage("cursor must come from an earlier context.list reply")
+	}
+	list, more, err := journal.ListContexts(ctx, owner, cursor, contextListPage)
+	if err != nil {
+		return response, contextError("list contexts", err)
+	}
+	response.ContextInfos = make([]protocol.ExecutionContextInfo, 0, len(list))
+	used := 0
+	for index, c := range list {
+		info := l.observedContext(ctx, journal, c)
+		encoded, err := json.Marshal(info)
+		if err != nil {
+			return response, contextError("encode context list", err)
+		}
+		if index > 0 && used+len(encoded) > contextListBudget {
+			more = true
+			break
+		}
+		used += len(encoded)
+		response.ContextInfos = append(response.ContextInfos, info)
+	}
+	if more && len(response.ContextInfos) > 0 {
+		response.ContextNextCursor = response.ContextInfos[len(response.ContextInfos)-1].ContextID
+	}
+	return response, nil
+}
+
 func (l *lifecycle) contextOperation(ctx context.Context, journal *execution.Journal, caller appcaller.Caller, request protocol.Control, params protocol.ExecutionContextRequest) (execution.Context, error) {
 	owner := string(caller.ID)
 	switch request.Type {
 	case protocol.TypeContextOpen:
-		if params.Open == nil {
-			return execution.Context{}, contextUsage("context.open needs executionContext.open")
-		}
-		spec, err := normalizeContextSpec(*params.Open)
-		if err != nil {
-			return execution.Context{}, err
-		}
-		c, _, err := journal.OpenContext(ctx, l.contextOpenKey(caller, request.RequestKey), spec)
-		return c, contextError("open context", err)
+		return l.openContext(ctx, journal, caller, request.RequestKey, params.Open)
 	case protocol.TypeContextReceipt:
 		c, err := journal.ContextReceipt(ctx, l.contextOpenKey(caller, request.RequestKey))
 		return c, contextError("read context receipt", err)
@@ -82,6 +113,22 @@ func (l *lifecycle) contextOperation(ctx context.Context, journal *execution.Jou
 	}
 }
 
+// openContext digests the caller's request alone. Host-dependent resolution,
+// the directory check and the login shell, runs only for a new key, so a
+// retry returns the original result even after the host changed.
+func (l *lifecycle) openContext(ctx context.Context, journal *execution.Journal, caller appcaller.Caller, key string, open *protocol.ContextSpec) (execution.Context, error) {
+	if open == nil {
+		return execution.Context{}, contextUsage("context.open needs executionContext.open")
+	}
+	spec, err := canonicalContextSpec(*open)
+	if err != nil {
+		return execution.Context{}, err
+	}
+	resolve := func() (execution.ContextSpec, error) { return resolveContextSpec(spec) }
+	c, _, err := journal.OpenContext(ctx, l.contextOpenKey(caller, key), execution.Digest(spec), resolve)
+	return c, contextError("open context", err)
+}
+
 func (l *lifecycle) updateContext(ctx context.Context, journal *execution.Journal, owner string, params protocol.ExecutionContextRequest) (execution.Context, error) {
 	if params.ExpectedRevision == nil || params.Change == nil {
 		return execution.Context{}, contextUsage("context.update needs expectedRevision and change")
@@ -95,7 +142,13 @@ func (l *lifecycle) updateContext(ctx context.Context, journal *execution.Journa
 			return execution.Context{}, err
 		}
 	}
-	c, err := journal.UpdateContext(ctx, owner, params.ContextID, *params.ExpectedRevision, change, validateContextSpec)
+	check := func(next execution.ContextSpec) error {
+		if err := validateContextSyntax(next); err != nil {
+			return err
+		}
+		return validContextDirectory(next.Cwd)
+	}
+	c, err := journal.UpdateContext(ctx, owner, params.ContextID, *params.ExpectedRevision, change, check)
 	return c, contextError("update context "+params.ContextID, err)
 }
 
@@ -103,31 +156,43 @@ func (l *lifecycle) contextOpenKey(caller appcaller.Caller, opaque string) execu
 	return execution.Key{Host: string(l.host.ID), Class: execution.ApplicationClass, Principal: string(caller.ID), Opaque: opaque, Operation: execution.OperationContextOpen}
 }
 
-// normalizeContextSpec validates an open request and resolves the login
-// shell once, so later jobs in the context use the shell it opened with.
-func normalizeContextSpec(in protocol.ContextSpec) (execution.ContextSpec, error) {
-	spec := execution.ContextSpec{Cwd: in.Cwd, Shell: in.Shell, Env: in.Env, Label: in.Label}
-	if spec.Shell == "" {
-		spec.Shell = protocol.ContextShellLogin
+// canonicalContextSpec validates and normalizes the caller's open request
+// without consulting the host.
+func canonicalContextSpec(in protocol.ContextSpec) (protocol.ContextSpec, error) {
+	if in.Shell == "" {
+		in.Shell = protocol.ContextShellLogin
 	}
+	if in.Shell != protocol.ContextShellLogin && in.Shell != protocol.ContextShellSh && in.Shell != protocol.ContextShellNone {
+		return in, contextUsage("shell must be login, sh or none")
+	}
+	if len(in.Env) == 0 {
+		in.Env = nil
+	}
+	return in, validateContextSyntax(execution.ContextSpec{Cwd: in.Cwd, Shell: in.Shell, Env: in.Env, Label: in.Label})
+}
+
+// resolveContextSpec binds a new context to this host: its directory must
+// exist, and the login shell is resolved once, so later jobs use the shell it
+// opened with.
+func resolveContextSpec(in protocol.ContextSpec) (execution.ContextSpec, error) {
+	spec := execution.ContextSpec{Cwd: in.Cwd, Shell: in.Shell, Env: in.Env, Label: in.Label}
 	switch spec.Shell {
 	case protocol.ContextShellLogin:
 		spec.ShellPath = hostShell()
 	case protocol.ContextShellSh:
 		spec.ShellPath = posixShellPath
-	case protocol.ContextShellNone:
-	default:
-		return execution.ContextSpec{}, contextUsage("shell must be login, sh or none")
 	}
-	if len(spec.Env) == 0 {
-		spec.Env = nil
+	if len(spec.ShellPath) > maxContextPath || !validContextText(spec.ShellPath) {
+		return execution.ContextSpec{}, contextUsage("the host's login shell path is not usable")
 	}
-	return spec, validateContextSpec(spec)
+	return spec, validContextDirectory(spec.Cwd)
 }
 
-func validateContextSpec(spec execution.ContextSpec) error {
-	if err := validContextDirectory(spec.Cwd); err != nil {
-		return err
+const maxContextPath = 4096
+
+func validateContextSyntax(spec execution.ContextSpec) error {
+	if len(spec.Cwd) > maxContextPath || !filepath.IsAbs(spec.Cwd) || filepath.Clean(spec.Cwd) != spec.Cwd || !validContextText(spec.Cwd) {
+		return contextUsage("cwd must be an absolute clean path on the host")
 	}
 	if len(spec.Label) > protocol.MaxContextLabelBytes || !validContextText(spec.Label) {
 		return contextUsage("label must be valid text of at most 256 bytes")
@@ -136,9 +201,6 @@ func validateContextSpec(spec execution.ContextSpec) error {
 }
 
 func validContextDirectory(dir string) error {
-	if len(dir) > 4096 || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || !validContextText(dir) {
-		return contextUsage("cwd must be an absolute clean path on the host")
-	}
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return contextUsage(fmt.Sprintf("cwd %s is not a directory on this host", dir))
@@ -185,6 +247,24 @@ func validContextText(value string) bool {
 	return utf8.ValidString(value) && !strings.ContainsRune(value, 0)
 }
 
+// observedContext reports the context with its jobs observed now. Observing
+// settles finished jobs, so a job whose daemon died before launch reads as
+// uncertain, not running.
+func (l *lifecycle) observedContext(ctx context.Context, journal *execution.Journal, c execution.Context) protocol.ExecutionContextInfo {
+	info := wireContext(c)
+	for _, key := range c.Members {
+		r, _ := l.lookupExecution(ctx, journal, key)
+		switch r.Phase {
+		case executionTerminalPhase:
+		case executionLivePhase:
+			info.RunningJobs++
+		default:
+			info.UncertainJobs++
+		}
+	}
+	return info
+}
+
 func wireContext(c execution.Context) protocol.ExecutionContextInfo {
 	names := make([]string, 0, len(c.Env))
 	for name := range c.Env {
@@ -195,7 +275,7 @@ func wireContext(c execution.Context) protocol.ExecutionContextInfo {
 	if c.ClosedAt != nil {
 		state = protocol.ContextStateClosed
 	}
-	return protocol.ExecutionContextInfo{HostID: c.Host, ContextID: c.ID, Handle: protocol.ContextHandle(c.Host, c.ID), RequestKey: c.Key.Opaque, State: state, Revision: c.Revision, Cwd: c.Cwd, Shell: c.Shell, ShellPath: c.ShellPath, Label: c.Label, EnvNames: names, EnvDigest: execution.Digest(envOrEmpty(c.Env)), RunningJobs: c.RunningJobs, CreatedAt: c.CreatedAt, LastUsedAt: c.LastUsedAt, ClosedAt: c.ClosedAt, ExpiresAt: c.ExpiresAt()}
+	return protocol.ExecutionContextInfo{HostID: c.Host, ContextID: c.ID, Handle: protocol.ContextHandle(c.Host, c.ID), RequestKey: c.Key.Opaque, State: state, Revision: c.Revision, Cwd: c.Cwd, Shell: c.Shell, ShellPath: c.ShellPath, Label: c.Label, EnvNames: names, EnvDigest: execution.Digest(envOrEmpty(c.Env)), CreatedAt: c.CreatedAt, LastUsedAt: c.LastUsedAt, ClosedAt: c.ClosedAt, ExpiresAt: c.ExpiresAt()}
 }
 
 func envOrEmpty(env map[string]string) map[string]string {

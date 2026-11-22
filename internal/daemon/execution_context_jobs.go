@@ -10,6 +10,7 @@ import (
 
 	"github.com/shaul/mesh/internal/access"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
@@ -55,27 +56,45 @@ func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol
 	if err != nil {
 		return protocol.Control{}, err
 	}
-	var overlay map[string]string
-	resolve := func(c execution.Context) (execution.Intent, error) {
-		intent, env, err := resolveContextJob(c, job)
-		overlay = env
-		return intent, err
+	ctx = admittedContext(ctx)
+	resolve := func(c execution.Context) (execution.Intent, map[string]string, error) {
+		return resolveContextJob(c, job)
 	}
 	reserve := func() (execution.Receipt, bool, []string, execution.Intent, error) {
-		var env []string
-		var launch execution.Intent
-		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, func(intent execution.Intent) (execution.Binding, error) {
-			launch = intent
-			ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(intent.Kind))
-			if err != nil {
-				return execution.Binding{}, executionBoundaryError("reserve context job", err)
-			}
-			env = worker.ExecutionEnvironment(withEnvOverlay(l.environment(), overlay), string(l.host.ID), ref, intent.Term)
-			return execution.NewBinding(key, intent, ref, env), nil
-		})
-		return r, owner, env, launch, executionBoundaryError("reserve context job", err)
+		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key))
+		if err != nil || !owner {
+			return r, owner, nil, execution.Intent{}, executionBoundaryError("reserve context job", err)
+		}
+		return l.persistedContextLaunch(ctx, journal, r)
 	}
 	return l.createExecution(ctx, request, journal, key, reserve)
+}
+
+// allocateContextJob reserves the worker slot for a new context job.
+func (l *lifecycle) allocateContextJob(key execution.Key) func(execution.LaunchSnapshot) (execution.Binding, error) {
+	return func(s execution.LaunchSnapshot) (execution.Binding, error) {
+		ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(s.Intent.Kind))
+		if err != nil {
+			return execution.Binding{}, executionBoundaryError("reserve context job", err)
+		}
+		return execution.NewBinding(key, s.Intent, ref, l.contextJobEnvironment(s, ref)), nil
+	}
+}
+
+func (l *lifecycle) contextJobEnvironment(s execution.LaunchSnapshot, ref session.Reservation) []string {
+	return worker.ExecutionEnvironment(withEnvOverlay(l.environment(), s.Env), string(l.host.ID), ref, s.Intent.Term)
+}
+
+// persistedContextLaunch launches from the snapshot stored with the
+// reservation, so what runs is exactly what the receipt accepted. A snapshot
+// that cannot be read means the job is never started.
+func (l *lifecycle) persistedContextLaunch(ctx context.Context, journal *execution.Journal, r execution.Receipt) (execution.Receipt, bool, []string, execution.Intent, error) {
+	snapshot, err := journal.ReadLaunchSnapshot(r)
+	if err != nil {
+		next, saveErr := journal.NotStarted(ctx, r.Binding, "launch_snapshot_unreadable")
+		return next, false, nil, execution.Intent{}, errors.Join(executionBoundaryError("read context launch", err), saveErr)
+	}
+	return r, true, l.contextJobEnvironment(snapshot, r.Binding.Reservation), snapshot.Intent, nil
 }
 
 func (l *lifecycle) environment() []string {
@@ -103,8 +122,12 @@ func contextJobRequest(request protocol.Control) (contextJobIntent, error) {
 	if len(job.Env) == 0 {
 		job.Env = nil
 	}
-	if !validContextText(job.ShellCommand) || !validContextText(job.Cwd) || len(job.Cwd) > 4096 {
+	if !validContextText(job.ShellCommand) || !validContextText(job.Cwd) || len(job.Cwd) > maxContextPath {
 		return job, contextUsage("command and cwd must be valid text")
+	}
+	// Equivalent paths resolve to the same directory, so they are one intent.
+	if job.Cwd != "" {
+		job.Cwd = filepath.Clean(job.Cwd)
 	}
 	return job, validContextEnv(job.Env)
 }

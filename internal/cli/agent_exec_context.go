@@ -133,23 +133,16 @@ func exactContextArgs(operation string) cobra.PositionalArgs {
 	}
 }
 
-// resolveContextTarget accepts a handle, which names its host, or a bare ID
-// with --host.
-func resolveContextTarget(operation, host, target string) (string, string, error) {
-	if target == "" {
-		return host, "", nil
+// contextHostValue picks the host to dial: --host, or the host a handle names.
+func contextHostValue(operation, host, target string) (string, error) {
+	if host != "" || target == "" || protocol.ValidContextID(target) {
+		return host, nil
 	}
-	if protocol.ValidContextID(target) {
-		return host, target, nil
-	}
-	handleHost, id, err := protocol.ParseContextHandle(target)
+	handleHost, _, err := protocol.ParseContextHandle(target)
 	if err != nil {
-		return "", "", agentapi.Usage(operation, err.Error())
+		return "", agentapi.Usage(operation, err.Error())
 	}
-	if host != "" && host != handleHost {
-		return "", "", agentapi.Usage(operation, "--host names another host than the context handle.")
-	}
-	return handleHost, id, nil
+	return handleHost, nil
 }
 
 func parseEnvAssignments(values []string) (map[string]string, error) {
@@ -187,7 +180,7 @@ func (a *application) runContextControl(cmd *cobra.Command, operation string, o 
 	if err := o.validate(operation); err != nil {
 		return err
 	}
-	hostValue, id, err := resolveContextTarget(operation, o.host, target)
+	hostValue, err := contextHostValue(operation, o.host, target)
 	if err != nil {
 		return err
 	}
@@ -198,9 +191,6 @@ func (a *application) runContextControl(cmd *cobra.Command, operation string, o 
 	if err != nil {
 		return err
 	}
-	if id != "" {
-		request.ExecutionContext.ContextID = id
-	}
 	request.Caller = protocol.CallerCredential(identity.Credential.Encode())
 	ctx, cancel := context.WithTimeout(cmd.Context(), o.timeout)
 	defer cancel()
@@ -208,12 +198,45 @@ func (a *application) runContextControl(cmd *cobra.Command, operation string, o 
 	if err != nil {
 		return err
 	}
+	if target != "" {
+		id, err := contextOnHost(operation, host.ID, target)
+		if err != nil {
+			return err
+		}
+		request.ExecutionContext.ContextID = id
+	}
+	if request.Type == protocol.TypeContextList {
+		return a.listAllContexts(ctx, cmd, host, request)
+	}
 	response, err := a.exchangeAgentControl(ctx, host, request)
 	if err != nil {
 		return err
 	}
 	return a.writeContextReply(cmd, request, response, host.ID)
 }
+
+// listAllContexts follows list pages; a host holds at most 4,096 contexts.
+func (a *application) listAllContexts(ctx context.Context, cmd *cobra.Command, host HostRecord, request protocol.Control) error {
+	merged := protocol.Control{Type: protocol.TypeContextResult, ContextInfos: []protocol.ExecutionContextInfo{}}
+	request.ExecutionContext = &protocol.ExecutionContextRequest{}
+	for range maxContextListPages {
+		response, err := a.exchangeAgentControl(ctx, host, request)
+		if err != nil {
+			return err
+		}
+		if response.Type != protocol.TypeContextResult {
+			return a.writeContextReply(cmd, request, response, host.ID)
+		}
+		merged.ContextInfos = append(merged.ContextInfos, response.ContextInfos...)
+		if response.ContextNextCursor == "" {
+			return a.writeContextReply(cmd, request, merged, host.ID)
+		}
+		request.ExecutionContext.Cursor = response.ContextNextCursor
+	}
+	return fmt.Errorf("host returned more context pages than it can hold")
+}
+
+const maxContextListPages = 4096
 
 func (a *application) exchangeAgentControl(ctx context.Context, host HostRecord, request protocol.Control) (protocol.Control, error) {
 	conn, _, err := openAgentHostInfo(ctx, host, a.dependencies.DialPassive)
@@ -261,5 +284,5 @@ func agentContext(info protocol.ExecutionContextInfo) agentapi.ExecutionContext 
 	if names == nil {
 		names = []string{}
 	}
-	return agentapi.ExecutionContext{HostID: info.HostID, ContextID: info.ContextID, Handle: info.Handle, RequestKey: info.RequestKey, State: info.State, Revision: info.Revision, Cwd: info.Cwd, Shell: info.Shell, ShellPath: info.ShellPath, Label: info.Label, EnvNames: names, EnvDigest: info.EnvDigest, RunningJobs: info.RunningJobs, CreatedAt: info.CreatedAt, LastUsedAt: info.LastUsedAt, ClosedAt: info.ClosedAt, ExpiresAt: info.ExpiresAt}
+	return agentapi.ExecutionContext{HostID: info.HostID, ContextID: info.ContextID, Handle: info.Handle, RequestKey: info.RequestKey, State: info.State, Revision: info.Revision, Cwd: info.Cwd, Shell: info.Shell, ShellPath: info.ShellPath, Label: info.Label, EnvNames: names, EnvDigest: info.EnvDigest, RunningJobs: info.RunningJobs, UncertainJobs: info.UncertainJobs, CreatedAt: info.CreatedAt, LastUsedAt: info.LastUsedAt, ClosedAt: info.ClosedAt, ExpiresAt: info.ExpiresAt}
 }

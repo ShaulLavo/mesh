@@ -108,14 +108,15 @@ func (a *application) runAgentExecution(cmd *cobra.Command, o agentExecutionOpti
 	if err != nil {
 		return err
 	}
+	// A context handle names its host; refuse a mismatch before connecting.
+	if err := attachApplicationCaller(a.agent.operation, host.ID, o, &request); err != nil {
+		return err
+	}
 	conn, _, err := openAgentHostInfo(ctx, host, a.dependencies.DialPassive)
 	if err != nil {
 		return agentapi.Fail(agentError(err, a.agent.operation, host.ID, agentapi.HostUnreachable).Code, a.agent.operation, host.ID, err.Error())
 	}
 	defer func() { _ = conn.Close() }()
-	if err := attachApplicationCaller(a.agent.operation, o, &request); err != nil {
-		return err
-	}
 	request.RequestID = a.agent.requestID
 	if request.RequestID == "" {
 		request.RequestID, err = newDaemonRequestID()

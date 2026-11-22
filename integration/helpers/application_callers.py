@@ -13,6 +13,8 @@ from terminal_window import eventually, print_diagnostics
 
 
 JOB = 'cat; printf "%s " "$GREETING"; pwd -P'
+# Every CLI reply, accepted or rejected, is checked for credential leaks.
+REPLIES = []
 
 
 def mesh(fixture, *args, ok=True):
@@ -23,6 +25,7 @@ def mesh(fixture, *args, ok=True):
                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             check=False, timeout=30)
     assert result.stdout, (args, result.returncode, result.stderr)
+    REPLIES.append(result.stdout + result.stderr)
     envelope = json.loads(result.stdout)
     if ok:
         assert result.returncode == 0 and envelope["status"] == "ok", (args, result.stdout, result.stderr)
@@ -136,7 +139,7 @@ def scenario(fixture):
     assert ctx("bob", "get", alice["handle"], ok=False) == "context.not_found"
     mesh(fixture, "session", "input", "--host", host, again["sessionId"], "--instance", again["instance"],
          "--identity", "alice", "--context", second["contextId"], "--write-key", "eof", "--offset", "0", "--eof")
-    credential_never_printed(fixture, (fixture.root / "daemon.log").read_text(errors="replace"))
+    credential_never_printed(fixture, (fixture.root / "daemon.log").read_text(errors="replace"), *REPLIES)
 
 
 def lost_replies(fixture, host, work):

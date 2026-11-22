@@ -420,6 +420,8 @@ type Control struct {
 	ExecutionContext *ExecutionContextRequest `json:"executionContext,omitempty"`
 	ContextInfo      *ExecutionContextInfo    `json:"contextInfo,omitempty"`
 	ContextInfos     []ExecutionContextInfo   `json:"contextInfos,omitempty"`
+	// ContextNextCursor continues a context.list reply that did not fit.
+	ContextNextCursor string `json:"contextNextCursor,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

@@ -253,7 +253,7 @@ func (l *lifecycle) restoreExecution(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return executionBoundaryError("execution.go restoreExecution", journal.Maintain(ctx))
+	return executionBoundaryError("execution.go restoreExecution", errors.Join(journal.Maintain(ctx), journal.MaintainContexts(ctx)))
 }
 func (l *lifecycle) closeExecution() {
 	if l.executionOutput != nil {

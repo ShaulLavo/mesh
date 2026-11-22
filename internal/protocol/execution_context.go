@@ -82,6 +82,8 @@ type ExecutionContextRequest struct {
 	Change           *ContextChange    `json:"change,omitempty"`
 	ShellCommand     string            `json:"shellCommand,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`
+	// Cursor continues context.list from Control.ContextNextCursor.
+	Cursor string `json:"cursor,omitempty"`
 }
 
 // ContextSpec is the canonical creation intent of a context.
@@ -104,22 +106,26 @@ type ContextChange struct {
 // ExecutionContextInfo is what a host returns about one context. It names
 // environment variables and a digest of their values, never the values.
 type ExecutionContextInfo struct {
-	HostID      string     `json:"hostId"`
-	ContextID   string     `json:"contextId"`
-	Handle      string     `json:"handle"`
-	RequestKey  string     `json:"requestKey"`
-	State       string     `json:"state"`
-	Revision    uint64     `json:"revision,string"`
-	Cwd         string     `json:"cwd"`
-	Shell       string     `json:"shell"`
-	ShellPath   string     `json:"shellPath,omitempty"`
-	Label       string     `json:"label,omitempty"`
-	EnvNames    []string   `json:"envNames"`
-	EnvDigest   string     `json:"envDigest"`
-	RunningJobs int        `json:"runningJobs"`
-	CreatedAt   time.Time  `json:"createdAt"`
-	LastUsedAt  time.Time  `json:"lastUsedAt"`
-	ClosedAt    *time.Time `json:"closedAt,omitempty"`
+	HostID      string   `json:"hostId"`
+	ContextID   string   `json:"contextId"`
+	Handle      string   `json:"handle"`
+	RequestKey  string   `json:"requestKey"`
+	State       string   `json:"state"`
+	Revision    uint64   `json:"revision,string"`
+	Cwd         string   `json:"cwd"`
+	Shell       string   `json:"shell"`
+	ShellPath   string   `json:"shellPath,omitempty"`
+	Label       string   `json:"label,omitempty"`
+	EnvNames    []string `json:"envNames"`
+	EnvDigest   string   `json:"envDigest"`
+	RunningJobs int      `json:"runningJobs"`
+	// UncertainJobs were accepted but cannot be confirmed running or ended,
+	// such as a job whose daemon stopped before launch. They keep the
+	// context from expiring like running jobs do.
+	UncertainJobs int        `json:"uncertainJobs"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	LastUsedAt    time.Time  `json:"lastUsedAt"`
+	ClosedAt      *time.Time `json:"closedAt,omitempty"`
 	// ExpiresAt is when the record goes away if it stays unused and no job
 	// runs. A running job postpones expiry.
 	ExpiresAt time.Time `json:"expiresAt"`

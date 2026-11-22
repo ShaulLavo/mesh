@@ -27,9 +27,11 @@ mesh context open --host HOST_ID --identity codex --request-key ctx-1 \
 
 The reply carries a handle, `mc1.HOST_ID.CONTEXT_ID`, that later commands
 accept in place of `--host`. Results name environment variables and a digest
-of their values, never the values. The same key and options return the same
-context. Different options under the same key return `request.key_conflict`.
-If the reply is lost, look it up:
+of their values, never the values. The same key and options return the
+original result of that open, even after the context changed or the host's
+login shell moved. Different options under the same key return
+`request.key_conflict`. If the reply is lost, look it up; this also returns
+the original result, and `mesh context get` shows the current state:
 
 ```bash
 mesh context receipt --host HOST_ID --identity codex --request-key ctx-1 --json
@@ -69,10 +71,12 @@ mesh context close CONTEXT_HANDLE --identity codex --json
 A stale `--expected-revision` returns `context.conflict`. Closing stops new
 jobs (`context.closed`); running jobs keep going and keep their receipts.
 
-A context with no running job expires 30 days after its last use, together
-with its open receipt. After a reboot the context remains and its jobs show as
+A context expires 30 days after its last use, together with its open
+receipt, once none of its jobs is running or uncertain (`runningJobs` and
+`uncertainJobs`). After a reboot the context remains and its jobs show as
 interrupted. Each identity can hold 64 open contexts per host, and a host
-holds at most 1,024.
+holds at most 1,024; an open whose reply was lost still holds its slot.
+`mesh context ls` follows the host's pages for you.
 
 ## Account administration
 

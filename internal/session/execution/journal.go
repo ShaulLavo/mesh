@@ -21,6 +21,8 @@ type Journal struct {
 	maxActive        int
 	maintenanceAfter string
 	maintenanceMu    sync.Mutex
+	// Context quotas: open contexts per owner and per host, retained in all.
+	contextOwnerLimit, contextHostLimit, contextRetainLimit int
 }
 
 func Open(state, boot, owner string) (*Journal, error) {
@@ -37,7 +39,7 @@ func Open(state, boot, owner string) (*Journal, error) {
 			return nil, err
 		}
 	}
-	j := &Journal{files: f, boot: boot, owner: owner, now: time.Now, maxRecords: 10000, maxActive: 128}
+	j := &Journal{files: f, boot: boot, owner: owner, now: time.Now, maxRecords: 10000, maxActive: 128, contextOwnerLimit: maxOpenPerOwner, contextHostLimit: maxOpenPerHost, contextRetainLimit: maxRetainedContexts}
 	if err := j.initializeLock(); err != nil {
 		_ = f.Close()
 		return nil, err
@@ -113,12 +115,19 @@ func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve
 	if !errors.Is(err, os.ErrNotExist) {
 		return r, false, err
 	}
-	return j.acceptNew(ctx, k, normalized, reserve, nil)
+	return j.acceptNew(ctx, k, normalized, reserve, acceptHooks{})
 }
 
-// acceptNew publishes a fresh reservation under the journal lock. decorate,
-// when set, adds context evidence before the receipt becomes durable.
-func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func() (Binding, error), decorate func(*Receipt)) (Receipt, bool, error) {
+// acceptHooks extend a reservation before its receipt becomes durable:
+// decorate adds receipt evidence, and prepare stores files that must exist
+// whenever the receipt does.
+type acceptHooks struct {
+	decorate func(*Receipt)
+	prepare  func(Binding) error
+}
+
+// acceptNew publishes a fresh reservation under the journal lock.
+func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func() (Binding, error), hooks acceptHooks) (Receipt, bool, error) {
 	var r Receipt
 	if err := j.capacity(); err != nil {
 		return Receipt{}, false, err
@@ -134,8 +143,8 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 		return Receipt{}, false, err
 	}
 	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent}
-	if decorate != nil {
-		decorate(&r)
+	if hooks.decorate != nil {
+		hooks.decorate(&r)
 	}
 	if (binding.Mode() == KindLine) != (k.Class == InternalServiceClass) {
 		return r, false, fmt.Errorf("execution: invalid internal request namespace")
@@ -143,27 +152,37 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	if binding.RequestHash != k.Hash() || binding.Mode() != i.Kind || binding.Stdin != i.Stdin {
 		return r, false, fmt.Errorf("execution: reservation namespace mismatch")
 	}
-	if err := j.files.Ensure(filepath.Dir(attempt(binding, "reference.json"))); err != nil {
+	if err := j.prepareAttempt(ctx, binding, hooks); err != nil {
 		return r, false, err
 	}
-	if _, err := j.files.Publish(attempt(binding, "reference.json"), binding, true); err != nil {
-		return r, false, err
-	}
-	// The lifetime inode exists before acceptance and survives until receipt purge.
-	fence, err := j.files.Lock(ctx, attempt(binding, "lifetime.lock"))
-	if err != nil {
-		return r, false, err
-	}
-	err = errors.Join(j.files.Confirm(attempt(binding, "lifetime.lock")), fence.Close())
-	if err != nil {
-		return r, false, err
-	}
-	if err := ctx.Err(); err != nil {
+	if err := admitted(ctx); err != nil {
 		return r, false, executionBoundaryError("execution admission canceled", err)
 	}
 	r.Acceptance = string(Durable)
 	r, err = j.save(r)
 	return r, err == nil, err
+}
+
+// prepareAttempt stores the files a durable receipt relies on.
+func (j *Journal) prepareAttempt(ctx context.Context, binding Binding, hooks acceptHooks) error {
+	if err := j.files.Ensure(filepath.Dir(attempt(binding, "reference.json"))); err != nil {
+		return err
+	}
+	if _, err := j.files.Publish(attempt(binding, "reference.json"), binding, true); err != nil {
+		return err
+	}
+	// The lifetime inode exists before acceptance and survives until receipt purge.
+	fence, err := j.files.Lock(ctx, attempt(binding, "lifetime.lock"))
+	if err != nil {
+		return err
+	}
+	if err := errors.Join(j.files.Confirm(attempt(binding, "lifetime.lock")), fence.Close()); err != nil {
+		return err
+	}
+	if hooks.prepare == nil {
+		return nil
+	}
+	return hooks.prepare(binding)
 }
 func (j *Journal) capacity() error {
 	entries, err := j.files.Names("execution/requests")
