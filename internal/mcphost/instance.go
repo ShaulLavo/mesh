@@ -679,7 +679,7 @@ func (s *Supervisor) stopInstance(ctx context.Context, inst *instance, reason st
 	if gen != nil {
 		_ = gen.upstream.Close()
 	}
-	if err := s.finishDrainingStops(ctx, draining); err != nil {
+	if err := s.finishDrainingStops(ctx, inst, draining); err != nil {
 		return fmt.Errorf("stop instance %s: %w", inst.rec.ID, err)
 	}
 	if ref.SessionID != "" {
@@ -716,7 +716,7 @@ func stopTargetLocked(gen *generation, inst *instance) WorkerRef {
 	return WorkerRef{}
 }
 
-func (s *Supervisor) finishDrainingStops(ctx context.Context, draining []*drainingGen) error {
+func (s *Supervisor) finishDrainingStops(ctx context.Context, inst *instance, draining []*drainingGen) error {
 	for _, dg := range draining {
 		if dg.gen.stopDrain != nil {
 			dg.gen.stopDrain(ctx)
@@ -729,9 +729,16 @@ func (s *Supervisor) finishDrainingStops(ctx context.Context, draining []*draini
 		s.mu.Lock()
 		err := dg.err
 		s.mu.Unlock()
-		if err != nil {
-			return err
+		if err == nil {
+			continue
 		}
+		if retryErr := s.stopWorker(ctx, dg.gen.ref); retryErr != nil {
+			return retryErr
+		}
+		s.mu.Lock()
+		dg.err = nil
+		inst.draining = slices.DeleteFunc(inst.draining, func(d *drainingGen) bool { return d == dg })
+		s.mu.Unlock()
 	}
 	return nil
 }

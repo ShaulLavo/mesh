@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,8 +21,12 @@ import (
 
 	"github.com/shaul/mesh/internal/mcphost"
 	"github.com/shaul/mesh/internal/mcpwire"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/protocol/mcpframe"
+	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 const mcpHTTPFixtureRole = "mcp-http-fixture"
@@ -440,5 +446,158 @@ func TestHostedMCPManagedHTTPOwnerGuardNative(t *testing.T) {
 	}
 	if rogueHits.Load() != 0 || rogueAuth.Load() != nil {
 		t.Fatalf("rogue listener received %d hits (auth=%v) after worker exit", rogueHits.Load(), rogueAuth.Load())
+	}
+}
+
+// TestHostedMCPNativeRemoveAfterWorkerExit proves that removing a hosted MCP
+// service right after its worker exits (both racing with socket teardown and
+// after the socket is already gone) confirms exit and succeeds cleanly.
+func TestHostedMCPNativeRemoveAfterWorkerExit(t *testing.T) {
+	f := newMCPDaemon(t)
+	cred := newCredential(t)
+	for _, tc := range []struct {
+		name           string
+		waitSocketGone bool
+	}{
+		{name: "exit-immediate", waitSocketGone: false},
+		{name: "exit-settled", waitSocketGone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.publishMCP(t, mcphost.Definition{
+				Name: tc.name,
+				Argv: []string{f.executable, mcpFixtureRole},
+				Cwd:  f.root,
+			})
+			_, reader := f.mcpStream(t, mcpframe.Route{Service: tc.name, Caller: cred}, mcpToolCall(`"w1"`, "whoami", `{}`))
+			if reply := readMCP(t, reader)[0]; reply.ErrorObject() != nil {
+				t.Fatalf("warm %s: %s", tc.name, reply.Raw())
+			}
+			_, exitReader := f.mcpStream(t, mcpframe.Route{Service: tc.name, Caller: cred}, mcpToolCall(`"e1"`, "exit", `{}`))
+			_ = readMCP(t, exitReader)
+			if tc.waitSocketGone {
+				pipeEventually(t, func() bool { return f.liveWorkers(t) == 0 })
+			}
+			if reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceDelete, RequestID: "rm-" + tc.name, Service: tc.name}); reply.Type != protocol.TypeMCPServiceResult {
+				t.Fatalf("remove %s after worker exit: %+v", tc.name, reply)
+			}
+			pipeEventually(t, func() bool { return f.liveWorkers(t) == 0 })
+		})
+	}
+}
+
+// TestHostedMCPNativeStopMissingSocketConfirmsExactProcess verifies that when a
+// worker's socket is missing and the journal has no terminal record, Stop
+// confirms exit only when the exact reservation matches and the recorded
+// process group is gone, keeping uncertainty otherwise.
+func TestHostedMCPNativeStopMissingSocketConfirmsExactProcess(t *testing.T) {
+	// Keep the socket path well under macOS's 104-byte Unix domain socket limit.
+	stateDir, err := os.MkdirTemp("/tmp", "mcp-stop-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+	sessionsDir := filepath.Join(stateDir, "s")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l := &lifecycle{
+		host:        storage.Host{ID: "test-host"},
+		sessionsDir: sessionsDir,
+	}
+	t.Cleanup(l.closeExecution)
+	launcher := mcpLauncher{l: l}
+
+	ctx := t.Context()
+	journal, err := l.executionJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := execution.Normalize(execution.Intent{
+		Kind:    execution.KindLine,
+		Stdin:   execution.StdinOpen,
+		Command: []string{"/bin/sleep", "30"},
+		Cwd:     stateDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := launcher.key(mcphost.LaunchKey{Service: "svc-stop", Instance: "inst-stop", Generation: 1})
+	receipt, created, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
+		res, err := worker.Reserve(sessionsDir, execution.PurposeForKind(intent.Kind))
+		if err != nil {
+			return execution.Binding{}, fmt.Errorf("reserve worker: %w", err)
+		}
+		return execution.NewBinding(key, intent, res, os.Environ()), nil
+	})
+	if err != nil || !created {
+		t.Fatalf("reserve execution: created=%v err=%v", created, err)
+	}
+	b := receipt.Binding
+	if err := journal.Dispatch(ctx, b, intent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Published(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	ref := launcher.ref(b)
+	workerDir := filepath.Join(sessionsDir, b.Reservation.ID)
+	if err := os.Remove(paths.Launching(workerDir)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("/bin/sleep", "30") //nolint:gosec // fixed sleep fixture for process liveness test
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+
+	// 1. Missing socket with live recorded process must keep reporting uncertainty.
+	resCopy := b.Reservation
+	meta := worker.Meta{
+		Reservation:   &resCopy,
+		ExecutionKind: b.Mode(),
+		ID:            b.Reservation.ID,
+		PID:           cmd.Process.Pid,
+		Command:       intent.Command,
+		Cwd:           intent.Cwd,
+		State:         worker.StateDetached,
+		CreatedAt:     time.Now().UTC(),
+		BootID:        worker.BootID(),
+	}
+	if err := worker.WriteMeta(workerDir, meta); err != nil {
+		t.Fatal(err)
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := launcher.Stop(stopCtx, ref); err == nil {
+		t.Fatal("Stop succeeded while recorded worker process was still alive with missing socket")
+	}
+
+	// Kill and reap the child process so both PID and PGID return ESRCH.
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_ = cmd.Wait()
+
+	// 2. Missing socket with dead PID but mismatched reservation must still fail.
+	wrongRes := b.Reservation
+	wrongRes.Instance = "wrong-instance"
+	wrongMeta := meta
+	wrongMeta.Reservation = &wrongRes
+	if err := worker.WriteMeta(workerDir, wrongMeta); err != nil {
+		t.Fatal(err)
+	}
+	if err := launcher.Stop(stopCtx, ref); err == nil {
+		t.Fatal("Stop succeeded despite reservation mismatch on missing socket")
+	}
+
+	// 3. Missing socket with exact reservation and confirmed dead process succeeds.
+	if err := worker.WriteMeta(workerDir, meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := launcher.Stop(stopCtx, ref); err != nil {
+		t.Fatalf("Stop failed for missing socket with confirmed dead exact worker: %v", err)
 	}
 }

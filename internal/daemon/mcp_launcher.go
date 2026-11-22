@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/shaul/mesh/internal/mcphost"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
@@ -173,11 +177,17 @@ func (m mcpLauncher) Stop(ctx context.Context, ref mcphost.WorkerRef) error {
 	if r.Phase == executionTerminalPhase {
 		return nil
 	}
+	if b.Reservation.BootID != "" && worker.BootID() != "" && b.Reservation.BootID != worker.BootID() {
+		return nil
+	}
 	if err := journal.MarkKill(ctx, b); err != nil {
 		return fmt.Errorf("stop MCP worker %s: %w", ref.SessionID, err)
 	}
 	req := protocol.Control{Type: protocol.TypeExecutionKill, RequestID: "mcp-stop", SessionID: b.Reservation.ID, Instance: b.Reservation.Instance}
 	if _, err := m.l.executionDeliver(ctx, req, b); err != nil {
+		if m.confirmWorkerGone(ctx, journal, b, err) {
+			return nil
+		}
 		return fmt.Errorf("stop MCP worker %s: %w", ref.SessionID, err)
 	}
 	return m.awaitTerminal(ctx, journal, b)
@@ -193,12 +203,65 @@ func (m mcpLauncher) awaitTerminal(ctx context.Context, journal *execution.Journ
 		if err == nil && r.Phase == executionTerminalPhase {
 			return nil
 		}
+		if m.workerGoneWithoutJournal(ctx, b) {
+			return nil
+		}
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
 			return fmt.Errorf("stop MCP worker %s: %w", b.Reservation.ID, ctx.Err())
 		}
 	}
+}
+
+// confirmWorkerGone resolves a missing or closed worker socket during Stop by
+// proving through the exact journal binding, exact reservation metadata, and
+// recorded process that the worker has already exited. When exit cannot be
+// proven, it returns false so the caller keeps reporting uncertainty.
+func (m mcpLauncher) confirmWorkerGone(ctx context.Context, journal *execution.Journal, b execution.Binding, deliverErr error) bool {
+	if !workerSocketUnavailable(deliverErr) {
+		return false
+	}
+	if r, err := journal.Exact(ctx, b); err == nil && r.Phase == executionTerminalPhase {
+		return true
+	}
+	return m.workerGoneWithoutJournal(ctx, b)
+}
+
+func (m mcpLauncher) workerGoneWithoutJournal(ctx context.Context, b execution.Binding) bool {
+	if b.Reservation.BootID != "" && worker.BootID() != "" && b.Reservation.BootID != worker.BootID() {
+		return true
+	}
+	dir := filepath.Join(m.l.sessionsDir, b.Reservation.ID)
+	if _, err := os.Lstat(paths.Launching(dir)); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if probeErr := worker.ProbePipe(ctx, m.l.sessionsDir, b); probeErr == nil || !workerSocketUnavailable(probeErr) {
+		return false
+	}
+	meta, err := worker.ReadMeta(dir)
+	if err != nil {
+		return false
+	}
+	if meta.Reservation == nil || *meta.Reservation != b.Reservation || meta.ID != b.Reservation.ID || meta.ExecutionKind != b.Mode() {
+		return false
+	}
+	if meta.BootID != "" && worker.BootID() != "" && meta.BootID != worker.BootID() {
+		return true
+	}
+	if meta.State == worker.StateExited || meta.State == worker.StateInterrupted {
+		return true
+	}
+	return meta.PID > 1 && processGroupGone(meta.PID)
+}
+
+func workerSocketUnavailable(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
+func processGroupGone(pid int) bool {
+	return errors.Is(syscall.Kill(-pid, 0), syscall.ESRCH) && errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
 }
 
 // Stderr reads up to limit bytes from the tail of the private diagnostics ring
