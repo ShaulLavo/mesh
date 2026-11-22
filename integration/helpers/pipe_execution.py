@@ -51,8 +51,8 @@ class PipeFixture(LifecycleFixture):
         return conn
 
 
-def exchange(fixture, request):
-    return round_trip(str(fixture.local / "daemon.sock"), request, timeout=25)
+def exchange(fixture, request, timeout=25):
+    return round_trip(str(fixture.local / "daemon.sock"), request, timeout=timeout)
 
 
 def send(conn, request):
@@ -87,7 +87,8 @@ def logs(fixture, job, stream, cursor="", size=65536):
     request = bound("logs", job, stream=stream, cursor=cursor, maxBytes=size)
     deadline = time.monotonic() + 60
     while True:
-        response = exchange(fixture, request)
+        remaining = deadline - time.monotonic()
+        response = exchange(fixture, request, timeout=max(1, min(25, remaining)))
         if response.get("errorCode") != "state.unavailable" or time.monotonic() > deadline:
             return response
         time.sleep(.05)
