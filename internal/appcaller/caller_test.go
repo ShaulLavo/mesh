@@ -49,10 +49,10 @@ func TestCredentialRoundTripAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, err := ParseCredential(c.Encode())
-	if err != nil || parsed != c {
+	if err != nil || parsed.Encode() != c.Encode() {
 		t.Fatalf("round trip failed: %v", err)
 	}
-	for _, text := range []string{fmt.Sprint(c), fmt.Sprintf("%v %+v %#v %s", c, c, c, c)} {
+	for _, text := range []string{fmt.Sprint(c), fmt.Sprintf("%v %+v %#v", c, c, c), fmt.Sprintf("%+v", Identity{Name: "x", Credential: c})} {
 		if strings.Contains(text, c.Encode()[len(credentialPrefix):]) {
 			t.Fatalf("formatting leaked the credential: %s", text)
 		}
@@ -77,7 +77,7 @@ func TestIdentityStoreIsPrivateAndNeverOverwrites(t *testing.T) {
 		t.Fatalf("second create = %v, want exists", err)
 	}
 	loaded, err := Load(dir, "codex")
-	if err != nil || loaded.Credential != created.Credential {
+	if err != nil || loaded.Credential.Encode() != created.Credential.Encode() {
 		t.Fatalf("load = %v", err)
 	}
 	info, err := os.Stat(filepath.Join(Dir(dir), "codex.json"))

@@ -39,13 +39,16 @@ const credentialPrefix = "mac1_"
 // ErrInvalidCredential reports an encoded credential that cannot be parsed.
 var ErrInvalidCredential = errors.New("application credential is malformed")
 
-// Credential is one caller secret. Its String method never prints the secret,
-// so a credential that reaches a log or an error by accident stays private.
-type Credential struct{ raw [CredentialBytes]byte }
+// Credential is one caller secret. The bytes sit behind a pointer, so a
+// credential formatted into a log or an error by accident prints an address,
+// never the secret.
+type Credential struct{ raw *[CredentialBytes]byte }
+
+var zeroCredential [CredentialBytes]byte
 
 // Generate creates a fresh random credential.
 func Generate() (Credential, error) {
-	var c Credential
+	c := Credential{raw: new([CredentialBytes]byte)}
 	if _, err := rand.Read(c.raw[:]); err != nil {
 		return Credential{}, fmt.Errorf("generate application credential: %w", err)
 	}
@@ -62,7 +65,7 @@ func ParseCredential(encoded string) (Credential, error) {
 	if err != nil || len(raw) != CredentialBytes {
 		return Credential{}, ErrInvalidCredential
 	}
-	var c Credential
+	c := Credential{raw: new([CredentialBytes]byte)}
 	copy(c.raw[:], raw)
 	if c.IsZero() {
 		return Credential{}, ErrInvalidCredential
@@ -71,28 +74,24 @@ func ParseCredential(encoded string) (Credential, error) {
 }
 
 // Encode returns the form carried in protocol.Control.Caller and stored in
-// the identity file.
+// the identity file. The unset credential encodes as empty.
 func (c Credential) Encode() string {
+	if c.IsZero() {
+		return ""
+	}
 	return credentialPrefix + base64.RawURLEncoding.EncodeToString(c.raw[:])
 }
 
 // IsZero reports the unset credential.
-func (c Credential) IsZero() bool { return c == Credential{} }
-
-func (c Credential) String() string   { return "[application credential]" }
-func (c Credential) GoString() string { return c.String() }
-
-// The redaction must hold wherever a credential is formatted, including
-// through an Identity value.
-var (
-	_ fmt.Stringer   = Credential{}
-	_ fmt.GoStringer = Credential{}
-)
+func (c Credential) IsZero() bool { return c.raw == nil || *c.raw == zeroCredential }
 
 // Fingerprint is a short local label for listing identities. It is a
 // separate digest from the application ID, so it reveals neither the secret
 // nor the ID a host derives.
 func (c Credential) Fingerprint() string {
+	if c.IsZero() {
+		return ""
+	}
 	sum := sha256.Sum256(append([]byte("mesh application credential fingerprint\x00"), c.raw[:]...))
 	return hex.EncodeToString(sum[:6])
 }
