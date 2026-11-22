@@ -167,16 +167,17 @@ func (w *Worker) runPipe(attempt *execution.Attempt, mode, sockPath string) (int
 	started = true
 	defer w.abortPipe()
 	p.childStarted()
-	if err := attempt.Started(); err != nil {
-		return 0, fmt.Errorf("record child start: %w", err)
-	}
-	executionBoundary(w.cfg.Dir, "after_spawn")
+	// The start record and the metadata are independent durable writes, so
+	// they share one flush round. publishPipe joins both before anything
+	// becomes visible to the daemon.
+	startRecorded := make(chan error, 1)
+	go func() { startRecorded <- attempt.Started() }()
 	meta := Meta{Build: build, Reservation: w.cfg.Reservation, ID: w.cfg.ID, PID: w.cmd.Process.Pid, Command: w.cfg.Command, Cwd: w.cfg.Cwd, State: StateDetached, CreatedAt: time.Now(), BootID: BootID(), Label: w.cfg.Label, ExecutionKind: mode}
-	return w.serveStartedPipe(attempt, p, readers, sockPath, meta)
+	return w.serveStartedPipe(attempt, p, readers, sockPath, meta, startRecorded)
 }
 
-func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []*pipeReader, sockPath string, meta Meta) (int, error) {
-	ln, err := w.publishPipe(attempt, sockPath, meta)
+func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []*pipeReader, sockPath string, meta Meta, startRecorded <-chan error) (int, error) {
+	ln, err := w.publishPipe(attempt, sockPath, meta, startRecorded)
 	if err != nil {
 		return 0, err
 	}
@@ -204,9 +205,15 @@ func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, rea
 	return w.finishPipe(attempt, readers, p.stdout, lineDone, stopReaders, meta)
 }
 
-func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta Meta) (net.Listener, error) {
-	if err := WriteMeta(w.cfg.Dir, meta); err != nil {
-		return nil, err
+func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta Meta, startRecorded <-chan error) (net.Listener, error) {
+	metaErr := WriteMeta(w.cfg.Dir, meta)
+	// Always receive, so the start record never outlives the attempt it uses.
+	if err := <-startRecorded; err != nil {
+		return nil, fmt.Errorf("record child start: %w", err)
+	}
+	executionBoundary(w.cfg.Dir, "after_spawn")
+	if metaErr != nil {
+		return nil, metaErr
 	}
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -222,18 +229,36 @@ func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta M
 func (w *Worker) openPipeReaders(p *childPipes) ([]*pipeReader, error) {
 	b := *w.cfg.Execution
 	state := filepath.Dir(filepath.Dir(w.cfg.Dir))
-	readers := make([]*pipeReader, 0, len(b.Streams()))
-	for _, stream := range b.Streams() {
-		capture, err := execution.OpenCapture(state, b, stream)
-		if err != nil {
+	streams := b.Streams()
+	captures := make([]*execution.Capture, len(streams))
+	errs := make([]error, len(streams))
+	// Each stream initializes its own durable files; running them together
+	// pays one flush round instead of one per stream.
+	var group sync.WaitGroup
+	for i, stream := range streams {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			captures[i], errs[i] = execution.OpenCapture(state, b, stream)
+		}()
+	}
+	group.Wait()
+	readers := make([]*pipeReader, 0, len(streams))
+	for i, stream := range streams {
+		if errs[i] != nil {
 			abortPipeCaptures(readers)
-			return nil, workerExecutionError("initialize pipe capture", err)
+			for _, capture := range captures[i+1:] {
+				if capture != nil {
+					capture.Abort()
+				}
+			}
+			return nil, workerExecutionError("initialize pipe capture", errs[i])
 		}
 		file := p.stderr
 		if stream == execution.StreamStdout {
 			file = p.stdout
 		}
-		readers = append(readers, &pipeReader{file: file, capture: capture, done: make(chan string, 1)})
+		readers = append(readers, &pipeReader{file: file, capture: captures[i], done: make(chan string, 1)})
 	}
 	return readers, nil
 }

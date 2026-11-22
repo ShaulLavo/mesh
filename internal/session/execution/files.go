@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -43,6 +44,11 @@ func (e *PersistenceError) Unwrap() error { return e.Err }
 type Files struct {
 	root  *os.Root
 	fault func(string) error
+	// confirmed remembers records this process already proved durable. Records
+	// are replaced by rename and never rewritten in place, so an unchanged
+	// stamp means the same durable bytes and no new fsync round is owed.
+	confirmMu sync.Mutex
+	confirmed map[string]fileStamp
 }
 
 func OpenFiles(path string) (*Files, error) {
@@ -69,7 +75,7 @@ func OpenFiles(path string) (*Files, error) {
 		}
 		return nil, executionBoundaryError("open execution root", err)
 	}
-	return &Files{root: root}, nil
+	return &Files{root: root, confirmed: make(map[string]fileStamp)}, nil
 }
 
 func (f *Files) Close() error { return executionBoundaryError("files.go Close", f.root.Close()) }
@@ -175,11 +181,47 @@ func (f *Files) Confirm(name string) error {
 	if err != nil {
 		return err
 	}
-	err = errors.Join(f.dataSync(file), f.syncDirs(name))
+	return errors.Join(f.confirmOpen(name, file), f.closeFile(file))
+}
+
+// confirmOpen makes an opened record and its namespace durable unless this
+// process already did so for the same unchanged file.
+func (f *Files) confirmOpen(name string, file *os.File) error {
+	stamp, ok := f.stampOf(file)
+	if ok && f.wasConfirmed(name, stamp) {
+		return nil
+	}
+	err := errors.Join(f.dataSync(file), f.syncDirs(name))
 	if err == nil {
 		err = f.flushDevice(file)
 	}
-	return errors.Join(err, f.closeFile(file))
+	if err == nil && ok {
+		f.remember(name, stamp)
+	}
+	return err
+}
+
+// stampOf identifies the file's current bytes. Fault injection bypasses the
+// memory so tests that script individual sync steps still see every one.
+func (f *Files) stampOf(file *os.File) (fileStamp, bool) {
+	if f.fault != nil {
+		return fileStamp{}, false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fileStamp{}, false
+	}
+	return stampFromInfo(info)
+}
+func (f *Files) wasConfirmed(name string, stamp fileStamp) bool {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	return f.confirmed[name] == stamp
+}
+func (f *Files) remember(name string, stamp fileStamp) {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	f.confirmed[name] = stamp
 }
 func (f *Files) Publish(name string, value any, exclusive bool) (Stage, error) {
 	return f.PublishBounded(name, value, exclusive, MaxRecord)
@@ -227,8 +269,12 @@ func (f *Files) publishBytes(name string, data []byte, exclusive bool) (Stage, e
 	if err == nil {
 		err = f.flushDevice(file)
 	}
+	stamp, stamped := f.stampOf(file)
 	if err = errors.Join(err, f.closeFile(file)); err != nil {
 		return Unconfirmed, &PersistenceError{Unconfirmed, err}
+	}
+	if stamped {
+		f.remember(name, stamp)
 	}
 	return Durable, nil
 }
@@ -284,11 +330,7 @@ func (f *Files) ensureOne(name string) error {
 	if err != nil {
 		return err
 	}
-	err = errors.Join(f.dataSync(file), f.syncDirs(anchor))
-	if err == nil {
-		err = f.flushDevice(file)
-	}
-	return errors.Join(err, f.closeFile(file))
+	return errors.Join(f.confirmOpen(anchor, file), f.closeFile(file))
 }
 func (f *Files) Names(dir string) ([]os.DirEntry, error) {
 	if err := f.check(dir, false); err != nil {
