@@ -108,37 +108,49 @@ func (s *Supervisor) newInstanceLocked(caller Caller, d Definition, isDefault bo
 // acquire returns a running generation at the service's current revision and
 // counts one active use of it. Concurrent callers share one startup.
 func (s *Supervisor) acquire(ctx context.Context, inst *instance) (*generation, error) {
+	s.mu.Lock()
+	stops := inst.stops
+	s.mu.Unlock()
 	for {
-		s.mu.Lock()
-		d, err := s.serviceLocked(inst.rec.ServiceID)
-		if err != nil {
-			s.mu.Unlock()
-			return nil, err
-		}
-		if gen := s.usableLocked(inst, d); gen != nil {
-			gen.active++
-			stopTimer(inst.idle)
-			s.mu.Unlock()
-			return gen, nil
-		}
-		if inst.starting != nil {
-			wait := inst.starting
-			s.mu.Unlock()
-			if err := waitFor(ctx, wait); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if err := startable(inst); err != nil {
-			s.mu.Unlock()
-			return nil, err
-		}
-		inst.starting = make(chan struct{})
-		s.mu.Unlock()
-		if err := s.startDetached(ctx, inst, d); err != nil {
-			return nil, err
+		gen, err := s.acquireStep(ctx, inst, stops)
+		if gen != nil || err != nil {
+			return gen, err
 		}
 	}
+}
+
+// acquireStep returns a usable generation, or waits for or performs one
+// start and returns nothing so the caller looks again.
+func (s *Supervisor) acquireStep(ctx context.Context, inst *instance, stops int) (*generation, error) {
+	s.mu.Lock()
+	d, err := s.serviceLocked(inst.rec.ServiceID)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	// A stop while this caller waited wins; the caller does not restart
+	// what was just stopped.
+	if inst.stops != stops {
+		s.mu.Unlock()
+		return nil, failure(codeUnavailable, true, "instance %s was stopped", inst.rec.ID)
+	}
+	if gen := s.usableLocked(inst, d); gen != nil {
+		gen.active++
+		stopTimer(inst.idle)
+		s.mu.Unlock()
+		return gen, nil
+	}
+	if wait := inst.starting; wait != nil {
+		s.mu.Unlock()
+		return nil, waitFor(ctx, wait)
+	}
+	if err := startable(inst); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	inst.starting = make(chan struct{})
+	s.mu.Unlock()
+	return nil, s.startDetached(ctx, inst, d)
 }
 
 // startDetached launches outside the caller's context, so a caller that
@@ -250,6 +262,8 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 	inst.rec.Worker = &ref
 	s.mu.Unlock()
 	if err := s.persist(ctx, inst); err != nil {
+		// An unrecorded worker would outlive its instance; stop it now.
+		_ = s.stopWorker(ctx, ref)
 		return nil, err
 	}
 	return s.connect(ctx, inst, d, key, ref)
@@ -276,6 +290,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 	s.mu.Unlock()
 	if err := s.settle(ctx, inst, StateReady, "", nil); err != nil {
 		_ = upstream.Close()
+		_ = s.stopWorker(ctx, ref)
 		return nil, err
 	}
 	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info)}, nil
@@ -496,29 +511,64 @@ func (s *Supervisor) idleStop(ctx context.Context, inst *instance, gen *generati
 	}
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
-	_ = s.stopInstance(ctx, inst, "idle")
+	_ = s.stopInstance(ctx, inst, idleReason)
 }
 
 // stopInstance records stop intent, then stops the exact current worker.
+// It holds the start slot, so it waits for an in-flight launch or recovery
+// and then stops whatever that produced instead of racing it.
 func (s *Supervisor) stopInstance(ctx context.Context, inst *instance, reason string) error {
+	if err := s.waitClaim(ctx, inst); err != nil {
+		return fmt.Errorf("stop instance %s: %w", inst.rec.ID, err)
+	}
+	defer s.finishStart(inst)
 	s.mu.Lock()
 	gen := inst.current
 	inst.current = nil
+	if reason != idleReason {
+		inst.stops++
+	}
 	stopTimer(inst.idle)
 	stopTimer(inst.retry)
 	inst.retry = nil
+	recorded := inst.rec.Worker
 	inst.rec.Intent, inst.rec.State, inst.rec.Reason = intentStop, StateStopped, reason
 	s.mu.Unlock()
 	if err := s.persist(ctx, inst); err != nil {
 		return err
 	}
+	ref := WorkerRef{}
 	if gen != nil {
 		_ = gen.upstream.Close()
-		if err := s.stopWorker(ctx, gen.ref); err != nil {
-			return fmt.Errorf("stop instance %s: %w", inst.rec.ID, err)
-		}
+		ref = gen.ref
+	} else if recorded != nil {
+		// A launch that failed after its worker started left only the record.
+		ref = *recorded
+	}
+	if err := s.stopWorker(ctx, ref); err != nil {
+		return fmt.Errorf("stop instance %s: %w", inst.rec.ID, err)
 	}
 	return nil
+}
+
+// idleReason marks an idle stop, which a newly arriving caller may undo.
+const idleReason = "idle"
+
+// waitClaim takes the start slot, waiting for its current holder.
+func (s *Supervisor) waitClaim(ctx context.Context, inst *instance) error {
+	for {
+		s.mu.Lock()
+		if inst.starting == nil {
+			inst.starting = make(chan struct{})
+			s.mu.Unlock()
+			return nil
+		}
+		wait := inst.starting
+		s.mu.Unlock()
+		if err := waitFor(ctx, wait); err != nil {
+			return err
+		}
+	}
 }
 
 // recover adopts the worker recorded for an instance's latest generation,

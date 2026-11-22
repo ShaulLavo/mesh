@@ -105,6 +105,10 @@ type fakeLauncher struct {
 	uncertain bool
 	locate    WorkerStatus
 	mode      string
+	// dialing, when set, is signalled at each attach, which then waits for
+	// dialGate to close.
+	dialing  chan struct{}
+	dialGate chan struct{}
 }
 
 func newFakeLauncher() *fakeLauncher { return &fakeLauncher{workers: map[string]*fakeWorker{}} }
@@ -196,6 +200,13 @@ func (f *fakeLauncher) Stderr(_ context.Context, ref WorkerRef, limit int) ([]by
 }
 
 func (f *fakeLauncher) Dial(_ context.Context, ref WorkerRef) (LineConn, error) {
+	f.mu.Lock()
+	dialing, gate := f.dialing, f.dialGate
+	f.mu.Unlock()
+	if dialing != nil {
+		dialing <- struct{}{}
+		<-gate
+	}
 	w := f.worker(ref.SessionID)
 	if w == nil {
 		return nil, errors.New("no worker")

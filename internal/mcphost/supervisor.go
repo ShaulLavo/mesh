@@ -125,6 +125,8 @@ type instance struct {
 	idle     *time.Timer
 	retry    *time.Timer
 	backoff  time.Duration
+	// stops counts explicit stops, so callers waiting across one give up.
+	stops int
 }
 
 type generation struct {
@@ -411,21 +413,31 @@ func (s *Supervisor) Remove(ctx context.Context, name string) error {
 			stopping = append(stopping, inst)
 		}
 	}
+	// Withdraw the service first, so no call starts an instance meanwhile.
+	delete(s.services, d.ID)
+	delete(s.byName, name)
 	s.mu.Unlock()
-	for _, inst := range stopping {
-		if err := s.stopInstance(ctx, inst, "service removed"); err != nil {
-			return err
-		}
-	}
-	if err := s.cfg.Store.DeleteMCPService(ctx, d.ID, d.Revision); err != nil {
-		return fmt.Errorf("remove %s: %w", name, err)
+	err := s.stopAll(ctx, stopping)
+	if err == nil {
+		err = s.cfg.Store.DeleteMCPService(ctx, d.ID, d.Revision)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.services, d.ID)
-	delete(s.byName, name)
+	if err != nil {
+		s.services[d.ID], s.byName[name] = d, d.ID
+		return fmt.Errorf("remove %s: %w", name, err)
+	}
 	for _, inst := range stopping {
 		delete(s.instances, inst.rec.ID)
+	}
+	return nil
+}
+
+func (s *Supervisor) stopAll(ctx context.Context, instances []*instance) error {
+	for _, inst := range instances {
+		if err := s.stopInstance(ctx, inst, "service removed"); err != nil {
+			return err
+		}
 	}
 	return nil
 }

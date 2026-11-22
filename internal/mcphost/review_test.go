@@ -34,6 +34,101 @@ func TestEmptyListenDoesNotHoldInstance(t *testing.T) {
 	eventually(t, func() bool { return f.sup.Services(caller("a"))[0].Instances[0].State == StateStopped })
 }
 
+func (f *fakeLauncher) live() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	live := 0
+	for _, w := range f.workers {
+		select {
+		case <-w.ended:
+		default:
+			live++
+		}
+	}
+	return live
+}
+
+func (f *fakeLauncher) holdDials() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dialing, f.dialGate = make(chan struct{}, 8), make(chan struct{})
+	return f.dialGate
+}
+
+// A stop that arrives while the instance is still starting must win: the
+// start's worker is stopped and the instance stays stopped.
+func TestStopDuringStartStaysStopped(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo", InstancePolicy: PolicyShared})
+	gate := f.launcher.holdDials()
+	calls := make(chan error, 1)
+	go func() { _, err := whoami(t, f.sup, caller("a"), Target{Service: "repo"}); calls <- err }()
+	<-f.launcher.dialing
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := f.sup.StopInstance(t.Context(), Caller{Account: "local", Admin: true}, Target{Service: "repo"})
+		stopped <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	<-calls
+	view := f.sup.Services(Caller{Account: "local", Admin: true})[0].Instances[0]
+	if view.State != StateStopped || f.launcher.live() != 0 {
+		t.Fatalf("stop lost to the start: state %s, %d live workers", view.State, f.launcher.live())
+	}
+}
+
+// Removing a service while one of its instances is starting leaves no
+// worker behind.
+func TestRemoveDuringStartLeavesNoWorker(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo"})
+	gate := f.launcher.holdDials()
+	go func() { _, _ = whoami(t, f.sup, caller("a"), Target{Service: "repo"}) }()
+	<-f.launcher.dialing
+	removed := make(chan error, 1)
+	go func() { removed <- f.sup.Remove(t.Context(), "repo") }()
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return f.launcher.live() == 0 })
+	if len(f.sup.Services(Caller{Account: "local", Admin: true})) != 0 {
+		t.Fatal("removed service is still listed")
+	}
+}
+
+// Background recovery after a restart and a stop must not race either.
+func TestStopDuringRecoveryStaysStopped(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo", InstancePolicy: PolicyShared})
+	if _, err := whoami(t, f.sup, caller("a"), Target{Service: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	f.sup.Close()
+	gate := f.launcher.holdDials()
+	next := f.open(t)
+	<-f.launcher.dialing
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := next.StopInstance(t.Context(), Caller{Account: "local", Admin: true}, Target{Service: "repo"})
+		stopped <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(gate)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	view := next.Services(Caller{Account: "local", Admin: true})[0].Instances[0]
+	if view.State != StateStopped || f.launcher.live() != 0 {
+		t.Fatalf("stop lost to recovery: state %s, %d live workers", view.State, f.launcher.live())
+	}
+}
+
 func TestDiscoverMasksTasks(t *testing.T) {
 	router, err := NewRouter()
 	if err != nil {
