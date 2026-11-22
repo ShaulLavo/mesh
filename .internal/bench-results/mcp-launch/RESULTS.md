@@ -26,12 +26,16 @@ disk, load under 1), which is also a second, unrelated Linux filesystem. Raw sam
 
 | What | Before | After | Samples |
 | --- | ---: | ---: | ---: |
-| Create plus wait over the control socket | 472 / 520 / 383 | 151 / 185 / 125 | 52 each |
-| CLI `session create` plus `session wait` | 557 / 629 / 495 | 219 / 270 / 184 | 52 each |
-| First create after daemon start (cold) | 399 to 485 | 112 to 248 | 6 each |
+| Create plus wait over the control socket | 483 / 613 | 165 / 201 | 60 each |
+| CLI `session create` plus `session wait` | 624 / 786 | 240 / 286 | 60 each |
+| First create after daemon start (cold) | 402 to 559 | 144 to 208 | 3 each |
 
-An earlier, separate run of the same binaries (`vps-create-wait/`, 60 samples each) gave 477 to 158 ms
-for create plus wait.
+These are the final numbers, taken after the review round (directory and device barriers always run,
+the confirmation memory is bounded and limited to JSON records, Linux-only image stamps) against
+current `origin/main` as the "before" build, in `vps/`. The first round, before those changes, measured
+472 to 151 ms (control socket) and 557 to 219 ms (CLI) and is kept in `vps-first-round/`; the round
+before that (`vps-create-wait/`) gave 477 to 158 ms. The extra 10 to 15 ms is the directory syncs that
+are no longer skipped.
 
 For scale, the ssh317 measurements on the PC recorded a warm pooled OpenSSH `/bin/true` at about 6 ms and
 the Mesh SSH helper at about 10 ms. A keyed job is a different operation (a durable receipt, a detached
@@ -53,7 +57,9 @@ instead of 50 to 80 times.
 | Create total | 457 | 142 |
 
 Per create and wait the daemon and worker made 457 fsync calls before and 212 after (summed 127 ms and
-109 ms on the VPS; the fsync cost is small on a quiet ext4 disk and large on a loaded one).
+109 ms on the VPS; the fsync cost is small on a quiet ext4 disk and large on a loaded one). This trace is
+from the first round; the final code runs the directory syncs on every confirmation again, so its fsync
+count is higher than 212.
 
 ## What changed
 
