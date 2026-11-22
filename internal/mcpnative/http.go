@@ -31,6 +31,7 @@ const (
 	httpHeaderAuth      = "Authorization"
 	httpHeaderCache     = "Cache-Control"
 	httpHeaderContent   = "Content-Type"
+	httpHeaderLength    = "Content-Length"
 	httpHeaderWWWAuth   = "WWW-Authenticate"
 	httpBearerPrefix    = "Bearer "
 	sseFrameOverhead    = len("event: message\ndata: \n\n")
@@ -76,6 +77,7 @@ type HTTPServer struct {
 	token         string
 	generation    uint64
 	active        map[*httpActiveRequest]struct{}
+	leases        map[*httpActiveRequest]struct{}
 	inflightBytes int
 	closed        bool
 
@@ -94,6 +96,13 @@ type httpActiveRequest struct {
 
 	deadlineMu sync.Mutex
 	rc         *http.ResponseController
+
+	// outMu serializes every reply write and flush with rotation: a writer
+	// checks outputClosed and finishes its write and flush under the lock, and
+	// rotation sets outputClosed under it, so no write begins after rotation
+	// returns and none is still running then.
+	outMu        sync.Mutex
+	outputClosed bool
 }
 
 func (e *httpActiveRequest) totalBytesLocked() int {
@@ -108,6 +117,19 @@ func (e *httpActiveRequest) abortIO() {
 		_ = e.rc.SetReadDeadline(past)
 	}
 	e.deadlineMu.Unlock()
+}
+
+// closeOutput stops a retired exchange's output. The past deadline fails a
+// write blocked on a slow client so the writer releases outMu; taking outMu
+// then waits out a write that passed the retirement check. TCP cannot recall
+// bytes the kernel accepted before this point, so the promise is that no
+// output happens after it.
+func (e *httpActiveRequest) closeOutput() {
+	e.cancel()
+	e.abortIO()
+	e.outMu.Lock()
+	e.outputClosed = true
+	e.outMu.Unlock()
 }
 
 func (e *httpActiveRequest) armWriteDeadline(timeout time.Duration) error {
@@ -271,6 +293,7 @@ func NewHTTPServer(opts HTTPServerOptions) (*HTTPServer, error) {
 		token:          opts.Token,
 		generation:     1,
 		active:         make(map[*httpActiveRequest]struct{}),
+		leases:         make(map[*httpActiveRequest]struct{}),
 	}, nil
 }
 
@@ -330,9 +353,11 @@ func (s *HTTPServer) httpPolicy() mcpwire.HTTPPolicy {
 	}
 }
 
-// RotateToken replaces the active bearer token and cancels every in-flight
-// request exchange authenticated under an earlier token generation, interrupting
-// any blocked writes and suppressing queued frames.
+// RotateToken replaces the active bearer token and retires every request
+// authenticated under an earlier token generation: their waits are cancelled
+// (never the Mesh jobs behind them), blocked writes are interrupted, and queued
+// frames are suppressed. When it returns, no output for an old-token request is
+// being written or will be written. retired counts the admitted exchanges.
 func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired int, err error) {
 	if newToken == "" {
 		return 0, 0, errors.New("HTTP MCP bearer token must not be empty")
@@ -341,19 +366,25 @@ func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired in
 	s.token = newToken
 	s.generation++
 	generation = s.generation
-	targets := make([]*httpActiveRequest, 0, len(s.active))
-	for entry := range s.active {
+	// Retiring in the same critical section as the generation switch means no
+	// old-token write can start once the new token is accepted.
+	exchanges := retireOlderLocked(s.active, generation, nil)
+	targets := retireOlderLocked(s.leases, generation, exchanges)
+	s.mu.Unlock()
+	for _, entry := range targets {
+		entry.closeOutput()
+	}
+	return generation, len(exchanges), nil
+}
+
+func retireOlderLocked(set map[*httpActiveRequest]struct{}, generation uint64, targets []*httpActiveRequest) []*httpActiveRequest {
+	for entry := range set {
 		if entry.generation < generation {
 			entry.retired.Store(true)
 			targets = append(targets, entry)
 		}
 	}
-	s.mu.Unlock()
-	for _, entry := range targets {
-		entry.cancel()
-		entry.abortIO()
-	}
-	return generation, len(targets), nil
+	return targets
 }
 
 // Shutdown stops admitting new requests, cancels in-flight HTTP waits (never
@@ -413,18 +444,18 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w)
 		return
 	}
+	rc := http.NewResponseController(w)
 	if r.ContentLength > mcpwire.MaxMessage {
-		s.writeBoundedFaultJSON(w, &mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
+		s.rejectAuthenticated(w, rc, authGen, &mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
 		return
 	}
-	rc := http.NewResponseController(w)
 	reqCtx, entry, precharged, admitStatus := s.admitExchange(r.Context(), authGen, r.ContentLength, rc)
 	if admitStatus == http.StatusUnauthorized {
 		writeUnauthorized(w)
 		return
 	}
 	if entry == nil {
-		s.writeBoundedFaultJSON(w, meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish."))
+		s.rejectAuthenticated(w, rc, authGen, meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish."))
 		return
 	}
 	defer s.finishExchange(entry)
@@ -504,6 +535,29 @@ func (s *HTTPServer) admitExchange(parent context.Context, authGen uint64, conte
 	s.inflightBytes += needed
 	s.exchanges.Add(1)
 	return reqCtx, entry, precharged, http.StatusOK
+}
+
+// rejectAuthenticated answers an authenticated request that was not admitted.
+// The fault is output for an old-token request too, so it holds a lease that
+// rotation retires exactly like an admitted exchange.
+func (s *HTTPServer) rejectAuthenticated(w http.ResponseWriter, rc *http.ResponseController, authGen uint64, fault *mcpwire.Fault) {
+	lease := &httpActiveRequest{generation: authGen, cancel: func() {}, rc: rc}
+	s.mu.Lock()
+	current := !s.closed && s.generation == authGen
+	if current {
+		s.leases[lease] = struct{}{}
+	}
+	s.mu.Unlock()
+	if !current {
+		writeUnauthorized(w)
+		return
+	}
+	defer func() {
+		s.mu.Lock()
+		delete(s.leases, lease)
+		s.mu.Unlock()
+	}()
+	s.sendFault(w, lease, faultHTTPStatus(fault.Code), fault)
 }
 
 func (s *HTTPServer) chargeIngress(entry *httpActiveRequest, delta int) bool {
@@ -601,11 +655,12 @@ func (s *HTTPServer) handleReadHTTPError(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if body.budgetError || errors.Is(err, errIngressBudget) {
-		s.writeBoundedFaultJSON(w, meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request byte budget exceeded; retry after active requests finish."))
+		fault := meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request byte budget exceeded; retry after active requests finish.")
+		s.sendFault(w, entry, faultHTTPStatus(fault.Code), fault)
 		return
 	}
 	if r.Context().Err() == nil {
-		w.WriteHeader(http.StatusBadRequest)
+		s.sendStatus(w, entry, http.StatusBadRequest)
 	}
 }
 
@@ -707,27 +762,81 @@ func (s *HTTPServer) finishHTTPStream(ctx context.Context, w http.ResponseWriter
 	s.writeTerminalHTTP(w, entry, sseStarted, preferSSE, id, res)
 }
 
-func (s *HTTPServer) writeSSEEvent(w http.ResponseWriter, entry *httpActiveRequest, started *bool, frame []byte) error {
+// emit runs one complete write and its flush for entry under the output lock,
+// or refuses with errStreamRetired before writing anything once rotation has
+// retired the exchange. The flush stays inside the lock because bytes left
+// buffered would go out with net/http's flush after the handler returns, when
+// the exchange is no longer registered for rotation to stop.
+func (s *HTTPServer) emit(entry *httpActiveRequest, write func() error) error {
+	entry.outMu.Lock()
+	defer entry.outMu.Unlock()
+	if entry.outputClosed {
+		return errStreamRetired
+	}
 	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
 		return err
 	}
 	defer entry.clearWriteDeadline()
-
-	if !*started {
-		w.Header().Set(httpHeaderContent, httpSSEMedia)
-		w.Header().Set(httpHeaderCache, "no-store")
-		w.WriteHeader(http.StatusOK)
-		*started = true
+	if err := write(); err != nil {
+		return err
 	}
-	if err := mcpwire.WriteSSE(w, frame); err != nil {
-		return fmt.Errorf("write MCP SSE event: %w", err)
+	if entry.rc == nil {
+		return nil
 	}
-	if entry.rc != nil {
-		if err := entry.rc.Flush(); err != nil {
-			return fmt.Errorf("flush MCP SSE event: %w", err)
-		}
+	if err := entry.rc.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return fmt.Errorf("flush MCP HTTP output: %w", err)
 	}
 	return nil
+}
+
+// sendReply sends a single, non-streamed reply. A reply that rotation refused
+// before any byte was written becomes a bare 401, as for any retired request.
+func (s *HTTPServer) sendReply(w http.ResponseWriter, entry *httpActiveRequest, write func() error) {
+	if errors.Is(s.emit(entry, write), errStreamRetired) {
+		writeUnauthorized(w)
+	}
+}
+
+// sendStatus and sendJSON declare the exact length so the reply is complete
+// once flushed, leaving net/http nothing to finish after the handler returns.
+func (s *HTTPServer) sendStatus(w http.ResponseWriter, entry *httpActiveRequest, status int) {
+	s.sendReply(w, entry, func() error {
+		w.Header().Set(httpHeaderLength, "0")
+		w.WriteHeader(status)
+		return nil
+	})
+}
+
+func (s *HTTPServer) sendJSON(w http.ResponseWriter, entry *httpActiveRequest, status int, raw []byte) {
+	s.sendReply(w, entry, func() error {
+		w.Header().Set(httpHeaderContent, httpJSONMedia)
+		w.Header().Set(httpHeaderCache, "no-store")
+		w.Header().Set(httpHeaderLength, strconv.Itoa(len(raw)))
+		w.WriteHeader(status)
+		if _, err := w.Write(raw); err != nil {
+			return fmt.Errorf("write MCP JSON reply: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *HTTPServer) sendFault(w http.ResponseWriter, entry *httpActiveRequest, status int, fault *mcpwire.Fault) {
+	s.sendJSON(w, entry, status, encodeBoundedFault(fault, min(mcpwire.MaxMessage, s.connBytes)))
+}
+
+func (s *HTTPServer) writeSSEEvent(w http.ResponseWriter, entry *httpActiveRequest, started *bool, frame []byte) error {
+	return s.emit(entry, func() error {
+		if !*started {
+			w.Header().Set(httpHeaderContent, httpSSEMedia)
+			w.Header().Set(httpHeaderCache, "no-store")
+			w.WriteHeader(http.StatusOK)
+			*started = true
+		}
+		if err := mcpwire.WriteSSE(w, frame); err != nil {
+			return fmt.Errorf("write MCP SSE event: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *HTTPServer) writeTerminalHTTP(w http.ResponseWriter, entry *httpActiveRequest, sseStarted, preferSSE bool, id mcpwire.ID, res httpReplyResult) {
@@ -754,17 +863,7 @@ func (s *HTTPServer) writeTerminalHTTP(w http.ResponseWriter, entry *httpActiveR
 		_ = s.writeSSEEvent(w, entry, &sseStarted, frame)
 		return
 	}
-	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
-		return
-	}
-	defer entry.clearWriteDeadline()
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(status)
-	_, _ = w.Write(frame)
-	if entry.rc != nil {
-		_ = entry.rc.Flush()
-	}
+	s.sendJSON(w, entry, status, frame)
 }
 
 func (s *HTTPServer) reserveTerminalBytes(entry *httpActiveRequest, frame, fallback []byte, status int, useSSE bool) ([]byte, int) {
@@ -798,26 +897,10 @@ func writeUnauthorized(w http.ResponseWriter) {
 
 func (s *HTTPServer) writeHTTPInputResponse(w http.ResponseWriter, entry *httpActiveRequest, input mcpwire.HTTPInput) {
 	if input.Fault == nil {
-		w.WriteHeader(input.Status)
+		s.sendStatus(w, entry, input.Status)
 		return
 	}
-	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
-		return
-	}
-	defer entry.clearWriteDeadline()
-	raw := encodeBoundedFault(input.Fault, min(mcpwire.MaxMessage, s.connBytes))
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(input.Status)
-	_, _ = w.Write(raw)
-}
-
-func (s *HTTPServer) writeBoundedFaultJSON(w http.ResponseWriter, fault *mcpwire.Fault) {
-	raw := encodeBoundedFault(fault, min(mcpwire.MaxMessage, s.connBytes))
-	w.Header().Set(httpHeaderContent, httpJSONMedia)
-	w.Header().Set(httpHeaderCache, "no-store")
-	w.WriteHeader(faultHTTPStatus(fault.Code))
-	_, _ = w.Write(raw)
+	s.sendFault(w, entry, input.Status, input.Fault)
 }
 
 // wantsSSE reports whether the server should prefer text/event-stream even when
