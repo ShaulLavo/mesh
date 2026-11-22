@@ -258,7 +258,7 @@ func (w *Worker) serve(conn net.Conn) {
 		switch f.Kind {
 		case protocol.KindInput:
 			if !w.enqueueInput(c, f.Payload) {
-				if w.hasExited() {
+				if w.exitFollows(c) {
 					// Input that raced the exit has nowhere to go. Keep reading
 					// until the writer closes the connection after the exit frame.
 					continue

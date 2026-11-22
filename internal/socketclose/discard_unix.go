@@ -1,6 +1,8 @@
 //go:build unix
 
-package transport
+// Package socketclose helps close a Unix socket without losing what the peer
+// has not read yet.
+package socketclose
 
 import (
 	"io"
@@ -8,14 +10,16 @@ import (
 	"syscall"
 )
 
-// discardQueuedInput reads whatever the peer has already sent, without
-// waiting. Closing a Unix socket that still holds unread input makes the peer
-// read ECONNRESET instead of EOF, so an ordinary close would look like a
-// failure to a client that sent a resize or keystroke just before it.
+// DiscardQueued reads whatever the peer has already sent, without waiting.
+// Closing a Unix socket that still holds unread input makes the peer read
+// ECONNRESET instead of EOF on Linux, and on macOS it also drops the data the
+// closing side had already written to the peer, such as a session's final
+// exit frame. A client that sent a resize or keystroke just before the close
+// would otherwise lose its answer.
 //
 // It uses Control rather than Read because Close is also how a blocked reader
 // is cancelled: Read would wait behind that reader's lock.
-func discardQueuedInput(stream io.ReadWriteCloser) {
+func DiscardQueued(stream io.Closer) {
 	unix, ok := stream.(*net.UnixConn)
 	if !ok {
 		return

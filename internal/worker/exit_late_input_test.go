@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -23,13 +25,21 @@ func TestWorkerDeliversExitFrameDespiteInputAfterExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop := filepath.Join(root, "stop")
+	// The output must outgrow the socket buffers so the writer stays blocked,
+	// yet stay under the worker's 256 queued frames, past which it drops a slow
+	// client. macOS reads the PTY in 1 KiB chunks, so 1 MiB would be 1024 frames
+	// there, where Linux reads 32 KiB chunks.
+	outputBytes := 1 << 20
+	if runtime.GOOS == "darwin" {
+		outputBytes = 100 << 10
+	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := Run(Config{
 			ID: "7K3D", Dir: dir, Cwd: root, Cols: 80, Rows: 24,
 			Env: []string{"PATH=/usr/bin:/bin", "TERM=xterm-256color", "LANG=C"},
 			Command: []string{"/bin/sh", "-c",
-				`head -c 1048576 /dev/zero | tr '\0' x; while [ ! -e "$1" ]; do sleep 0.01; done; exit 7`, "late-input", stop},
+				fmt.Sprintf(`head -c %d /dev/zero | tr '\0' x; while [ ! -e "$1" ]; do sleep 0.01; done; exit 7`, outputBytes), "late-input", stop},
 		})
 		done <- err
 	}()
