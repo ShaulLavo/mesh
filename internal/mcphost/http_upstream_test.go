@@ -74,13 +74,7 @@ func TestInterruptedStreams(t *testing.T) {
 		"empty stream":          func(http.ResponseWriter, string) {},
 	} {
 		t.Run(name, func(t *testing.T) {
-			endpoint := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, _ := io.ReadAll(r.Body)
-				startSSE(w)
-				serve(w, requestID(t, body))
-			}))
-			upstream := dialUpstream(t, endpoint, nil, nil)
-			events, err := callAll(t, upstream, toolCall(t, "1", "echo", `{}`, `"progressToken":"p1"`))
+			events, err := interruptedCall(t, serve)
 			if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, mcpwire.ErrInterrupted) || terminals(events) != 0 {
 				t.Fatalf("events %d, err %v", len(events), err)
 			}
@@ -89,6 +83,17 @@ func TestInterruptedStreams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func interruptedCall(t *testing.T, serve func(http.ResponseWriter, string)) ([]mcpwire.Event, error) {
+	t.Helper()
+	endpoint := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		startSSE(w)
+		serve(w, requestID(t, body))
+	}))
+	upstream := dialUpstream(t, endpoint, nil, nil)
+	return callAll(t, upstream, toolCall(t, "1", "echo", `{}`, `"progressToken":"p1"`))
 }
 
 func TestWrongIDsAndShapesAreRejected(t *testing.T) {
@@ -159,36 +164,17 @@ func TestExtraTerminalResult(t *testing.T) {
 	}
 }
 
-func TestLegacySessionAndResumeSignalsAreRefusedAndNeverSent(t *testing.T) {
-	var calls atomic.Int32
-	rec := &recorder{}
-	endpoint := startServer(t, rec.handler(func(w http.ResponseWriter, r *http.Request, body []byte) {
-		switch calls.Add(1) {
-		case 1:
-			w.Header().Set("Mcp-Session-Id", "abc")
-			w.Header().Set("Last-Event-Id", "9")
-			writeJSON(w, http.StatusOK, okResult(requestID(t, body)))
-		case 2:
-			startSSE(w)
-			_, _ = io.WriteString(w, "id: 4\nevent: message\ndata: "+okResult(requestID(t, body))+"\n\n")
-		default:
-			writeJSON(w, http.StatusOK, okResult(requestID(t, body)))
-		}
+// Session metadata is inert, but a legacy transport handshake is real
+// protocol activity and stays refused.
+func TestLegacyTransportActivityIsRefused(t *testing.T) {
+	endpoint := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		startSSE(w)
+		_, _ = io.WriteString(w, "event: endpoint\ndata: /messages?sessionId=1\n\n")
 	}))
 	upstream := dialUpstream(t, endpoint, nil, nil)
-	for range 2 {
-		_, err := callAll(t, upstream, toolCall(t, "1", "echo", `{}`, ""))
-		if !errors.Is(err, mcpwire.ErrPeerMessage) {
-			t.Fatalf("legacy signal accepted: %v", err)
-		}
-	}
-	if events, err := callAll(t, upstream, toolCall(t, "1", "echo", `{}`, "")); err != nil || terminals(events) != 1 {
-		t.Fatalf("plain reply: %v", err)
-	}
-	for i, got := range rec.all() {
-		if headerSet(got.Header, "Mcp-Session-Id") || headerSet(got.Header, "Last-Event-Id") {
-			t.Errorf("request %d carried a session or resume header: %v", i, got.Header)
-		}
+	events, err := callAll(t, upstream, toolCall(t, "1", "echo", `{}`, ""))
+	if !errors.Is(err, mcpwire.ErrPeerMessage) || len(events) != 0 {
+		t.Fatalf("events %d, err %v", len(events), err)
 	}
 }
 
@@ -428,33 +414,32 @@ func TestCancellationClosesTheResponseStream(t *testing.T) {
 		"before headers": func(_ http.ResponseWriter, started chan<- struct{}) { started <- struct{}{} },
 	}
 	for name, serve := range cases {
-		t.Run(name, func(t *testing.T) {
-			started, stopped := make(chan struct{}, 1), make(chan struct{})
-			endpoint := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = io.Copy(io.Discard, r.Body)
-				serve(w, started)
-				<-r.Context().Done()
-				close(stopped)
-			}))
-			upstream := dialUpstream(t, endpoint, nil, nil)
-			ctx, cancel := context.WithCancel(testContext(t))
-			defer cancel()
-			var delivered atomic.Int32
-			errs := make(chan error, 1)
-			go func() {
-				errs <- upstream.Call(ctx, toolCall(t, "1", "echo", `{}`, `"progressToken":"p1"`), func(mcpwire.Event) error {
-					delivered.Add(1)
-					return nil
-				})
-			}()
-			<-started
-			cancel()
-			if err := <-errs; !errors.Is(err, context.Canceled) {
-				t.Fatalf("err %v", err)
-			}
-			<-stopped
-		})
+		t.Run(name, func(t *testing.T) { cancelledCall(t, serve) })
 	}
+}
+
+func cancelledCall(t *testing.T, serve func(http.ResponseWriter, chan<- struct{})) {
+	t.Helper()
+	started, stopped := make(chan struct{}, 1), make(chan struct{})
+	endpoint := startServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		serve(w, started)
+		<-r.Context().Done()
+		close(stopped)
+	}))
+	upstream := dialUpstream(t, endpoint, nil, nil)
+	ctx, cancel := context.WithCancel(testContext(t))
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() {
+		errs <- upstream.Call(ctx, toolCall(t, "1", "echo", `{}`, `"progressToken":"p1"`), func(mcpwire.Event) error { return nil })
+	}()
+	await(t, started, "the call to reach the server")
+	cancel()
+	if err := awaitErr(t, errs); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v", err)
+	}
+	await(t, stopped, "the server to see the cancellation")
 }
 
 func TestCloseCancelsCallsInFlight(t *testing.T) {
@@ -470,12 +455,12 @@ func TestCloseCancelsCallsInFlight(t *testing.T) {
 	go func() {
 		errs <- upstream.Call(testContext(t), toolCall(t, "1", "echo", `{}`, ""), func(mcpwire.Event) error { return nil })
 	}()
-	<-started
+	await(t, started, "the call to reach the server")
 	_ = upstream.Close()
-	if err := <-errs; !errors.Is(err, ErrOutcomeUnknown) {
+	if err := awaitErr(t, errs); !errors.Is(err, ErrOutcomeUnknown) {
 		t.Fatalf("err %v", err)
 	}
-	<-stopped
+	await(t, stopped, "the server to see the close")
 }
 
 func TestSlowConsumerFailsOnlyItsCall(t *testing.T) {
@@ -497,13 +482,13 @@ func TestSlowConsumerFailsOnlyItsCall(t *testing.T) {
 		close(stopped)
 	}))
 	upstream := dialUpstream(t, endpoint, nil, nil)
-	release := make(chan struct{})
+	gate := newReleaser(t)
 	errs := make(chan error, 1)
 	var once atomic.Bool
 	go func() {
 		errs <- upstream.Call(testContext(t), toolCall(t, "1", "slow", `{}`, `"progressToken":"p1"`), func(mcpwire.Event) error {
 			if once.CompareAndSwap(false, true) {
-				<-release
+				<-gate.gate
 			}
 			return nil
 		})
@@ -512,9 +497,9 @@ func TestSlowConsumerFailsOnlyItsCall(t *testing.T) {
 	if events, err := callAll(t, upstream, toolCall(t, "2", "fast", `{}`, "")); err != nil || terminals(events) != 1 {
 		t.Fatalf("other call: %v", err)
 	}
-	<-stopped
-	close(release)
-	if err := <-errs; !errors.Is(err, ErrSlowConsumer) {
+	await(t, stopped, "the server to see the slow call fail")
+	gate.open()
+	if err := awaitErr(t, errs); !errors.Is(err, ErrSlowConsumer) {
 		t.Fatalf("err %v", err)
 	}
 }

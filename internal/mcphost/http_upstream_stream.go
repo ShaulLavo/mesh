@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -19,6 +20,10 @@ const maxUpstreamResponseHeader = 64 << 10
 // ErrRedirect is a 3xx reply. Mesh never follows one, because a redirect
 // would move the request and its credentials away from the approved endpoint.
 var ErrRedirect = errors.New("MCP upstream answered with a redirect")
+
+// ErrMalformedResponse is an HTTP reply that could not be parsed. The parser's
+// own text can echo peer bytes, so only this classification is reported.
+var ErrMalformedResponse = errors.New("MCP upstream sent an unreadable HTTP response")
 
 func notSent(err error) error { return fmt.Errorf("%w: %w", ErrNotSent, err) }
 
@@ -117,13 +122,25 @@ func (c *httpClient) newRequest(ctx context.Context, call httpCall) (*http.Reque
 	return req, cancel, nil
 }
 
-// upstreamError keeps the dial classification and drops the URL the standard
-// library would otherwise print.
+// upstreamError keeps the dial and cancellation classification. Anything else
+// the HTTP parser says can quote peer bytes, so it is reduced to a class.
 func upstreamError(err error) error {
-	if errors.Is(err, ErrNotSent) {
+	switch {
+	case errors.Is(err, ErrNotSent):
 		return err
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("MCP upstream request: %w", context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("MCP upstream request: %w", context.DeadlineExceeded)
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return fmt.Errorf("MCP upstream request: %w", io.ErrUnexpectedEOF)
 	}
-	return fmt.Errorf("MCP upstream request: %w", err)
+	var network *net.OpError
+	if errors.As(err, &network) {
+		// Addresses and the operating system's reason carry no peer text.
+		return fmt.Errorf("MCP upstream request: %w", network)
+	}
+	return fmt.Errorf("MCP upstream request: %w", ErrMalformedResponse)
 }
 
 func openStream(call httpCall, response *http.Response, cancel context.CancelFunc) (*httpStream, error) {
@@ -174,7 +191,7 @@ func (s *httpStream) next() (mcpwire.Event, error) {
 		return mcpwire.Event{}, io.EOF
 	}
 	if err != nil {
-		return mcpwire.Event{}, fmt.Errorf("MCP upstream response: %w", err)
+		return mcpwire.Event{}, streamError(err)
 	}
 	if event.Terminal {
 		s.refresh = s.confirmsHeaderMismatch(event.Message)
@@ -182,18 +199,51 @@ func (s *httpStream) next() (mcpwire.Event, error) {
 	return event, nil
 }
 
+// streamError classifies a failure while reading a reply. The wire layer's
+// own errors use fixed text; a raw reader error is reduced to a class.
+func streamError(err error) error {
+	switch {
+	case errors.Is(err, mcpwire.ErrPeerMessage), errors.Is(err, mcpwire.ErrTooLarge), errors.Is(err, mcpwire.ErrInterrupted),
+		errors.Is(err, mcpwire.ErrFramingLost), errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("MCP upstream response: %w", err)
+	default:
+		return fmt.Errorf("MCP upstream response: %w", ErrMalformedResponse)
+	}
+}
+
 // confirmsHeaderMismatch recognizes the one rejection that happens before the
-// tool runs: HTTP 400 with -32020 on a tool call. A stale schema that sent too
-// few or too many parameter headers produces exactly this. Nothing ran
-// upstream, so one retry after a schema refresh is not a replay.
+// tool runs and that a fresh schema can explain: HTTP 400 with -32020 on a
+// tool call whose message names an Mcp-Param header. The error has no
+// structured data, and Mesh builds the standard headers from the body, so a
+// standard-header or unexplained -32020 is the caller's result, not a reason to
+// refresh. Nothing ran upstream, so one retry is not a replay. The router that
+// retries must still check that the service revision, instance generation and
+// credential scope are the ones the call started with.
 func (s *httpStream) confirmsHeaderMismatch(terminal mcpwire.Message) bool {
 	if s.call.afterRefresh || s.status != http.StatusBadRequest || s.call.request.Method() != mcpwire.MethodCallTool {
 		return false
 	}
 	var failure struct {
-		Code int `json:"code"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
 	}
-	return json.Unmarshal(terminal.ErrorObject(), &failure) == nil && failure.Code == mcpwire.HeaderMismatch
+	if json.Unmarshal(terminal.ErrorObject(), &failure) != nil || failure.Code != mcpwire.HeaderMismatch {
+		return false
+	}
+	return namesParameterHeaderOnly(failure.Message)
+}
+
+func namesParameterHeaderOnly(message string) bool {
+	lower := strings.ToLower(message)
+	if !strings.Contains(lower, "mcp-param-") {
+		return false
+	}
+	for _, standard := range []string{"mcp-name", "mcp-method", "mcp-protocol-version"} {
+		if strings.Contains(lower, standard) {
+			return false
+		}
+	}
+	return true
 }
 
 // close cancels the request and closes the response stream. It is safe to

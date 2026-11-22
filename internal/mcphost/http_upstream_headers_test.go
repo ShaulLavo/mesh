@@ -266,14 +266,14 @@ func FuzzBuildRequestHeaders(f *testing.F) {
 	})
 }
 
+func unprintableHeaderByte(r rune) bool { return (r < 0x20 && r != '\t') || r > 0x7e }
+
 func assertWireHeaders(t *testing.T, h http.Header, tool, text, header string, advertised bool) {
 	t.Helper()
 	for name, values := range h {
 		for _, value := range values {
-			for i := range len(value) {
-				if c := value[i]; (c < 0x20 && c != '\t') || c > 0x7e {
-					t.Fatalf("header %s carries byte %#x: %q", name, c, value)
-				}
+			if i := strings.IndexFunc(value, unprintableHeaderByte); i >= 0 {
+				t.Fatalf("header %s carries byte %#x: %q", name, value[i], value)
 			}
 		}
 	}

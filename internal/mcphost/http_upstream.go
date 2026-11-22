@@ -161,7 +161,9 @@ func deliver(ctx context.Context, queue *eventQueue, sink func(mcpwire.Event) er
 		if ctx.Err() != nil {
 			return fmt.Errorf("MCP upstream call: %w", ctx.Err())
 		}
-		if err := sink(event); err != nil {
+		err = sink(event)
+		queue.release(event)
+		if err != nil {
 			return &sinkFailure{err}
 		}
 		if event.Terminal {

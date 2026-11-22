@@ -19,8 +19,10 @@ const (
 // eventQueue hands validated events from the goroutine that reads the HTTP
 // response to the goroutine that runs the sink.
 type eventQueue struct {
-	mu       sync.Mutex
-	events   []mcpwire.Event
+	mu     sync.Mutex
+	events []mcpwire.Event
+	head   int
+	// bytes counts the queued events and the one the sink is handling.
 	bytes    int
 	finished bool
 	failure  error
@@ -38,15 +40,17 @@ func (q *eventQueue) signal() {
 	}
 }
 
-// push queues an event. A terminal event is always accepted: it is one
-// message of at most the single-message cap, and dropping it would turn a
-// finished request into an unknown one.
+// push queues an event within the call's budget. Any event that does not fit,
+// the terminal result included, ends the call as a slow consumer: the error is
+// small and needs no queue space, and queued payloads are dropped at once.
 func (q *eventQueue) push(event mcpwire.Event) bool {
 	size := len(event.Message.Raw())
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if !event.Terminal && (len(q.events) >= httpCallQueueEvents || q.bytes+size > httpCallQueueBytes) {
+	queued := len(q.events) - q.head
+	if q.bytes+size > httpCallQueueBytes || (!event.Terminal && queued >= httpCallQueueEvents) {
 		q.slow, q.finished = true, true
+		q.events, q.head = nil, 0
 		q.signal()
 		return false
 	}
@@ -57,6 +61,13 @@ func (q *eventQueue) push(event mcpwire.Event) bool {
 	}
 	q.signal()
 	return true
+}
+
+// release returns a delivered event's bytes to the budget once the sink is done with it.
+func (q *eventQueue) release(event mcpwire.Event) {
+	q.mu.Lock()
+	q.bytes -= len(event.Message.Raw())
+	q.mu.Unlock()
 }
 
 // fail ends the queue with the reader's error.
@@ -97,9 +108,14 @@ func (q *eventQueue) poll() (event mcpwire.Event, ready bool, err error) {
 	switch {
 	case q.slow:
 		return mcpwire.Event{}, true, ErrSlowConsumer
-	case len(q.events) > 0:
-		event, q.events = q.events[0], q.events[1:]
-		q.bytes -= len(event.Message.Raw())
+	case q.head < len(q.events):
+		event = q.events[q.head]
+		// The slot must not keep a delivered payload alive.
+		q.events[q.head] = mcpwire.Event{}
+		q.head++
+		if q.head == len(q.events) {
+			q.events, q.head = q.events[:0], 0
+		}
 		return event, true, nil
 	case q.mismatch:
 		return mcpwire.Event{}, true, ErrHeaderMismatch
@@ -115,6 +131,9 @@ func (q *eventQueue) poll() (event mcpwire.Event, ready bool, err error) {
 // or an overflow. It stops at the terminal event: the stream is closed right
 // after delivery, so a frame sent later is never read.
 func pump(stream *httpStream, q *eventQueue) {
+	// The reader owns the connection's lifetime, so a blocked sink cannot
+	// keep a finished or failed stream open.
+	defer stream.close()
 	for {
 		event, err := stream.next()
 		if err != nil {
@@ -125,12 +144,7 @@ func pump(stream *httpStream, q *eventQueue) {
 			q.rejectHeaders()
 			return
 		}
-		if !q.push(event) {
-			// Stop the server's writes now; the sink may take a long time to return.
-			stream.close()
-			return
-		}
-		if event.Terminal {
+		if !q.push(event) || event.Terminal {
 			return
 		}
 	}
