@@ -597,6 +597,7 @@ func serveHTTPUntilSignal(ctx context.Context, stderr io.Writer, tcpLn, controlL
 		MaxHeaderBytes:    mcpHTTPMaxHeaderBytes,
 		ErrorLog:          log.New(io.Discard, "", 0),
 	}
+	live.mcpSrv.Attach(httpSrv)
 
 	controlDone := make(chan struct{})
 	go func() {

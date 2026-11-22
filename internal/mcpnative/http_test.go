@@ -40,6 +40,7 @@ func startTestHTTPServer(t *testing.T, opts HTTPServerOptions) (*HTTPServer, *ht
 		t.Fatalf("NewHTTPServer: %v", err)
 	}
 	ts.Config.Handler = srv
+	srv.Attach(ts.Config)
 	ts.Start()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
