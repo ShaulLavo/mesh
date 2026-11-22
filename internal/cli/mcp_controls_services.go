@@ -271,22 +271,24 @@ func (c *mcpControls) HibernateSession(ctx context.Context, req mcpnative.Sessio
 // workers.
 func (c *mcpControls) RecoverSession(ctx context.Context, req mcpnative.SessionLifecycleRequest) (mcpnative.CallOutcome, error) {
 	const operation = "sessions.recover"
-	control := protocol.Control{Type: protocol.TypeRecover, SessionID: req.SessionID, RecoveryAction: req.Action, Cols: 80, Rows: 24, Term: recoveryTerm}
+	control := protocol.Control{Type: protocol.TypeRecover, SessionID: req.SessionID, RecoveryAction: req.Action, Cols: 80, Rows: 24, Term: recoveryTerm, RecoveryRequireInterrupted: true}
 	return c.sessionLifecycle(ctx, operation, req, control, func(host HostRecord, response protocol.Control) (any, error) {
-		result, err := recoveredResponse(response)
-		if err != nil {
-			return nil, err
-		}
-		// A live session is not recovered; mesh recover would attach to it,
-		// and an agent never takes a session it did not create.
-		if result.Existing {
-			return nil, agentapi.Fail(agentapi.UsageInvalid, operation, host.ID, fmt.Sprintf("session %s is %s; only an interrupted session can be recovered", req.SessionID, safeRemoteText(result.State)))
-		}
-		if result.Remote != nil || result.SessionID == "" || result.RecoveredFrom != req.SessionID {
-			return nil, fmt.Errorf("host %s returned no local replacement session", HostLabel(host))
-		}
-		return agentapi.SessionRecovery{HostID: host.ID, SessionID: result.SessionID, RecoveredFrom: result.RecoveredFrom, Action: req.Action, AgentStatus: result.AgentStatus}, nil
+		return recoveredReplacement(host, req, response)
 	})
+}
+
+// recoveredReplacement accepts only a replacement for the requested source.
+// The host refuses a live source under its recovery lock; a retry after a
+// lost reply returns the recorded replacement, which names this source.
+func recoveredReplacement(host HostRecord, req mcpnative.SessionLifecycleRequest, response protocol.Control) (agentapi.SessionRecovery, error) {
+	result, err := recoveredResponse(response)
+	if err != nil {
+		return agentapi.SessionRecovery{}, err
+	}
+	if result.Remote != nil || result.SessionID == "" || result.SessionID == req.SessionID || result.RecoveredFrom != req.SessionID {
+		return agentapi.SessionRecovery{}, fmt.Errorf("host %s returned no local replacement session", HostLabel(host))
+	}
+	return agentapi.SessionRecovery{HostID: host.ID, SessionID: result.SessionID, RecoveredFrom: result.RecoveredFrom, Action: req.Action, AgentStatus: result.AgentStatus}, nil
 }
 
 func (c *mcpControls) sessionLifecycle(ctx context.Context, operation string, req mcpnative.SessionLifecycleRequest, control protocol.Control, build func(HostRecord, protocol.Control) (any, error)) (mcpnative.CallOutcome, error) {

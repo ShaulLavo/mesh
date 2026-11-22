@@ -7,6 +7,8 @@ import (
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpnative"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/recovery"
 )
 
 const testTerminalHost = "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"
@@ -49,5 +51,21 @@ func TestIdentitylessFrontendRefusesTerminalAndMutations(t *testing.T) {
 		if err != nil || !out.IsError || len(out.Envelope.Errors) != 1 || out.Envelope.Errors[0].Code != agentapi.UsageInvalid {
 			t.Errorf("%s without identity = %+v, %v; want usage.invalid before any host", name, out.Envelope, err)
 		}
+	}
+}
+
+// A recovery retry that finds the recorded replacement succeeds; a reply
+// naming the source itself (a live session) never does.
+func TestRecoveredReplacementAcceptsRetryAndRefusesSource(t *testing.T) {
+	host := HostRecord{ID: testTerminalHost, MachineName: "pc"}
+	req := mcpnative.SessionLifecycleRequest{SessionID: "7K3D", Action: "shell"}
+	retry := protocol.Control{Type: protocol.TypeRecovered, SessionID: "9QXA", RecoveryResult: &recovery.Result{SessionID: "9QXA", RecoveredFrom: "7K3D", Existing: true}}
+	got, err := recoveredReplacement(host, req, retry)
+	if err != nil || got.SessionID != "9QXA" || got.RecoveredFrom != "7K3D" {
+		t.Fatalf("retry with recorded replacement = %+v, %v", got, err)
+	}
+	live := protocol.Control{Type: protocol.TypeRecovered, SessionID: "7K3D", RecoveryResult: &recovery.Result{SessionID: "7K3D", Existing: true, State: "detached"}}
+	if _, err := recoveredReplacement(host, req, live); err == nil {
+		t.Fatal("a live source was accepted as its own replacement")
 	}
 }

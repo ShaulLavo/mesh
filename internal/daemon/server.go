@@ -309,6 +309,9 @@ func clientErrorCode(err error) string {
 	if errors.Is(err, recovery.ErrUncertain) {
 		return protocol.ErrorCodeRecoveryUncertain
 	}
+	if errors.Is(err, recovery.ErrSourceLive) {
+		return executionUsageInvalidCode
+	}
 	if errors.Is(err, errAccessNotFound) {
 		return errAccessNotFound.Error()
 	}

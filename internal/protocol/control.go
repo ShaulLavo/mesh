@@ -385,6 +385,9 @@ type Control struct {
 	// ScreenSource says where a terminal job's screen came from: "live"
 	// from its worker, or "saved" from its last checkpoint.
 	ScreenSource string `json:"screenSource,omitempty"`
+	// RecoveryRequireInterrupted refuses recovery of a live source under
+	// the host's recovery lock.
+	RecoveryRequireInterrupted bool `json:"recoveryRequireInterrupted,omitempty"`
 
 	// Logs
 	Output []byte `json:"output,omitempty"`
