@@ -2,6 +2,7 @@ package mcphost
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,11 @@ type Caller struct {
 func (c Caller) Key() string { return c.Account + "\x00" + c.App }
 
 func (c Caller) current() bool { return c.Current == nil || c.Current() }
+
+// owns compares a persisted owner with this caller in constant time.
+func (c Caller) owns(owner string) bool {
+	return subtle.ConstantTimeCompare([]byte(owner), []byte(c.Key())) == 1
+}
 
 // Route is everything the router needs to forward one request.
 type Route struct {

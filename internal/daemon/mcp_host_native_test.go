@@ -1,8 +1,6 @@
 package daemon
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -13,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shaul/mesh/internal/appcaller"
 	"github.com/shaul/mesh/internal/mcphost"
 	"github.com/shaul/mesh/internal/mcphost/mcpfixture"
 	"github.com/shaul/mesh/internal/mcpwire"
@@ -96,9 +95,9 @@ func readMCP(t *testing.T, reader *protocol.Reader) []mcpwire.Message {
 	}
 }
 
-func (f *nativePipeDaemon) mcpCall(t *testing.T, credential, tool, args string) mcpwire.Message {
+func (f *nativePipeDaemon) mcpCall(t *testing.T, credential protocol.CallerCredential, tool, args string) mcpwire.Message {
 	t.Helper()
-	_, reader := f.mcpStream(t, mcpframe.Route{Service: "fixture", AppCredential: credential}, mcpToolCall(`"call-1"`, tool, args))
+	_, reader := f.mcpStream(t, mcpframe.Route{Service: "fixture", Caller: credential}, mcpToolCall(`"call-1"`, tool, args))
 	messages := readMCP(t, reader)
 	return messages[len(messages)-1]
 }
@@ -108,13 +107,13 @@ func mcpToolCall(id, tool, args string) string {
 		`,"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
 }
 
-func newCredential(t *testing.T) string {
+func newCredential(t *testing.T) protocol.CallerCredential {
 	t.Helper()
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	credential, err := appcaller.Generate()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return hex.EncodeToString(b[:])
+	return protocol.CallerCredential(credential.Encode())
 }
 
 func resultText(t *testing.T, m mcpwire.Message) string {
@@ -187,16 +186,23 @@ func TestHostedMCPNative(t *testing.T) {
 		t.Fatal("two application callers on one device shared an isolated process")
 	}
 
+	t.Run("malformed credential is refused", func(t *testing.T) {
+		_, reader := f.mcpStream(t, mcpframe.Route{Service: "fixture", Caller: "not-a-credential"}, mcpToolCall(`1`, "whoami", `{}`))
+		if reply := readMCP(t, reader)[0]; errorCode(reply) != executionUsageInvalidCode {
+			t.Fatalf("malformed credential: %s", reply.Raw())
+		}
+	})
+
 	t.Run("cancel on disconnect", func(t *testing.T) {
-		conn, _ := f.mcpStream(t, mcpframe.Route{Service: "fixture", AppCredential: a}, mcpToolCall(`7`, "slow", `{}`))
+		conn, _ := f.mcpStream(t, mcpframe.Route{Service: "fixture", Caller: a}, mcpToolCall(`7`, "slow", `{}`))
 		time.Sleep(200 * time.Millisecond)
 		_ = conn.Close()
 		pipeEventually(t, func() bool { return strings.Contains(f.mcpLogs(t, a), "cancelled \"mesh-") })
 	})
 
 	t.Run("catalog carries no secret", func(t *testing.T) {
-		for _, credential := range []string{"", a} {
-			reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls", AppCredential: credential})
+		for _, credential := range []protocol.CallerCredential{"", a} {
+			reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls", Caller: credential})
 			if strings.Contains(string(reply.Result), "native-secret") || strings.Contains(string(reply.Result), secret) || !strings.Contains(string(reply.Result), "fixture bot") {
 				t.Fatalf("catalog: %s", reply.Result)
 			}
@@ -204,7 +210,7 @@ func TestHostedMCPNative(t *testing.T) {
 		// The owner's diagnostics hold the server's own stderr, captured
 		// asynchronously by the worker.
 		pipeEventually(t, func() bool { return strings.Contains(f.mcpLogs(t, a), "native-secret-42") })
-		if logs := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, RequestID: "logs", Service: "fixture", AppCredential: b, Instance: f.instanceID(t, a)}); logs.ErrorCode != "access.denied" {
+		if logs := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, RequestID: "logs", Service: "fixture", Caller: b, Instance: f.instanceID(t, a)}); logs.ErrorCode != "access.denied" {
 			t.Fatalf("another caller read diagnostics: %+v", logs)
 		}
 	})
@@ -228,7 +234,7 @@ func TestHostedMCPNative(t *testing.T) {
 
 	t.Run("legacy server is incompatible", func(t *testing.T) {
 		f.publishMCP(t, mcphost.Definition{Name: "legacy", Argv: []string{f.executable, mcpFixtureRole}, Env: map[string]string{mcpfixture.EnvMode: "legacy"}})
-		_, reader := f.mcpStream(t, mcpframe.Route{Service: "legacy", AppCredential: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
+		_, reader := f.mcpStream(t, mcpframe.Route{Service: "legacy", Caller: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
 		reply := readMCP(t, reader)[0]
 		if errorCode(reply) != "service.incompatible" {
 			t.Fatalf("legacy server: %s", reply.Raw())
@@ -237,7 +243,7 @@ func TestHostedMCPNative(t *testing.T) {
 
 	t.Run("missing runtime is classified", func(t *testing.T) {
 		f.publishMCP(t, mcphost.Definition{Name: "missing", Argv: []string{"/bin/sh", "-c", "exec /no/such/runtime"}})
-		_, reader := f.mcpStream(t, mcpframe.Route{Service: "missing", AppCredential: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
+		_, reader := f.mcpStream(t, mcpframe.Route{Service: "missing", Caller: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
 		reply := readMCP(t, reader)[0]
 		if errorCode(reply) != "service.failed" || !strings.Contains(string(reply.ErrorObject()), "127") {
 			t.Fatalf("missing runtime: %s", reply.Raw())
@@ -254,9 +260,9 @@ func TestHostedMCPNative(t *testing.T) {
 	})
 }
 
-func (f *nativePipeDaemon) mcpLogs(t *testing.T, credential string) string {
+func (f *nativePipeDaemon) mcpLogs(t *testing.T, credential protocol.CallerCredential) string {
 	t.Helper()
-	reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, RequestID: "logs", Service: "fixture", AppCredential: credential})
+	reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, RequestID: "logs", Service: "fixture", Caller: credential})
 	var out struct {
 		Stderr []byte `json:"stderr"`
 	}
@@ -264,9 +270,9 @@ func (f *nativePipeDaemon) mcpLogs(t *testing.T, credential string) string {
 	return string(out.Stderr)
 }
 
-func (f *nativePipeDaemon) instanceID(t *testing.T, credential string) string {
+func (f *nativePipeDaemon) instanceID(t *testing.T, credential protocol.CallerCredential) string {
 	t.Helper()
-	reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls", AppCredential: credential})
+	reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls", Caller: credential})
 	var out struct {
 		Services []mcphost.ServiceView `json:"services"`
 	}
@@ -325,7 +331,7 @@ func TestHostedMCPLargeAndSlow(t *testing.T) {
 	t.Logf("3 MiB reply through one shared instance: %v", samples)
 
 	// One caller stops reading while three others fetch 3 MiB replies.
-	slow, slowReader := f.mcpStream(t, mcpframe.Route{Service: "fixture", AppCredential: newCredential(t)}, mcpToolCall(`1`, "big", fmt.Sprintf(`{"bytes":%d}`, size)))
+	slow, slowReader := f.mcpStream(t, mcpframe.Route{Service: "fixture", Caller: newCredential(t)}, mcpToolCall(`1`, "big", fmt.Sprintf(`{"bytes":%d}`, size)))
 	var wg sync.WaitGroup
 	times := make([]time.Duration, 3)
 	for i := range 3 {

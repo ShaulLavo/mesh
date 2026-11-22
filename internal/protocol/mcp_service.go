@@ -54,9 +54,9 @@ type MCPServiceRequest struct {
 	// Instance selects an instance by ID; New asks for another isolated one.
 	Instance string `json:"instance,omitempty"`
 	New      bool   `json:"new,omitempty"`
-	// AppCredential is the application caller's private credential. The host
-	// derives the caller from it and never stores or echoes it.
-	AppCredential string `json:"appCredential,omitempty"`
+	// Caller is the application caller's credential, as in Control.Caller.
+	// The host derives the caller from it and never stores or echoes it.
+	Caller CallerCredential `json:"caller,omitempty"`
 	// Definition is the submitted service definition for upsert.
 	Definition       json.RawMessage `json:"definition,omitempty"`
 	ExpectedRevision int64           `json:"expectedRevision,omitempty"`

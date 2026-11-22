@@ -93,8 +93,9 @@ type Config struct {
 	// continuations and isolated instances of a retired account are retired.
 	AccountCurrent func(account string) bool
 	// JobActive reports whether a native job a lease names is still running
-	// and belongs to account.
-	JobActive func(ctx context.Context, account, job string) bool
+	// and belongs to the caller: the application app when it has one, or
+	// the account's own work otherwise.
+	JobActive func(ctx context.Context, account, app, job string) bool
 	// HostDefaultCwd is used for definitions without a working directory.
 	HostDefaultCwd string
 }

@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/appcaller"
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/mcphost"
 	"github.com/shaul/mesh/internal/mcpwire"
@@ -23,12 +22,10 @@ import (
 )
 
 const (
-	mcpLocalAccount   = "local-account:daemon-account"
-	mcpWriteWatchdog  = 30 * time.Second
-	mcpCredentialSize = 32
-	mcpAccessDenied   = "access.denied"
-	mcpInstanceKey    = "instance"
-	mcpServicesKey    = "services"
+	mcpWriteWatchdog = 30 * time.Second
+	mcpAccessDenied  = "access.denied"
+	mcpInstanceKey   = "instance"
+	mcpServicesKey   = "services"
 )
 
 // mcpController serves the hosted MCP controls of this host.
@@ -67,9 +64,9 @@ func (c *mcpController) accountCurrent(account string) bool {
 	return identity.GrantedIdentity(c.stateDir, id)
 }
 
-// jobActive accepts "SESSION/INSTANCE" naming a running native job whose
-// receipt belongs to account.
-func (c *mcpController) jobActive(ctx context.Context, account, job string) bool {
+// jobActive accepts "SESSION/INSTANCE" naming a running native job owned by
+// the caller: an application's own job, or account-owned work otherwise.
+func (c *mcpController) jobActive(ctx context.Context, account, app, job string) bool {
 	sessionID, instance, ok := strings.Cut(job, "/")
 	if !ok {
 		return false
@@ -83,37 +80,38 @@ func (c *mcpController) jobActive(ctx context.Context, account, job string) bool
 		return false
 	}
 	r, err := journal.Exact(ctx, b)
-	return err == nil && r.Phase != executionTerminalPhase && r.Key.Class+":"+r.Key.Principal == account
+	if err != nil || r.Phase == executionTerminalPhase {
+		return false
+	}
+	if app != "" {
+		return r.Key.Class == execution.ApplicationClass && (appcaller.Caller{ID: appcaller.ID(app)}).Owns(r.Key.Principal)
+	}
+	return r.Key.Class+":"+r.Key.Principal == account
 }
 
 // caller derives the application caller from the admitted connection and
 // the presented credential. A request without a credential is whole-account
 // administration under the connection's existing authorization.
-func (c *mcpController) caller(ctx context.Context, credential string) (mcphost.Caller, error) {
-	if err := workerExecutionAdmission(ctx); err != nil {
+func (c *mcpController) caller(ctx context.Context, credential protocol.CallerCredential) (mcphost.Caller, error) {
+	// The same verification every application control uses: the ID is
+	// derived from the credential in the connection's authenticated scope.
+	app, present, err := applicationCaller(ctx, protocol.Control{Caller: credential})
+	if err != nil {
 		return mcphost.Caller{}, err
 	}
-	caller := mcphost.Caller{Account: mcpLocalAccount, Grant: "local"}
-	if local, _ := ctx.Value(localClientKey{}).(bool); !local {
+	scope, err := applicationCallerScope(ctx)
+	if err != nil {
+		return mcphost.Caller{}, err
+	}
+	caller := mcphost.Caller{Account: scope.Class + ":" + scope.Principal, Grant: "local", App: string(app.ID), Admin: !present}
+	if scope.Class == appcaller.ScopeDevice {
 		peer, _ := transport.Peer(ctx)
-		incarnation, ok := identity.GrantIncarnation(c.stateDir, peer.Identity)
+		incarnation, ok := identity.GrantIncarnation(c.stateDir, scope.Principal)
 		if !ok {
 			return mcphost.Caller{}, access.ErrDenied
 		}
-		caller.Account, caller.Grant, caller.Current = "device:"+peer.Identity, "device:"+incarnation, peer.Current
+		caller.Grant, caller.Current = "device:"+incarnation, peer.Current
 	}
-	if credential == "" {
-		caller.Admin = true
-		return caller, nil
-	}
-	raw, err := hex.DecodeString(credential)
-	if err != nil || len(raw) != mcpCredentialSize {
-		return mcphost.Caller{}, fmt.Errorf("%w: application credential must be 32 bytes of hex", mcphost.ErrInvalid)
-	}
-	// The ID is scoped by the authenticated account, so the same credential
-	// on another device is a different caller.
-	sum := sha256.Sum256(append([]byte(caller.Account+"\x00"), raw...))
-	caller.App = hex.EncodeToString(sum[:])
 	return caller, nil
 }
 
@@ -162,7 +160,7 @@ func mcpErrorCode(err error) (string, bool) {
 		return resourceLimitCode, false
 	case errors.Is(err, mcphost.ErrConflict):
 		return "service.conflict", false
-	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrSecretFile):
+	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrSecretFile), errors.As(err, new(*callerValidationError)):
 		return executionUsageInvalidCode, false
 	case errors.Is(err, mcphost.ErrHTTPUnavailable), errors.Is(err, mcphost.ErrManagedHTTPUnsupported):
 		return "protocol.unsupported", false
@@ -172,7 +170,7 @@ func mcpErrorCode(err error) (string, bool) {
 }
 
 func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceRequest) (json.RawMessage, error) {
-	caller, err := c.caller(ctx, req.AppCredential)
+	caller, err := c.caller(ctx, req.Caller)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +263,7 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 	}()
 	defer func() { _ = conn.Close(); <-readerDone }()
 	host := string(c.l.host.ID)
-	caller, err := c.caller(lifetime, route.AppCredential)
+	caller, err := c.caller(lifetime, route.Caller)
 	if err == nil {
 		err = c.sup.Forward(lifetime, caller, mcphost.Target{Service: route.Service, Instance: route.Instance, New: route.New}, request, func(raw []byte, terminal bool) error {
 			return writeMCPEvent(lifetime, conn, raw, terminal)

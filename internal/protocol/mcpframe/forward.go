@@ -11,10 +11,11 @@ import (
 // Route selects the hosted service instance an mcp.forward goes to. It
 // travels beside the MCP message, never inside it.
 type Route struct {
-	Service       string `json:"service"`
-	Instance      string `json:"instance,omitempty"`
-	New           bool   `json:"new,omitempty"`
-	AppCredential string `json:"appCredential,omitempty"`
+	Service  string `json:"service"`
+	Instance string `json:"instance,omitempty"`
+	New      bool   `json:"new,omitempty"`
+	// Caller is the application credential, as in protocol.Control.Caller.
+	Caller protocol.CallerCredential `json:"caller,omitempty"`
 }
 
 // EncodeForward builds the opening frame of an H3 stream.

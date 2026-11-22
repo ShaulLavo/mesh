@@ -2,6 +2,7 @@ package mcphost
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -204,12 +205,12 @@ func (s *Supervisor) viewLocked(caller Caller, d Definition) ServiceView {
 }
 
 func visible(caller Caller, inst *instance) bool {
-	return caller.Admin || inst.rec.Owner == "" || inst.rec.Owner == caller.Key()
+	return caller.Admin || inst.rec.Owner == "" || caller.owns(inst.rec.Owner)
 }
 
 func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceView {
 	r := inst.rec
-	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner == caller.Key(), Default: r.Default, State: r.State, Reason: r.Reason,
+	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
 		v.Active, v.ServerInfo = gen.active, gen.serverInfo
@@ -368,7 +369,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 	if ttl < 0 || ttl > maxLeaseTTL {
 		return Lease{}, InstanceView{}, invalid("lease TTL must be between 0 and 24h")
 	}
-	if job != "" && !s.jobActive(ctx, caller.Account, job) {
+	if job != "" && !s.jobActive(ctx, caller.Account, caller.App, job) {
 		return Lease{}, InstanceView{}, failure(codeNotFound, false, "job %s is not a running job of this caller", job)
 	}
 	inst, _, err := s.pick(ctx, caller, target)
@@ -380,7 +381,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 			return Lease{}, InstanceView{}, err
 		}
 	}
-	lease := Lease{ID: leaseID, Caller: caller.Key(), Account: caller.Account, Grant: caller.Grant, Job: job, Expires: s.cfg.Now().Add(ttl)}
+	lease := Lease{ID: leaseID, Caller: caller.Key(), Account: caller.Account, App: caller.App, Grant: caller.Grant, Job: job, Expires: s.cfg.Now().Add(ttl)}
 	if err := s.putLease(ctx, inst, lease, ttl == 0); err != nil {
 		return Lease{}, InstanceView{}, err
 	}
@@ -397,7 +398,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 func (s *Supervisor) putLease(ctx context.Context, inst *instance, lease Lease, remove bool) error {
 	s.mu.Lock()
 	index := slices.IndexFunc(inst.rec.Leases, func(l Lease) bool { return l.ID == lease.ID })
-	if index >= 0 && inst.rec.Leases[index].Caller != lease.Caller {
+	if index >= 0 && subtle.ConstantTimeCompare([]byte(inst.rec.Leases[index].Caller), []byte(lease.Caller)) != 1 {
 		s.mu.Unlock()
 		return fmt.Errorf("lease %s: %w", lease.ID, ErrDenied)
 	}
@@ -465,7 +466,7 @@ func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, retired 
 	}
 	now := s.cfg.Now()
 	kept := slices.DeleteFunc(leases, func(l Lease) bool {
-		return !now.Before(l.Expires) || !s.accountCurrent(l.Account, retired) || (l.Job != "" && !s.jobActive(ctx, l.Account, l.Job))
+		return !now.Before(l.Expires) || !s.accountCurrent(l.Account, retired) || (l.Job != "" && !s.jobActive(ctx, l.Account, l.App, l.Job))
 	})
 	s.mu.Lock()
 	changed := len(kept) != len(inst.rec.Leases)
@@ -481,8 +482,8 @@ func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, retired 
 	}
 }
 
-func (s *Supervisor) jobActive(ctx context.Context, account, job string) bool {
-	return s.cfg.JobActive != nil && s.cfg.JobActive(ctx, account, job)
+func (s *Supervisor) jobActive(ctx context.Context, account, app, job string) bool {
+	return s.cfg.JobActive != nil && s.cfg.JobActive(ctx, account, app, job)
 }
 
 func (s *Supervisor) accountCurrent(account string, retired map[string]bool) bool {

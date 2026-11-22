@@ -8,7 +8,7 @@ import (
 )
 
 func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
-	gate, err := j.lock(ctx)
+	gate, err := j.lockAdmitted(ctx)
 	if err != nil {
 		return err
 	}
@@ -27,6 +27,9 @@ func (j *Journal) prepareOutputAdmission(ctx context.Context, k Key) error {
 	candidate, slots := j.outputCandidate(ctx, entries)
 	if slots < j.maxActive || candidate.Binding.Reservation.Instance == "" {
 		return nil
+	}
+	if err := admitted(ctx); err != nil {
+		return err
 	}
 	return j.expireOutput(ctx, candidate.Binding)
 }

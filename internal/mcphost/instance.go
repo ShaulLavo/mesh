@@ -59,7 +59,7 @@ func (s *Supervisor) findLocked(caller Caller, d Definition, target Target) (*in
 		if inst == nil || inst.rec.ServiceID != d.ID {
 			return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrNotFound)
 		}
-		if inst.rec.Owner != "" && inst.rec.Owner != caller.Key() {
+		if inst.rec.Owner != "" && !caller.owns(inst.rec.Owner) {
 			return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrDenied)
 		}
 		return inst, nil
@@ -71,7 +71,7 @@ func (s *Supervisor) findLocked(caller Caller, d Definition, target Target) (*in
 		if inst.rec.ServiceID != d.ID {
 			continue
 		}
-		if d.InstancePolicy == PolicyShared || (inst.rec.Default && inst.rec.Owner == caller.Key()) {
+		if d.InstancePolicy == PolicyShared || (inst.rec.Default && inst.rec.Owner != "" && caller.owns(inst.rec.Owner)) {
 			return inst, nil
 		}
 	}

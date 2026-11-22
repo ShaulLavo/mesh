@@ -66,6 +66,7 @@ type Lease struct {
 	ID      string    `json:"id"`
 	Caller  string    `json:"caller"`
 	Account string    `json:"account"`
+	App     string    `json:"app,omitempty"`
 	Grant   string    `json:"grant"`
 	Job     string    `json:"job,omitempty"`
 	Expires time.Time `json:"expires"`
