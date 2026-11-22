@@ -42,7 +42,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh unserve`](#mesh-unserve) | Remove one private service |
 | [`mesh daemon`](#mesh-daemon) | Run this host's coordinator |
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
-| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP stdio server and manage agent identities |
+| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP server (stdio or loopback HTTP) |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
 | [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
@@ -125,7 +125,7 @@ SETUP
 
   daemon [command] [--flags]                            Run this host's coordinator
   device [command]                                      Approve device keys for this daemon's OS account
-  mcp [command] [--flags]                               Run the stateless native MCP stdio server and manage agent identities
+  mcp [command] [--flags]                               Run the stateless native MCP server (stdio or loopback HTTP)
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
   skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
@@ -2000,12 +2000,18 @@ FLAGS
 ## mesh mcp
 
 ```text
-Run Mesh's stateless MCP 2026-07-28 server over stdio.
-stdout carries only newline-delimited JSON-RPC MCP messages;
-diagnostics and startup errors go to stderr.
+Run Mesh's stateless MCP 2026-07-28 server over stdio, or over loopback
+Streamable HTTP when --http is passed.
 
-Pass --identity NAME to enable durable execution contexts and mesh_exec.
-Without --identity, only passive native discovery is enabled.
+In stdio mode, stdout carries only newline-delimited JSON-RPC MCP messages;
+diagnostics and startup errors go to stderr. Pass --identity NAME to enable
+durable execution contexts and mesh_exec; without --identity, only passive
+native discovery is enabled.
+
+In HTTP mode (--http 127.0.0.1:PORT --identity NAME), Mesh binds only the
+specified loopback address at /mcp and authenticates every POST with a
+random bearer token stored in a private 0600 file. Rotate tokens with
+`mesh mcp token rotate`.
 
 Usage:
   mesh mcp [flags]
@@ -2021,10 +2027,14 @@ Available Commands:
   show        Show one hosted MCP server and its instances
   start       Start a hosted MCP server's instance now
   stop        Stop a hosted MCP server's processes and keep its definition
+  token       Manage bearer tokens for the native loopback MCP HTTP server
 
 Flags:
-  -h, --help              help for mcp
-      --identity string   local application identity created with mesh mcp identity create NAME
+      --allow-origin stringArray   allow an exact loopback HTTP Origin header (repeatable; requires --http)
+  -h, --help                       help for mcp
+      --http string                bind the native Streamable HTTP server on one loopback host:port (for example 127.0.0.1:8765)
+      --identity string            local application identity created with mesh mcp identity create NAME
+      --token-file string          private 0600 file path for the HTTP bearer token record (requires --http)
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2239,6 +2249,49 @@ Usage:
 Flags:
   -h, --help              help for stop
       --instance string   instance ID; without it, start and restart use your own instance and stop stops all of them
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp token
+
+```text
+Manage bearer tokens for the native loopback MCP HTTP server
+
+Usage:
+  mesh mcp token [flags]
+  mesh mcp token [command]
+
+Available Commands:
+  rotate      Rotate the bearer token for a running loopback MCP HTTP listener
+
+Flags:
+  -h, --help   help for token
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh mcp token [command] --help" for more information about a command.
+```
+
+## mesh mcp token rotate
+
+```text
+Replace the bearer token stored for one running mesh mcp --http listener and
+retire all active streams authenticated with the previous token. The token
+value is written only to the private token file and is never printed or logged.
+
+Usage:
+  mesh mcp token rotate [flags]
+
+Flags:
+  -h, --help              help for rotate
+      --http string       exact loopback host:port of the running listener
+      --identity string   local application identity bound to the listener
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

@@ -382,8 +382,11 @@ func (c *mcpControls) decodeExecReceipt(operation string, resp protocol.Control,
 }
 
 func (c *mcpControls) finishExecWait(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, target *mcpnative.TargetMeta, notify func(mcpnative.ProgressUpdate)) (*agentapi.ExecutionReceipt, string, *mcpnative.CallOutcome, error) {
-	if receipt.Phase == "terminal" || req.WaitMS <= 0 {
+	if req.WaitMS <= 0 {
 		return receipt, "", nil, nil
+	}
+	if receipt.Phase == "terminal" {
+		return receipt, "completed", nil, nil
 	}
 	resp, waitErr := c.waitExecJob(ctx, host, req, ref, notify)
 	if waitErr != nil {

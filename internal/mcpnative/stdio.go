@@ -54,9 +54,7 @@ type queuedFrame struct {
 
 // StdioServer runs the stateless MCP 2026-07-28 stdio frontend.
 type StdioServer struct {
-	registry   *Registry
-	controls   Controls
-	serverInfo json.RawMessage
+	core       *dispatcher
 	stderr     io.Writer
 	stderrCh   chan string
 	maxReqs    int
@@ -95,42 +93,17 @@ type activeRequest struct {
 
 // NewStdioServer constructs a stateless native MCP stdio server.
 func NewStdioServer(opts ServerOptions) (*StdioServer, error) {
-	registry := opts.Registry
-	if registry == nil {
-		registry = DefaultRegistry()
-	}
-	version := opts.Version
-	if version == "" {
-		version = "dev"
-	}
-	serverInfo, err := json.Marshal(map[string]string{"name": "mesh", "version": version})
+	core, err := newDispatcher(opts)
 	if err != nil {
-		return nil, fmt.Errorf("encode MCP server info: %w", err)
+		return nil, err
 	}
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = io.Discard
 	}
-	maxReqs := opts.MaxRequests
-	if maxReqs <= 0 {
-		maxReqs = DefaultMaxRequests
-	}
-	maxBytes := opts.MaxFrontendBytes
-	if maxBytes <= 0 {
-		maxBytes = DefaultFrontendBytes
-	}
-	connBytes := opts.MaxConnBytes
-	if connBytes <= 0 {
-		connBytes = DefaultConnBytes
-	}
-	drainWait := opts.EOFDrainTimeout
-	if drainWait <= 0 {
-		drainWait = defaultEOFDrainWait
-	}
+	maxReqs, maxBytes, connBytes, drainWait := serverLimits(opts)
 	return &StdioServer{
-		registry:      registry,
-		controls:      opts.Controls,
-		serverInfo:    serverInfo,
+		core:          core,
 		stderr:        stderr,
 		stderrCh:      make(chan string, stderrQueueSize),
 		maxReqs:       maxReqs,
@@ -249,13 +222,13 @@ func abortStream(stream any) {
 	}
 }
 
-func waitBounded(deadline time.Time, fn func()) bool {
+func waitBounded(deadline time.Time, fn func()) {
 	done := make(chan struct{})
 	go func() {
 		fn()
 		close(done)
 	}()
-	return waitChannelBounded(deadline, done)
+	waitChannelBounded(deadline, done)
 }
 
 func waitChannelBounded(deadline time.Time, done <-chan struct{}) bool {
@@ -399,12 +372,12 @@ func (s *StdioServer) executeRequest(ctx context.Context, msg mcpwire.Message, e
 			s.enqueueProgress(entry, token, update)
 		}
 	}
-	reply, fault := s.handleMessage(ctx, msg, notify)
+	reply, fault := s.core.handleMessage(ctx, msg, notify)
 	s.completeActive(entry, reply, fault)
 }
 
 func (s *StdioServer) completeActive(entry *activeRequest, reply []byte, fault *mcpwire.Fault) {
-	frame, fallback := s.prepareTerminalFrames(entry.id, reply, fault)
+	frame, fallback, _ := prepareTerminalFrames(entry.id, reply, fault)
 
 	s.mu.Lock()
 	entry.completed = true
@@ -443,136 +416,6 @@ func (s *StdioServer) completeActive(entry *activeRequest, reply []byte, fault *
 	s.mu.Unlock()
 }
 
-func (s *StdioServer) prepareTerminalFrames(id mcpwire.ID, reply []byte, fault *mcpwire.Fault) (primary, fallback []byte) {
-	fallback, _ = meshFault(id, agentapi.ResourceLimit, true, "Frontend output buffer limit exceeded.").Reply()
-	if fault != nil {
-		primary, _ = fault.Reply()
-		return primary, fallback
-	}
-	if len(reply) > mcpwire.MaxMessage {
-		primary, _ = meshFault(id, agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit.").Reply()
-		return primary, fallback
-	}
-	return reply, fallback
-}
-
-func (s *StdioServer) handleMessage(ctx context.Context, msg mcpwire.Message, notify func(ProgressUpdate)) ([]byte, *mcpwire.Fault) {
-	switch msg.Method() {
-	case mcpwire.MethodDiscover:
-		return s.completeResult(msg, discoverPayload(), defaultDiscoverTTLMS)
-	case mcpwire.MethodListTools:
-		return s.handleListTools(msg)
-	case mcpwire.MethodCallTool:
-		return s.handleCallTool(ctx, msg, notify)
-	default:
-		return nil, &mcpwire.Fault{ID: msg.ID(), Code: mcpwire.MethodNotFound, Message: "MCP method not found"}
-	}
-}
-
-func discoverPayload() json.RawMessage {
-	raw, _ := json.Marshal(map[string]any{
-		"capabilities": map[string]any{
-			"tools": map[string]bool{"listChanged": false},
-		},
-		"instructions": discoverInstructions,
-	})
-	return raw
-}
-
-func (s *StdioServer) handleListTools(msg mcpwire.Message) ([]byte, *mcpwire.Fault) {
-	var params struct {
-		Cursor string `json:"cursor"`
-	}
-	if len(msg.Params()) > 0 {
-		_ = json.Unmarshal(msg.Params(), &params)
-	}
-	if params.Cursor != "" {
-		return nil, &mcpwire.Fault{ID: msg.ID(), Code: mcpwire.InvalidParams, Message: "Invalid pagination cursor"}
-	}
-	raw, err := json.Marshal(map[string]any{"tools": s.registry.Definitions()})
-	if err != nil {
-		return nil, &mcpwire.Fault{ID: msg.ID(), Code: meshRPCErrorCode, Message: err.Error()}
-	}
-	return s.completeResult(msg, raw, defaultDiscoverTTLMS)
-}
-
-func (s *StdioServer) handleCallTool(ctx context.Context, msg mcpwire.Message, notify func(ProgressUpdate)) ([]byte, *mcpwire.Fault) {
-	var params struct {
-		Name      string          `json:"name"`
-		Arguments json.RawMessage `json:"arguments"`
-	}
-	if err := json.Unmarshal(msg.Params(), &params); err != nil {
-		return nil, &mcpwire.Fault{ID: msg.ID(), Code: mcpwire.InvalidParams, Message: "Invalid tools/call parameters"}
-	}
-	spec, ok := s.registry.Lookup(params.Name)
-	if !ok {
-		return nil, &mcpwire.Fault{ID: msg.ID(), Code: mcpwire.InvalidParams, Message: fmt.Sprintf("Unknown tool %q", params.Name)}
-	}
-	outcome, err := spec.Handler(ctx, s.controls, params.Arguments, notify)
-	if err != nil {
-		return s.toolHandlerError(msg, spec.Operation, err)
-	}
-	resultRaw, err := buildToolResult(outcome, spec.Operation)
-	if err != nil {
-		return nil, meshFault(msg.ID(), agentapi.InternalError, false, err.Error())
-	}
-	return s.completeResult(msg, resultRaw, 0)
-}
-
-func (s *StdioServer) toolHandlerError(msg mcpwire.Message, operation string, err error) ([]byte, *mcpwire.Fault) {
-	id := msg.ID()
-	var badParam *paramError
-	if errors.As(err, &badParam) || errors.Is(err, ErrInvalidHandle) {
-		return nil, &mcpwire.Fault{ID: id, Code: mcpwire.InvalidParams, Message: err.Error()}
-	}
-	var envelope agentapi.Envelope
-	var failure *agentapi.Failure
-	if errors.As(err, &failure) {
-		item := failure.Err
-		item.Operation = operation
-		item.Message = agentapi.CleanMessage(item.Message)
-		envelope = errorEnvelopeFromItem(operation, item)
-	} else {
-		envelope = errorEnvelope(operation, "", agentapi.StateUnavailable, agentapi.CleanMessage(err.Error()))
-	}
-	raw, encodeErr := buildToolResult(CallOutcome{Envelope: envelope, IsError: true}, operation)
-	if encodeErr != nil {
-		return nil, meshFault(id, agentapi.InternalError, false, encodeErr.Error())
-	}
-	return s.completeResult(msg, raw, 0)
-}
-
-func errorEnvelopeFromItem(operation string, item agentapi.Error) agentapi.Envelope {
-	id, _ := agentapi.NewRequestID()
-	return agentapi.Envelope{
-		SchemaVersion: agentapi.SchemaVersion,
-		Operation:     operation,
-		Status:        agentapi.StatusError,
-		RequestID:     id,
-		Errors:        []agentapi.Error{item},
-	}
-}
-
-func (s *StdioServer) completeResult(req mcpwire.Message, result json.RawMessage, ttlMS int64) ([]byte, *mcpwire.Fault) {
-	reply, err := mcpwire.Complete(req, result, s.serverInfo, ttlMS)
-	if errors.Is(err, mcpwire.ErrTooLarge) {
-		return nil, meshFault(req.ID(), agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit.")
-	}
-	if err != nil {
-		return nil, meshFault(req.ID(), agentapi.InternalError, false, err.Error())
-	}
-	return reply, nil
-}
-
-func meshFault(id mcpwire.ID, code agentapi.Code, retryable bool, message string) *mcpwire.Fault {
-	return &mcpwire.Fault{
-		ID:      id,
-		Code:    meshRPCErrorCode,
-		Message: agentapi.CleanMessage(message),
-		Data:    map[string]any{"meshCode": string(code), "retryable": retryable},
-	}
-}
-
 func (s *StdioServer) enqueueUnadmittedFault(fault *mcpwire.Fault) {
 	raw, err := fault.Reply()
 	if err != nil {
@@ -593,19 +436,8 @@ func (s *StdioServer) enqueueUnadmittedFault(fault *mcpwire.Fault) {
 }
 
 func (s *StdioServer) enqueueProgress(entry *activeRequest, token json.RawMessage, update ProgressUpdate) {
-	params := map[string]any{"progressToken": token, "progress": update.Progress}
-	if update.Total != nil {
-		params["total"] = *update.Total
-	}
-	if update.Message != "" {
-		params["message"] = agentapi.CleanMessage(update.Message)
-	}
-	raw, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"method":  "notifications/progress",
-		"params":  params,
-	})
-	if err != nil || len(raw) > mcpwire.MaxMessage {
+	raw, ok := marshalProgressNotification(token, update)
+	if !ok {
 		return
 	}
 	s.mu.Lock()
@@ -775,22 +607,4 @@ func (s *StdioServer) cancelAllActive() {
 	for _, cancel := range cancels {
 		cancel()
 	}
-}
-
-func extractProgressToken(msg mcpwire.Message) json.RawMessage {
-	if len(msg.Params()) == 0 {
-		return nil
-	}
-	var params struct {
-		Meta struct {
-			ProgressToken json.RawMessage `json:"progressToken"`
-		} `json:"_meta"`
-	}
-	if json.Unmarshal(msg.Params(), &params) != nil {
-		return nil
-	}
-	if len(params.Meta.ProgressToken) == 0 || string(params.Meta.ProgressToken) == "null" {
-		return nil
-	}
-	return params.Meta.ProgressToken
 }
