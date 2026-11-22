@@ -17,6 +17,14 @@ LONG_TOOL = "very_long_tool_name_" + "x" * 60
 REFUSED_PREFIX = "file:///refused"
 
 
+def answered(responses, key):
+    """The accepted answer to one input request, or how the client declined it."""
+    reply = responses.get(key) or {}
+    if reply.get("action") != "accept":
+        return f"({reply.get('action', 'no answer')})"
+    return str((reply.get("content") or {}).get("v", ""))
+
+
 class Core:
     def __init__(self, label):
         self.label = label
@@ -189,10 +197,10 @@ class Core:
         if state is None:
             return self.ask(req_id, "ask2-r1", "first", "First?")
         if state == "ask2-r1":
-            return self.ask(req_id, "ask2-r2:" + responses["first"]["content"]["v"], "second", "Second?")
+            return self.ask(req_id, "ask2-r2:" + answered(responses, "first"), "second", "Second?")
         if state.startswith("ask2-r2:"):
             first = state.split(":", 1)[1]
-            return self.complete(req_id, {"content": [{"type": "text", "text": f"hello {first} {responses['second']['content']['v']}"}]})
+            return self.complete(req_id, {"content": [{"type": "text", "text": f"hello {first} {answered(responses, 'second')}"}]})
         return self.complete(req_id, {"content": [{"type": "text", "text": "bad state"}], "isError": True})
 
     def listen(self, req_id, params, send):

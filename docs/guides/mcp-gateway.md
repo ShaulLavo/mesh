@@ -75,58 +75,111 @@ Each hosted entry carries
 ## Lists, caching and refresh
 
 `tools/list` returns native tools first, then each selected service in profile
-order with its entries in upstream order, in pages of at most 200. A page
-cursor is signed with a key derived from the application identity and fails
-once the profile entry or any listing changes; list again from the start.
+order with its entries in upstream order, in pages of at most 200. Every list
+request and every page rechecks each host's catalog, so a revoked device, a
+re-approved grant, a re-pinned host or a removed service takes effect on the
+next page. A page cursor is signed with a key derived from the application
+identity and binds the profiles file revision and the state each listing was
+read under; any change, even an edit that is later reverted, fails it and the
+client lists again from the start.
 
-The first list for a cold service starts it and reads its discovery and
-listings. Listings are cached privately per host pin and application identity
-under the state directory for the upstream TTL, at most 5 minutes; the reply
-advertises the shortest remaining TTL. When a host is unreachable, its cached
-listings stay usable for 24 hours with `stale: true` and `ttlMs: 0`, then
-expire. An authorization failure or a changed host identity discards that
-host's listings at once.
+The owning host keeps a listing revision for each service and account. It
+advances it when a listing that passes through it differs from the last one,
+when an upstream reports a list change, and when the service is published
+again, and reports it in `mcp.catalog` and on the `mcp` topic of
+`state.watch`. The gateway binds every cached listing to that revision, the
+service revision and account, the pinned instance and the caller's scope on
+the host (which changes when the device is approved again), and fetches it
+again when any of them differs. Listings are cached privately per host pin
+and application identity under the state directory for the upstream TTL, at
+most 5 minutes; the reply advertises the shortest remaining TTL. When a host
+is unreachable, a listing read under the caller's current scope stays usable
+for 24 hours with `stale: true` and `ttlMs: 0`, then expires and is never
+served. An authorization failure or a changed host identity discards this
+caller's listings of that host at once; other callers' records stay.
+
+Each list result reports every selected route under
+`_meta["com.github.shaullavo.mesh/routes"]` with its `state` (`ready`,
+`stopped`, `stale`, `expired`, `offline`, `unauthorized`, `unsupported`,
+`incompatible`, `failed`, `identity_changed` or `not_found`), `freshness`
+(`live`, `cached`, `stale` or `expired`) and any error code. Upstream
+page-level fields and metadata that cannot be merged are kept per route under
+`_meta["com.github.shaullavo.mesh/upstreams"]`. Unowned list request
+parameters are passed to each upstream. Resource URIs and templates with
+invalid percent escapes, whitespace or unbalanced template expressions are
+left out.
 
 Discovery advertises `tools.listChanged` always (profile edits are watched),
 `prompts`, `resources` and `completions` when a selected service offers them,
 and `resources.subscribe` only when one supports it. Tasks are not offered.
 
-**Refresh fallback.** In a `subscriptions/listen`, list changes come from the
-upstream listener when the service acknowledged it, and otherwise from
-bounded refresh: the gateway re-reads that listing about once a minute with
-jitter, backs off to 5 minutes on failure, and sends `list_changed` when the
-listing differs. A profile edit also sends `list_changed`. A client that does
-not listen refreshes when the advertised TTL runs out or by listing again.
+**Refresh.** In a `subscriptions/listen`, list changes come from three
+places: the upstream's own listener when it acknowledged the filter, the
+owning host's listing revisions on `state.watch` (one watch per host, shared
+by the frontend's listens), and edits to the profile. A host that cannot
+deliver listing revisions falls back to bounded refresh: the gateway reads a
+baseline when the listen starts, re-reads each listing about once a minute
+with jitter, backs off to 5 minutes on failure, and reports a changed
+listing. Resource list changes also cover resource templates. A client that
+does not listen refreshes when the advertised TTL runs out or by listing
+again.
 
 ## Calls, input rounds and subscriptions
 
 Calls go to the owning host over the same authenticated stream as
-`mesh mcp connect`. Unknown names and URIs get `-32602`; host failures use
-`-31000` with `meshCode` and keep other services usable. Tool calls, prompt
-gets, reads and continuations are never retried automatically.
+`mesh mcp connect`, by exact service ID, carrying the service revision and
+account the gateway resolved. A service that was published again since
+refuses the call with `catalog.stale` and the gateway retires its cached
+listing; a service removed and published again never receives the old ID's
+calls, even under a name equal to that ID. A changed instance pin takes
+effect on the next request. Unknown names and URIs get `-32602`. Hosted
+failures inside `tools/call` are tool execution errors (`isError: true` with
+the agent envelope); elsewhere they are `-31000` with `meshCode`. Other
+services stay usable. Tool calls, prompt gets, reads and continuations are
+never retried automatically, so a write interrupted by a lost link or a
+retired grant reports its outcome as unknown and does not run twice.
 
 An `input_required` result passes through with the host's continuation
 reference. Send the next round to the same name or URI with that
 `requestState` and your `inputResponses`; declare the matching client
 capability (for example `elicitation`) on the retry. The host binds each
 reference to the application identity, device grant, service revision,
-instance generation, method and arguments, accepts it once, and expires it
-after 10 minutes, so a replayed or altered reference gets `-32602` with
-`meshCode: mcp.state_invalid`. A new `mesh mcp --profile` process with the
+account, instance generation, method and arguments, accepts it once, and
+expires it after 10 minutes. It checks everything but the instance before
+choosing or starting an instance, so a replayed, altered or obsolete
+reference gets `-32602` with `meshCode: mcp.state_invalid` without starting
+anything. A new `mesh mcp --profile` process with the
 same identity can continue a round started by an earlier one.
 
-`subscriptions/listen` opens one upstream listen per service that can back
-the request and acknowledges only what is backed: list-change filters, plus
-each resource URI its upstream accepted. Updates are tagged with the client's
-listen ID and coalesced, so a slow client never stalls an upstream. One
-frontend holds at most four listens; a fifth gets `resource.limit`. Cancelling
-one listen cancels exactly its upstream listens. When an upstream ends its
-listen, or the profile drops a service the listen holds, the listen ends with
-one complete result. A revoked device grant ends it with `access.denied`.
+`subscriptions/listen` resolves every route and collects the upstream
+acknowledgments within one 5-second setup bound, so a silent host cannot
+hold the acknowledgment. It acknowledges only what is backed: list-change
+filters, plus each resource URI its upstream accepted. A route whose
+upstream acknowledges nothing, fails before acknowledging or closes after an
+empty acknowledgment is left out and never ends the listen. Events that
+arrive before the downstream acknowledgment wait for it. Updates are tagged
+with the client's listen ID, keep their own fields and are coalesced within
+the frontend's shared byte budget, so a slow client never stalls an
+upstream; an update that would exceed the 3.5 MiB message limit after the
+URI rewrite ends only its own listen. One frontend holds at most four
+listens; a fifth gets `resource.limit`. Cancelling one listen cancels exactly
+its upstream listens. When an accepted upstream ends its listen, or a profile
+edit changes the routes (including an instance pin), the listen reports the
+list changes and ends with one complete result; listen again. A retired
+device grant ends it with `access.denied` and drops its events not yet
+written.
 
 ## Client configuration
 
-Codex (with its `mcp_2026_07_28` development feature):
+Both clients below were run against `mesh mcp --profile` with two hosting
+machines: discovery, a listen, every list, native and hosted calls, progress
+and three-round input. In their non-interactive modes (`claude -p`,
+`codex exec`) the clients answer input requests themselves with `cancel` or
+`decline`; interactive sessions ask the user.
+
+Codex 0.167.1 (with its `mcp_2026_07_28` development feature). Codex asks
+before calling a tool that is not read-only unless the server's
+`default_tools_approval_mode` allows it:
 
 ```toml
 [features]
@@ -140,7 +193,7 @@ args = ["mcp", "--profile", "dev", "--identity", "codex"]
 CODEX_MCP_PROTOCOL_VERSION = "2026-07-28"
 ```
 
-Claude Code:
+Claude Code 2.1.322:
 
 ```json
 {
@@ -150,7 +203,10 @@ Claude Code:
 }
 ```
 
-A profile with hosted services needs `--identity`. The gateway serves stdio
-only. `mesh_services_list` and `mesh_service_inspect` also show hosted
-servers, and `mesh_service_lease` holds an on-demand instance running for up
-to 24 hours.
+Hosted services need `--identity`: without one the gateway serves native
+tools only and reports every hosted route as `unauthorized`, whatever the
+profile says. The gateway serves stdio only. `mesh_services_list` and
+`mesh_service_inspect` also show hosted servers to an identified frontend,
+and `mesh_service_lease` holds an on-demand instance running for up to 24
+hours under a lease key you choose; repeating a call with the same key
+renews the same lease.

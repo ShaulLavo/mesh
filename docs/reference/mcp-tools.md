@@ -423,7 +423,7 @@ Inspect one Mesh serve route on a host without opening its URL or triggering on-
 
 ## mesh_service_lease
 
-Hold or release one hosted MCP server instance for a renewable TTL of at most 24 hours, so an on-demand instance stays running for upstream work Mesh cannot see. Pass the same lease_id to renew; ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.
+Hold or release one hosted MCP server instance for a renewable TTL of at most 24 hours, so an on-demand instance stays running for upstream work Mesh cannot see. lease_id is your key for the lease: repeating a call with the same key returns the same lease with the new TTL, and ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.
 
 - Linked operation: `mcp.lease`
 - Hints: idempotent
@@ -431,7 +431,7 @@ Hold or release one hosted MCP server instance for a renewable TTL of at most 24
   - `host` (`string`, required): Machine name, exact host ID, or local.
   - `instance` (`string`, optional): Instance ID or mi1 handle; omit for this caller's default or the shared instance.
   - `job` (`string`, optional): Optional running native job ID that bounds the lease.
-  - `lease_id` (`string`, optional): Existing lease to renew or release.
+  - `lease_id` (`string`, required): Caller-chosen lease key; the same key always names the same lease.
   - `service` (`string`, required): Hosted MCP server name or ID on that host.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 5000).
   - `ttl_seconds` (`integer`, required): Lease lifetime in seconds; 0 releases the lease.
