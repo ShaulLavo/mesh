@@ -193,6 +193,7 @@ type HostInfo struct {
 	UpdateSupported         bool               `json:"updateSupported,omitempty"`
 	RecoverySupported       bool               `json:"recoverySupported,omitempty"`
 	ServiceHealthSupported  bool               `json:"serviceHealthSupported,omitempty"`
+	ExecutionPipeSupported  bool               `json:"executionPipeSupported,omitempty"`
 	ID                      string             `json:"id"`
 	MeshIdentity            string             `json:"meshIdentity"`
 	TailscaleName           string             `json:"tailscaleName,omitempty"`
@@ -395,6 +396,7 @@ type Control struct {
 	ExecutionKind     string                `json:"kind,omitempty"`
 	RequestKey        string                `json:"requestKey,omitempty"`
 	ExecutionReceipt  *ExecutionReceipt     `json:"executionReceipt,omitempty"`
+	ExecutionReceipts []ExecutionReceipt    `json:"executionReceipts,omitempty"`
 	Instance          string                `json:"instance,omitempty"`
 	Stream            string                `json:"stream,omitempty"`
 	Cursor            string                `json:"cursor,omitempty"`

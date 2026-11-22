@@ -51,13 +51,14 @@ type HostsData struct {
 }
 
 type HostSummary struct {
-	HostID       *string   `json:"hostId"`
-	MachineName  string    `json:"machineName,omitempty"`
-	Local        bool      `json:"local"`
-	NameShadowed bool      `json:"nameShadowed"`
-	Reachability string    `json:"reachability"`
-	Observed     *Observed `json:"observed"`
-	Declared     Declared  `json:"declared"`
+	HostID       *string           `json:"hostId"`
+	MachineName  string            `json:"machineName,omitempty"`
+	Local        bool              `json:"local"`
+	NameShadowed bool              `json:"nameShadowed"`
+	Reachability string            `json:"reachability"`
+	Observed     *Observed         `json:"observed"`
+	Capabilities *HostCapabilities `json:"capabilities,omitempty"`
+	Declared     Declared          `json:"declared"`
 }
 
 type Observed struct {

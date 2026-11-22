@@ -664,6 +664,7 @@ func denyScopedExecutionRequests(t *testing.T, loose bool) {
 	requests = append(requests,
 		protocol.Control{Type: protocol.TypeExecutionInput, RequestID: "input-denied", SessionID: "7K3D", Instance: instance, WriteKey: "lookup"},
 		protocol.Control{Type: protocol.TypeExecutionInspect, RequestID: "inspect-denied", SessionID: "7K3D", Instance: instance},
+		protocol.Control{Type: protocol.TypeExecutionList, RequestID: "list-denied"},
 		protocol.Control{Type: protocol.TypeWorkerLineAttach, RequestID: "line-denied", SessionID: "7K3D", Instance: instance},
 	)
 	for _, request := range requests {

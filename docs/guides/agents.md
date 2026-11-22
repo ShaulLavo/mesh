@@ -60,4 +60,10 @@ Edit fleet notes only when the user asks. Add `--fleet` to the read and write co
 
 Each JSON invocation writes one envelope with `schemaVersion`, `operation`, `status`, `requestId`, `data`, and `errors`. Exit 0 means complete, 3 means partial with useful data, 2 means invalid usage or input, and 1 means operational failure. A session exit code is data, not the CLI exit code. JSON mode cannot be combined with privacy mode.
 
-`mesh skill show` is Markdown-only. Use `mesh skill show --file references/commands.md` for the generated reference of shipped agent operations, or the [CLI reference](../reference/cli.md) for all commands.
+`mesh skill show` is Markdown-only. Use `mesh skill show --file references/commands.md` for the generated reference of shipped agent CLI operations, `mesh skill show --file references/mcp-tools.md` (or the [MCP tools reference](../reference/mcp-tools.md)) for the native `mesh mcp` stdio server tools, or the [CLI reference](../reference/cli.md) for all commands.
+
+## Run the native MCP stdio server
+
+Start `mesh mcp` from an MCP client that speaks the stateless `2026-07-28` protocol. `stdout` carries only newline-delimited JSON-RPC MCP messages; diagnostics and startup errors go to `stderr` (exiting with status 2 before any protocol output). Legacy `initialize` handshakes are refused with `-32601`.
+
+Tool results carry the same agent envelope in `structuredContent` and a bounded summary in `content`. Opaque job handles (`mj1.<hostId>.<sessionId>.<instance>`) let a fresh `mesh mcp` process inspect, wait on, read output from, send stdin to, signal, cancel, or remove durable jobs as its very first request without discovery. Cancelling a wait or closing stdin never cancels an accepted job.

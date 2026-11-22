@@ -24,6 +24,8 @@ const (
 	TypeExecutionRemove  = "execution.remove"
 	TypeExecutionInput   = "execution.input"
 	TypeExecutionInspect = "execution.inspect"
+	TypeExecutionList    = "execution.list"
+	TypeExecutionListed  = "execution.listed"
 	TypeWorkerPipeProbe  = "worker.pipe.probe"
 	TypeWorkerLineAttach = "worker.line.attach"
 	TypeWorkerLineInput  = "worker.line.input"
@@ -168,6 +170,9 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		}
 		return executionString(raw)
 	}
+	if kind == TypeExecutionList {
+		return fmt.Errorf("execution: unexpected field %s", name)
+	}
 	if kind != TypeExecutionCreate {
 		return validateExecutionBoundField(kind, name, raw)
 	}
@@ -306,7 +311,7 @@ type ExecutionPage struct {
 // controls are admitted by the worker socket.
 func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionList:
 		return true
 	default:
 		return false
@@ -365,9 +370,11 @@ func validateExecutionInputField(name string, raw json.RawMessage) error {
 
 func validateExecutionRequired(kind string, fields map[string]json.RawMessage) error {
 	required := []string{executionTypeField, "requestId"}
-	if kind == TypeExecutionCreate || kind == TypeExecutionRequest {
+	switch kind {
+	case TypeExecutionList:
+	case TypeExecutionCreate, TypeExecutionRequest:
 		required = append(required, "requestKey")
-	} else {
+	default:
 		required = append(required, sessionIDField, "instance")
 	}
 	if kind == TypeExecutionCreate {
