@@ -380,6 +380,7 @@ func (c *mcpControls) ListServices(ctx context.Context, req mcpnative.ListServic
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
+	envelope = c.withHostedServices(ctx, hosts, envelope, req.Timeout)
 	return mcpnative.CallOutcome{Envelope: envelope, Target: target, IsError: envelope.Status == agentapi.StatusError}, nil
 }
 
@@ -415,6 +416,9 @@ func (c *mcpControls) InspectService(ctx context.Context, req mcpnative.InspectS
 				Target:   target,
 			}, nil
 		}
+	}
+	if out, ok := c.inspectHosted(ctx, host, req.Name, req.Timeout, target); ok {
+		return out, nil
 	}
 	return failOutcome("services.inspect", target, agentapi.Fail(agentapi.ServiceNotFound, "services.inspect", req.Name, fmt.Sprintf("No service named %q on host %s.", req.Name, host.ID)).Err), nil
 }

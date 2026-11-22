@@ -38,13 +38,13 @@ type mcpController struct {
 	sup      *mcphost.Supervisor
 }
 
-func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, stateDir string) (*mcpController, error) {
+func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, stateDir string, listings func(mcphost.ListingRevision)) (*mcpController, error) {
 	c := &mcpController{l: l, stateDir: stateDir}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "/"
 	}
-	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, HostID: string(l.host.ID), GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval})
+	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, HostID: string(l.host.ID), GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval, ListingChanged: listings})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: configure MCP hosting: %w", err)
 	}
@@ -52,6 +52,11 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 		return nil, fmt.Errorf("daemon: restore MCP hosting: %w", err)
 	}
 	c.sup = sup
+	if listings != nil {
+		for _, rev := range sup.ListingRevisions() {
+			listings(rev)
+		}
+	}
 	return c, nil
 }
 
@@ -192,7 +197,7 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 	target := mcphost.Target{Service: req.Service, Instance: req.Instance, New: req.New}
 	switch req.Type {
 	case protocol.TypeMCPCatalog:
-		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), mcpServicesKey: c.sup.Catalog(caller)}, nil)
+		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), "scope": mcphost.CallerScope(caller), mcpServicesKey: c.sup.Catalog(caller)}, nil)
 	case protocol.TypeMCPServiceUpsert:
 		return c.upsert(ctx, caller, req)
 	case protocol.TypeMCPServiceDelete:
@@ -284,7 +289,7 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 	host := string(c.l.host.ID)
 	caller, err := c.caller(lifetime, route.Caller)
 	if err == nil {
-		err = c.sup.Forward(lifetime, caller, mcphost.Target{Service: route.Service, Instance: route.Instance, New: route.New}, request, func(raw []byte, terminal bool) error {
+		err = c.sup.Forward(lifetime, caller, forwardTarget(route), request, func(raw []byte, terminal bool) error {
 			return writeMCPEvent(lifetime, conn, raw, terminal)
 		})
 	}
@@ -296,6 +301,14 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 		return fmt.Errorf("encode MCP error reply: %w", encodeErr)
 	}
 	return writeMCPEvent(lifetime, conn, reply, true)
+}
+
+func forwardTarget(route mcpframe.Route) mcphost.Target {
+	target := mcphost.Target{Service: route.Service, Instance: route.Instance, New: route.New, ExactID: route.ExactID}
+	if route.Expect != nil {
+		target.Expect = &mcphost.Expectation{Revision: route.Expect.Revision, Account: route.Expect.Account}
+	}
+	return target
 }
 
 // mcpForwardError gives daemon-level refusals their Mesh codes.

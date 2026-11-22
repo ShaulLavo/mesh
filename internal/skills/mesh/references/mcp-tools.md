@@ -34,6 +34,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_profile_get` | `profile.show` | read-only, idempotent | Read this machine's host or fleet notes |
 | `mesh_profile_set` | `profile.set` | destructive | Replace this machine's host or fleet notes |
 | `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
+| `mesh_service_lease` | `mcp.lease` | idempotent | Hold a hosted MCP server instance running |
 | `mesh_service_publish` | `services.publish` | destructive, open-world | Publish or replace a private route |
 | `mesh_service_start` | `services.start` | destructive, idempotent | Start an on-demand route |
 | `mesh_service_stop` | `services.stop` | destructive, idempotent | Stop an on-demand route |
@@ -419,6 +420,21 @@ Inspect one Mesh serve route on a host without opening its URL or triggering on-
   - `host` (`string`, required): Machine name or exact host ID.
   - `name` (`string`, required): Exact serve route name.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_service_lease
+
+Hold or release one hosted MCP server instance for a renewable TTL of at most 24 hours, so an on-demand instance stays running for upstream work Mesh cannot see. lease_id is your key for the lease: repeating a call with the same key returns the same lease with the new TTL, and ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.
+
+- Linked operation: `mcp.lease`
+- Hints: idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name, exact host ID, or local.
+  - `instance` (`string`, optional): Instance ID or mi1 handle; omit for this caller's default or the shared instance.
+  - `job` (`string`, optional): Optional running native job ID that bounds the lease.
+  - `lease_id` (`string`, required): Caller-chosen lease key; the same key always names the same lease.
+  - `service` (`string`, required): Hosted MCP server name or ID on that host.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 5000).
+  - `ttl_seconds` (`integer`, required): Lease lifetime in seconds; 0 releases the lease.
 
 ## mesh_service_publish
 

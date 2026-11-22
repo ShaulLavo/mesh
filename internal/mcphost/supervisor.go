@@ -105,6 +105,9 @@ type Config struct {
 	// SweepInterval is how often leases and retired grants are swept; zero
 	// means 30 seconds.
 	SweepInterval time.Duration
+	// ListingChanged receives each service's new listing revision, for the
+	// mcp topic of state.watch.
+	ListingChanged func(ListingRevision)
 }
 
 type Supervisor struct {
@@ -166,6 +169,7 @@ func NewSupervisor(cfg Config) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
+	router.listings.notify = cfg.ListingChanged
 	return &Supervisor{cfg: cfg, router: router, services: map[string]Definition{}, byName: map[string]string{}, instances: map[string]*instance{}}, nil
 }
 
@@ -311,6 +315,7 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 	if d.Lifecycle == LifecycleKept && !d.Disabled {
 		s.detach(func(ctx context.Context) { s.ensureKept(ctx, d.ID) })
 	}
+	s.router.listings.published(d)
 	return d, nil
 }
 
@@ -438,6 +443,7 @@ func (s *Supervisor) Remove(ctx context.Context, name string) error {
 	for _, inst := range stopping {
 		delete(s.instances, inst.rec.ID)
 	}
+	s.router.listings.removed(d)
 	return nil
 }
 

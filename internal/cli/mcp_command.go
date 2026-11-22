@@ -17,6 +17,7 @@ func (a *application) mcpCommand() *cobra.Command {
 	var httpAddr string
 	var allowOrigins []string
 	var tokenFile string
+	var profileName string
 	command := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run the stateless native MCP server (stdio or loopback HTTP)",
@@ -40,6 +41,12 @@ func (a *application) mcpCommand() *cobra.Command {
 			if private, err := cmd.Flags().GetBool("privacy"); err == nil && private {
 				return agentapi.Usage("mcp.serve", "Privacy mode cannot be combined with mesh mcp.")
 			}
+			if cmd.Flags().Changed("profile") {
+				if cmd.Flags().Changed("http") {
+					return agentapi.Usage("mcp.serve", "--profile serves stdio only; the aggregate gateway has no HTTP endpoint.")
+				}
+				return a.runMCPGateway(cmd, profileName, cmd.Flags().Changed("identity"), identityName)
+			}
 			if cmd.Flags().Changed("http") {
 				return a.runMCPHTTP(cmd, mcpHTTPOptions{
 					ListenAddr:     httpAddr,
@@ -62,10 +69,11 @@ func (a *application) mcpCommand() *cobra.Command {
 	command.Flags().StringVar(&httpAddr, "http", "", "bind the native Streamable HTTP server on one loopback host:port (for example 127.0.0.1:8765)")
 	command.Flags().StringArrayVar(&allowOrigins, "allow-origin", nil, "allow an exact loopback HTTP Origin header (repeatable; requires --http)")
 	command.Flags().StringVar(&tokenFile, "token-file", "", "private 0600 file path for the HTTP bearer token record (requires --http)")
+	command.Flags().StringVar(&profileName, "profile", "", "serve the aggregate gateway for one profile from mcp-profiles.json (native tools plus selected hosted services)")
 	command.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return agentapi.Usage("mcp.serve", err.Error())
 	})
-	command.AddCommand(a.mcpIdentityCommand(), a.mcpTokenCommand(), a.mcpConnectCommand())
+	command.AddCommand(a.mcpIdentityCommand(), a.mcpTokenCommand(), a.mcpConnectCommand(), a.mcpProfileCommand())
 	command.AddCommand(a.mcpServiceCommands()...)
 	return command
 }
