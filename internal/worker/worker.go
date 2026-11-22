@@ -788,7 +788,7 @@ func (w *Worker) hasExited() bool {
 
 // inputExitWait bounds how long refused input waits for the command's exit to
 // be recorded before its client is dropped as stuck.
-const inputExitWait = finalFlushTimeout
+var inputExitWait = finalFlushTimeout
 
 // exitFollows reports whether the command's exit is recorded shortly after
 // input for owner was refused. Only the current owner waits: a replaced client
