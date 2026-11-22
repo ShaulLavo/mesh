@@ -1,0 +1,1776 @@
+{
+  "mesh": "mesh v0.1.354-0.20261122144349-ec05360c4146+dirty ec05360c41467c2d954043181a396d558d7c1de8 linux/amd64",
+  "loadAverageBefore": [
+    0.310546875,
+    0.33447265625,
+    0.38134765625
+  ],
+  "runs": [
+    {
+      "tail": {
+        "timeToFirstByteMs": 700.0,
+        "firstOffset": 0,
+        "closeReason": "eof",
+        "endOffset": 104857600,
+        "bytesRead": 22020096,
+        "pages": 21,
+        "gaps": [
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ]
+        ],
+        "seconds": 8.363,
+        "throughputMiBps": 2.5,
+        "worker": {
+          "cpuSeconds": 3.73,
+          "peakRssKiB": 45052
+        }
+      },
+      "retainedRead": {
+        "bytesRead": 8388608,
+        "seconds": 0.893,
+        "throughputMiBps": 9.0
+      },
+      "stoppedReader": {
+        "firstCursorResult": "logs.cursor_expired",
+        "earliestOffset": 96468992,
+        "retainedBytes": 8388608
+      }
+    },
+    {
+      "tail": {
+        "timeToFirstByteMs": 688.0,
+        "firstOffset": 0,
+        "closeReason": "eof",
+        "endOffset": 104857600,
+        "bytesRead": 28311552,
+        "pages": 27,
+        "gaps": [
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ]
+        ],
+        "seconds": 7.979,
+        "throughputMiBps": 3.4,
+        "worker": {
+          "cpuSeconds": 3.49,
+          "peakRssKiB": 45228
+        }
+      },
+      "retainedRead": {
+        "bytesRead": 8388608,
+        "seconds": 1.022,
+        "throughputMiBps": 7.8
+      },
+      "stoppedReader": {
+        "firstCursorResult": "logs.cursor_expired",
+        "earliestOffset": 96468992,
+        "retainedBytes": 8388608
+      }
+    },
+    {
+      "tail": {
+        "timeToFirstByteMs": 732.6,
+        "firstOffset": 0,
+        "closeReason": "eof",
+        "endOffset": 104857600,
+        "bytesRead": 22020096,
+        "pages": 21,
+        "gaps": [
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ],
+          [
+            {
+              "code": "logs.cursor_expired",
+              "message": "execution control: read execution page: output cursor expired",
+              "operation": "sessions.logs",
+              "target": "eoM2k0mfgsQ31Zws5JQ9Vn8l45QgsnG1Uf3UvO_4vMI",
+              "retryable": false
+            }
+          ]
+        ],
+        "seconds": 8.048,
+        "throughputMiBps": 2.6,
+        "worker": {
+          "cpuSeconds": 3.3,
+          "peakRssKiB": 45096
+        }
+      },
+      "retainedRead": {
+        "bytesRead": 8388608,
+        "seconds": 0.943,
+        "throughputMiBps": 8.5
+      },
+      "stoppedReader": {
+        "firstCursorResult": "logs.cursor_expired",
+        "earliestOffset": 96468992,
+        "retainedBytes": 8388608
+      }
+    }
+  ],
+  "frontend": {
+    "cpuSeconds": 8.23,
+    "peakRssKiB": 58552
+  },
+  "daemon": {
+    "cpuSeconds": 7.24,
+    "peakRssKiB": 78768
+  },
+  "loadAverageAfter": [
+    1.58984375,
+    0.71728515625,
+    0.5126953125
+  ],
+  "retryableErrors": {
+    "count": 0,
+    "codes": {}
+  }
+}
