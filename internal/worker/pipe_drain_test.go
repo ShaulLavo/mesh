@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -124,7 +125,11 @@ func TestPipeDrainKeepsOutputTheLeaderWroteWhileTheCaptureCatchesUp(t *testing.T
 // holds, and the final flush reports that instead of claiming a result.
 func TestPipeDrainReportsNotRecordedWhileTheCaptureStaysBlocked(t *testing.T) {
 	f := newPipeDrainFixture(t, execution.StreamStdout)
-	f.stallStream(t, execution.StreamStdout) // released when the temporary directory is removed
+	// The handle must stay referenced: a collected Fence closes its file, which
+	// releases the lock and lets the commit through.
+	stall := f.stallStream(t, execution.StreamStdout)
+	t.Cleanup(func() { _ = stall.Close() })
+	runtime.GC() // a lost reference would release the lock here, on every platform
 	go func() { _, _ = f.streams[0].writes.Write(bytes.Repeat([]byte("x"), 4<<20)) }()
 	reasons := f.drain(pipeDrainLimits{silence: time.Minute, total: 200 * time.Millisecond})
 	if reasons[0] != pipeDrainCutoff {
