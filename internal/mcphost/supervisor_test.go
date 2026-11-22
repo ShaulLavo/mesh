@@ -455,8 +455,41 @@ func TestDefinitionPolicy(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", d, err)
 	}
 	f := newSupervisorFixture(t)
-	if _, err := f.sup.Publish(t.Context(), Definition{Name: "web", URL: "http://127.0.0.1:9/mcp", InstancePolicy: PolicyShared}, 0); !errors.Is(err, ErrHTTPUnavailable) && newHTTPUpstream == nil {
-		t.Fatalf("HTTP definition without the H5 client: %v", err)
+	managed := Definition{Name: "web", URL: "http://127.0.0.1:9/mcp", RunArgv: []string{"x"}, InstancePolicy: PolicyShared}
+	if _, err := f.sup.Publish(t.Context(), managed, 0); !errors.Is(err, ErrManagedHTTPUnsupported) {
+		t.Fatalf("managed HTTP definition: %v", err)
+	}
+}
+
+func TestExternalHTTPServer(t *testing.T) {
+	f := newSupervisorFixture(t)
+	endpoint := startSDK(t, false, make(chan error, 4))
+	secret := filepath.Join(t.TempDir(), "auth")
+	if err := os.WriteFile(secret, []byte("Bearer fixture-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.publish(t, Definition{Name: "web", Argv: []string{}, URL: endpoint, InstancePolicy: PolicyShared,
+		HeaderSecrets: map[string]string{"Authorization": secret}, AccountMode: AccountHostAccount, AccountLabel: "fixture"})
+	ctx, cancel := context.WithTimeout(t.Context(), testHang)
+	defer cancel()
+	out := &collected{}
+	// The SDK fixture checks the mirrored Region header against the body, so
+	// this only succeeds with the compiled tool schema.
+	if err := f.sup.Forward(ctx, caller("a"), Target{Service: "web"}, callRequest(t, `"r"`, toolParams("regional", `{"region":"eu-west"}`, "")), out.emit); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.last(), "eu-west") || string(member([]byte(out.last()), "id")) != `"r"` {
+		t.Fatalf("regional call: %s", out.last())
+	}
+	views := fmt.Sprintf("%+v", f.sup.Services(Caller{Account: "local", Admin: true}))
+	if strings.Contains(views, "fixture-secret") || strings.Contains(views, secret) {
+		t.Fatalf("credential in the catalog: %s", views)
+	}
+	if f.launcher.launches != 0 {
+		t.Fatal("an external HTTP server started a process")
+	}
+	if _, err := f.sup.StopInstance(t.Context(), Caller{Account: "local", Admin: true}, Target{Service: "web"}); err != nil {
+		t.Fatalf("stopping an external connection: %v", err)
 	}
 }
 

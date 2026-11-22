@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/shaul/mesh/internal/storage"
@@ -67,6 +68,8 @@ var (
 	ErrDenied          = errors.New("mcp instance belongs to another caller")
 	ErrLimit           = errors.New("mcp host limit reached")
 	ErrConflict        = errors.New("mcp service changed")
+	// ErrManagedHTTPUnsupported refuses --run HTTP definitions in this release.
+	ErrManagedHTTPUnsupported = errors.New("Mesh-managed HTTP server processes (--run) are not supported yet; start the server yourself and publish its --url")
 )
 
 const (
@@ -124,10 +127,13 @@ type instance struct {
 }
 
 type generation struct {
-	number     int64
-	revision   int64
-	ref        WorkerRef
-	upstream   *StdioUpstream
+	number   int64
+	revision int64
+	ref      WorkerRef
+	upstream Upstream
+	// tools holds the compiled x-mcp-header rules of an HTTP upstream's
+	// current tools/list, read by the H5 client for every tools/call.
+	tools      atomic.Pointer[ToolHeaders]
 	serverInfo json.RawMessage
 	active     int
 	draining   bool
@@ -266,6 +272,11 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 	if d.Transport == TransportHTTP && newHTTPUpstream == nil {
 		return d, fmt.Errorf("service %s: %w", d.Name, ErrHTTPUnavailable)
 	}
+	if len(d.RunArgv) > 0 {
+		// The managed process's stdout is not MCP framing, so it needs a
+		// plain pipe worker rather than the line worker stdio servers use.
+		return d, fmt.Errorf("service %s: %w", d.Name, ErrManagedHTTPUnsupported)
+	}
 	if d.Lifecycle == LifecycleKept && d.InstancePolicy != PolicyShared {
 		return d, invalid("a kept service has no caller to own an isolated instance; use --shared")
 	}
@@ -360,7 +371,15 @@ func (s *Supervisor) stopGeneration(ctx context.Context, gen *generation) {
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
 	_ = gen.upstream.Close()
-	_ = s.cfg.Launcher.Stop(ctx, gen.ref)
+	_ = s.stopWorker(ctx, gen.ref)
+}
+
+// stopWorker stops the generation's process, if Mesh owns one.
+func (s *Supervisor) stopWorker(ctx context.Context, ref WorkerRef) error {
+	if ref.SessionID == "" {
+		return nil
+	}
+	return s.cfg.Launcher.Stop(ctx, ref)
 }
 
 // Remove deletes a definition and stops its instances.

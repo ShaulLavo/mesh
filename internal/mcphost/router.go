@@ -124,7 +124,7 @@ func (r *Router) rewrite(request mcpwire.Message, state *upstreamState) (mcpwire
 	var restore restoration
 	if token := member(raw, paramsKey, metaKey, "progressToken"); token != nil {
 		restore.progress = token
-		if raw, err = setMember(raw, []string{paramsKey, metaKey, "progressToken"}, jsonString(r.ids.progress())); err != nil {
+		if raw, err = setMember(raw, []string{paramsKey, metaKey, "progressToken"}, quotedJSON(r.ids.progress())); err != nil {
 			return mcpwire.Message{}, restoration{}, err
 		}
 	}

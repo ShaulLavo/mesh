@@ -70,7 +70,7 @@ func (s *upstreamState) apply(raw []byte) ([]byte, error) {
 	if s.state == nil {
 		return setMember(raw, []string{paramsKey, requestStateKey}, nil)
 	}
-	return setMember(raw, []string{paramsKey, requestStateKey}, jsonString(*s.state))
+	return setMember(raw, []string{paramsKey, requestStateKey}, quotedJSON(*s.state))
 }
 
 func stateInvalid(reason string) *Failure {
@@ -173,7 +173,7 @@ func (c *continuations) capture(route Route, request mcpwire.Message, raw []byte
 	if err != nil {
 		return nil, err
 	}
-	return setMember(raw, []string{resultKey, requestStateKey}, jsonString(ref))
+	return setMember(raw, []string{resultKey, requestStateKey}, quotedJSON(ref))
 }
 
 func (c *continuations) store(entry *continuation) (string, error) {

@@ -3,6 +3,7 @@ package mcphost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -46,7 +47,27 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 		}
 	}()
 	route := Route{Caller: caller, Service: d.ID, Revision: gen.revision, Account: d.AccountLabel, Instance: inst.rec.ID, Generation: strconv.FormatInt(gen.number, 10), Upstream: gen.upstream, ServerInfo: gen.serverInfo}
-	return s.router.Forward(ctx, route, request, emit)
+	emitted := false
+	counted := func(raw []byte, terminal bool) error {
+		emitted = true
+		return emit(raw, terminal)
+	}
+	err = s.router.Forward(ctx, route, request, counted)
+	if !retryableHeaderMismatch(err, emitted, request) {
+		return err
+	}
+	// The server rejected headers built from a stale schema. Refresh it once
+	// in the same revision, generation and account scope, then retry.
+	if refreshErr := s.refreshTools(ctx, gen); refreshErr != nil {
+		return errors.Join(err, refreshErr)
+	}
+	return s.router.Forward(WithSchemaRefreshed(ctx), route, request, emit)
+}
+
+// retryableHeaderMismatch allows the single schema-refresh retry only when
+// nothing reached the caller and no continuation was consumed.
+func retryableHeaderMismatch(err error, emitted bool, request mcpwire.Message) bool {
+	return errors.Is(err, ErrHeaderMismatch) && !emitted && member(request.Params(), requestStateKey) == nil
 }
 
 func (s *Supervisor) hold(inst *instance, gen *generation) {
@@ -160,7 +181,10 @@ func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceV
 	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner == caller.Key(), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
-		v.Active, v.ServerInfo, v.LateReplies = gen.active, gen.serverInfo, gen.upstream.LateReplies()
+		v.Active, v.ServerInfo = gen.active, gen.serverInfo
+		if stdio, ok := gen.upstream.(*StdioUpstream); ok {
+			v.LateReplies = stdio.LateReplies()
+		}
 	}
 	return v
 }

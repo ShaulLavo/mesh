@@ -99,7 +99,7 @@ func encodeJSON(value any) ([]byte, error) {
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n")), nil
 }
 
-func jsonString(value string) json.RawMessage {
+func quotedJSON(value string) json.RawMessage {
 	raw, _ := json.Marshal(value)
 	return raw
 }

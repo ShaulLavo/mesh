@@ -219,6 +219,9 @@ func (s *Supervisor) start(ctx context.Context, inst *instance, d Definition) er
 func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (*generation, error) {
 	ctx, cancel := context.WithTimeout(ctx, d.ReadyTimeout+stopTimeout)
 	defer cancel()
+	if !d.Owned() {
+		return s.connectExternal(ctx, inst, d)
+	}
 	env, err := launchEnvironment(d)
 	if err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
@@ -345,33 +348,42 @@ func (s *Supervisor) settle(ctx context.Context, inst *instance, state, reason s
 // probe sends server/discover with empty client capabilities and accepts
 // only a well-formed modern result. A legacy server is never retried in a
 // legacy mode.
-func (s *Supervisor) probe(ctx context.Context, upstream *StdioUpstream, deadline time.Duration) (json.RawMessage, error) {
+func (s *Supervisor) probe(ctx context.Context, upstream Upstream, deadline time.Duration) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
+	reply, err := s.hostCall(ctx, upstream, mcpwire.MethodDiscover, map[string]any{})
+	return probeResult(reply, err)
+}
+
+// hostCall sends one of the host's own read-only requests, with empty client
+// capabilities and a host-assigned ID, and returns its terminal reply.
+func (s *Supervisor) hostCall(ctx context.Context, upstream Upstream, method string, params map[string]any) (mcpwire.Message, error) {
 	id, _ := s.router.ids.request()
-	raw, err := encodeJSON(map[string]any{jsonrpcKey: jsonrpcVersion, "id": id, "method": mcpwire.MethodDiscover, paramsKey: map[string]any{
-		metaKey: map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "probe"}},
-	}})
+	params[metaKey] = map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "host"}}
+	raw, err := encodeJSON(map[string]any{jsonrpcKey: jsonrpcVersion, "id": id, "method": method, paramsKey: params})
 	if err != nil {
-		return nil, err
+		return mcpwire.Message{}, err
 	}
 	request, err := reparse(raw)
 	if err != nil {
-		return nil, err
+		return mcpwire.Message{}, err
 	}
 	var reply mcpwire.Message
 	err = upstream.Call(ctx, request, func(event mcpwire.Event) error {
 		reply = event.Message
 		return nil
 	})
-	return probeResult(reply, err)
+	if err != nil {
+		return reply, fmt.Errorf("host %s: %w", method, err)
+	}
+	return reply, nil
 }
 
 func probeResult(reply mcpwire.Message, err error) (json.RawMessage, error) {
 	if errors.Is(err, ErrOutcomeUnknown) && errors.Is(err, mcpwire.ErrPeerMessage) {
 		return nil, failure(codeIncompatible, false, "server/discover reply is not a valid %s result: %w", mcpwire.Version, err)
 	}
-	if errors.Is(err, ErrProtocolFault) {
+	if errors.Is(err, ErrProtocolFault) || errors.Is(err, ErrMalformedResponse) {
 		return nil, failure(codeIncompatible, false, "server output is not %s MCP: %w", mcpwire.Version, err)
 	}
 	if err != nil {
@@ -392,10 +404,13 @@ func (s *Supervisor) watch(ctx context.Context, inst *instance, gen *generation)
 	}
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
-	status, code := s.awaitExit(ctx, LaunchKey{Service: inst.rec.ServiceID, Instance: inst.rec.ID, Generation: gen.number})
+	status, code := WorkerAbsent, (*int)(nil)
+	if gen.ref.SessionID != "" {
+		status, code = s.awaitExit(ctx, LaunchKey{Service: inst.rec.ServiceID, Instance: inst.rec.ID, Generation: gen.number})
+	}
 	if status == WorkerLive {
 		// Framing was lost while the process runs on: stop it.
-		_ = s.cfg.Launcher.Stop(ctx, gen.ref)
+		_ = s.stopWorker(ctx, gen.ref)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -499,7 +514,7 @@ func (s *Supervisor) stopInstance(ctx context.Context, inst *instance, reason st
 	}
 	if gen != nil {
 		_ = gen.upstream.Close()
-		if err := s.cfg.Launcher.Stop(ctx, gen.ref); err != nil {
+		if err := s.stopWorker(ctx, gen.ref); err != nil {
 			return fmt.Errorf("stop instance %s: %w", inst.rec.ID, err)
 		}
 	}
@@ -514,6 +529,10 @@ func (s *Supervisor) recover(ctx context.Context, inst *instance) {
 	}
 	d, err := s.service(inst.rec.ServiceID)
 	if err != nil {
+		return
+	}
+	if !d.Owned() {
+		_ = s.settle(ctx, inst, StateStopped, "reconnects on its next use", nil)
 		return
 	}
 	key := LaunchKey{Service: inst.rec.ServiceID, Instance: inst.rec.ID, Generation: inst.rec.Generation}

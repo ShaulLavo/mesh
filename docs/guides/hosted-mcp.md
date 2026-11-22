@@ -32,9 +32,20 @@ process at the new revision.
 | `--account-mode none\|host-account` | Whose upstream account the server uses. |
 | `--account-label TEXT` | Non-secret name of that account, shown to callers. |
 
-HTTP definitions (`--url`, `--run`, `--header-secret`) take a loopback URL
-only. They are refused until the host's build includes the HTTP upstream
-client.
+## Publish an HTTP server you run yourself
+
+```sh
+mesh mcp publish search --url http://127.0.0.1:8080/mcp --shared \
+  --account-mode host-account --account-label "search bot" \
+  --header-secret Authorization=/home/me/.secrets/search-auth
+```
+
+The URL must be `127.0.0.1`, `::1` or `localhost`. Mesh owns no process for
+it: start, stop and idle expiry open and close the connection, and
+`mesh mcp logs` has nothing to show. Credential headers are read from their
+secret files and sent only to that URL. Mesh mirrors `x-mcp-header` tool
+parameters from the server's own tool schemas. Mesh-managed HTTP processes
+(`--run`) are refused in this release.
 
 ## Instances and callers
 

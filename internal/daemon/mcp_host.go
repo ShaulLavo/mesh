@@ -164,7 +164,7 @@ func mcpErrorCode(err error) (string, bool) {
 		return "service.conflict", false
 	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrSecretFile):
 		return executionUsageInvalidCode, false
-	case errors.Is(err, mcphost.ErrHTTPUnavailable):
+	case errors.Is(err, mcphost.ErrHTTPUnavailable), errors.Is(err, mcphost.ErrManagedHTTPUnsupported):
 		return "protocol.unsupported", false
 	default:
 		return stateUnavailableCode, true
