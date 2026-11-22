@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,14 +26,20 @@ import (
 type mcpControls struct {
 	app     *application
 	pool    *mcpHostPool
+	caller  protocol.CallerCredential
 	account string
+
+	cwdMu       sync.RWMutex
+	contextCwds map[string]string
 }
 
-func newMCPControls(app *application, pool *mcpHostPool) *mcpControls {
+func newMCPControls(app *application, pool *mcpHostPool, caller protocol.CallerCredential) *mcpControls {
 	return &mcpControls{
-		app:     app,
-		pool:    pool,
-		account: currentAccountName(),
+		app:         app,
+		pool:        pool,
+		caller:      caller,
+		account:     currentAccountName(),
+		contextCwds: make(map[string]string),
 	}
 }
 
@@ -63,7 +70,8 @@ func (c *mcpControls) targetMeta(host HostRecord, info protocol.HostInfo) *mcpna
 
 func hostCapabilitiesFromInfo(info protocol.HostInfo) *agentapi.HostCapabilities {
 	return &agentapi.HostCapabilities{
-		ExecutionPipe: info.ExecutionPipeSupported,
+		ExecutionPipe:    info.ExecutionPipeSupported,
+		ExecutionContext: info.ExecutionContextSupported,
 	}
 }
 
@@ -459,11 +467,13 @@ func (c *mcpControls) listHostServices(ctx context.Context, host HostRecord) (re
 }
 
 func (c *mcpControls) JobStatus(ctx context.Context, req mcpnative.JobRefRequest) (mcpnative.CallOutcome, error) {
-	return c.runJobStateControl(ctx, "sessions.inspect", req.Job.HostID, req.Timeout, protocol.Control{
+	control := protocol.Control{
 		Type:      protocol.TypeExecutionInspect,
 		SessionID: req.Job.SessionID,
 		Instance:  req.Job.Instance,
-	})
+	}
+	c.attachCaller(&control, req.Context)
+	return c.runJobStateControl(ctx, "sessions.inspect", req.Job.HostID, req.Timeout, control)
 }
 
 func (c *mcpControls) JobWait(ctx context.Context, req mcpnative.JobWaitRequest, notify func(mcpnative.ProgressUpdate)) (mcpnative.CallOutcome, error) {
@@ -483,9 +493,13 @@ func (c *mcpControls) JobWait(ctx context.Context, req mcpnative.JobWaitRequest,
 			Instance:      req.Job.Instance,
 			TimeoutMillis: timeoutMS,
 		}
+		c.attachCaller(&sentControl, req.Context)
 		return sentControl
 	})
 	target := c.targetMeta(host, info)
+	if req.Context != nil {
+		target.ContextID = req.Context.String()
+	}
 	if err != nil {
 		return failOutcome("sessions.wait", target, agentError(err, "sessions.wait", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -535,6 +549,7 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 		Cursor:    req.Cursor,
 		MaxBytes:  req.MaxBytes,
 	}
+	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)
 	if err != nil {
@@ -568,6 +583,9 @@ func (c *mcpControls) jobOutputOutcome(control, response protocol.Control, hostI
 }
 
 func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRequest) (mcpnative.CallOutcome, error) {
+	if req.Context != nil && c.caller == "" {
+		return c.identityRequiredOutcome("sessions.request", req.Context.HostID), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveSessionHost(callCtx, req.Host)
@@ -578,8 +596,12 @@ func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRe
 		Type:       protocol.TypeExecutionRequest,
 		RequestKey: req.RequestKey,
 	}
+	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)
+	if req.Context != nil {
+		target.ContextID = req.Context.String()
+	}
 	if err != nil {
 		return failOutcome("sessions.request", target, agentError(err, "sessions.request", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -587,6 +609,9 @@ func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRe
 }
 
 func (c *mcpControls) ListJobs(ctx context.Context, req mcpnative.ListJobsRequest) (mcpnative.CallOutcome, error) {
+	if req.Context != nil && c.caller == "" {
+		return c.identityRequiredOutcome("jobs.list", req.Context.HostID), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveSessionHost(callCtx, req.Host)
@@ -599,8 +624,12 @@ func (c *mcpControls) ListJobs(ctx context.Context, req mcpnative.ListJobsReques
 		ExecutionListLimit: req.Limit,
 		Cursor:             req.Page,
 	}
+	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, true)
 	target := c.targetMeta(host, info)
+	if req.Context != nil {
+		target.ContextID = req.Context.String()
+	}
 	if err != nil {
 		return failOutcome("jobs.list", target, agentError(err, "jobs.list", host.ID, agentapi.HostUnreachable)), nil
 	}
@@ -630,11 +659,16 @@ func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionRecei
 		if err != nil {
 			continue
 		}
+		var contextHandle string
+		if rec.ContextID != "" {
+			contextHandle = protocol.ContextHandle(rec.HostID, rec.ContextID)
+		}
 		items = append(items, mcpnative.JobListItem{
 			Job:       handle,
 			HostID:    rec.HostID,
 			SessionID: rec.SessionID,
 			Instance:  rec.Instance,
+			ContextID: contextHandle,
 			State:     mcpnative.JobStateFromReceipt(rec),
 			CreatedAt: rec.CreatedAt,
 			ExitCode:  exitCode,
@@ -664,6 +698,7 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 		InputBytes:  req.Data,
 		InputEOF:    req.EOF,
 	}
+	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)
 	if err != nil {
@@ -692,28 +727,34 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 }
 
 func (c *mcpControls) JobSignal(ctx context.Context, req mcpnative.JobSignalRequest) (mcpnative.CallOutcome, error) {
-	return c.runJobStateControl(ctx, "sessions.signal", req.Job.HostID, req.Timeout, protocol.Control{
+	control := protocol.Control{
 		Type:      protocol.TypeExecutionSignal,
 		SessionID: req.Job.SessionID,
 		Instance:  req.Job.Instance,
 		Signal:    req.Signal,
-	})
+	}
+	c.attachCaller(&control, req.Context)
+	return c.runJobStateControl(ctx, "sessions.signal", req.Job.HostID, req.Timeout, control)
 }
 
 func (c *mcpControls) JobCancel(ctx context.Context, req mcpnative.JobRefRequest) (mcpnative.CallOutcome, error) {
-	return c.runJobStateControl(ctx, "sessions.kill", req.Job.HostID, req.Timeout, protocol.Control{
+	control := protocol.Control{
 		Type:      protocol.TypeExecutionKill,
 		SessionID: req.Job.SessionID,
 		Instance:  req.Job.Instance,
-	})
+	}
+	c.attachCaller(&control, req.Context)
+	return c.runJobStateControl(ctx, "sessions.kill", req.Job.HostID, req.Timeout, control)
 }
 
 func (c *mcpControls) JobRemove(ctx context.Context, req mcpnative.JobRefRequest) (mcpnative.CallOutcome, error) {
-	return c.runJobStateControl(ctx, "sessions.remove", req.Job.HostID, req.Timeout, protocol.Control{
+	control := protocol.Control{
 		Type:      protocol.TypeExecutionRemove,
 		SessionID: req.Job.SessionID,
 		Instance:  req.Job.Instance,
-	})
+	}
+	c.attachCaller(&control, req.Context)
+	return c.runJobStateControl(ctx, "sessions.remove", req.Job.HostID, req.Timeout, control)
 }
 
 func (c *mcpControls) runJobStateControl(ctx context.Context, operation, hostID string, timeout time.Duration, control protocol.Control) (mcpnative.CallOutcome, error) {
@@ -740,6 +781,9 @@ func (c *mcpControls) jobStateOutcome(operation string, control, response protoc
 		}
 		if control.Instance != "" && (receipt.Instance != control.Instance || receipt.SessionID != control.SessionID) {
 			return failOutcome(operation, target, agentapi.Fail(agentapi.SessionInstanceMismatch, operation, hostID, "host returned another execution instance").Err), nil
+		}
+		if receipt.ContextID != "" && target.ContextID == "" {
+			target.ContextID = protocol.ContextHandle(receipt.HostID, receipt.ContextID)
 		}
 		ref := mcpnative.JobRef{HostID: receipt.HostID, SessionID: receipt.SessionID, Instance: receipt.Instance}
 		stateData = &mcpnative.JobStateData{

@@ -10,23 +10,26 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
 )
 
 const (
-	minTimeoutMS     = 100
-	maxHostListMS    = 30000
-	maxTimeoutMS     = 60000
-	defaultHostMS    = 2000
-	defaultOpMS      = 5000
-	defaultWaitMS    = 10000
-	defaultPageLimit = 100
-	maxPageLimit     = 500
-	defaultOutputMax = 65536
-	maxOutputBytes   = 1 << 20
-	maxCursorLength  = 2048
+	minTimeoutMS      = 100
+	maxHostListMS     = 30000
+	maxTimeoutMS      = 60000
+	defaultHostMS     = 2000
+	defaultOpMS       = 5000
+	defaultWaitMS     = 10000
+	defaultPageLimit  = 100
+	maxPageLimit      = 500
+	defaultOutputMax  = 65536
+	maxOutputBytes    = 1 << 20
+	defaultExecOutput = 16384
+	maxExecOutput     = 256 << 10
+	maxCursorLength   = 2048
 )
 
 type paramError struct {
@@ -175,6 +178,138 @@ func validateRequestKey(key string) error {
 func validateWriteKey(key string) error {
 	if err := session.ValidateWriteKey(key); err != nil {
 		return invalidParam("invalid write_key: %v", err)
+	}
+	return nil
+}
+
+func parseOptionalContext(raw string) (*ContextRef, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	ref, err := ParseContextHandle(raw)
+	if err != nil {
+		return nil, invalidParam("%v", err)
+	}
+	return &ref, nil
+}
+
+func parseRevision(raw json.RawMessage, required bool) (*uint64, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		if required {
+			return nil, invalidParam("expected_revision is required")
+		}
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return nil, invalidParam("expected_revision must be a nonnegative integer or decimal string")
+		}
+		n, err := strconv.ParseUint(text, 10, 64)
+		if err != nil || strconv.FormatUint(n, 10) != text {
+			return nil, invalidParam("expected_revision must be a canonical nonnegative decimal string")
+		}
+		return &n, nil
+	}
+	var n uint64
+	if err := json.Unmarshal(trimmed, &n); err != nil {
+		return nil, invalidParam("expected_revision must be a nonnegative integer or decimal string")
+	}
+	return &n, nil
+}
+
+func parseContextShell(shell string) (string, error) {
+	if shell == "" {
+		return protocol.ContextShellLogin, nil
+	}
+	switch shell {
+	case protocol.ContextShellLogin, protocol.ContextShellSh, protocol.ContextShellNone:
+		return shell, nil
+	default:
+		return "", invalidParam("shell must be login, sh, or none")
+	}
+}
+
+func parseExecStdin(stdin string) (string, error) {
+	if stdin == "" {
+		return execution.StdinClosed, nil
+	}
+	switch stdin {
+	case execution.StdinClosed, execution.StdinOpen:
+		return stdin, nil
+	default:
+		return "", invalidParam("stdin must be closed or open")
+	}
+}
+
+func parseExecWaitMS(ms *int) (int, error) {
+	if ms == nil {
+		return defaultWaitMS, nil
+	}
+	if *ms < 0 || *ms > maxTimeoutMS {
+		return 0, invalidParam("wait_ms must be between 0 and %d", maxTimeoutMS)
+	}
+	return *ms, nil
+}
+
+func parseExecOutputBytes(value *int) (int, error) {
+	if value == nil {
+		return defaultExecOutput, nil
+	}
+	if *value < 1 || *value > maxExecOutput {
+		return 0, invalidParam("output_bytes must be between 1 and %d", maxExecOutput)
+	}
+	return *value, nil
+}
+
+func parseExecCommand(command *string, argv []string) (string, []string, error) {
+	hasCmd := command != nil && *command != ""
+	hasArgv := len(argv) > 0
+	if hasCmd == hasArgv {
+		return "", nil, invalidParam("pass exactly one of command or argv")
+	}
+	if hasCmd {
+		return *command, nil, nil
+	}
+	if len(argv) > 1024 {
+		return "", nil, invalidParam("argv exceeds 1024 entries")
+	}
+	if argv[0] == "" {
+		return "", nil, invalidParam("argv[0] must be non-empty")
+	}
+	return "", argv, nil
+}
+
+func parseEnvMap(env map[string]string, field string) error {
+	if len(env) > protocol.MaxContextEnvVars {
+		return invalidParam("%s exceeds %d variables", field, protocol.MaxContextEnvVars)
+	}
+	size := 0
+	for name, val := range env {
+		if err := validateEnvName(name, field); err != nil {
+			return err
+		}
+		if strings.ContainsRune(val, 0) {
+			return invalidParam("%s[%q] must not contain NUL bytes", field, name)
+		}
+		size += len(name) + len(val) + 2
+	}
+	if size > protocol.MaxContextEnvBytes {
+		return invalidParam("%s exceeds %d bytes", field, protocol.MaxContextEnvBytes)
+	}
+	return nil
+}
+
+func validateEnvName(name, field string) error {
+	if name == "" || strings.HasPrefix(name, "MESH_") {
+		return invalidParam("%s name %q is empty or reserved", field, name)
+	}
+	for i, ch := range name {
+		if ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (i > 0 && ch >= '0' && ch <= '9') {
+			continue
+		}
+		return invalidParam("%s name %q must match [A-Za-z_][A-Za-z0-9_]*", field, name)
 	}
 	return nil
 }

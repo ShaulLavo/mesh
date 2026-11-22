@@ -417,6 +417,223 @@ def exercise_host_mismatch_and_revocation(fixture):
         rev_client.terminate()
 
 
+def exercise_contexts_exec_and_isolation(fixture):
+    host_id = fixture.remote_id
+    ctx_dir_1 = str(fixture.root)
+    ctx_dir_2 = str(fixture.root / "ctx-sub")
+    Path(ctx_dir_2).mkdir(exist_ok=True)
+
+    # Create two distinct application identities under the same account.
+    for name in ("alpha", "beta"):
+        res = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
+        require(res.returncode == 0 and not res.stderr, f"identity create {name} failed: rc={res.returncode} out={res.stdout!r} err={res.stderr!r}")
+
+    alpha = MCPClient(fixture.binary, fixture.environment, args=("--identity", "alpha"))
+    ctx_handle = ""
+    short_job = ""
+    long_job = ""
+    try:
+        # Capabilities report executionContext=true.
+        hosts_resp = alpha.call_tool("mesh_hosts_list", {"timeout_ms": 5000})
+        hosts_list = hosts_resp["result"]["structuredContent"]["data"]["hosts"]
+        remote_host = next((h for h in hosts_list if h.get("hostId") == host_id), None)
+        require(remote_host is not None and remote_host.get("capabilities", {}).get("executionContext") is True, f"executionContext capability missing: {remote_host}")
+
+        # Open context with secret env overlay; secret must never appear in response.
+        opened = alpha.call_tool("mesh_context_open", {
+            "host": host_id,
+            "request_key": "ctx-open-1",
+            "cwd": ctx_dir_1,
+            "shell": "sh",
+            "env": {"APP_TEST_SECRET": "top-secret-42"},
+            "label": "alpha-work",
+        })
+        require(not opened["result"]["isError"], f"context open failed: {opened}")
+        require("top-secret-42" not in json.dumps(opened), f"secret leaked in open reply: {opened}")
+        open_data = opened["result"]["structuredContent"]["data"]
+        ctx_handle = open_data["handle"]
+        require(ctx_handle.startswith(f"mc1.{host_id}."), f"unexpected context handle: {open_data}")
+        require(open_data["revision"] == "1" and open_data["envNames"] == ["APP_TEST_SECRET"] and open_data["uncertainJobs"] == 0, f"unexpected open data: {open_data}")
+
+        # Replay with same key & intent returns original revision-1 snapshot; changed intent conflicts.
+        replayed = alpha.call_tool("mesh_context_open", {
+            "host": host_id,
+            "request_key": "ctx-open-1",
+            "cwd": ctx_dir_1,
+            "shell": "sh",
+            "env": {"APP_TEST_SECRET": "top-secret-42"},
+            "label": "alpha-work",
+        })
+        require(not replayed["result"]["isError"] and replayed["result"]["structuredContent"]["data"]["handle"] == ctx_handle, f"context open replay failed: {replayed}")
+        conflict = alpha.call_tool("mesh_context_open", {
+            "host": host_id,
+            "request_key": "ctx-open-1",
+            "cwd": ctx_dir_2,
+            "shell": "sh",
+        })
+        require(conflict["result"]["isError"] and conflict["result"]["structuredContent"]["errors"][0]["code"] == "request.key_conflict", f"expected request.key_conflict: {conflict}")
+
+        # Update context to revision 2; stale expected_revision returns context.conflict.
+        updated = alpha.call_tool("mesh_context_update", {
+            "context": ctx_handle,
+            "expected_revision": 1,
+            "cwd": ctx_dir_2,
+            "set_env": {"EXTRA_FLAG": "yes"},
+            "label": "alpha-v2",
+        })
+        require(not updated["result"]["isError"] and updated["result"]["structuredContent"]["data"]["revision"] == "2", f"context update failed: {updated}")
+        stale = alpha.call_tool("mesh_context_update", {
+            "context": ctx_handle,
+            "expected_revision": 1,
+            "label": "stale",
+        })
+        require(stale["result"]["isError"] and stale["result"]["structuredContent"]["errors"][0]["code"] == "context.conflict", f"expected context.conflict: {stale}")
+
+        # Retried open and context_receipt return original revision-1 snapshot; context_get returns current rev 2.
+        rec_open = alpha.call_tool("mesh_context_receipt", {"host": host_id, "request_key": "ctx-open-1"})
+        require(not rec_open["result"]["isError"] and rec_open["result"]["structuredContent"]["data"]["revision"] == "1", f"expected rev 1 from context_receipt: {rec_open}")
+        got_cur = alpha.call_tool("mesh_context_get", {"context": ctx_handle})
+        require(not got_cur["result"]["isError"] and got_cur["result"]["structuredContent"]["data"]["revision"] == "2" and got_cur["result"]["structuredContent"]["data"]["cwd"] == ctx_dir_2, f"expected rev 2 from context_get: {got_cur}")
+
+        listed_ctx = alpha.call_tool("mesh_context_list", {"host": host_id})
+        require(not listed_ctx["result"]["isError"] and any(c["handle"] == ctx_handle for c in listed_ctx["result"]["structuredContent"]["data"]["contexts"]), f"context missing from list: {listed_ctx}")
+
+        # Short mesh_exec job: checks inherited env + cwd, attempts cd/export, returns inline stdout/stderr.
+        short_exec = alpha.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-short-1",
+            "command": "printf 'cwd=%s;sec=%s;extra=%s;job=%s' \"$PWD\" \"$APP_TEST_SECRET\" \"$EXTRA_FLAG\" \"$JOB_VAR\"; printf 'err-line' >&2; cd /; export APP_TEST_SECRET=mutated",
+            "env": {"JOB_VAR": "per-job"},
+            "wait_ms": 10000,
+        })
+        require(not short_exec["result"]["isError"], f"short mesh_exec failed: {short_exec}")
+        short_data = short_exec["result"]["structuredContent"]["data"]
+        short_job = short_data["job"]
+        require(short_data["state"] == "exited" and short_data["wait"] == "completed", f"short exec state: {short_data}")
+        require(short_data["result"]["termination"]["code"] == 0, f"short exec exit: {short_data}")
+        require(short_data["stdout"]["data"] == f"cwd={ctx_dir_2};sec=top-secret-42;extra=yes;job=per-job", f"short exec stdout: {short_data}")
+        require(short_data["stderr"]["data"] == "err-line", f"short exec stderr: {short_data}")
+
+        # Child cd/export never mutates context.
+        after_exec_ctx = alpha.call_tool("mesh_context_get", {"context": ctx_handle})
+        require(after_exec_ctx["result"]["structuredContent"]["data"]["revision"] == "2" and after_exec_ctx["result"]["structuredContent"]["data"]["cwd"] == ctx_dir_2, f"exec mutated context: {after_exec_ctx}")
+
+        # CLI parity: create context job via CLI and verify MCP sees matching status/output.
+        cli_create = run_cli(
+            fixture.binary,
+            fixture.environment,
+            "session",
+            "create",
+            "--host",
+            host_id,
+            "--kind",
+            "pipe",
+            "--identity",
+            "alpha",
+            "--context",
+            ctx_handle,
+            "--request-key",
+            "cli-ctx-short-1",
+            "--json",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf 'cli-ctx-ok'",
+        )
+        require(cli_create.returncode == 0, f"CLI context create failed: {cli_create.stdout!r} {cli_create.stderr!r}")
+        cli_rec = json.loads(cli_create.stdout)["data"]
+        cli_job_handle = f"mj1.{host_id}.{cli_rec['sessionId']}.{cli_rec['instance']}"
+        cli_wait = alpha.call_tool("mesh_job_wait", {"job": cli_job_handle, "context": ctx_handle, "wait_ms": 10000})
+        require(not cli_wait["result"]["isError"] and cli_wait["result"]["structuredContent"]["data"]["state"] == "exited", f"MCP wait on CLI context job failed: {cli_wait}")
+        cli_out = alpha.call_tool("mesh_job_output", {"job": cli_job_handle, "context": ctx_handle, "stream": "stdout"})
+        require(cli_out["result"]["structuredContent"]["data"]["data"] == "cli-ctx-ok", f"CLI/MCP context output mismatch: {cli_out}")
+
+        # Long mesh_exec job with progress notifications returning state=running after wait_ms.
+        long_req_id = alpha.request("tools/call", {
+            "name": "mesh_exec",
+            "arguments": {
+                "context": ctx_handle,
+                "request_key": "exec-long-1",
+                "argv": ["/bin/sh", "-c", "printf 'tick-1\\n'; exec /bin/sleep 60"],
+                "wait_ms": 1500,
+            },
+        }, progress_token="exec-long-prog")
+        saw_progress = False
+        long_exec = None
+        while True:
+            msg = alpha.read_message(timeout=15.0)
+            if msg.get("method") == "notifications/progress":
+                require(msg["params"]["progressToken"] == "exec-long-prog", f"wrong progress token: {msg}")
+                saw_progress = True
+                continue
+            require(msg.get("id") == long_req_id, f"unexpected reply while waiting on mesh_exec: {msg}")
+            long_exec = msg
+            break
+        require(saw_progress, "expected notifications/progress during long mesh_exec")
+        require(not long_exec["result"]["isError"], f"long mesh_exec failed: {long_exec}")
+        long_data = long_exec["result"]["structuredContent"]["data"]
+        long_job = long_data["job"]
+        require(long_data["state"] == "running" and long_data["wait"] == "timed_out", f"long exec state: {long_data}")
+
+        # mesh_jobs_list scoped to context lists alpha's context jobs.
+        ctx_jobs = alpha.call_tool("mesh_jobs_list", {"context": ctx_handle, "all": True})
+        ctx_job_ids = [j["job"] for j in ctx_jobs["result"]["structuredContent"]["data"]["jobs"]]
+        require(short_job in ctx_job_ids and long_job in ctx_job_ids, f"missing jobs in context list: {ctx_job_ids}")
+
+        rc, _ = alpha.close_eof()
+        require(rc == 0, f"alpha EOF exit = {rc}")
+    finally:
+        alpha.terminate()
+
+    # App isolation: second identity beta on the same account/host sees zero alpha contexts/jobs
+    # and is denied access to alpha's context and job handles.
+    beta = MCPClient(fixture.binary, fixture.environment, args=("--identity", "beta"))
+    try:
+        beta_ctxs = beta.call_tool("mesh_context_list", {"host": host_id})
+        require(not beta_ctxs["result"]["isError"] and beta_ctxs["result"]["structuredContent"]["data"]["contexts"] == [], f"beta saw alpha contexts: {beta_ctxs}")
+        beta_jobs = beta.call_tool("mesh_jobs_list", {"host": host_id, "all": True})
+        require(not beta_jobs["result"]["isError"] and beta_jobs["result"]["structuredContent"]["data"]["jobs"] == [], f"beta saw alpha jobs: {beta_jobs}")
+        beta_get = beta.call_tool("mesh_context_get", {"context": ctx_handle})
+        require(beta_get["result"]["isError"] and beta_get["result"]["structuredContent"]["errors"][0]["code"] == "context.not_found", f"beta read alpha context: {beta_get}")
+        beta_exec = beta.call_tool("mesh_exec", {"context": ctx_handle, "request_key": "beta-intrude", "argv": ["/bin/true"]})
+        require(beta_exec["result"]["isError"] and beta_exec["result"]["structuredContent"]["errors"][0]["code"] == "context.not_found", f"beta ran in alpha context: {beta_exec}")
+        beta_job = beta.call_tool("mesh_job_status", {"job": long_job})
+        require(beta_job["result"]["isError"] and beta_job["result"]["structuredContent"]["errors"][0]["code"] == "access.denied", f"beta inspected alpha job: {beta_job}")
+        rc, _ = beta.close_eof()
+        require(rc == 0, f"beta EOF exit = {rc}")
+    finally:
+        beta.terminate()
+
+    # Fresh alpha frontend recovers context and running job by request_key with NO discovery,
+    # cancels the running job, closes the context, and confirms closed-context rules.
+    alpha2 = MCPClient(fixture.binary, fixture.environment, args=("--identity", "alpha"))
+    try:
+        fresh_ctx_rec = alpha2.call_tool("mesh_context_receipt", {"host": host_id, "request_key": "ctx-open-1"})
+        require(not fresh_ctx_rec["result"]["isError"] and fresh_ctx_rec["result"]["structuredContent"]["data"]["handle"] == ctx_handle, f"fresh context receipt failed: {fresh_ctx_rec}")
+
+        fresh_job_rec = alpha2.call_tool("mesh_job_receipt", {"context": ctx_handle, "request_key": "exec-long-1"})
+        require(not fresh_job_rec["result"]["isError"] and fresh_job_rec["result"]["structuredContent"]["data"]["job"] == long_job, f"fresh job receipt failed: {fresh_job_rec}")
+
+        cancel_long = alpha2.call_tool("mesh_job_cancel", {"job": long_job, "context": ctx_handle})
+        require(not cancel_long["result"]["isError"], f"cancel long context job failed: {cancel_long}")
+        waited_long = alpha2.call_tool("mesh_job_wait", {"job": long_job, "context": ctx_handle, "wait_ms": 10000})
+        require(waited_long["result"]["structuredContent"]["data"]["state"] == "killed", f"long context job not killed: {waited_long}")
+
+        closed = alpha2.call_tool("mesh_context_close", {"context": ctx_handle, "expected_revision": 2})
+        require(not closed["result"]["isError"] and closed["result"]["structuredContent"]["data"]["state"] == "closed", f"context close failed: {closed}")
+
+        after_close_exec = alpha2.call_tool("mesh_exec", {"context": ctx_handle, "request_key": "after-close", "argv": ["/bin/true"]})
+        require(after_close_exec["result"]["isError"] and after_close_exec["result"]["structuredContent"]["errors"][0]["code"] == "context.closed", f"expected context.closed: {after_close_exec}")
+
+        # Existing job handles and receipts remain readable after context close.
+        still_readable = alpha2.call_tool("mesh_job_status", {"job": short_job, "context": ctx_handle})
+        require(not still_readable["result"]["isError"] and still_readable["result"]["structuredContent"]["data"]["state"] == "exited", f"job unreadable after context close: {still_readable}")
+        rc, _ = alpha2.close_eof()
+        require(rc == 0, f"alpha2 EOF exit = {rc}")
+    finally:
+        alpha2.terminate()
+
+
 def main():
     binary = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="mesh-mcp-native-") as directory:
@@ -427,11 +644,12 @@ def main():
         try:
             fixture.start_remote()
             exercise_short_and_long_jobs(fixture)
+            exercise_contexts_exec_and_isolation(fixture)
             exercise_long_job_input_cancel_and_eof(fixture)
             exercise_host_mismatch_and_revocation(fixture)
         finally:
             fixture.close()
-    print("PASS: native MCP stdio server verified across fresh connect, short/long jobs, CLI parity, wait vs job cancel, EOF, identity mismatch, and live revocation")
+    print("PASS: native MCP stdio server verified across fresh connect, contexts, mesh_exec, app isolation, short/long jobs, CLI parity, wait vs job cancel, EOF, identity mismatch, and live revocation")
 
 
 if __name__ == "__main__":
