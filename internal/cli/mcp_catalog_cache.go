@@ -105,9 +105,9 @@ func (c *mcpCatalogCache) openRoot(create bool) (*os.Root, error) {
 }
 
 func acquireMCPCacheLock(ctx context.Context, root *os.Root) (*os.File, error) {
-	file, err := root.OpenFile(mcpCatalogCacheLockName, os.O_RDWR|os.O_CREATE, 0o600)
+	file, err := openMCPCacheLockFile(root)
 	if err != nil {
-		return nil, fmt.Errorf("open MCP catalog cache lock: %w", err)
+		return nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -125,6 +125,32 @@ func acquireMCPCacheLock(ctx context.Context, root *os.Root) (*os.File, error) {
 	return file, nil
 }
 
+// openMCPCacheLockFile opens the never-removed cache lock file without calling
+// openat(..., O_CREAT|O_NOFOLLOW) concurrently across threads: on Darwin/XNU,
+// concurrent O_CREAT without O_EXCL on a not-yet-created file can spuriously
+// fail with ENOENT.
+func openMCPCacheLockFile(root *os.Root) (*os.File, error) {
+	var lastErr error
+	for range 8 {
+		file, err := root.OpenFile(mcpCatalogCacheLockName, os.O_RDWR, 0)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("open MCP catalog cache lock: %w", err)
+		}
+		file, err = root.OpenFile(mcpCatalogCacheLockName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return file, nil
+		}
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("open MCP catalog cache lock: %w", err)
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("open MCP catalog cache lock: %w", lastErr)
+}
+
 func waitMCPCacheLock(ctx context.Context, file *os.File) error {
 	waitCtx, cancel := context.WithTimeout(ctx, mcpCatalogCacheLockWait)
 	defer cancel()
@@ -135,7 +161,7 @@ func waitMCPCacheLock(ctx context.Context, file *os.File) error {
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EINTR) {
 			return fmt.Errorf("lock MCP catalog cache: %w", err)
 		}
 		select {
