@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -220,13 +222,24 @@ func (c *continuations) deleteLocked(ref string) {
 	}
 }
 
-// retireAccount drops every continuation of a revoked account. A grant
-// mismatch already refuses them; this frees their memory at once.
-func (c *continuations) retireAccount(account string) {
+// grants lists the distinct account and grant pairs holding continuations.
+func (c *continuations) grants() [][2]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen := map[[2]string]bool{}
+	for _, entry := range c.entries {
+		seen[[2]string{entry.binding.principal, entry.binding.grant}] = true
+	}
+	return slices.Collect(maps.Keys(seen))
+}
+
+// retireGrant drops every continuation of a retired grant. A grant mismatch
+// already refuses them; this frees their memory at once.
+func (c *continuations) retireGrant(account, grant string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for ref, entry := range c.entries {
-		if entry.binding.principal == account {
+		if entry.binding.principal == account && entry.binding.grant == grant {
 			c.deleteLocked(ref)
 		}
 	}

@@ -460,58 +460,75 @@ func (s *Supervisor) sweepLoop(ctx context.Context) {
 }
 
 // Sweep expires leases, releases job leases whose job ended, and retires the
-// leases, continuations and isolated instances of accounts whose grant was
-// revoked. Shared instances and native jobs keep running.
+// leases, continuations and isolated instances of grants that are no longer
+// current, including after the device was approved again. Shared instances
+// and native jobs keep running.
 func (s *Supervisor) Sweep(ctx context.Context) {
 	s.mu.Lock()
 	instances := slices.Collect(maps.Values(s.instances))
 	s.mu.Unlock()
-	retired := map[string]bool{}
+	grants := grantCheck{current: s.cfg.GrantCurrent, seen: map[[2]string]bool{}}
 	for _, inst := range instances {
-		s.sweepInstance(ctx, inst, retired)
+		s.sweepInstance(ctx, inst, &grants)
 	}
-	for account := range retired {
-		s.router.continuations.retireAccount(account)
+	for _, held := range s.router.continuations.grants() {
+		if !grants.ok(held[0], held[1]) {
+			s.router.continuations.retireGrant(held[0], held[1])
+		}
 	}
 }
 
-func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, retired map[string]bool) {
+// grantCheck asks about each account and grant once per sweep.
+type grantCheck struct {
+	current func(account, grant string) bool
+	seen    map[[2]string]bool
+}
+
+func (g *grantCheck) ok(account, grant string) bool {
+	key := [2]string{account, grant}
+	if current, known := g.seen[key]; known {
+		return current
+	}
+	g.seen[key] = g.current(account, grant)
+	return g.seen[key]
+}
+
+func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, grants *grantCheck) {
 	s.mu.Lock()
-	owner := inst.rec.OwnerAccount
+	owner, ownerGrant := inst.rec.OwnerAccount, inst.rec.OwnerGrant
 	leases := slices.Clone(inst.rec.Leases)
 	s.mu.Unlock()
-	if owner != "" && !s.accountCurrent(owner, retired) {
-		_ = s.stopInstance(ctx, inst, "the owning device's access was revoked")
+	if owner != "" && !grants.ok(owner, ownerGrant) {
+		_ = s.stopInstance(ctx, inst, "the owning device's grant was retired")
 	}
 	now := s.cfg.Now()
-	kept := slices.DeleteFunc(leases, func(l Lease) bool {
-		return !now.Before(l.Expires) || !s.accountCurrent(l.Account, retired) || (l.Job != "" && !s.jobActive(ctx, l.Account, l.App, l.Job))
-	})
-	s.mu.Lock()
-	changed := len(kept) != len(inst.rec.Leases)
-	if changed {
-		inst.rec.Leases = kept
-		if d, err := s.serviceLocked(inst.rec.ServiceID); err == nil {
-			s.armIdleLocked(inst, d)
+	var expired []Lease
+	for _, l := range leases {
+		if !now.Before(l.Expires) || !grants.ok(l.Account, l.Grant) || (l.Job != "" && !s.jobActive(ctx, l.Account, l.App, l.Job)) {
+			expired = append(expired, l)
 		}
 	}
-	s.mu.Unlock()
-	if changed {
+	if s.dropLeases(inst, expired) {
 		_ = s.persist(ctx, inst)
 	}
 }
 
-func (s *Supervisor) jobActive(ctx context.Context, account, app, job string) bool {
-	return s.cfg.JobActive != nil && s.cfg.JobActive(ctx, account, app, job)
-}
-
-func (s *Supervisor) accountCurrent(account string, retired map[string]bool) bool {
-	if retired[account] {
+// dropLeases removes exactly the leases the sweep judged, so a lease added
+// or renewed while the sweep ran unlocked survives it.
+func (s *Supervisor) dropLeases(inst *instance, expired []Lease) bool {
+	if len(expired) == 0 {
 		return false
 	}
-	if s.cfg.AccountCurrent(account) {
-		return true
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	before := len(inst.rec.Leases)
+	inst.rec.Leases = slices.DeleteFunc(inst.rec.Leases, func(l Lease) bool { return slices.Contains(expired, l) })
+	if d, err := s.serviceLocked(inst.rec.ServiceID); err == nil {
+		s.armIdleLocked(inst, d)
 	}
-	retired[account] = true
-	return false
+	return len(inst.rec.Leases) != before
+}
+
+func (s *Supervisor) jobActive(ctx context.Context, account, app, job string) bool {
+	return s.cfg.JobActive != nil && s.cfg.JobActive(ctx, account, app, job)
 }

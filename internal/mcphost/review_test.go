@@ -129,6 +129,75 @@ func TestStopDuringRecoveryStaysStopped(t *testing.T) {
 	}
 }
 
+// Revoking and re-approving a device gives it a new grant incarnation. The
+// old grant's leases, continuations and isolated instances must go even
+// though the device is approved again; shared instances keep running.
+func TestReapprovedDeviceLosesOldGrantState(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo"})
+	f.publish(t, Definition{Name: "shared", InstancePolicy: PolicyShared})
+	old := caller("a")
+	for _, svc := range []string{"repo", "shared"} {
+		if _, err := whoami(t, f.sup, old, Target{Service: svc}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := f.sup.Lease(t.Context(), old, Target{Service: "repo"}, "", time.Hour, ""); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), testHang)
+	defer cancel()
+	if err := f.sup.Forward(ctx, old, Target{Service: "repo"}, callRequest(t, `1`, toolParams("ask", `{}`, "")), (&collected{}).emit); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.retiredGrants[old.Grant] = true
+	f.mu.Unlock()
+	f.sup.Sweep(t.Context())
+	admin := Caller{Account: "local", Admin: true}
+	for _, v := range f.sup.Services(admin) {
+		want := StateReady
+		if v.Name == "repo" {
+			want = StateStopped
+		}
+		if v.Instances[0].State != want || (v.Name == "repo" && v.Instances[0].Leases != 0) {
+			t.Fatalf("%s after re-approval: %+v", v.Name, v.Instances[0])
+		}
+	}
+	f.sup.router.continuations.mu.Lock()
+	pending := len(f.sup.router.continuations.entries)
+	f.sup.router.continuations.mu.Unlock()
+	if pending != 0 {
+		t.Fatalf("%d continuations of the retired grant remain", pending)
+	}
+}
+
+// A lease added while a sweep is checking jobs must survive the sweep.
+func TestSweepKeepsLeaseAddedConcurrently(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo", InstancePolicy: PolicyShared})
+	f.jobs["job"] = true
+	if _, _, err := f.sup.Lease(t.Context(), caller("a"), Target{Service: "repo"}, "", time.Hour, "job"); err != nil {
+		t.Fatal(err)
+	}
+	checking, resume := make(chan struct{}), make(chan struct{})
+	f.mu.Lock()
+	f.jobs["job"] = false
+	f.jobCheck = func() { close(checking); <-resume }
+	f.mu.Unlock()
+	swept := make(chan struct{})
+	go func() { defer close(swept); f.sup.Sweep(t.Context()) }()
+	<-checking
+	if _, _, err := f.sup.Lease(t.Context(), caller("b"), Target{Service: "repo"}, "", time.Hour, ""); err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+	<-swept
+	if leases := f.sup.Services(caller("b"))[0].Instances[0].Leases; leases != 1 {
+		t.Fatalf("leases after the sweep: %d, want only the new one", leases)
+	}
+}
+
 func TestDiscoverMasksTasks(t *testing.T) {
 	router, err := NewRouter()
 	if err != nil {

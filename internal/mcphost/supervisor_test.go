@@ -279,13 +279,17 @@ type supervisorFixture struct {
 	launcher *fakeLauncher
 	sup      *Supervisor
 	accounts map[string]bool
-	jobs     map[string]bool
+	// retiredGrants are grant incarnations replaced by a re-approval.
+	retiredGrants map[string]bool
+	jobs          map[string]bool
+	// jobCheck, when set, runs inside each job check.
+	jobCheck func()
 	mu       sync.Mutex
 }
 
 func newSupervisorFixture(t *testing.T) *supervisorFixture {
 	t.Helper()
-	f := &supervisorFixture{store: newMemStore(), launcher: newFakeLauncher(), accounts: map[string]bool{}, jobs: map[string]bool{}}
+	f := &supervisorFixture{store: newMemStore(), launcher: newFakeLauncher(), accounts: map[string]bool{}, retiredGrants: map[string]bool{}, jobs: map[string]bool{}}
 	f.sup = f.open(t)
 	t.Cleanup(f.launcher.stopAll)
 	return f
@@ -294,8 +298,8 @@ func newSupervisorFixture(t *testing.T) *supervisorFixture {
 func (f *supervisorFixture) open(t *testing.T) *Supervisor {
 	t.Helper()
 	sup, err := NewSupervisor(Config{Store: f.store, Launcher: f.launcher, HostDefaultCwd: t.TempDir(),
-		AccountCurrent: func(a string) bool { f.mu.Lock(); defer f.mu.Unlock(); return !f.accounts[a] },
-		JobActive:      func(_ context.Context, _, _, job string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.jobs[job] },
+		GrantCurrent: func(a, g string) bool { f.mu.Lock(); defer f.mu.Unlock(); return !f.accounts[a] && !f.retiredGrants[g] },
+		JobActive:    f.jobActive,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +309,16 @@ func (f *supervisorFixture) open(t *testing.T) *Supervisor {
 	}
 	t.Cleanup(sup.Close)
 	return sup
+}
+
+func (f *supervisorFixture) jobActive(_ context.Context, _, _, job string) bool {
+	f.mu.Lock()
+	active, check := f.jobs[job], f.jobCheck
+	f.mu.Unlock()
+	if check != nil {
+		check()
+	}
+	return active
 }
 
 func (f *supervisorFixture) publish(t *testing.T, d Definition) Definition {

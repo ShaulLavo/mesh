@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/shaul/mesh/internal/mcpwire"
@@ -35,9 +36,17 @@ func (s *Supervisor) pick(ctx context.Context, caller Caller, target Target) (*i
 		return nil, d, failure(codeUnavailable, false, "service %s is disabled", d.Name)
 	}
 	inst, err := s.findLocked(caller, d, target)
-	if inst != nil || err != nil {
+	if err != nil {
 		s.mu.Unlock()
-		return inst, d, err
+		return nil, d, err
+	}
+	if inst != nil {
+		stale := inst.rec.Owner != "" && inst.rec.OwnerGrant != caller.Grant
+		s.mu.Unlock()
+		if stale {
+			return inst, d, s.rebind(ctx, inst, caller)
+		}
+		return inst, d, nil
 	}
 	inst, err = s.newInstanceLocked(caller, d, !target.New)
 	s.mu.Unlock()
@@ -51,6 +60,20 @@ func (s *Supervisor) pick(ctx context.Context, caller Caller, target Target) (*i
 		return nil, d, err
 	}
 	return inst, d, nil
+}
+
+// rebind hands an isolated instance to its caller's new grant incarnation.
+// Whatever ran under the old grant is that grant's state, so it is stopped
+// first rather than inherited.
+func (s *Supervisor) rebind(ctx context.Context, inst *instance, caller Caller) error {
+	if err := s.stopInstance(ctx, inst, "the owning device was approved again"); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	inst.rec.OwnerGrant = caller.Grant
+	inst.rec.Leases = slices.DeleteFunc(inst.rec.Leases, func(l Lease) bool { return l.Grant != caller.Grant })
+	s.mu.Unlock()
+	return s.persist(ctx, inst)
 }
 
 func (s *Supervisor) findLocked(caller Caller, d Definition, target Target) (*instance, error) {
@@ -98,7 +121,7 @@ func (s *Supervisor) newInstanceLocked(caller Caller, d Definition, isDefault bo
 	now := s.cfg.Now()
 	rec := InstanceRecord{ID: id, ServiceID: d.ID, Default: isDefault, Revision: d.Revision, Intent: intentStop, State: StateStopped, CreatedAt: now, UpdatedAt: now}
 	if d.InstancePolicy == PolicyIsolated {
-		rec.Owner, rec.OwnerAccount = caller.Key(), caller.Account
+		rec.Owner, rec.OwnerAccount, rec.OwnerGrant = caller.Key(), caller.Account, caller.Grant
 	}
 	inst := &instance{rec: rec}
 	s.instances[id] = inst

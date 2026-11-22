@@ -89,9 +89,10 @@ type Config struct {
 	Store    Store
 	Launcher Launcher
 	Now      func() time.Time
-	// AccountCurrent reports whether an account still has its grant. Leases,
-	// continuations and isolated instances of a retired account are retired.
-	AccountCurrent func(account string) bool
+	// GrantCurrent reports whether grant is still the account's current
+	// grant incarnation. Leases, continuations and isolated instances of a
+	// retired grant are retired, even if the device was approved again.
+	GrantCurrent func(account, grant string) bool
 	// JobActive reports whether a native job a lease names is still running
 	// and belongs to the caller: the application app when it has one, or
 	// the account's own work otherwise.
@@ -151,8 +152,8 @@ func NewSupervisor(cfg Config) (*Supervisor, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.AccountCurrent == nil {
-		cfg.AccountCurrent = func(string) bool { return true }
+	if cfg.GrantCurrent == nil {
+		cfg.GrantCurrent = func(string, string) bool { return true }
 	}
 	router, err := NewRouter()
 	if err != nil {

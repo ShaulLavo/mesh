@@ -41,7 +41,7 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 	if err != nil {
 		home = "/"
 	}
-	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, AccountCurrent: c.accountCurrent, JobActive: c.jobActive, HostDefaultCwd: home})
+	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: configure MCP hosting: %w", err)
 	}
@@ -54,14 +54,27 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 
 func (c *mcpController) Close() { c.sup.Close() }
 
-// accountCurrent reports whether a device still has its full-device grant.
-// The local account cannot be revoked from here.
-func (c *mcpController) accountCurrent(account string) bool {
+// grantCurrent reports whether grant is the device's current approval
+// line. A revoked and re-approved device has a new incarnation, so state
+// bound to the old one is retired. The local account cannot be revoked.
+func (c *mcpController) grantCurrent(account, grant string) bool {
 	id, device := strings.CutPrefix(account, "device:")
 	if !device {
 		return true
 	}
-	return identity.GrantedIdentity(c.stateDir, id)
+	incarnation, ok := identity.GrantIncarnation(c.stateDir, id)
+	return ok && "device:"+incarnation == grant
+}
+
+// latchedGrant reads the device's grant incarnation and binds it to the
+// connection: a connection admitted under an older incarnation is no
+// longer current, so a successful check afterwards proves the two match.
+func (c *mcpController) latchedGrant(peer transport.AuthenticatedPeer, id string) (string, error) {
+	incarnation, ok := identity.GrantIncarnation(c.stateDir, id)
+	if !ok || !peer.Current() {
+		return "", access.ErrDenied
+	}
+	return "device:" + incarnation, nil
 }
 
 // jobActive accepts "SESSION/INSTANCE" naming a running native job owned by
@@ -106,11 +119,10 @@ func (c *mcpController) caller(ctx context.Context, credential protocol.CallerCr
 	caller := mcphost.Caller{Account: scope.Class + ":" + scope.Principal, Grant: "local", App: string(app.ID), Admin: !present}
 	if scope.Class == appcaller.ScopeDevice {
 		peer, _ := transport.Peer(ctx)
-		incarnation, ok := identity.GrantIncarnation(c.stateDir, scope.Principal)
-		if !ok {
-			return mcphost.Caller{}, access.ErrDenied
+		if caller.Grant, err = c.latchedGrant(peer, scope.Principal); err != nil {
+			return mcphost.Caller{}, err
 		}
-		caller.Grant, caller.Current = "device:"+incarnation, peer.Current
+		caller.Current = peer.Current
 	}
 	return caller, nil
 }

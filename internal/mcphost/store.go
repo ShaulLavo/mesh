@@ -44,8 +44,10 @@ type InstanceRecord struct {
 	ServiceID string `json:"serviceId"`
 	// Owner is the caller key of an isolated instance and empty when shared.
 	Owner string `json:"owner,omitempty"`
-	// OwnerAccount lets revocation find the instances of a retired account.
+	// OwnerAccount and OwnerGrant let revocation find the instances of a
+	// retired grant.
 	OwnerAccount string  `json:"ownerAccount,omitempty"`
+	OwnerGrant   string  `json:"ownerGrant,omitempty"`
 	Default      bool    `json:"default,omitempty"`
 	Revision     int64   `json:"revision"`
 	Generation   int64   `json:"generation"`
