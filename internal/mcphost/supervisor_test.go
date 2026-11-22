@@ -284,7 +284,7 @@ func (f *supervisorFixture) open(t *testing.T) *Supervisor {
 	t.Helper()
 	sup, err := NewSupervisor(Config{Store: f.store, Launcher: f.launcher, HostDefaultCwd: t.TempDir(),
 		AccountCurrent: func(a string) bool { f.mu.Lock(); defer f.mu.Unlock(); return !f.accounts[a] },
-		JobActive:      func(_ context.Context, job string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.jobs[job] },
+		JobActive:      func(_ context.Context, _, job string) bool { f.mu.Lock(); defer f.mu.Unlock(); return f.jobs[job] },
 	})
 	if err != nil {
 		t.Fatal(err)

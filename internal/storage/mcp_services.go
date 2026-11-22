@@ -55,10 +55,10 @@ func (s *Store) PutMCPService(ctx context.Context, row MCPServiceRow, expected i
 	var err error
 	if expected == 0 {
 		result, err = s.db.ExecContext(ctx, "INSERT INTO mcp_services (id, name, revision, transport, record) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-			row.ID, row.Name, row.Revision, row.Transport, row.Record)
+			row.ID, row.Name, row.Revision, row.Transport, string(row.Record))
 	} else {
 		result, err = s.db.ExecContext(ctx, "UPDATE mcp_services SET name = ?, revision = ?, transport = ?, record = ? WHERE id = ? AND revision = ?",
-			row.Name, row.Revision, row.Transport, row.Record, row.ID, expected)
+			row.Name, row.Revision, row.Transport, string(row.Record), row.ID, expected)
 	}
 	if err != nil {
 		return fmt.Errorf("storage: save MCP service %s: %w", row.Name, err)
@@ -125,7 +125,7 @@ func (s *Store) ListMCPInstances(ctx context.Context) ([]MCPInstanceRow, error) 
 func (s *Store) PutMCPInstance(ctx context.Context, row MCPInstanceRow) error {
 	result, err := s.db.ExecContext(ctx, `INSERT INTO mcp_instances (id, service_id, record)
         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM mcp_services WHERE id = ?)
-        ON CONFLICT(id) DO UPDATE SET record = excluded.record`, row.ID, row.ServiceID, row.Record, row.ServiceID)
+        ON CONFLICT(id) DO UPDATE SET record = excluded.record`, row.ID, row.ServiceID, string(row.Record), row.ServiceID)
 	if err != nil {
 		return fmt.Errorf("storage: save MCP instance %s: %w", row.ID, err)
 	}

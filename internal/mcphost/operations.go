@@ -316,7 +316,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 	if ttl < 0 || ttl > maxLeaseTTL {
 		return Lease{}, InstanceView{}, invalid("lease TTL must be between 0 and 24h")
 	}
-	if job != "" && (s.cfg.JobActive == nil || !s.cfg.JobActive(ctx, job)) {
+	if job != "" && !s.jobActive(ctx, caller.Account, job) {
 		return Lease{}, InstanceView{}, failure(codeNotFound, false, "job %s is not a running job of this caller", job)
 	}
 	inst, _, err := s.pick(ctx, caller, target)
@@ -414,7 +414,7 @@ func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, retired 
 	}
 	now := s.cfg.Now()
 	kept := slices.DeleteFunc(leases, func(l Lease) bool {
-		return !now.Before(l.Expires) || !s.accountCurrent(l.Account, retired) || (l.Job != "" && (s.cfg.JobActive == nil || !s.cfg.JobActive(ctx, l.Job)))
+		return !now.Before(l.Expires) || !s.accountCurrent(l.Account, retired) || (l.Job != "" && !s.jobActive(ctx, l.Account, l.Job))
 	})
 	s.mu.Lock()
 	changed := len(kept) != len(inst.rec.Leases)
@@ -428,6 +428,10 @@ func (s *Supervisor) sweepInstance(ctx context.Context, inst *instance, retired 
 	if changed {
 		_ = s.persist(ctx, inst)
 	}
+}
+
+func (s *Supervisor) jobActive(ctx context.Context, account, job string) bool {
+	return s.cfg.JobActive != nil && s.cfg.JobActive(ctx, account, job)
 }
 
 func (s *Supervisor) accountCurrent(account string, retired map[string]bool) bool {

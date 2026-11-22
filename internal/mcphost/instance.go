@@ -221,7 +221,7 @@ func (s *Supervisor) launch(inst *instance, d Definition) (*generation, error) {
 	}
 	ref, err := s.cfg.Launcher.Launch(ctx, LaunchSpec{Key: key, Argv: d.Argv, Cwd: cwd, Env: env})
 	if errors.Is(err, ErrLaunchUncertain) {
-		return nil, s.settle(ctx, inst, StateUncertain, "worker launch outcome is unknown; no second worker starts until it settles", nil)
+		return nil, s.settle(ctx, inst, StateUncertain, "worker launch outcome is unknown; no second worker starts until it settles: "+err.Error(), nil)
 	}
 	if err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, "worker did not start: "+err.Error(), nil)
@@ -261,12 +261,31 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 // failStart classifies an early exit, such as a missing runtime, by the
 // worker's exit status.
 func (s *Supervisor) failStart(ctx context.Context, inst *instance, key LaunchKey, ref WorkerRef, reason string) error {
-	_, status, code, _ := s.cfg.Launcher.Locate(ctx, key)
-	if status == WorkerEnded {
+	if status, code := s.awaitExit(ctx, key); status == WorkerEnded {
 		return s.settle(ctx, inst, StateFailed, exitReason(code), code)
 	}
 	_ = s.cfg.Launcher.Stop(ctx, ref)
 	return s.settle(ctx, inst, StateFailed, reason, nil)
+}
+
+// awaitExit gives a worker whose child just exited a moment to record the
+// exit status, so the failure names it.
+func (s *Supervisor) awaitExit(ctx context.Context, key LaunchKey) (WorkerStatus, *int) {
+	ctx, cancel := context.WithTimeout(ctx, exitSettle)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, status, code, _ := s.cfg.Launcher.Locate(ctx, key)
+		if status != WorkerLive {
+			return status, code
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return status, nil
+		}
+	}
 }
 
 func exitReason(code *int) string {

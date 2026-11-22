@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/shaul/mesh/internal/storage"
 )
 
 // WorkerStatus is what the launcher found for one reserved generation.
@@ -68,16 +70,16 @@ var (
 )
 
 const (
-	drainGrace     = 30 * time.Second
-	maxLeaseTTL    = 24 * time.Hour
-	minBackoff     = time.Second
-	maxBackoff     = 5 * time.Minute
-	sweepInterval  = 30 * time.Second
-	stopTimeout    = 10 * time.Second
-	stderrLimit    = 1 << 20
-	exitNotFound   = 127
-	exitNoPermit   = 126
-	probeIDTimeout = time.Second
+	drainGrace    = 30 * time.Second
+	maxLeaseTTL   = 24 * time.Hour
+	minBackoff    = time.Second
+	maxBackoff    = 5 * time.Minute
+	sweepInterval = 30 * time.Second
+	stopTimeout   = 10 * time.Second
+	stderrLimit   = 1 << 20
+	exitNotFound  = 127
+	exitNoPermit  = 126
+	exitSettle    = 2 * time.Second
 )
 
 type Config struct {
@@ -87,8 +89,9 @@ type Config struct {
 	// AccountCurrent reports whether an account still has its grant. Leases,
 	// continuations and isolated instances of a retired account are retired.
 	AccountCurrent func(account string) bool
-	// JobActive reports whether a native job a lease names is still running.
-	JobActive func(ctx context.Context, job string) bool
+	// JobActive reports whether a native job a lease names is still running
+	// and belongs to account.
+	JobActive func(ctx context.Context, account, job string) bool
 	// HostDefaultCwd is used for definitions without a working directory.
 	HostDefaultCwd string
 }
@@ -253,7 +256,10 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 		return d, err
 	}
 	if err := s.cfg.Store.PutMCPService(ctx, row, expected); err != nil {
-		return d, fmt.Errorf("publish %s: %w: %w", d.Name, ErrConflict, err)
+		if errors.Is(err, storage.ErrMCPRevision) {
+			return d, fmt.Errorf("publish %s: %w: %w", d.Name, ErrConflict, err)
+		}
+		return d, fmt.Errorf("publish %s: %w", d.Name, err)
 	}
 	s.services[d.ID], s.byName[d.Name] = d, d.ID
 	s.retireRevisionLocked(d)
