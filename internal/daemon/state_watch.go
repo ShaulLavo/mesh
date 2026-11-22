@@ -56,13 +56,14 @@ type stateBroker struct {
 	subscribers  map[*stateSubscriber]struct{}
 	metrics      *hostmetrics.Snapshot
 	metricsAt    time.Time
+	mcpListings  map[string]protocol.MCPListingRevision
 }
 
 func newStateBroker(limit int, now func() time.Time) *stateBroker {
 	if limit == 0 {
 		limit = DefaultSubscriberLimit
 	}
-	return &stateBroker{projection: make(chan struct{}, 1), dirty: map[storage.SessionID]bool{}, revisions: map[storage.SessionID]uint64{}, activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}}
+	return &stateBroker{projection: make(chan struct{}, 1), dirty: map[storage.SessionID]bool{}, revisions: map[storage.SessionID]uint64{}, activity: make(chan struct{}, 1), now: now, limit: limit, stored: map[storage.SessionID]storage.Session{}, memory: map[string]protocol.SessionMemory{}, sessions: map[string]protocol.SessionInfo{}, services: map[string]protocol.ServiceInfo{}, observations: map[string]sectionObservation{}, subscribers: map[*stateSubscriber]struct{}{}, mcpListings: map[string]protocol.MCPListingRevision{}}
 }
 func (b *stateBroker) observeSessions(err error) { b.observe(protocol.TopicSessions, err) }
 func (b *stateBroker) observeServices(err error) { b.observe(protocol.TopicServices, err) }
@@ -300,6 +301,9 @@ func (b *stateBroker) snapshotLocked(sub *stateSubscriber) *protocol.StateSnapsh
 		}
 		slices.SortFunc(snapshot.Services, func(a, c protocol.ServiceInfo) int { return strings.Compare(a.Name, c.Name) })
 	}
+	if sub.topics[protocol.TopicMCP] {
+		snapshot.MCPListings = b.mcpSnapshotLocked()
+	}
 	if sub.topics[protocol.TopicMetrics] && b.metrics != nil {
 		v := *b.metrics
 		ageMetrics(&v, max(0, b.now().Sub(b.metricsAt).Milliseconds()))
@@ -345,6 +349,7 @@ func cloneStatePayload(value protocol.StatePayload) protocol.StatePayload {
 	value.Session = cloneStatePointer(value.Session, cloneStateSession)
 	value.Service = cloneStatePointer(value.Service, cloneStateService)
 	value.Metrics = cloneStatePointer(value.Metrics, cloneStateMetrics)
+	value.MCPListing = cloneStatePointer(value.MCPListing, nil)
 	return value
 }
 

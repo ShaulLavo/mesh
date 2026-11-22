@@ -68,18 +68,21 @@ type CatalogInstance struct {
 // mcp.catalog (PLAN §6.6). Operational configuration (argv/command, cwd,
 // endpoint URL, env/secret/header names) never enters the catalog.
 type CatalogService struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Revision        int64             `json:"revision"`
-	Transport       string            `json:"transport"`
-	Lifecycle       string            `json:"lifecycle"`
-	IdleSeconds     int64             `json:"idleSeconds,omitempty"`
-	ReadySeconds    int64             `json:"readySeconds"`
-	InstancePolicy  string            `json:"instancePolicy"`
-	AccountMode     string            `json:"accountMode"`
-	AccountLabel    string            `json:"accountLabel,omitempty"`
-	Disabled        bool              `json:"disabled,omitempty"`
-	ProtocolVersion string            `json:"protocolVersion"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Revision        int64  `json:"revision"`
+	Transport       string `json:"transport"`
+	Lifecycle       string `json:"lifecycle"`
+	IdleSeconds     int64  `json:"idleSeconds,omitempty"`
+	ReadySeconds    int64  `json:"readySeconds"`
+	InstancePolicy  string `json:"instancePolicy"`
+	AccountMode     string `json:"accountMode"`
+	AccountLabel    string `json:"accountLabel,omitempty"`
+	Disabled        bool   `json:"disabled,omitempty"`
+	ProtocolVersion string `json:"protocolVersion"`
+	// ListingRevision changes whenever the host sees this service's
+	// listings change (PLAN section 7.3).
+	ListingRevision string            `json:"listingRevision,omitempty"`
 	Instances       []CatalogInstance `json:"instances"`
 }
 
@@ -180,6 +183,7 @@ func (s *Supervisor) catalogLocked(caller Caller, d Definition) CatalogService {
 		AccountLabel:    d.AccountLabel,
 		Disabled:        d.Disabled,
 		ProtocolVersion: mcpwire.Version,
+		ListingRevision: s.router.listings.token(d.ID, d.AccountLabel, d.Revision),
 		Instances:       []CatalogInstance{},
 	}
 	for _, inst := range s.instances {
