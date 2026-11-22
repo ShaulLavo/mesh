@@ -31,15 +31,22 @@ const (
 // pinned connection and remembers the host's private name for URLs.
 func (c *mcpControls) poolServiceExchange(host HostRecord, last *protocol.HostInfo) serviceExchange {
 	return func(ctx context.Context, request protocol.Control, expectedPrivateName *string) (protocol.Control, protocol.HostInfo, error) {
-		response, info, err := c.pool.ExchangeShort(ctx, host, request, request.Type == protocol.TypeServiceList)
-		*last = info
-		if err != nil {
+		if expectedPrivateName == nil {
+			response, info, err := c.pool.ExchangeShort(ctx, host, request, request.Type == protocol.TypeServiceList)
+			*last = info
 			return response, info, err
 		}
-		if expectedPrivateName != nil && info.PrivateName != *expectedPrivateName {
-			return protocol.Control{}, info, fmt.Errorf("host %s private name changed after preview", HostLabel(host))
+		// The private name the preview used must still hold before the
+		// publish is sent, on the connection that sends it.
+		check := func(info protocol.HostInfo) error {
+			if info.PrivateName != *expectedPrivateName {
+				return fmt.Errorf("host %s private name changed after preview", HostLabel(host))
+			}
+			return nil
 		}
-		return response, info, nil
+		response, info, err := c.pool.ExchangeShortChecked(ctx, host, request, check)
+		*last = info
+		return response, info, err
 	}
 }
 

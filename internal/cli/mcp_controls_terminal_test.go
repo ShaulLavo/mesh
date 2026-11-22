@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/shaul/mesh/internal/mcpnative"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/recovery"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 const testTerminalHost = "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"
@@ -67,5 +69,39 @@ func TestRecoveredReplacementAcceptsRetryAndRefusesSource(t *testing.T) {
 	live := protocol.Control{Type: protocol.TypeRecovered, SessionID: "7K3D", RecoveryResult: &recovery.Result{SessionID: "7K3D", Existing: true, State: "detached"}}
 	if _, err := recoveredReplacement(host, req, live); err == nil {
 		t.Fatal("a live source was accepted as its own replacement")
+	}
+}
+
+// Publishing checks the host's private name on the connection that sends
+// the upsert, before it is sent. A changed name sends no upsert at all.
+func TestPublishChecksPrivateNameBeforeUpsert(t *testing.T) {
+	host := HostRecord{ID: testTerminalHost, MeshIdentity: testTerminalHost, MachineName: "pc", NameRevision: 1, Endpoint: "ws://127.0.0.1:1/control/ws"}
+	for _, tc := range []struct {
+		current string
+		upserts int32
+	}{{current: "changed.example", upserts: 0}, {current: "site.example", upserts: 1}} {
+		var upserts atomic.Int32
+		dial := func(context.Context, HostRecord) (transport.Conn, error) {
+			return newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) {
+				switch req.Type {
+				case protocol.TypeHostInfo:
+					return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: host.ID, MeshIdentity: host.MeshIdentity, MachineName: "pc", NameRevision: 1, PrivateName: tc.current}}, nil
+				case protocol.TypeServiceUpsert:
+					upserts.Add(1)
+					return protocol.Control{Type: protocol.TypeServiceUpserted}, nil
+				default:
+					return protocol.Control{Type: protocol.TypeError, Message: "unexpected"}, nil
+				}
+			}), nil
+		}
+		pool := newMCPHostPool(dial, time.Now)
+		c := &mcpControls{pool: pool}
+		var info protocol.HostInfo
+		expected := "site.example"
+		_, _, err := c.poolServiceExchange(host, &info)(t.Context(), protocol.Control{Type: protocol.TypeServiceUpsert}, &expected)
+		pool.Close()
+		if upserts.Load() != tc.upserts || (tc.upserts == 0) != (err != nil) {
+			t.Fatalf("current name %q: upserts=%d err=%v", tc.current, upserts.Load(), err)
+		}
 	}
 }
