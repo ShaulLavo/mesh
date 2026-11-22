@@ -390,9 +390,9 @@ jobs:
       actions: read
     timeout-minutes: 75
     outputs:
-      linux-amd64: ${{ matrix.platform == 'linux/amd64' && steps.handoff.outputs.pin || '' }}
-      linux-arm64: ${{ matrix.platform == 'linux/arm64' && steps.handoff.outputs.pin || '' }}
-      darwin-arm64: ${{ matrix.platform == 'darwin/arm64' && steps.handoff.outputs.pin || '' }}
+      linux-amd64: ${{ job.status == 'success' && matrix.platform == 'linux/amd64' && steps.handoff.outputs.pin || '' }}
+      linux-arm64: ${{ job.status == 'success' && matrix.platform == 'linux/arm64' && steps.handoff.outputs.pin || '' }}
+      darwin-arm64: ${{ job.status == 'success' && matrix.platform == 'darwin/arm64' && steps.handoff.outputs.pin || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -542,9 +542,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scratch=$(mktemp -d /tmp/ms-XXXXXX)
-          trap 'rm -rf -- "$scratch"' EXIT
-          export TMPDIR="$scratch" MESH_SHORT_TMP="$scratch"
           output="$RUNNER_TEMP/publication-evidence"
           plan=(--publication-platform-plan "$PUBLICATION_PLAN" --publication-plan-sha256 "$PLAN_SHA")
           extra=()
@@ -555,7 +552,10 @@ jobs:
             --native-helper "$RUNNER_TEMP/harness.noindex/native-helper" \
             --publication-version "$VERSION" --publication-source "$SOURCE" \
             "${extra[@]}" "${plan[@]}"
-          python3 scripts/run-original-update-readers.py "$RUNNER_TEMP/reader-packets/$KEY" "$PLATFORM" \
+          scratch=$(mktemp -d /tmp/ms-XXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          TMPDIR="$scratch" MESH_SHORT_TMP="$scratch" python3 scripts/run-original-update-readers.py \
+            "$RUNNER_TEMP/reader-packets/$KEY" "$PLATFORM" \
             "$HOME/.cache/mesh-release-baselines" "$MESH_RELEASE_TRUST_CACHE" "$output/readers" "${plan[@]}"
           python3 scripts/publication-jobs.py record-platform "$output" "$PLATFORM" "$PUBLICATION_PLAN" "$PLAN_SHA"
       - name: Remove publication staging inputs and confirm removal

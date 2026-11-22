@@ -210,6 +210,12 @@ class InstalledGateWiringTests(unittest.TestCase):
                         "scripts/publication-jobs.py record-platform",
                         "name: publication-platform-${{ matrix.key }}-attempt-${{ github.run_attempt }}"):
             self.assertIn(setting, installed)
+        for key, platform in (("linux-amd64", "linux/amd64"), ("linux-arm64", "linux/arm64"), ("darwin-arm64", "darwin/arm64")):
+            self.assertIn(f"{key}: ${{{{ job.status == 'success' && matrix.platform == '{platform}' && steps.handoff.outputs.pin || '' }}}}", installed)
+        exercise = GATE.step(installed, "Exercise signed draft native cases, original permitted readers, and record evidence")
+        self.assertNotIn("export TMPDIR=", exercise)
+        self.assertLess(exercise.index("scripts/prove-installed-catchup.py"), exercise.index("mktemp -d /tmp/ms-XXXXXX"))
+        self.assertLess(exercise.index("mktemp -d /tmp/ms-XXXXXX"), exercise.index("scripts/run-original-update-readers.py"))
         publish = GATE.job(RELEASE, "publish")
         self.assertLess(publish.index("name: Upload signed draft assets"), publish.index("name: update-publication-trust"))
         self.assertLess(publish.index("scripts/prepare-draft-intake.py documents"), publish.index("scripts/publication-jobs.py reduced-plan"))
