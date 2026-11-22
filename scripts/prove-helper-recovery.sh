@@ -11,12 +11,15 @@ output=$(cd -- "$1" && pwd)
 python3 "$repo_root/scripts/test-helper-recovery-paths.py" > "$output/path-controls.log" 2>&1
 # Validate resolved daemon and worker socket paths before building or starting binaries.
 root=$(python3 "$repo_root/scripts/fixtures/helper_recovery_paths.py" create)
-trap 'rm -rf -- "$root"' EXIT
+source "$repo_root/scripts/fixtures/update-proof-cleanup.sh"
+trap 'update_proof_cleanup "$root"' EXIT
 mkdir -p "$root/build"
 (cd "$repo_root" && go build -trimpath -ldflags '-X github.com/shaul/mesh/internal/release.Version=v0.1.162' -o "$root/build/fixed-helper" ./cmd/mesh)
 git -C "$repo_root" rev-parse HEAD > "$output/candidate-source.txt"
 printf '%s\n' 'The fixed helper is an unpublished PR-source fixture. Historical v149/v151/v159 inputs are actual public artifacts.' > "$output/artifact-boundaries.txt"
 status=0
+mkdir -p "$root/proof"
+touch "$root/proof/cleanup-pending"
 python3 "$repo_root/scripts/prove-helper-recovery.py" "$root/proof" "$root/build/fixed-helper" > "$output/proof.log" 2>&1 || status=$?
 if [[ -d $root/proof ]]; then
   while IFS= read -r path; do

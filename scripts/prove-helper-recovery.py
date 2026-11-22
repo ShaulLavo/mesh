@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """Native historical executables; disposable external release/service providers."""
-import hashlib
 import base64
+import hashlib
 import http.server
-import io
 import importlib
+import io
 import json
 import os
 import platform
 import plistlib
 import re
-import signal
 import shlex
 import socket
 import socketserver
@@ -22,6 +21,7 @@ import sys
 import tarfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 from fixtures import helper_recovery_paths, published_releases, tls
@@ -30,6 +30,7 @@ sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "integration" / "helpers"))
 controls = importlib.import_module("mesh_control")
+retained_session = importlib.import_module("retained_session")
 terminals = importlib.import_module("terminal_window")
 round_trip = controls.round_trip
 PROMPT, Terminal = terminals.PROMPT, terminals.Terminal
@@ -202,7 +203,7 @@ sys.exit(result["status"])
         self.closed = False
         self.departing = {}
         self.delay, self.fail_candidate, self.fail_original, self.helper_failure = 0, False, False, ""
-        self.workers = []
+        self.retained_session = None
         self.terminals = []
         if NATIVE["os"] == "darwin":
             agents = self.home / "Library" / "LaunchAgents"
@@ -345,17 +346,20 @@ sys.exit(result["status"])
 
     def seed(self):
         self.id = self.control("host.info")["host"]["id"]
-        terminal = Terminal([str(self.binary), "local", "--", str(HELPERS / "window_shell.sh")], self.environment, self.root, timeout=8)
+        self.retained_session = retained_session.RetainedSession(self.state, self.binary, HELPERS / "window_shell.sh")
+        self.retained_session.check_empty()
+        command = [str(self.binary), "local", "--"] + self.retained_session.command
+        terminal = Terminal(command, self.environment, self.root, timeout=8)
         self.terminals.append(terminal)
         terminal.expect(PROMPT)
         self.session = self.control("session.list")["sessions"][0]["id"]
         start = len(terminal.drain())
         terminal.send("printf '__SHELL__%s__END__\\n' \"$$\"\n")
         match = eventually(lambda: re.search(rb"__SHELL__([0-9]+)__END__", terminal.drain()[start:]), "original shell PID missing", timeout=8)
-        self.shell = int(match[1])
-        self.worker = self.socket_pid(self.state / "s" / self.session / "sock")
+        self.retained_session.capture(self.session, int(match[1]))
+        self.worker = self.retained_session.worker.pid
+        self.shell = self.retained_session.shell.pid
         self.worker_inode = self.binary.stat().st_ino
-        self.workers.extend((self.worker, self.shell))
         terminal.close()
         self.terminals.remove(terminal)
         key_blob = struct.pack(">I", 11) + b"ssh-ed25519" + struct.pack(">I", 32) + os.urandom(32)
@@ -383,11 +387,7 @@ sys.exit(result["status"])
         with sqlite3.connect(self.database) as database:
             require(database.execute("PRAGMA integrity_check").fetchone() == ("ok",), "database integrity changed")
             require(database.execute("SELECT id FROM sessions WHERE id = ?", (self.session,)).fetchone() == (self.session,), "original database session row disappeared")
-        require(self.socket_pid(self.state / "s" / self.session / "sock") == self.worker, "worker PID changed")
-        meta = json.loads((self.state / "s" / self.session / "meta.json").read_text())
-        require(meta["pid"] == self.shell, "shell PID changed")
-        for pid in self.workers:
-            os.kill(pid, 0)
+        self.retained_session.check_current()
         candidates = [self.binary, *self.binary.parent.glob(".mesh-update-*.previous")]
         original_image = next((path for path in candidates if path.stat().st_ino == self.worker_inode), None)
         require(original_image is not None, "original worker image inode was not retained")
@@ -437,17 +437,15 @@ sys.exit(result["status"])
     def close(self):
         with LOCK:
             self.closed = True
-        for terminal in self.terminals:
-            terminal.close()
-        self.stop("helper")
-        self.stop("daemon")
-        for pid in self.workers:
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        for log in self.logs:
-            log.close()
+        with ExitStack() as cleanup:
+            for log in self.logs:
+                cleanup.callback(log.close)
+            if self.retained_session is not None:
+                cleanup.callback(self.retained_session.close)
+            cleanup.callback(self.stop, "daemon")
+            cleanup.callback(self.stop, "helper")
+            for terminal in reversed(self.terminals):
+                cleanup.callback(terminal.close)
 
 
 def historical_failure_phase(host, expected):
@@ -592,9 +590,12 @@ try:
         "chain": ["v0.1.149", "v0.1.151", "v0.1.159"]}, indent=2) + "\n")
     print("PASS native helper recovery, failure restoration, genuine rollback settlement and published v149 -> v151 -> v159 retained-session chain", flush=True)
 finally:
-    for host in reversed(hosts):
-        host.close()
-    for server in (services, proxy):
-        server.shutdown()
-        server.server_close()
-    tls.verify_artifacts(original_digests, sys.exc_info()[1], event)
+    try:
+        with retained_session.confirm_cleanup(ROOT) as cleanup:
+            for server in (proxy, services):
+                cleanup.callback(server.server_close)
+                cleanup.callback(server.shutdown)
+            for host in hosts:
+                cleanup.callback(host.close)
+    finally:
+        tls.verify_artifacts(original_digests, sys.exc_info()[1], event)
