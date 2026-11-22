@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,28 @@ type pipeDrainFixture struct {
 	binding execution.Binding
 	streams []*pipeDrainStream
 	stop    context.CancelFunc
+	running sync.WaitGroup
+}
+
+// spawn runs fn on a goroutine the fixture waits for before the test's
+// temporary directory is removed.
+func (f *pipeDrainFixture) spawn(fn func()) { f.running.Go(fn) }
+
+// release stops everything the fixture started and waits for it, so nothing is
+// still writing into the temporary directory when it is removed. Capture
+// finishes after abort because its write loop exits on the abort and Finish
+// waits for that exit.
+func (f *pipeDrainFixture) release() {
+	f.stop()
+	for _, s := range f.streams {
+		_ = s.reader.file.Close()
+		_ = s.writes.Close()
+		s.reader.capture.Abort()
+	}
+	f.running.Wait()
+	for _, s := range f.streams {
+		_, _ = s.reader.capture.Finish(context.Background(), "interrupted")
+	}
 }
 
 func newPipeDrainFixture(t *testing.T, names ...string) *pipeDrainFixture {
@@ -54,14 +77,10 @@ func newPipeDrainFixture(t *testing.T, names ...string) *pipeDrainFixture {
 		}
 		s := &pipeDrainStream{writes: writes, reader: &pipeReader{file: reads, capture: capture, done: make(chan string, 1)}}
 		f.streams = append(f.streams, s)
-		t.Cleanup(func() {
-			stop()
-			_ = reads.Close()
-			_ = writes.Close()
-			capture.Abort()
-		})
-		go s.reader.read(ctx)
+		f.spawn(func() { s.reader.read(ctx) })
 	}
+	// Registered after the temporary directory, so it runs before its removal.
+	t.Cleanup(f.release)
 	return f
 }
 
@@ -100,10 +119,10 @@ func TestPipeDrainKeepsOutputTheLeaderWroteWhileTheCaptureCatchesUp(t *testing.T
 	f := newPipeDrainFixture(t, execution.StreamStdout)
 	stall := f.stallStream(t, execution.StreamStdout)
 	payload := bytes.Repeat([]byte("x"), 4<<20)
-	go func() {
+	f.spawn(func() {
 		_, _ = f.streams[0].writes.Write(payload)
 		_ = f.streams[0].writes.Close()
-	}()
+	})
 	silence := 50 * time.Millisecond
 	// The stall outlasts the silence window many times over, but stays inside
 	// the capture's own lock wait so the commit succeeds once it ends.
@@ -130,7 +149,7 @@ func TestPipeDrainReportsNotRecordedWhileTheCaptureStaysBlocked(t *testing.T) {
 	stall := f.stallStream(t, execution.StreamStdout)
 	t.Cleanup(func() { _ = stall.Close() })
 	runtime.GC() // a lost reference would release the lock here, on every platform
-	go func() { _, _ = f.streams[0].writes.Write(bytes.Repeat([]byte("x"), 4<<20)) }()
+	f.spawn(func() { _, _ = f.streams[0].writes.Write(bytes.Repeat([]byte("x"), 4<<20)) })
 	reasons := f.drain(pipeDrainLimits{silence: time.Minute, total: 200 * time.Millisecond})
 	if reasons[0] != pipeDrainCutoff {
 		t.Fatalf("drain reason = %q, want %q", reasons[0], pipeDrainCutoff)
@@ -155,21 +174,35 @@ func TestPipeDrainCutsOffADescendantThatStaysSilent(t *testing.T) {
 
 func TestPipeDrainCutsOffADescendantThatKeepsWriting(t *testing.T) {
 	f := newPipeDrainFixture(t, execution.StreamStdout)
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
+	f.spawn(func() {
 		for {
 			if _, err := f.streams[0].writes.Write([]byte("x")); err != nil {
 				return
 			}
 			time.Sleep(time.Millisecond)
 		}
-	}()
+	})
 	if reasons := f.drain(pipeDrainLimits{silence: time.Minute, total: 200 * time.Millisecond}); reasons[0] != pipeDrainCutoff {
 		t.Fatalf("drain reason = %q, want %q", reasons[0], pipeDrainCutoff)
 	}
-	_ = f.streams[0].writes.Close()
-	<-finished
+}
+
+// keepBusy writes a byte every few milliseconds until stop closes or the
+// descriptor does, then closes the write end like a finished descendant.
+func (f *pipeDrainFixture) keepBusy(s *pipeDrainStream, stop <-chan struct{}) {
+	f.spawn(func() {
+		defer func() { _ = s.writes.Close() }()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
+			if _, err := s.writes.Write([]byte("x")); err != nil {
+				return
+			}
+		}
+	})
 }
 
 // closed reports whether the descriptor has been closed by its cutoff.
@@ -201,19 +234,9 @@ func TestPipeDrainCutsOffASilentStreamWhileTheOtherStaysBusy(t *testing.T) {
 			f := newPipeDrainFixture(t, silent, busy)
 			quiet, active := f.streams[0], f.streams[1]
 			stopWriting := make(chan struct{})
-			go func() {
-				for {
-					select {
-					case <-stopWriting:
-						_ = active.writes.Close()
-						return
-					case <-time.After(5 * time.Millisecond):
-						_, _ = active.writes.Write([]byte("x"))
-					}
-				}
-			}()
+			f.keepBusy(active, stopWriting)
 			reasons := make(chan []string, 1)
-			go func() { reasons <- f.drain(pipeDrainLimits{silence: 200 * time.Millisecond, total: time.Minute}) }()
+			f.spawn(func() { reasons <- f.drain(pipeDrainLimits{silence: 200 * time.Millisecond, total: time.Minute}) })
 			awaitClosed(t, quiet.reader.file, silent)
 			if _, err := quiet.writes.Write([]byte("late")); err == nil {
 				t.Fatal("a silent stream accepted bytes after its cutoff")
@@ -241,23 +264,13 @@ func TestPipeDrainCutsOffSilentLineStdoutWhileStderrStaysBusy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stdout.Close(); _ = held.Close() })
 	stopWriting := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-stopWriting:
-				_ = active.writes.Close()
-				return
-			case <-time.After(5 * time.Millisecond):
-				_, _ = active.writes.Write([]byte("x"))
-			}
-		}
-	}()
+	f.keepBusy(active, stopWriting)
 	lineDone := make(chan struct{})
 	finished := make(chan struct{})
-	go func() {
+	f.spawn(func() {
 		defer close(finished)
 		drainPipe(f.readers(), stdout, lineDone, f.stop, pipeDrainLimits{silence: 200 * time.Millisecond, total: time.Minute})
-	}()
+	})
 	awaitClosed(t, stdout, "line stdout")
 	close(stopWriting)
 	select {
