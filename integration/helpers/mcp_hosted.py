@@ -77,7 +77,8 @@ def main():
         require("ready" in mesh(fixture, "start", "shtools").stdout, "start did not reach protocol readiness")
         instance = show(fixture, "shtools")["instances"][0]
         require(instance["state"] == "ready" and instance["generation"] == 1, instance)
-        require("hosted fixture stderr line" in mesh(fixture, "logs", "shtools").stdout, "logs did not show stderr")
+        # The worker captures stderr asynchronously, so wait for the line.
+        eventually(lambda: "hosted fixture stderr line" in mesh(fixture, "logs", "shtools").stdout, "logs did not show stderr")
 
         mesh(fixture, "restart", "shtools")
         require(show(fixture, "shtools")["instances"][0]["generation"] == 2, "restart kept the old generation")

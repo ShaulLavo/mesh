@@ -169,8 +169,16 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	}
 	adopt := slices.Collect(maps.Values(s.instances))
 	s.mu.Unlock()
+	// Recovery probes each adopted server, which can take its whole ready
+	// timeout, so it runs in the background. Holding the start slot makes a
+	// call that arrives meanwhile wait for the adoption instead of launching.
 	for _, inst := range adopt {
-		s.recover(ctx, inst)
+		if s.claimStart(inst) {
+			s.detach(func(ctx context.Context) {
+				defer s.finishStart(inst)
+				s.recover(ctx, inst)
+			})
+		}
 	}
 	s.startKept()
 	s.detach(s.sweepLoop)
@@ -193,6 +201,25 @@ func (s *Supervisor) Close() {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+}
+
+// claimStart takes the instance's start slot, which launches and recovery
+// share, and reports false when another holder has it.
+func (s *Supervisor) claimStart(inst *instance) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if inst.starting != nil {
+		return false
+	}
+	inst.starting = make(chan struct{})
+	return true
+}
+
+func (s *Supervisor) finishStart(inst *instance) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	close(inst.starting)
+	inst.starting = nil
 }
 
 func stopTimer(t *time.Timer) {

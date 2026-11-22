@@ -237,7 +237,8 @@ func (s *Supervisor) resettle(ctx context.Context, inst *instance) {
 		inst.retry, inst.backoff = nil, 0
 	}
 	s.mu.Unlock()
-	if state == StateUncertain {
+	if state == StateUncertain && s.claimStart(inst) {
+		defer s.finishStart(inst)
 		s.recover(ctx, inst)
 	}
 }

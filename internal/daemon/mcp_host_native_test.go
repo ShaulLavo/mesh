@@ -201,9 +201,9 @@ func TestHostedMCPNative(t *testing.T) {
 				t.Fatalf("catalog: %s", reply.Result)
 			}
 		}
-		if !strings.Contains(f.mcpLogs(t, a), "native-secret-42") {
-			t.Fatal("the owner's diagnostics should hold the server's own stderr")
-		}
+		// The owner's diagnostics hold the server's own stderr, captured
+		// asynchronously by the worker.
+		pipeEventually(t, func() bool { return strings.Contains(f.mcpLogs(t, a), "native-secret-42") })
 		if logs := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, RequestID: "logs", Service: "fixture", AppCredential: b, Instance: f.instanceID(t, a)}); logs.ErrorCode != "access.denied" {
 			t.Fatalf("another caller read diagnostics: %+v", logs)
 		}
