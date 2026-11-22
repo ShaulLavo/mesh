@@ -66,7 +66,7 @@ func newFileHostFixture(t *testing.T) *fileHostFixture {
 	pool := newMCPHostPool(dial, time.Now)
 	t.Cleanup(pool.Close)
 	app := &application{dependencies: Dependencies{Now: time.Now}}
-	f.controls = newMCPControls(app, pool)
+	f.controls = newMCPControls(app, pool, "")
 	return f
 }
 
@@ -98,8 +98,8 @@ func requestTarget(t *testing.T, request protocol.Control) protocol.FileTarget {
 
 func TestMCPFileReadAddressesTheExactHostAccountAndReportsTheWorkspace(t *testing.T) {
 	f := newFileHostFixture(t)
-	f.controls.fileCallerCredential = filesTestCallerID
-	handle := mcpnative.FileContextRef{HostID: filesTestHostID, ContextID: filesTestContext}
+	f.controls.caller = filesTestCallerID
+	handle := mcpnative.ContextRef{HostID: filesTestHostID, ContextID: filesTestContext}
 	f.respond = func(req protocol.Control) (protocol.Control, error) {
 		return fileResult(t, protocol.TypeFileReadResult, protocol.FileReadResult{
 			Target: protocol.FileTarget{HostID: filesTestHostID, Account: "remote-bob", ContextID: filesTestContext, Cwd: "/work/app"},
@@ -129,7 +129,7 @@ func TestMCPFileReadAddressesTheExactHostAccountAndReportsTheWorkspace(t *testin
 
 func TestMCPFileToolsRefuseUnsafeTargetsBeforeSending(t *testing.T) {
 	f := newFileHostFixture(t)
-	handle := mcpnative.FileContextRef{HostID: filesTestHostID, ContextID: filesTestContext}
+	handle := mcpnative.ContextRef{HostID: filesTestHostID, ContextID: filesTestContext}
 	read := func(target mcpnative.FileTargetRef) mcpnative.CallOutcome {
 		out, err := f.controls.FileRead(t.Context(), mcpnative.FileReadRequest{Target: target, Path: "a.txt", Timeout: 5 * time.Second})
 		if err != nil {
@@ -142,8 +142,8 @@ func TestMCPFileToolsRefuseUnsafeTargetsBeforeSending(t *testing.T) {
 		t.Fatalf("no identity: %+v", out)
 	}
 	// A context from another host than the named one is refused.
-	f.controls.fileCallerCredential = filesTestCallerID
-	other := mcpnative.FileContextRef{HostID: "other-host-id-other-host-id-other-host-id1", ContextID: filesTestContext}
+	f.controls.caller = filesTestCallerID
+	other := mcpnative.ContextRef{HostID: "other-host-id-other-host-id-other-host-id1", ContextID: filesTestContext}
 	if out := read(mcpnative.FileTargetRef{Host: filesTestHostID, Context: &other}); !out.IsError || out.Envelope.Errors[0].Code != agentapi.UsageInvalid {
 		t.Fatalf("context of another host: %+v", out)
 	}
@@ -250,7 +250,7 @@ func TestMCPCopyTransfersBothWaysAndRefusesTheLocalHost(t *testing.T) {
 	app := &application{dependencies: Dependencies{Now: time.Now, DialControl: remote.dial}}
 	pool := newMCPHostPool(func(context.Context, HostRecord) (transport.Conn, error) { return nil, errors.New("unused") }, time.Now)
 	defer pool.Close()
-	controls := newMCPControls(app, pool)
+	controls := newMCPControls(app, pool, "")
 	root := t.TempDir()
 	source := filepath.Join(root, "source.txt")
 	remotePath := filepath.Join(root, "remote.txt")
@@ -292,7 +292,7 @@ func openProfileTestState(t *testing.T) *mcpControls {
 	}
 	pool := newMCPHostPool(nil, time.Now)
 	t.Cleanup(pool.Close)
-	return newMCPControls(&application{dependencies: Dependencies{Now: time.Now}}, pool)
+	return newMCPControls(&application{dependencies: Dependencies{Now: time.Now}}, pool, "")
 }
 
 func TestMCPProfileSetNeedsTheCurrentRevision(t *testing.T) {

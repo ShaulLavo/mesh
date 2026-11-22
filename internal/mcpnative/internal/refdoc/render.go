@@ -43,14 +43,19 @@ func renderToolSection(b *strings.Builder, def mcpnative.ToolDef) {
 	b.WriteString("\n")
 }
 
+type schemaProperty struct {
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Enum        []string `json:"enum"`
+	OneOf       []struct {
+		Type string `json:"type"`
+	} `json:"oneOf"`
+}
+
 func renderSchemaFields(b *strings.Builder, raw json.RawMessage) {
 	var schema struct {
-		Properties map[string]struct {
-			Type        string   `json:"type"`
-			Description string   `json:"description"`
-			Enum        []string `json:"enum"`
-		} `json:"properties"`
-		Required []string `json:"required"`
+		Properties map[string]schemaProperty `json:"properties"`
+		Required   []string                  `json:"required"`
 	}
 	if json.Unmarshal(raw, &schema) != nil || len(schema.Properties) == 0 {
 		b.WriteString("- Arguments: none\n")
@@ -76,8 +81,21 @@ func renderSchemaFields(b *strings.Builder, raw json.RawMessage) {
 		if len(prop.Enum) > 0 {
 			extra = " (" + strings.Join(prop.Enum, ", ") + ")"
 		}
-		fmt.Fprintf(b, "  - `%s` (`%s`, %s)%s: %s\n", name, prop.Type, req, extra, prop.Description)
+		fmt.Fprintf(b, "  - `%s` (`%s`, %s)%s: %s\n", name, schemaPropertyType(prop), req, extra, prop.Description)
 	}
+}
+
+func schemaPropertyType(prop schemaProperty) string {
+	if prop.Type != "" || len(prop.OneOf) == 0 {
+		return prop.Type
+	}
+	types := make([]string, 0, len(prop.OneOf))
+	for _, item := range prop.OneOf {
+		if item.Type != "" {
+			types = append(types, item.Type)
+		}
+	}
+	return strings.Join(types, "|")
 }
 
 func annotationSummary(a mcpnative.ToolAnnotations) string {

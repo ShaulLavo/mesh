@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -13,35 +12,18 @@ import (
 )
 
 const (
-	fileContextPrefix    = "mc1"
-	maxFileContextHandle = 96
-	maxFileCursorLength  = 4096
-	maxProfileDocument   = 32 << 10
-	defaultCopyMS        = 120000
-	maxCopyMS            = 600000
+	maxFileCursorLength = 4096
+	maxProfileDocument  = 32 << 10
+	defaultCopyMS       = 120000
+	maxCopyMS           = 600000
 )
-
-// ParseFileContextHandle validates and decodes mc1.<hostId>.<contextId>.
-func ParseFileContextHandle(raw string) (FileContextRef, error) {
-	parts := strings.Split(raw, ".")
-	if len(raw) == 0 || len(raw) > maxFileContextHandle || len(parts) != 3 || parts[0] != fileContextPrefix {
-		return FileContextRef{}, fmt.Errorf("%w: expected mc1.<hostId>.<contextId>", ErrInvalidHandle)
-	}
-	if err := ValidateHostID(parts[1]); err != nil {
-		return FileContextRef{}, fmt.Errorf("%w: %w", ErrInvalidHandle, err)
-	}
-	if err := ValidateHexID(parts[2]); err != nil {
-		return FileContextRef{}, fmt.Errorf("%w: %w", ErrInvalidHandle, err)
-	}
-	return FileContextRef{HostID: parts[1], ContextID: parts[2]}, nil
-}
 
 // fileTargetArgs reads the host, context and path every file tool takes.
 func fileTarget(host, contextHandle, path string) (FileTargetRef, string, error) {
 	var target FileTargetRef
 	target.Host = strings.TrimSpace(host)
 	if contextHandle != "" {
-		ref, err := ParseFileContextHandle(contextHandle)
+		ref, err := ParseContextHandle(contextHandle)
 		if err != nil {
 			return target, "", invalidParam("context: %v", err)
 		}

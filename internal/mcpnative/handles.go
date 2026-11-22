@@ -9,18 +9,49 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session"
 )
 
 const (
-	jobHandlePrefix    = "mj1"
-	canonicalHostIDLen = 43 // 32-byte Ed25519 public key in unpadded base64url
-	maxJobHandleLength = 96
+	jobHandlePrefix        = "mj1"
+	canonicalHostIDLen     = 43 // 32-byte Ed25519 public key in unpadded base64url
+	maxJobHandleLength     = 96
+	maxContextHandleLength = 80 // "mc1." (4) + hostID (43) + "." (1) + contextID (32)
 )
 
 // ErrInvalidHandle marks a syntactically malformed opaque Mesh handle.
 // Handlers map this error to JSON-RPC -32602 (InvalidParams).
 var ErrInvalidHandle = errors.New("malformed Mesh handle")
+
+// ContextRef identifies one durable execution context on a host.
+type ContextRef struct {
+	HostID    string
+	ContextID string
+}
+
+// String renders the canonical opaque context handle.
+func (r ContextRef) String() string {
+	return protocol.ContextHandle(r.HostID, r.ContextID)
+}
+
+// ParseContextHandle validates and decodes a mc1.<hostId>.<contextId> handle.
+func ParseContextHandle(raw string) (ContextRef, error) {
+	if len(raw) == 0 || len(raw) > maxContextHandleLength {
+		return ContextRef{}, fmt.Errorf("%w: expected mc1.<hostId>.<contextId>", ErrInvalidHandle)
+	}
+	hostID, contextID, err := protocol.ParseContextHandle(raw)
+	if err != nil {
+		return ContextRef{}, fmt.Errorf("%w: expected mc1.<hostId>.<contextId>", ErrInvalidHandle)
+	}
+	if err := ValidateHostID(hostID); err != nil {
+		return ContextRef{}, fmt.Errorf("%w: %w", ErrInvalidHandle, err)
+	}
+	if err := ValidateHexID(contextID); err != nil {
+		return ContextRef{}, fmt.Errorf("%w: %w", ErrInvalidHandle, err)
+	}
+	return ContextRef{HostID: hostID, ContextID: contextID}, nil
+}
 
 // JobRef identifies one exact durable execution receipt on a host.
 type JobRef struct {

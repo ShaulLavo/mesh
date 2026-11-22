@@ -19,12 +19,29 @@ import (
 )
 
 const (
-	testHostID   = "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"
-	testInstance = "0123456789abcdef0123456789abcdef"
-	testJob      = "mj1." + testHostID + ".7K3D." + testInstance
+	testHostID    = "khI9qfAZ1eqQXe4C2JhMIfS8lwSL_GC5Aef-MsKEYZE"
+	testInstance  = "0123456789abcdef0123456789abcdef"
+	testContextID = "fedcba9876543210fedcba9876543210"
+	testContext   = "mc1." + testHostID + "." + testContextID
+	testJob       = "mj1." + testHostID + ".7K3D." + testInstance
 )
 
 func TestHandleRoundTripsAndValidation(t *testing.T) {
+	parsedCtx, err := ParseContextHandle(testContext)
+	if err != nil || parsedCtx.HostID != testHostID || parsedCtx.ContextID != testContextID || parsedCtx.String() != testContext {
+		t.Fatalf("ParseContextHandle = %+v, %v", parsedCtx, err)
+	}
+	for _, bad := range []string{
+		"", "mc1", "mc1.host", testJob,
+		"mc1.bad!host." + testContextID,
+		"mc1." + testHostID + ".short",
+		"mc1." + testHostID + ".FEDCBA9876543210FEDCBA9876543210",
+	} {
+		if _, err := ParseContextHandle(bad); !errors.Is(err, ErrInvalidHandle) {
+			t.Errorf("ParseContextHandle(%q) = %v, want ErrInvalidHandle", bad, err)
+		}
+	}
+
 	job, err := FormatJobHandle(testHostID, "7K3D", testInstance)
 	if err != nil || job != testJob {
 		t.Fatalf("FormatJobHandle = %q, %v", job, err)
@@ -63,11 +80,14 @@ func TestOutputEncodingAndControlEscaping(t *testing.T) {
 }
 
 type stubControls struct {
-	waitFn   func(ctx context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error)
-	statusFn func(ctx context.Context, req JobRefRequest) (CallOutcome, error)
-	outputFn func(ctx context.Context, req JobOutputRequest) (CallOutcome, error)
-	cancelFn func(ctx context.Context, req JobRefRequest) (CallOutcome, error)
-	hostsFn  func(ctx context.Context, req ListHostsRequest) (CallOutcome, error)
+	waitFn        func(ctx context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error)
+	statusFn      func(ctx context.Context, req JobRefRequest) (CallOutcome, error)
+	outputFn      func(ctx context.Context, req JobOutputRequest) (CallOutcome, error)
+	cancelFn      func(ctx context.Context, req JobRefRequest) (CallOutcome, error)
+	hostsFn       func(ctx context.Context, req ListHostsRequest) (CallOutcome, error)
+	openContextFn func(ctx context.Context, req OpenContextRequest) (CallOutcome, error)
+	updateCtxFn   func(ctx context.Context, req UpdateContextRequest) (CallOutcome, error)
+	execFn        func(ctx context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error)
 	fileStub
 }
 
@@ -99,6 +119,74 @@ func (s *stubControls) ListServices(context.Context, ListServicesRequest) (CallO
 }
 func (s *stubControls) InspectService(context.Context, InspectServiceRequest) (CallOutcome, error) {
 	return CallOutcome{Envelope: okEnvelope("services.inspect", ServiceDetail{})}, nil
+}
+func (s *stubControls) OpenContext(ctx context.Context, req OpenContextRequest) (CallOutcome, error) {
+	if s.openContextFn != nil {
+		return s.openContextFn(ctx, req)
+	}
+	target := &TargetMeta{HostID: testHostID, HostName: "pc", Account: "agent", ContextID: testContext, Cwd: req.Cwd}
+	return CallOutcome{
+		Envelope: okEnvelope("contexts.open", agentapi.ExecutionContext{
+			HostID: testHostID, ContextID: testContextID, Handle: testContext, RequestKey: req.RequestKey,
+			State: "open", Revision: 1, Cwd: req.Cwd, Shell: req.Shell, Label: req.Label, EnvNames: []string{},
+		}),
+		Target: target,
+	}, nil
+}
+func (s *stubControls) GetContext(_ context.Context, req ContextRefRequest) (CallOutcome, error) {
+	target := &TargetMeta{HostID: req.Context.HostID, HostName: "pc", Account: "agent", ContextID: req.Context.String(), Cwd: "/work"}
+	return CallOutcome{
+		Envelope: okEnvelope("contexts.get", agentapi.ExecutionContext{
+			HostID: req.Context.HostID, ContextID: req.Context.ContextID, Handle: req.Context.String(),
+			State: "open", Revision: 1, Cwd: "/work", Shell: "login", EnvNames: []string{},
+		}),
+		Target: target,
+	}, nil
+}
+func (s *stubControls) ListContexts(context.Context, ListContextsRequest) (CallOutcome, error) {
+	return CallOutcome{Envelope: okEnvelope("contexts.list", agentapi.ExecutionContexts{HostID: testHostID, Contexts: []agentapi.ExecutionContext{}})}, nil
+}
+func (s *stubControls) ContextReceipt(_ context.Context, req ContextReceiptRequest) (CallOutcome, error) {
+	return CallOutcome{Envelope: okEnvelope("contexts.receipt", agentapi.ExecutionContext{HostID: testHostID, ContextID: testContextID, Handle: testContext, RequestKey: req.RequestKey, State: "open", Revision: 1, Cwd: "/work", Shell: "login", EnvNames: []string{}})}, nil
+}
+func (s *stubControls) UpdateContext(ctx context.Context, req UpdateContextRequest) (CallOutcome, error) {
+	if s.updateCtxFn != nil {
+		return s.updateCtxFn(ctx, req)
+	}
+	target := &TargetMeta{HostID: req.Context.HostID, HostName: "pc", Account: "agent", ContextID: req.Context.String(), Cwd: req.Cwd}
+	return CallOutcome{
+		Envelope: okEnvelope("contexts.update", agentapi.ExecutionContext{
+			HostID: req.Context.HostID, ContextID: req.Context.ContextID, Handle: req.Context.String(),
+			State: "open", Revision: req.ExpectedRevision + 1, Cwd: req.Cwd, Shell: "login", EnvNames: []string{},
+		}),
+		Target: target,
+	}, nil
+}
+func (s *stubControls) CloseContext(_ context.Context, req CloseContextRequest) (CallOutcome, error) {
+	target := &TargetMeta{HostID: req.Context.HostID, HostName: "pc", Account: "agent", ContextID: req.Context.String(), Cwd: "/work"}
+	return CallOutcome{
+		Envelope: okEnvelope("contexts.close", agentapi.ExecutionContext{
+			HostID: req.Context.HostID, ContextID: req.Context.ContextID, Handle: req.Context.String(),
+			State: "closed", Revision: 2, Cwd: "/work", Shell: "login", EnvNames: []string{},
+		}),
+		Target: target,
+	}, nil
+}
+func (s *stubControls) Exec(ctx context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+	if s.execFn != nil {
+		return s.execFn(ctx, req, notify)
+	}
+	code := 0
+	target := &TargetMeta{HostID: req.Context.HostID, HostName: "pc", Account: "agent", ContextID: req.Context.String(), Cwd: "/work"}
+	return CallOutcome{
+		Envelope: okEnvelope("sessions.create", ExecResultData{
+			Job: testJob, RequestKey: req.RequestKey, Target: *target, State: "exited", Wait: "completed",
+			Result: &agentapi.ExecutionResult{Termination: agentapi.ExecutionTermination{Kind: "exit", Code: &code}},
+			Stdout: &ExecStreamData{Encoding: "utf-8", Data: "ok\n", Start: "0", End: "3", NextCursor: "c1", EOF: true},
+			Stderr: &ExecStreamData{Encoding: "utf-8", Data: "", Start: "0", End: "0", NextCursor: "c2", EOF: true},
+		}),
+		Target: target,
+	}, nil
 }
 func (s *stubControls) JobStatus(ctx context.Context, req JobRefRequest) (CallOutcome, error) {
 	if s.statusFn != nil {

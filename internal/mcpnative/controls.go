@@ -48,6 +48,13 @@ type Controls interface {
 	InspectSession(ctx context.Context, req InspectSessionRequest) (CallOutcome, error)
 	ListServices(ctx context.Context, req ListServicesRequest) (CallOutcome, error)
 	InspectService(ctx context.Context, req InspectServiceRequest) (CallOutcome, error)
+	OpenContext(ctx context.Context, req OpenContextRequest) (CallOutcome, error)
+	GetContext(ctx context.Context, req ContextRefRequest) (CallOutcome, error)
+	ListContexts(ctx context.Context, req ListContextsRequest) (CallOutcome, error)
+	ContextReceipt(ctx context.Context, req ContextReceiptRequest) (CallOutcome, error)
+	UpdateContext(ctx context.Context, req UpdateContextRequest) (CallOutcome, error)
+	CloseContext(ctx context.Context, req CloseContextRequest) (CallOutcome, error)
+	Exec(ctx context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error)
 	JobStatus(ctx context.Context, req JobRefRequest) (CallOutcome, error)
 	JobWait(ctx context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error)
 	JobOutput(ctx context.Context, req JobOutputRequest) (CallOutcome, error)
@@ -115,18 +122,76 @@ type ServiceDetail struct {
 	Service agentapi.ServiceRow `json:"service"`
 }
 
+type OpenContextRequest struct {
+	Host       string
+	RequestKey string
+	Cwd        string
+	Shell      string
+	Env        map[string]string
+	Label      string
+	Timeout    time.Duration
+}
+
+type ContextRefRequest struct {
+	Context ContextRef
+	Timeout time.Duration
+}
+
+type ListContextsRequest struct {
+	Host    string
+	Cursor  string
+	Timeout time.Duration
+}
+
+type ContextReceiptRequest struct {
+	Host       string
+	RequestKey string
+	Timeout    time.Duration
+}
+
+type UpdateContextRequest struct {
+	Context          ContextRef
+	ExpectedRevision uint64
+	Cwd              string
+	SetEnv           map[string]string
+	UnsetEnv         []string
+	Label            *string
+	Timeout          time.Duration
+}
+
+type CloseContextRequest struct {
+	Context          ContextRef
+	ExpectedRevision *uint64
+	Timeout          time.Duration
+}
+
+type ExecRequest struct {
+	Context     ContextRef
+	RequestKey  string
+	Command     string
+	Argv        []string
+	Cwd         string
+	Env         map[string]string
+	Stdin       string
+	WaitMS      int
+	OutputBytes int
+}
+
 type JobRefRequest struct {
 	Job     JobRef
+	Context *ContextRef
 	Timeout time.Duration
 }
 
 type JobWaitRequest struct {
-	Job    JobRef
-	WaitMS int
+	Job     JobRef
+	Context *ContextRef
+	WaitMS  int
 }
 
 type JobOutputRequest struct {
 	Job      JobRef
+	Context  *ContextRef
 	Stream   string
 	Cursor   string
 	MaxBytes int
@@ -135,12 +200,14 @@ type JobOutputRequest struct {
 
 type JobReceiptRequest struct {
 	Host       string
+	Context    *ContextRef
 	RequestKey string
 	Timeout    time.Duration
 }
 
 type ListJobsRequest struct {
 	Host    string
+	Context *ContextRef
 	All     bool
 	Limit   int
 	Page    string
@@ -149,6 +216,7 @@ type ListJobsRequest struct {
 
 type JobInputRequest struct {
 	Job      JobRef
+	Context  *ContextRef
 	WriteKey string
 	Offset   *uint64
 	Data     []byte
@@ -158,8 +226,39 @@ type JobInputRequest struct {
 
 type JobSignalRequest struct {
 	Job     JobRef
+	Context *ContextRef
 	Signal  string
 	Timeout time.Duration
+}
+
+// ExecStreamGap records a cursor/retention gap on one output stream.
+type ExecStreamGap struct {
+	Reason         string `json:"reason,omitempty"`
+	EarliestCursor string `json:"earliestCursor,omitempty"`
+}
+
+// ExecStreamData is the bounded initial stream snippet returned by mesh_exec.
+type ExecStreamData struct {
+	Encoding   string         `json:"encoding"`
+	Data       string         `json:"data"`
+	Start      string         `json:"start"`
+	End        string         `json:"end"`
+	NextCursor string         `json:"nextCursor"`
+	EOF        bool           `json:"eof"`
+	Gap        *ExecStreamGap `json:"gap"`
+}
+
+// ExecResultData is the structured result returned by mesh_exec.
+type ExecResultData struct {
+	Job        string                     `json:"job"`
+	RequestKey string                     `json:"requestKey"`
+	Target     TargetMeta                 `json:"target"`
+	State      string                     `json:"state"`
+	Wait       string                     `json:"wait,omitempty"`
+	Result     *agentapi.ExecutionResult  `json:"result,omitempty"`
+	Receipt    *agentapi.ExecutionReceipt `json:"receipt,omitempty"`
+	Stdout     *ExecStreamData            `json:"stdout,omitempty"`
+	Stderr     *ExecStreamData            `json:"stderr,omitempty"`
 }
 
 // JobStateData is the structured data returned by job status, wait, receipt,
@@ -206,6 +305,7 @@ type JobListItem struct {
 	HostID    string     `json:"hostId"`
 	SessionID string     `json:"sessionId"`
 	Instance  string     `json:"instance"`
+	ContextID string     `json:"contextId,omitempty"`
 	State     string     `json:"state"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
 	ExitCode  *int       `json:"exitCode,omitempty"`

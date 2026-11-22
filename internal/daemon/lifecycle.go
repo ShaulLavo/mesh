@@ -663,7 +663,7 @@ func (l *lifecycle) declaredHostInfo() protocol.HostInfo {
 		tailscaleName = *l.host.TailscaleName
 	}
 	host := protocol.HostInfo{
-		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true, ExecutionPipeSupported: true, FilesSupported: true,
+		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true, FilesSupported: true, ExecutionPipeSupported: true, ExecutionContextSupported: true,
 		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, Account: currentDaemonAccount(), TailscaleName: tailscaleName, PrivateName: l.privateName(),
 	}
 	if l.updateSummary != nil {

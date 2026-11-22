@@ -24,18 +24,7 @@ type FileControls interface {
 // handle's host is the host when Host is empty.
 type FileTargetRef struct {
 	Host    string
-	Context *FileContextRef
-}
-
-// FileContextRef is a parsed mc1.<hostId>.<contextId> handle.
-type FileContextRef struct {
-	HostID    string
-	ContextID string
-}
-
-// String renders the canonical handle.
-func (r FileContextRef) String() string {
-	return fileContextPrefix + "." + r.HostID + "." + r.ContextID
+	Context *ContextRef
 }
 
 type FileReadRequest struct {

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,9 +32,9 @@ func newContextFileFixture(t *testing.T) *contextFileFixture {
 	return &contextFileFixture{t: t, l: l, controller: controller, ctx: localServerContext(t.Context()), root: root}
 }
 
-func (f *contextFileFixture) open(caller protocol.CallerCredential, key, cwd string) string {
+func (f *contextFileFixture) open(caller protocol.CallerCredential, cwd string) string {
 	f.t.Helper()
-	reply, err := f.l.contextControl(f.ctx, protocol.Control{Type: protocol.TypeContextOpen, RequestID: "open", RequestKey: key, Caller: caller, ExecutionContext: &protocol.ExecutionContextRequest{Open: &protocol.ContextSpec{Cwd: cwd}}})
+	reply, err := f.l.contextControl(f.ctx, protocol.Control{Type: protocol.TypeContextOpen, RequestID: "open", RequestKey: "workspace", Caller: caller, ExecutionContext: &protocol.ExecutionContextRequest{Open: &protocol.ContextSpec{Cwd: cwd}}})
 	if err != nil || reply.ContextInfo == nil {
 		f.t.Fatalf("open context: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestFileRelativePathsResolveInTheAuthorizedContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.root, "sub", "a.txt"), []byte("alpha\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	contextID := f.open(caller, "workspace", f.root)
+	contextID := f.open(caller, f.root)
 	target := protocol.FileTarget{HostID: "host", ContextID: contextID}
 
 	read := fileOK[protocol.FileReadResult](t, f.read(caller, contextID, "sub/a.txt"), protocol.TypeFileReadResult)
@@ -103,7 +104,7 @@ func TestFileContextMustBeAuthorizedAndOpen(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.root, "a.txt"), []byte("alpha"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	contextID := f.open(alice, "workspace", f.root)
+	contextID := f.open(alice, f.root)
 
 	// Another application caller never sees the context.
 	fileCode(t, f.read(bob, contextID, "a.txt"), "context.not_found")
@@ -132,6 +133,38 @@ func TestFileContextMustBeAuthorizedAndOpen(t *testing.T) {
 func TestFileContextCannotNameAnotherHost(t *testing.T) {
 	f := newContextFileFixture(t)
 	alice, _ := testCaller(t)
-	contextID := f.open(alice, "workspace", f.root)
+	contextID := f.open(alice, f.root)
 	fileCode(t, f.call(protocol.TypeFileRead, alice, protocol.FileReadRequest{Target: protocol.FileTarget{HostID: "elsewhere", ContextID: contextID}, Path: "a.txt"}), "host.identity_mismatch")
+}
+
+// A file request that names a context carries the application caller through
+// the client server, which refuses a credential on controls that ignore it.
+func TestFileControlsAcceptTheApplicationCallerThroughTheClientServer(t *testing.T) {
+	f := newContextFileFixture(t)
+	caller, _ := testCaller(t)
+	if err := os.WriteFile(filepath.Join(f.root, "a.txt"), []byte("alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	contextID := f.open(caller, f.root)
+	server, err := newClientServer(f.l, &contextWorkerCounter{}, &contextControlCounter{}, disabledCertificateController{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.files = f.controller
+	client := newServerTestConn()
+	done := make(chan error, 1)
+	go func() { done <- server.Handle(f.ctx, client) }()
+	raw, err := protocol.EncodeFileDocument(protocol.FileReadRequest{Target: protocol.FileTarget{HostID: "host", ContextID: contextID}, Path: "a.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.pushRead(serverControlFrame(t, protocol.Control{Type: protocol.TypeFileRead, RequestID: "ctx", Caller: caller, Files: raw}))
+	page := fileOK[protocol.FileReadResult](t, decodeServerControl(t, client.nextWrite(t)), protocol.TypeFileReadResult)
+	if page.Data != "alpha\n" || page.Target.ContextID != contextID {
+		t.Fatalf("page: %+v", page)
+	}
+	client.pushReadError(io.EOF)
+	if err := waitServerResult(t, done, "file context server"); err != nil {
+		t.Fatal(err)
+	}
 }

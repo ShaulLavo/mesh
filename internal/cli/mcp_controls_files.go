@@ -25,12 +25,6 @@ const (
 	opFilesCopy   = "files.copy"
 )
 
-const identityRequiredForContext = "A context handle needs an application identity. Start mesh mcp --identity NAME after creating one with mesh mcp identity create NAME, or pass an absolute path."
-
-// fileCaller is the application credential sent with a request that names a
-// context. Only the owner of a context can resolve paths in it.
-func (c *mcpControls) fileCaller() protocol.CallerCredential { return c.fileCallerCredential }
-
 // fileSession is one resolved, verified host a file request runs on.
 type fileSession struct {
 	host  HostRecord
@@ -44,8 +38,8 @@ type fileSession struct {
 // host ID, OS account and, when a context is named, its ID. It never wakes a
 // host.
 func (c *mcpControls) openFileSession(ctx context.Context, operation string, ref mcpnative.FileTargetRef, retry bool) (fileSession, *mcpnative.CallOutcome, error) {
-	if ref.Context != nil && c.fileCaller() == "" {
-		failure := failOutcome(operation, &mcpnative.TargetMeta{HostID: ref.Context.HostID}, agentapi.Usage(operation, identityRequiredForContext).Err)
+	if ref.Context != nil && c.caller == "" {
+		failure := c.identityRequiredOutcome(operation, ref.Context.HostID)
 		return fileSession{}, &failure, nil
 	}
 	host, err := c.resolveFileHost(ctx, ref)
@@ -71,7 +65,7 @@ func (c *mcpControls) openFileSession(ctx context.Context, operation string, ref
 	session := fileSession{host: host, info: info, meta: meta}
 	session.files = HostFiles{Target: target, Exchange: c.fileExchange(host, retry)}
 	if ref.Context != nil {
-		session.files.Caller = c.fileCaller()
+		session.files.Caller = c.caller
 	}
 	return session, nil, nil
 }
