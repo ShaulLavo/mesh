@@ -525,7 +525,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	files.contexts = lifecycle.fileContext
 	server.files = files
 	server.context = &agentContextController{configDir: cfg.ConfigDir, stateDir: stateDir, hostID: meshHost.ID, trusted: updates.authority.IsAdministrator}
-	if mcpHost, err := startMCPHost(daemonCtx, lifecycle, store, stateDir); err != nil {
+	if mcpHost, err := startMCPHost(daemonCtx, lifecycle, store, stateDir, state.mcpListingChanged); err != nil {
 		reporter.report(err)
 	} else {
 		defer mcpHost.Close()

@@ -138,6 +138,9 @@ mesh mcp connect pc/repo-tools --identity codex
 Pass `--instance HANDLE` (either an opaque `mi1.<hostId>.<serviceId>.<instanceId>`
 handle or an instance ID) to reconnect to a specific authorized instance.
 
+To serve several hosted servers and the native tools through one entry, use a
+profile with `mesh mcp --profile NAME` ([guide](mcp-gateway.md)).
+
 `mesh mcp connect` runs a stateless MCP `2026-07-28` stdio server on the client:
 
 - **Protocol-only stdout**: `stdout` carries only newline-delimited JSON-RPC MCP

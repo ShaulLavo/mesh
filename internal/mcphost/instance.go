@@ -20,13 +20,21 @@ type Target struct {
 	Instance string
 	// New creates another isolated instance for the caller.
 	New bool
+	// ExactID resolves Service as a stable service ID only, never a name.
+	ExactID bool
+	// Expect, when set, is the service revision and account the caller
+	// resolved; a service that moved on refuses the request.
+	Expect *Expectation
 }
 
 // pick resolves target to an instance the caller may use, creating the
 // caller's default or a new isolated instance when needed.
 func (s *Supervisor) pick(ctx context.Context, caller Caller, target Target) (*instance, Definition, error) {
 	s.mu.Lock()
-	d, err := s.serviceLocked(target.Service)
+	d, err := s.serviceForTargetLocked(target)
+	if err == nil {
+		err = checkExpectation(d, target)
+	}
 	if err != nil {
 		s.mu.Unlock()
 		return nil, d, err

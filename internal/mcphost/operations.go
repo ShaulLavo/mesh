@@ -21,6 +21,9 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 	if !caller.current() {
 		return errRevoked
 	}
+	if err := s.precheck(caller, target, request); err != nil {
+		return err
+	}
 	inst, d, err := s.pick(ctx, caller, target)
 	if err != nil {
 		return err

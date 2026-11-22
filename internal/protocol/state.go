@@ -11,6 +11,7 @@ const (
 	TopicSessions           = "sessions"
 	TopicServices           = "services"
 	TopicMetrics            = "metrics"
+	TopicMCP                = "mcp"
 	TypeStateWatch          = "state.watch"
 	TypeStateSnapshot       = "state.snapshot"
 	TypeStateEvent          = "state.event"
@@ -33,7 +34,7 @@ func (w StateWatch) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, topic := range w.Topics {
-		if topic != TopicHost && topic != "sessions" && topic != "services" && topic != "metrics" {
+		if topic != TopicHost && topic != "sessions" && topic != "services" && topic != "metrics" && topic != TopicMCP {
 			return fmt.Errorf("state.watch unknown topic %q", topic)
 		}
 		if seen[topic] {
@@ -64,7 +65,17 @@ type StateSnapshot struct {
 	Sessions []SessionInfo            `json:"sessions,omitempty"`
 	Services []ServiceInfo            `json:"services,omitempty"`
 	Metrics  *hostmetrics.Snapshot    `json:"metrics,omitempty"`
-	Current  map[string]Observation   `json:"current"`
+	// MCPListings are the hosted services' listing revisions (topic mcp).
+	MCPListings []MCPListingRevision   `json:"mcpListings,omitempty"`
+	Current     map[string]Observation `json:"current"`
+}
+
+// MCPListingRevision is one hosted MCP service's listing revision for one
+// credential scope. An empty token means the service was removed.
+type MCPListingRevision struct {
+	ServiceID string `json:"serviceId"`
+	Account   string `json:"account,omitempty"`
+	Token     string `json:"token,omitempty"`
 }
 type StateEvent struct {
 	Seq     uint64       `json:"seq"`
@@ -84,6 +95,7 @@ type StatePayload struct {
 	Service     *ServiceInfo             `json:"service,omitempty"`
 	ServiceName string                   `json:"serviceName,omitempty"`
 	Metrics     *hostmetrics.Snapshot    `json:"metrics,omitempty"`
+	MCPListing  *MCPListingRevision      `json:"mcpListing,omitempty"`
 }
 type StateCurrent struct {
 	Seq      uint64                 `json:"seq"`

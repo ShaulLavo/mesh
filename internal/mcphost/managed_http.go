@@ -313,6 +313,7 @@ func (s *Supervisor) toggleServiceLocked(ctx context.Context, ref string, disabl
 		return "", nil, nil, fmt.Errorf("update %s: %w", d.Name, err)
 	}
 	s.services[updated.ID] = updated
+	s.router.listings.published(updated)
 	if !disabled && updated.Lifecycle == LifecycleKept {
 		s.detach(func(ctx context.Context) { s.ensureKept(ctx, updated.ID) })
 		return updated.ID, nil, nil, nil
