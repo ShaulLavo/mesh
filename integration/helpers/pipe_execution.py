@@ -77,8 +77,24 @@ def wait(fixture, job):
     return done["result"]
 
 
+def logs(fixture, job, stream, cursor="", size=65536):
+    """Read one page, retrying while the capture writer holds the stream lock.
+
+    The product bounds every lock wait and answers `state.unavailable`, a
+    retryable code, when a commit keeps the lock longer on a loaded host. A
+    client is meant to ask again, so the only limit here is a hang cap.
+    """
+    request = bound("logs", job, stream=stream, cursor=cursor, maxBytes=size)
+    deadline = time.monotonic() + 60
+    while True:
+        response = exchange(fixture, request)
+        if response.get("errorCode") != "state.unavailable" or time.monotonic() > deadline:
+            return response
+        time.sleep(.05)
+
+
 def page(fixture, job, stream, cursor="", size=65536):
-    response = exchange(fixture, bound("logs", job, stream=stream, cursor=cursor, maxBytes=size))
+    response = logs(fixture, job, stream, cursor, size)
     assert response.get("type") == "execution.receipt", response
     return response["executionPage"]
 
@@ -211,7 +227,8 @@ if paused:
         with socket.socket(socket.AF_UNIX) as slow:
             slow.connect(str(fixture.local / "daemon.sock"))
             send(slow, bound("logs", job, stream="stdout", maxBytes=MIB))
-            assert wait(fixture, job)["capture"] == "complete"
+            result = wait(fixture, job)
+            assert result["capture"] == "complete", result
         verify_suffix(fixture, job, starts, chunks)
     else:
         tail_bulk(fixture, job, starts, chunks)
@@ -235,7 +252,7 @@ def tail_bulk(fixture, job, cursors, chunks):
 
 def verify_suffix(fixture, job, starts, chunks):
     for stream, base, tail in (("stdout", 1, b"tail!"), ("stderr", 101, b"error tail!")):
-        missed = exchange(fixture, bound("logs", job, stream=stream, cursor=starts[stream], maxBytes=MIB))
+        missed = logs(fixture, job, stream, starts[stream], MIB)
         assert missed["errorCode"] == "logs.cursor_expired" and missed["executionPage"]["gap"], missed
         cursor = missed["executionPage"]["earliestCursor"]
         got = bytearray()

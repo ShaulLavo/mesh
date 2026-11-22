@@ -28,6 +28,21 @@ type pipeReader struct {
 	file    *os.File
 	capture *execution.Capture
 	done    chan string
+	// waitingSince is when the reader began waiting for the pipe to produce
+	// bytes, as Unix nanoseconds. It is zero while the reader holds bytes it
+	// has not yet handed to the capture, because then the pipe is not what the
+	// drain is waiting on.
+	waitingSince atomic.Int64
+}
+
+// silentFor reports how long the reader has waited on a silent pipe, counting
+// no earlier than the start of the drain.
+func (r *pipeReader) silentFor(drainStart time.Time) time.Duration {
+	since := r.waitingSince.Load()
+	if since == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, max(since, drainStart.UnixNano())))
 }
 
 type childPipes struct {
@@ -151,7 +166,7 @@ func (w *Worker) runPipe(attempt *execution.Attempt, mode, sockPath string) (int
 	return w.serveStartedPipe(attempt, p, readers, sockPath, meta)
 }
 
-func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []pipeReader, sockPath string, meta Meta) (int, error) {
+func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []*pipeReader, sockPath string, meta Meta) (int, error) {
 	ln, err := w.publishPipe(attempt, sockPath, meta)
 	if err != nil {
 		return 0, err
@@ -195,10 +210,10 @@ func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta M
 	return ln, nil
 }
 
-func (w *Worker) openPipeReaders(p *childPipes) ([]pipeReader, error) {
+func (w *Worker) openPipeReaders(p *childPipes) ([]*pipeReader, error) {
 	b := *w.cfg.Execution
 	state := filepath.Dir(filepath.Dir(w.cfg.Dir))
-	readers := make([]pipeReader, 0, len(b.Streams()))
+	readers := make([]*pipeReader, 0, len(b.Streams()))
 	for _, stream := range b.Streams() {
 		capture, err := execution.OpenCapture(state, b, stream)
 		if err != nil {
@@ -209,21 +224,23 @@ func (w *Worker) openPipeReaders(p *childPipes) ([]pipeReader, error) {
 		if stream == execution.StreamStdout {
 			file = p.stdout
 		}
-		readers = append(readers, pipeReader{file: file, capture: capture, done: make(chan string, 1)})
+		readers = append(readers, &pipeReader{file: file, capture: capture, done: make(chan string, 1)})
 	}
 	return readers, nil
 }
 
-func abortPipeCaptures(readers []pipeReader) {
+func abortPipeCaptures(readers []*pipeReader) {
 	for _, reader := range readers {
 		reader.capture.Abort()
 	}
 }
 
-func (r pipeReader) read(ctx context.Context) {
+func (r *pipeReader) read(ctx context.Context) {
 	buf := make([]byte, 32<<10)
 	for {
+		r.waitingSince.Store(time.Now().UnixNano())
 		n, err := r.file.Read(buf)
+		r.waitingSince.Store(0)
 		if n != 0 && !r.capture.OfferExact(ctx, buf[:n]) {
 			r.done <- pipeDrainCutoff
 			return
@@ -251,7 +268,7 @@ func (w *Worker) abortPipe() {
 	w.finish(-1)
 }
 
-func (w *Worker) finishPipe(attempt *execution.Attempt, readers []pipeReader, stdout *os.File, lineDone <-chan struct{}, stopReaders context.CancelFunc, meta Meta) (int, error) {
+func (w *Worker) finishPipe(attempt *execution.Attempt, readers []*pipeReader, stdout *os.File, lineDone <-chan struct{}, stopReaders context.CancelFunc, meta Meta) (int, error) {
 	if err := observeChildExit(w.cmd.Process.Pid); err != nil {
 		// Unblock any control awaiting completion while we still own the group.
 		w.abortPipe()
@@ -260,8 +277,7 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []pipeReader, st
 	if w.pipe.input != nil {
 		w.pipe.input.stopWriting()
 	}
-	deadline := time.Now().Add(ptyDrainTimeout)
-	reasons := drainPipe(readers, stdout, lineDone, stopReaders, deadline)
+	reasons := drainPipe(readers, stdout, lineDone, stopReaders, pipeDrainLimits{silence: ptyDrainTimeout, total: pipeDrainTotal})
 	state, err := w.reapChild()
 	code := -1
 	if state != nil {
@@ -287,7 +303,7 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []pipeReader, st
 	return code, nil
 }
 
-func finishPipeCapture(readers []pipeReader, reasons []string, result *execution.Result) {
+func finishPipeCapture(readers []*pipeReader, reasons []string, result *execution.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), finalFlushTimeout)
 	defer cancel()
 	for index, reader := range readers {
@@ -306,20 +322,41 @@ func finishPipeCapture(readers []pipeReader, reasons []string, result *execution
 
 const pipeDrainCutoff = "drain_timeout"
 
-func drainPipe(readers []pipeReader, stdout *os.File, lineDone <-chan struct{}, stopReaders context.CancelFunc, deadline time.Time) []string {
-	cutoff, cancel := context.WithDeadline(context.Background(), deadline)
+// pipeDrainTotal bounds the whole drain, so a descendant that keeps writing
+// cannot hold the worker open. It is longer than the silence window because
+// the capture commits to disk at its own pace, and a loaded disk must not cost
+// output the leader wrote before it exited.
+const pipeDrainTotal = 2 * time.Second
+
+type pipeDrainLimits struct {
+	// silence is how long a pipe may stay quiet after the leader exits before a
+	// descendant holding it open is cut off. Time spent handing bytes already
+	// read to the capture does not count as quiet.
+	silence time.Duration
+	// total bounds the entire drain.
+	total time.Duration
+}
+
+func drainPipe(readers []*pipeReader, stdout *os.File, lineDone <-chan struct{}, stopReaders context.CancelFunc, limits pipeDrainLimits) []string {
+	start := time.Now()
+	hard, cancel := context.WithTimeout(context.Background(), limits.total)
 	defer cancel()
+	cut := false
 	reasons := make([]string, len(readers))
 	for index, reader := range readers {
-		reasons[index] = pipeDrainResult(cutoff, reader.done)
+		reasons[index] = pipeDrainResult(hard, reader, start, limits.silence)
+		cut = cut || reasons[index] == pipeDrainCutoff
 	}
 	if lineDone != nil {
+		window := time.NewTimer(max(0, limits.silence-time.Since(start)))
+		defer window.Stop()
 		select {
 		case <-lineDone:
-		case <-cutoff.Done():
+		case <-window.C:
+			cut = true
 		}
 	}
-	if cutoff.Err() != nil {
+	if cut {
 		stopReaders()
 		for _, reader := range readers {
 			_ = reader.file.Close()
@@ -329,17 +366,31 @@ func drainPipe(readers []pipeReader, stdout *os.File, lineDone <-chan struct{}, 
 	return reasons
 }
 
-func pipeDrainResult(cutoff context.Context, done <-chan string) string {
-	// A different stream may already have exhausted the shared window.
+func pipeDrainResult(hard context.Context, reader *pipeReader, start time.Time, silence time.Duration) string {
+	for {
+		wait := silence - reader.silentFor(start)
+		if wait <= 0 {
+			return finishedOrCut(reader.done)
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case reason := <-reader.done:
+			timer.Stop()
+			return reason
+		case <-hard.Done():
+			timer.Stop()
+			return finishedOrCut(reader.done)
+		case <-timer.C:
+		}
+	}
+}
+
+// finishedOrCut prefers a reason the reader already reported over a cutoff.
+func finishedOrCut(done <-chan string) string {
 	select {
 	case reason := <-done:
 		return reason
 	default:
-	}
-	select {
-	case reason := <-done:
-		return reason
-	case <-cutoff.Done():
 		return pipeDrainCutoff
 	}
 }

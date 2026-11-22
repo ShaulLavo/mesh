@@ -95,7 +95,9 @@ confirmed. It returns `timed_out` with the current receipt when its finite wait
 ends. Waiting, reading, and cancelling either operation leave the child alive.
 The CLI reserves a small part of its deadline to receive the timeout response.
 A crashed worker can leave a durable output prefix and an unknown result.
-Descriptor-holding descendants have the existing 250 ms post-leader drain bound.
+After the leader exits, Mesh keeps capturing everything the command wrote, however
+long the disk takes. A descendant that holds an output descriptor open is cut off
+after 250 ms of silence, or after 2 seconds in total if it keeps writing.
 A drain cutoff reports `eof: false` and `closeReason: drain_timeout`.
 
 Signal and kill require the exact instance and a worker acknowledgement. A lost
