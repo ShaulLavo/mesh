@@ -73,11 +73,12 @@ Read one durable execution context owned by this application identity using its 
 
 ## mesh_context_list
 
-List durable execution contexts owned by this application identity on one Mesh host.
+List durable execution contexts owned by this application identity on one Mesh host. Returns a byte-bounded page and an optional nextCursor when more contexts remain.
 
 - Linked operation: `contexts.list`
 - Hints: read-only, idempotent
 - Arguments:
+  - `cursor` (`string`, optional): Optional opaque nextCursor returned by a previous mesh_context_list call.
   - `host` (`string`, required): Machine name or exact host ID.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
 

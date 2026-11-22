@@ -35,6 +35,7 @@ type clientServer struct {
 	apps         controlHandler
 	fleet        controlHandler
 	context      controlHandler
+	files        controlHandler
 	fleetProfile controlHandler
 }
 
@@ -90,8 +91,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 	}()
 
 	terminalUsed := false
+	lookahead := newFrameLookahead(client)
 	for {
-		frame, err := client.ReadFrame()
+		frame, err := lookahead.read()
 		if err != nil {
 			logClientStreamClose(ctx, terminalUsed, err)
 			return clientOperationError(ctx, "read client frame", err)
@@ -129,6 +131,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		if protocol.IsExecutionControl(request.Type) || protocol.IsContextControl(request.Type) {
 			if err := s.replyExecution(ctx, relay, request); err != nil {
 				return clientOperationError(ctx, "reply to execution request", err)
+			}
+			continue
+		}
+
+		if protocol.IsFileControl(request.Type) && s.files != nil {
+			if err := s.replyFiles(ctx, relay, lookahead, request); err != nil {
+				return clientOperationError(ctx, "reply to file request", err)
 			}
 			continue
 		}

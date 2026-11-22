@@ -41,10 +41,13 @@ func (c *mcpControls) TerminalOpen(ctx context.Context, req mcpnative.TerminalOp
 			Env:          req.Env,
 		},
 	}
+	if err := validateControlBeforeSend(&control); err != nil {
+		target := &mcpnative.TargetMeta{HostID: host.ID, HostName: HostLabel(host), ContextID: req.Context.String()}
+		return failOutcome("sessions.create", target, agentapi.Usage("sessions.create", err.Error()).Err), nil
+	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)
 	target.ContextID = req.Context.String()
-	target.Cwd = c.resolvedExecCwd(req.Context.String(), req.Cwd)
 	if err != nil {
 		return c.execCreateTransportFailure(err, host.ID, req.RequestKey, target), nil
 	}

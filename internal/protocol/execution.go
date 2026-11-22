@@ -73,6 +73,7 @@ type ExecutionReceipt struct {
 	// even after the context changed or closed.
 	ContextID       string  `json:"contextId,omitempty"`
 	ContextRevision *uint64 `json:"contextRevision,string,omitempty"`
+	Cwd             string  `json:"cwd,omitempty"`
 }
 
 // validateExecutionRaw runs before Control decoding can discard request evidence.

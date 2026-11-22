@@ -2,9 +2,9 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -35,31 +35,6 @@ func (c *mcpControls) identityRequiredOutcome(operation, hostID string) mcpnativ
 		target = &mcpnative.TargetMeta{HostID: hostID}
 	}
 	return failOutcome(operation, target, agentapi.Usage(operation, identityRequiredMessage).Err)
-}
-
-func (c *mcpControls) rememberContextCwd(info protocol.ExecutionContextInfo) {
-	if info.Handle == "" || info.Cwd == "" {
-		return
-	}
-	c.cwdMu.Lock()
-	c.contextCwds[info.Handle] = info.Cwd
-	c.cwdMu.Unlock()
-}
-
-func (c *mcpControls) resolvedExecCwd(handle, reqCwd string) string {
-	if reqCwd != "" && filepath.IsAbs(reqCwd) {
-		return filepath.Clean(reqCwd)
-	}
-	c.cwdMu.RLock()
-	base := c.contextCwds[handle]
-	c.cwdMu.RUnlock()
-	if base == "" {
-		return reqCwd
-	}
-	if reqCwd == "" {
-		return base
-	}
-	return filepath.Join(base, reqCwd)
 }
 
 func (c *mcpControls) OpenContext(ctx context.Context, req mcpnative.OpenContextRequest) (mcpnative.CallOutcome, error) {
@@ -98,16 +73,21 @@ func (c *mcpControls) ListContexts(ctx context.Context, req mcpnative.ListContex
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	return c.listAllMCPContexts(callCtx, host)
+	return c.listBoundedMCPContexts(callCtx, host, req.Cursor)
 }
 
-func (c *mcpControls) listAllMCPContexts(ctx context.Context, host HostRecord) (mcpnative.CallOutcome, error) {
+func (c *mcpControls) listBoundedMCPContexts(ctx context.Context, host HostRecord, startCursor string) (mcpnative.CallOutcome, error) {
+	budget := c.contextListBudget
+	if budget <= 0 {
+		budget = defaultMCPContextListBudget
+	}
 	control := protocol.Control{
 		Type:             protocol.TypeContextList,
 		Caller:           c.caller,
-		ExecutionContext: &protocol.ExecutionContextRequest{},
+		ExecutionContext: &protocol.ExecutionContextRequest{Cursor: startCursor},
 	}
-	merged := protocol.Control{Type: protocol.TypeContextResult, ContextInfos: []protocol.ExecutionContextInfo{}}
+	collected := make([]agentapi.ExecutionContext, 0)
+	usedBytes := 0
 	var lastInfo protocol.HostInfo
 	for range maxContextListPages {
 		response, info, err := c.pool.ExchangeShort(ctx, host, control, true)
@@ -119,14 +99,36 @@ func (c *mcpControls) listAllMCPContexts(ctx context.Context, host HostRecord) (
 		if response.Type != protocol.TypeContextResult {
 			return c.contextOutcome("contexts.list", control, response, host.ID, target), nil
 		}
-		merged.ContextInfos = append(merged.ContextInfos, response.ContextInfos...)
+		var stopped bool
+		collected, usedBytes, stopped = appendBoundedContexts(collected, usedBytes, budget, response.ContextInfos)
+		if stopped {
+			next := collected[len(collected)-1].ContextID
+			return okOutcome("contexts.list", target, agentapi.ExecutionContexts{HostID: host.ID, Contexts: collected, NextCursor: next}), nil
+		}
 		if response.ContextNextCursor == "" {
-			return c.contextOutcome("contexts.list", control, merged, host.ID, target), nil
+			return okOutcome("contexts.list", target, agentapi.ExecutionContexts{HostID: host.ID, Contexts: collected}), nil
 		}
 		control.ExecutionContext.Cursor = response.ContextNextCursor
 	}
 	target := c.targetMeta(host, lastInfo)
 	return failOutcome("contexts.list", target, agentapi.Fail(agentapi.InternalError, "contexts.list", host.ID, "host returned more context pages than it can hold").Err), nil
+}
+
+func appendBoundedContexts(collected []agentapi.ExecutionContext, usedBytes, budget int, page []protocol.ExecutionContextInfo) ([]agentapi.ExecutionContext, int, bool) {
+	for _, info := range page {
+		item := agentContext(info)
+		encoded, err := json.Marshal(item)
+		size := len(encoded) + 2
+		if err != nil {
+			size = 512
+		}
+		if len(collected) > 0 && usedBytes+size > budget {
+			return collected, usedBytes, true
+		}
+		collected = append(collected, item)
+		usedBytes += size
+	}
+	return collected, usedBytes, false
 }
 
 func (c *mcpControls) ContextReceipt(ctx context.Context, req mcpnative.ContextReceiptRequest) (mcpnative.CallOutcome, error) {
@@ -206,16 +208,18 @@ func (c *mcpControls) exchangeContext(ctx context.Context, operation string, hos
 func (c *mcpControls) contextOutcome(operation string, request, response protocol.Control, hostID string, target *mcpnative.TargetMeta) mcpnative.CallOutcome {
 	var data any
 	if response.ContextInfo != nil {
-		c.rememberContextCwd(*response.ContextInfo)
 		item := agentContext(*response.ContextInfo)
 		target.ContextID = item.Handle
 		target.Cwd = item.Cwd
 		data = item
 	}
 	if request.Type == protocol.TypeContextList && response.Type == protocol.TypeContextResult {
-		list := agentapi.ExecutionContexts{HostID: hostID, Contexts: make([]agentapi.ExecutionContext, 0, len(response.ContextInfos))}
+		list := agentapi.ExecutionContexts{
+			HostID:     hostID,
+			Contexts:   make([]agentapi.ExecutionContext, 0, len(response.ContextInfos)),
+			NextCursor: response.ContextNextCursor,
+		}
 		for _, info := range response.ContextInfos {
-			c.rememberContextCwd(info)
 			list.Contexts = append(list.Contexts, agentContext(info))
 		}
 		data = list
@@ -232,6 +236,28 @@ func (c *mcpControls) contextOutcome(operation string, request, response protoco
 		return failOutcome(operation, target, agentapi.Fail(agentapi.InternalError, operation, hostID, "host did not return a context result").Err)
 	}
 	return okOutcome(operation, target, data)
+}
+
+func validateControlBeforeSend(control *protocol.Control) error {
+	if control.RequestID == "" {
+		id, err := newDaemonRequestID()
+		if err != nil {
+			return err
+		}
+		control.RequestID = id
+	}
+	encoded, err := control.Encode()
+	if err != nil {
+		return fmt.Errorf("encode control: %w", err)
+	}
+	if _, err := protocol.DecodeControl(encoded); err != nil {
+		return fmt.Errorf("control fails protocol validation: %w", err)
+	}
+	return nil
+}
+
+func isAuthErrorCode(code agentapi.Code) bool {
+	return code == agentapi.AccessDenied || code == agentapi.HostAuthenticationFailed || code == agentapi.HostIdentityMismatch
 }
 
 func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notify func(mcpnative.ProgressUpdate)) (mcpnative.CallOutcome, error) {
@@ -258,10 +284,13 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 			Env:          req.Env,
 		},
 	}
+	if valErr := validateControlBeforeSend(&createCtrl); valErr != nil {
+		target := &mcpnative.TargetMeta{HostID: host.ID, HostName: HostLabel(host), ContextID: req.Context.String()}
+		return failOutcome("sessions.create", target, agentapi.Usage("sessions.create", valErr.Error()).Err), nil
+	}
 	resp, info, err := c.pool.ExchangeShort(createCtx, host, createCtrl, false)
 	target := c.targetMeta(host, info)
 	target.ContextID = req.Context.String()
-	target.Cwd = c.resolvedExecCwd(req.Context.String(), req.Cwd)
 	if err != nil {
 		return c.execCreateTransportFailure(err, host.ID, req.RequestKey, target), nil
 	}
@@ -270,12 +299,22 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 		return failOut, nil
 	}
 	ref := mcpnative.JobRef{HostID: receipt.HostID, SessionID: receipt.SessionID, Instance: receipt.Instance}
-	receipt, waitStatus, err := c.finishExecWait(ctx, host, req, ref, receipt, notify)
+	receipt, waitStatus, waitFail, err := c.finishExecWait(ctx, host, req, ref, receipt, target, notify)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
-	stdoutData, stderrData := c.fetchExecInitialStreams(ctx, host, req, ref)
-	return okOutcome("sessions.create", target, mcpnative.ExecResultData{
+	if waitFail != nil {
+		return *waitFail, nil
+	}
+	stdoutData, stderrData, streamFail := c.fetchExecInitialStreams(ctx, host, req, ref, receipt, waitStatus, target)
+	if streamFail != nil {
+		return *streamFail, nil
+	}
+	return okOutcome("sessions.create", target, execResultData(ref, target, receipt, waitStatus, stdoutData, stderrData)), nil
+}
+
+func execResultData(ref mcpnative.JobRef, target *mcpnative.TargetMeta, receipt *agentapi.ExecutionReceipt, waitStatus string, stdoutData, stderrData *mcpnative.ExecStreamData) mcpnative.ExecResultData {
+	return mcpnative.ExecResultData{
 		Job:        ref.String(),
 		RequestKey: receipt.RequestKey,
 		Target:     *target,
@@ -285,24 +324,23 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 		Receipt:    receipt,
 		Stdout:     stdoutData,
 		Stderr:     stderrData,
-	}), nil
+	}
 }
 
-func (c *mcpControls) finishExecWait(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, notify func(mcpnative.ProgressUpdate)) (*agentapi.ExecutionReceipt, string, error) {
-	if receipt.Phase == executionPhaseTerminal || req.WaitMS <= 0 {
-		return receipt, "", nil
+func execFollowupErrorOutcome(operation string, failure agentapi.Error, target *mcpnative.TargetMeta, partial mcpnative.ExecResultData) mcpnative.CallOutcome {
+	if isAuthErrorCode(failure.Code) {
+		return failOutcome(operation, target, failure)
 	}
-	waited, status, waitErr := c.waitExecJob(ctx, host, req, ref, notify)
-	if waitErr != nil {
-		if ctx.Err() != nil {
-			return nil, "", fmt.Errorf("wait for exec job cancelled: %w", ctx.Err())
-		}
-		return receipt, "timed_out", nil
+	return mcpnative.CallOutcome{
+		Envelope: agentapi.Envelope{
+			Operation: operation,
+			Status:    agentapi.StatusError,
+			Data:      partial,
+			Errors:    []agentapi.Error{failure},
+		},
+		Target:  target,
+		IsError: true,
 	}
-	if waited != nil {
-		receipt = waited
-	}
-	return receipt, status, nil
 }
 
 func (c *mcpControls) execCreateTransportFailure(err error, hostID, key string, target *mcpnative.TargetMeta) mcpnative.CallOutcome {
@@ -322,22 +360,19 @@ func (c *mcpControls) decodeExecReceipt(operation string, resp protocol.Control,
 			return nil, failOutcome(operation, target, agentError(err, operation, hostID, agentapi.InternalError)), false
 		}
 		receipt = parsed
-		ref := mcpnative.JobRef{HostID: parsed.HostID, SessionID: parsed.SessionID, Instance: parsed.Instance}
-		partial = &mcpnative.ExecResultData{
-			Job:        ref.String(),
-			RequestKey: parsed.RequestKey,
-			Target:     *target,
-			State:      mcpnative.JobStateFromReceipt(parsed),
-			Result:     parsed.Result,
-			Receipt:    parsed,
+		if parsed.Cwd != "" {
+			target.Cwd = parsed.Cwd
 		}
+		ref := mcpnative.JobRef{HostID: parsed.HostID, SessionID: parsed.SessionID, Instance: parsed.Instance}
+		data := execResultData(ref, target, parsed, "", nil, nil)
+		partial = &data
 	}
 	if resp.Type == protocol.TypeError {
 		failure := agentapi.Fail(controlAgentCode(resp.ErrorCode), operation, hostID, resp.Message).Err
-		envelope := agentapi.Envelope{Operation: operation, Status: agentapi.StatusError, Errors: []agentapi.Error{failure}}
-		if partial != nil {
-			envelope.Data = *partial
+		if isAuthErrorCode(failure.Code) || partial == nil {
+			return nil, failOutcome(operation, target, failure), false
 		}
+		envelope := agentapi.Envelope{Operation: operation, Status: agentapi.StatusError, Data: *partial, Errors: []agentapi.Error{failure}}
 		return nil, mcpnative.CallOutcome{Envelope: envelope, Target: target, IsError: true}, false
 	}
 	if resp.Type != protocol.TypeExecutionReceipt || receipt == nil {
@@ -346,7 +381,50 @@ func (c *mcpControls) decodeExecReceipt(operation string, resp protocol.Control,
 	return receipt, mcpnative.CallOutcome{}, true
 }
 
-func (c *mcpControls) waitExecJob(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, notify func(mcpnative.ProgressUpdate)) (*agentapi.ExecutionReceipt, string, error) {
+func (c *mcpControls) finishExecWait(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, target *mcpnative.TargetMeta, notify func(mcpnative.ProgressUpdate)) (*agentapi.ExecutionReceipt, string, *mcpnative.CallOutcome, error) {
+	if receipt.Phase == executionPhaseTerminal || req.WaitMS <= 0 {
+		return receipt, "", nil, nil
+	}
+	resp, waitErr := c.waitExecJob(ctx, host, req, ref, notify)
+	if waitErr != nil {
+		if errors.Is(waitErr, errWaitBudgetExpired) {
+			return receipt, "timed_out", nil, nil
+		}
+		if ctx.Err() != nil {
+			return nil, "", nil, fmt.Errorf("wait for exec job cancelled: %w", ctx.Err())
+		}
+		failure := agentError(waitErr, "sessions.wait", host.ID, agentapi.HostUnreachable)
+		outcome := execFollowupErrorOutcome("sessions.wait", failure, target, execResultData(ref, target, receipt, "", nil, nil))
+		return nil, "", &outcome, nil
+	}
+	if resp.Type == protocol.TypeError {
+		failure := agentapi.Fail(controlAgentCode(resp.ErrorCode), "sessions.wait", host.ID, resp.Message).Err
+		outcome := execFollowupErrorOutcome("sessions.wait", failure, target, execResultData(ref, target, receipt, "", nil, nil))
+		return nil, "", &outcome, nil
+	}
+	if resp.Type != protocol.TypeExecutionReceipt || resp.ExecutionReceipt == nil {
+		failure := agentapi.Fail(agentapi.InternalError, "sessions.wait", host.ID, "host did not return an execution receipt for wait").Err
+		outcome := execFollowupErrorOutcome("sessions.wait", failure, target, execResultData(ref, target, receipt, "", nil, nil))
+		return nil, "", &outcome, nil
+	}
+	parsed, parseErr := agentExecutionReceipt(resp.ExecutionReceipt, host.ID, req.RequestKey)
+	if parseErr != nil {
+		failure := agentError(parseErr, "sessions.wait", host.ID, agentapi.InternalError)
+		outcome := execFollowupErrorOutcome("sessions.wait", failure, target, execResultData(ref, target, receipt, "", nil, nil))
+		return nil, "", &outcome, nil
+	}
+	if parsed.SessionID != ref.SessionID || parsed.Instance != ref.Instance || parsed.HostID != ref.HostID {
+		failure := agentapi.Fail(agentapi.SessionInstanceMismatch, "sessions.wait", host.ID, "host returned another execution instance during wait").Err
+		outcome := execFollowupErrorOutcome("sessions.wait", failure, target, execResultData(ref, target, receipt, "", nil, nil))
+		return nil, "", &outcome, nil
+	}
+	if parsed.Cwd != "" {
+		target.Cwd = parsed.Cwd
+	}
+	return parsed, resp.ExecutionWait, nil, nil
+}
+
+func (c *mcpControls) waitExecJob(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, notify func(mcpnative.ProgressUpdate)) (protocol.Control, error) {
 	deadline := time.Now().Add(time.Duration(req.WaitMS) * time.Millisecond)
 	stopProgress := c.startExecProgress(ctx, host, req.Context, ref, notify)
 	defer stopProgress()
@@ -360,49 +438,59 @@ func (c *mcpControls) waitExecJob(ctx context.Context, host HostRecord, req mcpn
 			ExecutionContext: &protocol.ExecutionContextRequest{ContextID: req.Context.ContextID},
 		}
 	})
-	if err != nil {
-		return nil, "", err
-	}
-	if resp.ExecutionReceipt == nil {
-		return nil, resp.ExecutionWait, nil
-	}
-	parsed, parseErr := agentExecutionReceipt(resp.ExecutionReceipt, host.ID, req.RequestKey)
-	if parseErr != nil {
-		return nil, resp.ExecutionWait, parseErr
-	}
-	return parsed, resp.ExecutionWait, nil
+	return resp, err
 }
 
 func (c *mcpControls) startExecProgress(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, notify func(mcpnative.ProgressUpdate)) func() {
 	if notify == nil {
 		return func() {}
 	}
+	probeCtx, cancelProbe := context.WithCancel(ctx)
 	done := make(chan struct{})
 	notify(mcpnative.ProgressUpdate{Progress: 0, Message: "running " + ref.String() + " (stdout=0B stderr=0B)"})
 	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				stdoutBytes := c.probeObservedBytes(ctx, host, ctxRef, ref, execution.StreamStdout)
-				stderrBytes := c.probeObservedBytes(ctx, host, ctxRef, ref, execution.StreamStderr)
-				totalBytes := float64(stdoutBytes + stderrBytes)
-				notify(mcpnative.ProgressUpdate{
-					Progress: totalBytes,
-					Message:  fmt.Sprintf("running %s (stdout=%dB stderr=%dB)", ref.String(), stdoutBytes, stderrBytes),
-				})
-			}
-		}
+		defer close(done)
+		c.runExecProgressLoop(probeCtx, host, ctxRef, ref, notify)
 	}()
-	return func() { close(done) }
+	return func() {
+		cancelProbe()
+		<-done
+	}
 }
 
-func (c *mcpControls) probeObservedBytes(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, stream string) uint64 {
+func (c *mcpControls) runExecProgressLoop(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, notify func(mcpnative.ProgressUpdate)) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var (
+		maxStdout    uint64
+		maxStderr    uint64
+		lastProgress float64
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if n, ok := c.probeObservedBytes(ctx, host, ctxRef, ref, execution.StreamStdout); ok && n > maxStdout {
+				maxStdout = n
+			}
+			if n, ok := c.probeObservedBytes(ctx, host, ctxRef, ref, execution.StreamStderr); ok && n > maxStderr {
+				maxStderr = n
+			}
+			totalBytes := float64(maxStdout + maxStderr)
+			if totalBytes <= lastProgress {
+				continue
+			}
+			lastProgress = totalBytes
+			notify(mcpnative.ProgressUpdate{
+				Progress: totalBytes,
+				Message:  fmt.Sprintf("running %s (stdout=%dB stderr=%dB)", ref.String(), maxStdout, maxStderr),
+			})
+		}
+	}
+}
+
+func (c *mcpControls) probeObservedBytes(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, stream string) (uint64, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
 	ctrl := protocol.Control{
@@ -415,25 +503,33 @@ func (c *mcpControls) probeObservedBytes(ctx context.Context, host HostRecord, c
 		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxRef.ContextID},
 	}
 	resp, _, err := c.pool.ExchangeShort(probeCtx, host, ctrl, false)
-	if err != nil || resp.ExecutionPage == nil {
-		return 0
+	if err != nil || resp.Type != protocol.TypeExecutionReceipt || resp.ExecutionPage == nil {
+		return 0, false
 	}
 	n, err := strconv.ParseUint(resp.ExecutionPage.ObservedEnd, 10, 64)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return n
+	return n, true
 }
 
-func (c *mcpControls) fetchExecInitialStreams(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef) (*mcpnative.ExecStreamData, *mcpnative.ExecStreamData) {
+func (c *mcpControls) fetchExecInitialStreams(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, waitStatus string, target *mcpnative.TargetMeta) (*mcpnative.ExecStreamData, *mcpnative.ExecStreamData, *mcpnative.CallOutcome) {
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stdoutData := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStdout, req.OutputBytes)
-	stderrData := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStderr, req.OutputBytes)
-	return stdoutData, stderrData
+	stdoutData, errOut := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStdout, req.OutputBytes)
+	if errOut != nil {
+		outcome := execFollowupErrorOutcome("sessions.logs", *errOut, target, execResultData(ref, target, receipt, waitStatus, nil, nil))
+		return nil, nil, &outcome
+	}
+	stderrData, errErr := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStderr, req.OutputBytes)
+	if errErr != nil {
+		outcome := execFollowupErrorOutcome("sessions.logs", *errErr, target, execResultData(ref, target, receipt, waitStatus, stdoutData, nil))
+		return nil, nil, &outcome
+	}
+	return stdoutData, stderrData, nil
 }
 
-func (c *mcpControls) fetchOneExecStream(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, stream string, maxBytes int) *mcpnative.ExecStreamData {
+func (c *mcpControls) fetchOneExecStream(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, stream string, maxBytes int) (*mcpnative.ExecStreamData, *agentapi.Error) {
 	ctrl := protocol.Control{
 		Type:             protocol.TypeExecutionLogs,
 		Caller:           c.caller,
@@ -444,12 +540,22 @@ func (c *mcpControls) fetchOneExecStream(ctx context.Context, host HostRecord, c
 		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxRef.ContextID},
 	}
 	resp, _, err := c.pool.ExchangeShort(ctx, host, ctrl, true)
-	if err != nil || resp.ExecutionPage == nil {
-		return nil
+	if err != nil {
+		failure := agentError(err, "sessions.logs", host.ID, agentapi.HostUnreachable)
+		return nil, &failure
+	}
+	if resp.Type == protocol.TypeError {
+		failure := agentapi.Fail(controlAgentCode(resp.ErrorCode), "sessions.logs", host.ID, resp.Message).Err
+		return nil, &failure
+	}
+	if resp.Type != protocol.TypeExecutionReceipt || resp.ExecutionPage == nil {
+		failure := agentapi.Fail(agentapi.InternalError, "sessions.logs", host.ID, "host did not return an output page").Err
+		return nil, &failure
 	}
 	page, err := agentExecutionPage(resp.ExecutionPage, host.ID, ctrl)
 	if err != nil {
-		return nil
+		failure := agentError(err, "sessions.logs", host.ID, agentapi.InternalError)
+		return nil, &failure
 	}
-	return mcpnative.BuildExecStreamData(page)
+	return mcpnative.BuildExecStreamData(page), nil
 }

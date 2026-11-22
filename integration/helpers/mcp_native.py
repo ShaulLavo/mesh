@@ -15,6 +15,12 @@ from terminal_window import Fixture, eventually, require
 
 
 class MCPFixture(Fixture):
+    def __init__(self, binary, root):
+        super().__init__(binary, root)
+        # MCP integration tests exercise real shell="login" contexts rather than
+        # interactive PTY window_shell.sh tabs.
+        self.environment["SHELL"] = "/bin/bash" if Path("/bin/bash").exists() else "/bin/sh"
+
     def request_worker_kill(self, connections, socket_path, deadline):
         res_path = socket_path.parent / ".reservation"
         if not res_path.exists():
@@ -417,16 +423,48 @@ def exercise_host_mismatch_and_revocation(fixture):
         rev_client.terminate()
 
 
+def read_exec_with_progress(client, req_id, expected_token, timeout=15.0):
+    progress_values = []
+    while True:
+        msg = client.read_message(timeout=timeout)
+        if msg.get("method") == "notifications/progress":
+            require(msg["params"]["progressToken"] == expected_token, f"wrong progress token: {msg}")
+            progress_values.append(msg["params"]["progress"])
+            continue
+        require(msg.get("id") == req_id, f"unexpected reply while waiting on mesh_exec: {msg}")
+        return msg, progress_values
+
+
+def read_identity_secret(config_dir, name):
+    path = Path(config_dir) / "mcp" / "identities" / f"{name}.json"
+    data = json.loads(path.read_text())
+    cred = data.get("credential", "")
+    require(isinstance(cred, str) and len(cred) >= 16, f"missing credential in {path}: {data}")
+    return cred
+
+
 def exercise_contexts_exec_and_isolation(fixture):
     host_id = fixture.remote_id
     ctx_dir_1 = str(fixture.root)
     ctx_dir_2 = str(fixture.root / "ctx-sub")
+    ctx_dir_3 = str(fixture.root / "ctx-sub-3")
     Path(ctx_dir_2).mkdir(exist_ok=True)
+    Path(ctx_dir_3).mkdir(exist_ok=True)
+    launch_marker = fixture.root / "replay-launch-count.txt"
 
     # Create two distinct application identities under the same account.
+    secrets = []
     for name in ("alpha", "beta"):
         res = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
         require(res.returncode == 0 and not res.stderr, f"identity create {name} failed: rc={res.returncode} out={res.stdout!r} err={res.stderr!r}")
+        secret = read_identity_secret(fixture.config, name)
+        require(secret not in res.stdout and secret not in res.stderr, f"credential leaked by identity create {name}")
+        secrets.append(secret)
+
+    def assert_no_secret(payload, label):
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        for sec in secrets:
+            require(sec not in text, f"credential leaked in {label}")
 
     alpha = MCPClient(fixture.binary, fixture.environment, args=("--identity", "alpha"))
     ctx_handle = ""
@@ -448,6 +486,7 @@ def exercise_contexts_exec_and_isolation(fixture):
             "env": {"APP_TEST_SECRET": "top-secret-42"},
             "label": "alpha-work",
         })
+        assert_no_secret(opened, "context open")
         require(not opened["result"]["isError"], f"context open failed: {opened}")
         require("top-secret-42" not in json.dumps(opened), f"secret leaked in open reply: {opened}")
         open_data = opened["result"]["structuredContent"]["data"]
@@ -498,25 +537,113 @@ def exercise_contexts_exec_and_isolation(fixture):
         listed_ctx = alpha.call_tool("mesh_context_list", {"host": host_id})
         require(not listed_ctx["result"]["isError"] and any(c["handle"] == ctx_handle for c in listed_ctx["result"]["structuredContent"]["data"]["contexts"]), f"context missing from list: {listed_ctx}")
 
-        # Short mesh_exec job: checks inherited env + cwd, attempts cd/export, returns inline stdout/stderr.
+        # Strict command/argv exclusivity: command + empty argv must fail with -32602.
+        bad_both = alpha.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-bad-both",
+            "command": "echo hi",
+            "argv": [],
+        })
+        require(bad_both.get("error", {}).get("code") == -32602, f"expected -32602 for command + empty argv: {bad_both}")
+
+        # Short mesh_exec job: verifies durable cwd, target _meta, inherited env, and single launch on replay.
+        short_cmd = (
+            f"echo x >> '{launch_marker}'; "
+            "printf 'cwd=%s;sec=%s;extra=%s;job=%s' \"$PWD\" \"$APP_TEST_SECRET\" \"$EXTRA_FLAG\" \"$JOB_VAR\"; "
+            "printf 'err-line' >&2; cd /; export APP_TEST_SECRET=mutated"
+        )
         short_exec = alpha.call_tool("mesh_exec", {
             "context": ctx_handle,
             "request_key": "exec-short-1",
-            "command": "printf 'cwd=%s;sec=%s;extra=%s;job=%s' \"$PWD\" \"$APP_TEST_SECRET\" \"$EXTRA_FLAG\" \"$JOB_VAR\"; printf 'err-line' >&2; cd /; export APP_TEST_SECRET=mutated",
+            "command": short_cmd,
             "env": {"JOB_VAR": "per-job"},
             "wait_ms": 10000,
         })
+        assert_no_secret(short_exec, "short mesh_exec")
         require(not short_exec["result"]["isError"], f"short mesh_exec failed: {short_exec}")
+        short_meta = short_exec["result"].get("_meta", {}).get("com.github.shaullavo.mesh/target", {})
         short_data = short_exec["result"]["structuredContent"]["data"]
         short_job = short_data["job"]
+        require(short_meta.get("hostId") == host_id and short_meta.get("contextId") == ctx_handle and short_meta.get("cwd") == ctx_dir_2, f"unexpected _meta target: {short_meta}")
+        require(short_data["target"]["cwd"] == ctx_dir_2 and short_data["receipt"]["cwd"] == ctx_dir_2, f"durable cwd missing on short exec: {short_data}")
         require(short_data["state"] == "exited" and short_data["wait"] == "completed", f"short exec state: {short_data}")
         require(short_data["result"]["termination"]["code"] == 0, f"short exec exit: {short_data}")
         require(short_data["stdout"]["data"] == f"cwd={ctx_dir_2};sec=top-secret-42;extra=yes;job=per-job", f"short exec stdout: {short_data}")
         require(short_data["stderr"]["data"] == "err-line", f"short exec stderr: {short_data}")
+        require(len(launch_marker.read_text().splitlines()) == 1, "expected 1 launch after initial short mesh_exec")
 
         # Child cd/export never mutates context.
         after_exec_ctx = alpha.call_tool("mesh_context_get", {"context": ctx_handle})
         require(after_exec_ctx["result"]["structuredContent"]["data"]["revision"] == "2" and after_exec_ctx["result"]["structuredContent"]["data"]["cwd"] == ctx_dir_2, f"exec mutated context: {after_exec_ctx}")
+
+        # Edit context to ctx_dir_3, then replay exec-short-1 with changed wait_ms & output_bytes:
+        # must still report original ctx_dir_2 on BOTH target objects and launch only once!
+        updated3 = alpha.call_tool("mesh_context_update", {
+            "context": ctx_handle,
+            "expected_revision": 2,
+            "cwd": ctx_dir_3,
+        })
+        require(not updated3["result"]["isError"] and updated3["result"]["structuredContent"]["data"]["revision"] == "3", f"context update to rev 3 failed: {updated3}")
+        replayed_exec = alpha.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-short-1",
+            "command": short_cmd,
+            "env": {"JOB_VAR": "per-job"},
+            "wait_ms": 5000,
+            "output_bytes": 16,
+        })
+        require(not replayed_exec["result"]["isError"], f"replayed mesh_exec failed: {replayed_exec}")
+        rep_meta = replayed_exec["result"].get("_meta", {}).get("com.github.shaullavo.mesh/target", {})
+        rep_data = replayed_exec["result"]["structuredContent"]["data"]
+        require(rep_data["job"] == short_job, f"replayed job handle changed: {rep_data}")
+        require(rep_meta.get("cwd") == ctx_dir_2 and rep_data["target"]["cwd"] == ctx_dir_2, f"replay cwd drifted after context edit: meta={rep_meta} data={rep_data['target']}")
+        require(len(rep_data["stdout"]["data"]) == 16, f"replay output_bytes ignored: {rep_data['stdout']}")
+        require(len(launch_marker.read_text().splitlines()) == 1, "replay launched command a second time")
+
+        # Changed command intent under same request_key returns request.key_conflict.
+        exec_conflict = alpha.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-short-1",
+            "command": "echo different",
+            "wait_ms": 5000,
+        })
+        require(exec_conflict["result"]["isError"] and exec_conflict["result"]["structuredContent"]["errors"][0]["code"] == "request.key_conflict", f"expected request.key_conflict on changed command: {exec_conflict}")
+
+        # Text (utf-8) and binary (base64) cursor continuation on mesh_job_output.
+        bin_exec = alpha.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-bin-1",
+            "argv": ["/bin/sh", "-c", "printf 'ABCDEFGH'; printf '\\000\\377\\001\\376\\002\\375' >&2"],
+            "wait_ms": 10000,
+            "output_bytes": 4,
+        })
+        require(not bin_exec["result"]["isError"], f"binary exec failed: {bin_exec}")
+        bin_data = bin_exec["result"]["structuredContent"]["data"]
+        bin_job = bin_data["job"]
+        require(bin_data["stdout"]["encoding"] == "utf-8" and bin_data["stdout"]["data"] == "ABCD", f"text page 1: {bin_data['stdout']}")
+        text_p2 = alpha.call_tool("mesh_job_output", {"job": bin_job, "context": ctx_handle, "stream": "stdout", "cursor": bin_data["stdout"]["nextCursor"], "max_bytes": 64})
+        require(text_p2["result"]["structuredContent"]["data"]["data"] == "EFGH", f"text page 2: {text_p2}")
+        require(bin_data["stderr"]["encoding"] == "base64" and base64.b64decode(bin_data["stderr"]["data"]) == b"\x00\xff\x01\xfe", f"binary page 1: {bin_data['stderr']}")
+        bin_p2 = alpha.call_tool("mesh_job_output", {"job": bin_job, "context": ctx_handle, "stream": "stderr", "cursor": bin_data["stderr"]["nextCursor"], "max_bytes": 64})
+        bin_p2_data = bin_p2["result"]["structuredContent"]["data"]
+        require(bin_p2_data["encoding"] == "base64" and base64.b64decode(bin_p2_data["data"]) == b"\x02\xfd", f"binary page 2: {bin_p2}")
+
+        # Shell modes: login (command + argv) and none (argv ok, command refused).
+        login_ctx = alpha.call_tool("mesh_context_open", {"host": host_id, "request_key": "ctx-login", "cwd": ctx_dir_1, "shell": "login"})
+        require(not login_ctx["result"]["isError"], f"login context open failed: {login_ctx}")
+        login_handle = login_ctx["result"]["structuredContent"]["data"]["handle"]
+        login_cmd = alpha.call_tool("mesh_exec", {"context": login_handle, "request_key": "login-cmd", "command": "printf 'login-ok'", "wait_ms": 10000})
+        require(not login_cmd["result"]["isError"] and login_cmd["result"]["structuredContent"]["data"]["stdout"]["data"] == "login-ok", f"login command failed: {login_cmd}")
+        login_argv = alpha.call_tool("mesh_exec", {"context": login_handle, "request_key": "login-argv", "argv": ["/bin/echo", "-n", "argv-ok"], "wait_ms": 10000})
+        require(not login_argv["result"]["isError"] and login_argv["result"]["structuredContent"]["data"]["stdout"]["data"] == "argv-ok", f"login argv failed: {login_argv}")
+
+        none_ctx = alpha.call_tool("mesh_context_open", {"host": host_id, "request_key": "ctx-none", "cwd": ctx_dir_1, "shell": "none"})
+        require(not none_ctx["result"]["isError"], f"none context open failed: {none_ctx}")
+        none_handle = none_ctx["result"]["structuredContent"]["data"]["handle"]
+        none_cmd = alpha.call_tool("mesh_exec", {"context": none_handle, "request_key": "none-cmd", "command": "echo nope", "wait_ms": 5000})
+        require(none_cmd["result"]["isError"] and none_cmd["result"]["structuredContent"]["errors"][0]["code"] == "usage.invalid", f"shell=none accepted command string: {none_cmd}")
+        none_argv = alpha.call_tool("mesh_exec", {"context": none_handle, "request_key": "none-argv", "argv": ["/bin/echo", "-n", "none-ok"], "wait_ms": 10000})
+        require(not none_argv["result"]["isError"] and none_argv["result"]["structuredContent"]["data"]["stdout"]["data"] == "none-ok", f"shell=none argv failed: {none_argv}")
 
         # CLI parity: create context job via CLI and verify MCP sees matching status/output.
         cli_create = run_cli(
@@ -548,39 +675,49 @@ def exercise_contexts_exec_and_isolation(fixture):
         cli_out = alpha.call_tool("mesh_job_output", {"job": cli_job_handle, "context": ctx_handle, "stream": "stdout"})
         require(cli_out["result"]["structuredContent"]["data"]["data"] == "cli-ctx-ok", f"CLI/MCP context output mismatch: {cli_out}")
 
-        # Long mesh_exec job with progress notifications returning state=running after wait_ms.
+        # Quiet long mesh_exec job with progressToken: progress MUST be strictly increasing (never 0, 0, 0).
         long_req_id = alpha.request("tools/call", {
             "name": "mesh_exec",
             "arguments": {
                 "context": ctx_handle,
                 "request_key": "exec-long-1",
-                "argv": ["/bin/sh", "-c", "printf 'tick-1\\n'; exec /bin/sleep 60"],
-                "wait_ms": 1500,
+                "argv": ["/bin/sleep", "60"],
+                "wait_ms": 2200,
             },
         }, progress_token="exec-long-prog")
-        saw_progress = False
-        long_exec = None
-        while True:
-            msg = alpha.read_message(timeout=15.0)
-            if msg.get("method") == "notifications/progress":
-                require(msg["params"]["progressToken"] == "exec-long-prog", f"wrong progress token: {msg}")
-                saw_progress = True
-                continue
-            require(msg.get("id") == long_req_id, f"unexpected reply while waiting on mesh_exec: {msg}")
-            long_exec = msg
-            break
-        require(saw_progress, "expected notifications/progress during long mesh_exec")
+        long_exec, prog_vals = read_exec_with_progress(alpha, long_req_id, "exec-long-prog")
+        require(len(prog_vals) == 1 and prog_vals[0] == 0, f"quiet mesh_exec emitted non-monotonic progress: {prog_vals}")
         require(not long_exec["result"]["isError"], f"long mesh_exec failed: {long_exec}")
         long_data = long_exec["result"]["structuredContent"]["data"]
         long_job = long_data["job"]
         require(long_data["state"] == "running" and long_data["wait"] == "timed_out", f"long exec state: {long_data}")
+
+        # Cancel a live mesh_exec request via notifications/cancelled: accepted job MUST keep running!
+        cancel_req_id = alpha.request("tools/call", {
+            "name": "mesh_exec",
+            "arguments": {
+                "context": ctx_handle,
+                "request_key": "exec-cancel-call-1",
+                "argv": ["/bin/sleep", "60"],
+                "wait_ms": 30000,
+            },
+        }, progress_token="exec-cancel-tok")
+        cancel_prog = alpha.read_message(timeout=10.0)
+        require(cancel_prog.get("method") == "notifications/progress" and cancel_prog["params"]["progressToken"] == "exec-cancel-tok", f"missing cancel-call progress: {cancel_prog}")
+        alpha.send_raw({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancel_req_id, "reason": "stop waiting"}})
+        cancelled_rec = alpha.call_tool("mesh_job_receipt", {"context": ctx_handle, "request_key": "exec-cancel-call-1"})
+        require(not cancelled_rec["result"]["isError"] and cancelled_rec["result"]["structuredContent"]["data"]["state"] == "running", f"cancelling mesh_exec stopped its job: {cancelled_rec}")
+        cancel_call_job = cancelled_rec["result"]["structuredContent"]["data"]["job"]
+        alpha.call_tool("mesh_job_cancel", {"job": cancel_call_job, "context": ctx_handle})
+        alpha.call_tool("mesh_job_wait", {"job": cancel_call_job, "context": ctx_handle, "wait_ms": 10000})
 
         # mesh_jobs_list scoped to context lists alpha's context jobs.
         ctx_jobs = alpha.call_tool("mesh_jobs_list", {"context": ctx_handle, "all": True})
         ctx_job_ids = [j["job"] for j in ctx_jobs["result"]["structuredContent"]["data"]["jobs"]]
         require(short_job in ctx_job_ids and long_job in ctx_job_ids, f"missing jobs in context list: {ctx_job_ids}")
 
-        rc, _ = alpha.close_eof()
+        rc, alpha_stderr = alpha.close_eof()
+        assert_no_secret(alpha_stderr, "alpha stderr")
         require(rc == 0, f"alpha EOF exit = {rc}")
     finally:
         alpha.terminate()
@@ -590,6 +727,7 @@ def exercise_contexts_exec_and_isolation(fixture):
     beta = MCPClient(fixture.binary, fixture.environment, args=("--identity", "beta"))
     try:
         beta_ctxs = beta.call_tool("mesh_context_list", {"host": host_id})
+        assert_no_secret(beta_ctxs, "beta context list")
         require(not beta_ctxs["result"]["isError"] and beta_ctxs["result"]["structuredContent"]["data"]["contexts"] == [], f"beta saw alpha contexts: {beta_ctxs}")
         beta_jobs = beta.call_tool("mesh_jobs_list", {"host": host_id, "all": True})
         require(not beta_jobs["result"]["isError"] and beta_jobs["result"]["structuredContent"]["data"]["jobs"] == [], f"beta saw alpha jobs: {beta_jobs}")
@@ -599,13 +737,14 @@ def exercise_contexts_exec_and_isolation(fixture):
         require(beta_exec["result"]["isError"] and beta_exec["result"]["structuredContent"]["errors"][0]["code"] == "context.not_found", f"beta ran in alpha context: {beta_exec}")
         beta_job = beta.call_tool("mesh_job_status", {"job": long_job})
         require(beta_job["result"]["isError"] and beta_job["result"]["structuredContent"]["errors"][0]["code"] == "access.denied", f"beta inspected alpha job: {beta_job}")
-        rc, _ = beta.close_eof()
+        rc, beta_stderr = beta.close_eof()
+        assert_no_secret(beta_stderr, "beta stderr")
         require(rc == 0, f"beta EOF exit = {rc}")
     finally:
         beta.terminate()
 
     # Fresh alpha frontend recovers context and running job by request_key with NO discovery,
-    # cancels the running job, closes the context, and confirms closed-context rules.
+    # cancels the running job, closes the context, and confirms replay + closed-context rules.
     alpha2 = MCPClient(fixture.binary, fixture.environment, args=("--identity", "alpha"))
     try:
         fresh_ctx_rec = alpha2.call_tool("mesh_context_receipt", {"host": host_id, "request_key": "ctx-open-1"})
@@ -619,8 +758,23 @@ def exercise_contexts_exec_and_isolation(fixture):
         waited_long = alpha2.call_tool("mesh_job_wait", {"job": long_job, "context": ctx_handle, "wait_ms": 10000})
         require(waited_long["result"]["structuredContent"]["data"]["state"] == "killed", f"long context job not killed: {waited_long}")
 
-        closed = alpha2.call_tool("mesh_context_close", {"context": ctx_handle, "expected_revision": 2})
+        closed = alpha2.call_tool("mesh_context_close", {"context": ctx_handle, "expected_revision": 3})
         require(not closed["result"]["isError"] and closed["result"]["structuredContent"]["data"]["state"] == "closed", f"context close failed: {closed}")
+
+        # Replaying exec-short-1 AFTER context closure still succeeds with original durable cwd & single launch!
+        replay_after_close = alpha2.call_tool("mesh_exec", {
+            "context": ctx_handle,
+            "request_key": "exec-short-1",
+            "command": short_cmd,
+            "env": {"JOB_VAR": "per-job"},
+            "wait_ms": 1000,
+            "output_bytes": 32,
+        })
+        assert_no_secret(replay_after_close, "replay after close")
+        require(not replay_after_close["result"]["isError"], f"replay after close failed: {replay_after_close}")
+        require(replay_after_close["result"]["structuredContent"]["data"]["job"] == short_job, f"replay after close job mismatch: {replay_after_close}")
+        require(replay_after_close["result"]["structuredContent"]["data"]["target"]["cwd"] == ctx_dir_2, f"replay after close cwd mismatch: {replay_after_close}")
+        require(len(launch_marker.read_text().splitlines()) == 1, "replay after close launched command again")
 
         after_close_exec = alpha2.call_tool("mesh_exec", {"context": ctx_handle, "request_key": "after-close", "argv": ["/bin/true"]})
         require(after_close_exec["result"]["isError"] and after_close_exec["result"]["structuredContent"]["errors"][0]["code"] == "context.closed", f"expected context.closed: {after_close_exec}")
@@ -628,7 +782,8 @@ def exercise_contexts_exec_and_isolation(fixture):
         # Existing job handles and receipts remain readable after context close.
         still_readable = alpha2.call_tool("mesh_job_status", {"job": short_job, "context": ctx_handle})
         require(not still_readable["result"]["isError"] and still_readable["result"]["structuredContent"]["data"]["state"] == "exited", f"job unreadable after context close: {still_readable}")
-        rc, _ = alpha2.close_eof()
+        rc, alpha2_stderr = alpha2.close_eof()
+        assert_no_secret(alpha2_stderr, "alpha2 stderr")
         require(rc == 0, f"alpha2 EOF exit = {rc}")
     finally:
         alpha2.terminate()

@@ -31,7 +31,7 @@ func parseTerminalOpenArgs(raw json.RawMessage) (TerminalOpenRequest, error) {
 		Context    string            `json:"context"`
 		RequestKey string            `json:"request_key"`
 		Command    *string           `json:"command"`
-		Argv       []string          `json:"argv"`
+		Argv       *[]string         `json:"argv"`
 		Cwd        string            `json:"cwd"`
 		Env        map[string]string `json:"env"`
 		Cols       *int              `json:"cols"`

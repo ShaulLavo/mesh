@@ -140,6 +140,7 @@ type ContextRefRequest struct {
 
 type ListContextsRequest struct {
 	Host    string
+	Cursor  string
 	Timeout time.Duration
 }
 

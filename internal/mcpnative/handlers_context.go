@@ -80,11 +80,29 @@ func handleContextGet(ctx context.Context, controls Controls, raw json.RawMessag
 }
 
 func handleContextList(ctx context.Context, controls Controls, raw json.RawMessage, _ func(ProgressUpdate)) (CallOutcome, error) {
-	host, timeout, err := parseHostTimeoutCall(controls, raw)
+	if err := requireControls(controls); err != nil {
+		return CallOutcome{}, err
+	}
+	var args struct {
+		Host      string `json:"host"`
+		Cursor    string `json:"cursor"`
+		TimeoutMS *int   `json:"timeout_ms"`
+	}
+	if err := decodeArgs(raw, &args); err != nil {
+		return CallOutcome{}, err
+	}
+	host, err := requireNonEmpty(args.Host, "host")
 	if err != nil {
 		return CallOutcome{}, err
 	}
-	out, err := controls.ListContexts(ctx, ListContextsRequest{Host: host, Timeout: timeout})
+	if args.Cursor != "" && !protocol.ValidContextID(args.Cursor) {
+		return CallOutcome{}, invalidParam("cursor must be an opaque continuation token from mesh_context_list")
+	}
+	timeout, err := parseTimeout(args.TimeoutMS, defaultOpMS, maxTimeoutMS)
+	if err != nil {
+		return CallOutcome{}, err
+	}
+	out, err := controls.ListContexts(ctx, ListContextsRequest{Host: host, Cursor: args.Cursor, Timeout: timeout})
 	return wrapControl("mesh_context_list", out, err)
 }
 
@@ -212,7 +230,7 @@ func parseExecArgs(raw json.RawMessage) (ExecRequest, error) {
 		Context     string            `json:"context"`
 		RequestKey  string            `json:"request_key"`
 		Command     *string           `json:"command"`
-		Argv        []string          `json:"argv"`
+		Argv        *[]string         `json:"argv"`
 		Cwd         string            `json:"cwd"`
 		Env         map[string]string `json:"env"`
 		Stdin       string            `json:"stdin"`
@@ -248,10 +266,44 @@ func parseExecArgs(raw json.RawMessage) (ExecRequest, error) {
 	if err != nil {
 		return ExecRequest{}, err
 	}
-	return ExecRequest{
+	req := ExecRequest{
 		Context: ref, RequestKey: args.RequestKey, Command: cmd, Argv: argv,
 		Cwd: args.Cwd, Env: args.Env, Stdin: stdin, WaitMS: waitMS, OutputBytes: outputBytes,
-	}, nil
+	}
+	if err := validateExecEncodedSize(req); err != nil {
+		return ExecRequest{}, err
+	}
+	return req, nil
+}
+
+// validateExecEncodedSize verifies the JSON-encoded execution.create control
+// (including JSON escaping of env/command/argv/cwd and headroom for caller and
+// request metadata) fits inside Mesh's 40 KiB execution control payload cap
+// before any request is dispatched over the wire.
+func validateExecEncodedSize(req ExecRequest) error {
+	probe := protocol.Control{
+		Type:          protocol.TypeExecutionCreate,
+		RequestID:     "00000000000000000000000000000000",
+		Caller:        protocol.CallerCredential("mac1_0000000000000000000000000000000000000000000000000000000000000000"),
+		ExecutionKind: "pipe",
+		RequestKey:    req.RequestKey,
+		Command:       req.Argv,
+		Cwd:           req.Cwd,
+		Stdin:         req.Stdin,
+		ExecutionContext: &protocol.ExecutionContextRequest{
+			ContextID:    req.Context.ContextID,
+			ShellCommand: req.Command,
+			Env:          req.Env,
+		},
+	}
+	encoded, err := probe.Encode()
+	if err != nil {
+		return invalidParam("execution request cannot be encoded: %v", err)
+	}
+	if _, err := protocol.DecodeControl(encoded); err != nil {
+		return invalidParam("execution request exceeds Mesh control limits or failed validation: %v", err)
+	}
+	return nil
 }
 
 // BuildExecStreamData formats one initial output page for mesh_exec results.
