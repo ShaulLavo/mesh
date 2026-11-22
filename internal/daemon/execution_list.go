@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"strconv"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
@@ -15,7 +16,12 @@ func currentDaemonAccount() string {
 	if u, err := user.Current(); err == nil && u.Username != "" {
 		return u.Username
 	}
-	return os.Getenv("USER")
+	if name := os.Getenv("USER"); name != "" {
+		return name
+	}
+	// host.info and the file controls name the account the same way, so a
+	// caller can always address it, even for a UID with no username.
+	return strconv.Itoa(os.Getuid())
 }
 
 const executionListMaxBytes = 2 << 20

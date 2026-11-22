@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -37,6 +36,9 @@ type fileController struct {
 	writeSlot chan struct{}
 	// searchBytes bounds the content one search reads.
 	searchBytes int64
+	// contexts resolves an execution context for the request's caller and
+	// returns its working directory. It is nil where contexts are unavailable.
+	contexts func(ctx context.Context, request protocol.Control, contextID string) (string, error)
 	// hook lets a test act between steps of an operation. It is nil in the
 	// daemon.
 	hook func(stage, path string)
@@ -55,13 +57,7 @@ func (c *fileController) stage(stage, path string) {
 	}
 }
 
-func daemonAccount() string {
-	// The same name host.info reports, so a caller can put it in a target.
-	if account := currentDaemonAccount(); account != "" {
-		return account
-	}
-	return strconv.Itoa(os.Getuid())
-}
+func daemonAccount() string { return currentDaemonAccount() }
 
 // fileError carries the stable code a client acts on.
 type fileError struct {
@@ -113,15 +109,37 @@ func (c *fileController) HandleControl(ctx context.Context, request protocol.Con
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, true, fmt.Errorf("daemon: %s cancelled: %w", request.Type, err)
 	}
-	resultType, result, err := c.dispatch(ctx, request)
+	ctx, err := c.withScope(ctx, request)
 	if err != nil {
 		return fileErrorResponse(request, err), true, nil
+	}
+	resultType, result, err := c.dispatch(ctx, request)
+	if err != nil {
+		return c.scopedErrorResponse(ctx, request, err), true, nil
 	}
 	data, err := protocol.EncodeFileDocument(result)
 	if err != nil {
 		return fileErrorResponse(request, err), true, nil
 	}
 	return protocol.Control{Type: resultType, RequestID: request.RequestID, Files: data}, true, nil
+}
+
+// scopedErrorResponse is the error reply for a request that ran in an
+// authorized context: it also names the workspace, so a caller can tell where
+// a refusal happened. A request refused before authorization names none.
+func (c *fileController) scopedErrorResponse(ctx context.Context, request protocol.Control, err error) protocol.Control {
+	response := fileErrorResponse(request, err)
+	scope := scopeOf(ctx)
+	if scope.contextID == "" {
+		return response
+	}
+	detail := struct {
+		Target protocol.FileTarget `json:"target"`
+	}{protocol.FileTarget{HostID: c.hostID, Account: c.account, ContextID: scope.contextID, Cwd: scope.cwd}}
+	if raw, encodeErr := protocol.EncodeFileDocument(detail); encodeErr == nil {
+		response.Files = raw
+	}
+	return response
 }
 
 func (c *fileController) dispatch(ctx context.Context, request protocol.Control) (string, any, error) {
@@ -171,50 +189,110 @@ func decodeFileRequest(request protocol.Control, body any) error {
 	return nil
 }
 
+// fileScope is the authorized workspace of one request: the context whose
+// working directory resolves relative paths.
+type fileScope struct {
+	contextID string
+	cwd       string
+}
+
+type fileScopeKey struct{}
+
+// withScope authorizes the context the request names, if any, on this host
+// for the request's caller, before any path is looked at.
+func (c *fileController) withScope(ctx context.Context, request protocol.Control) (context.Context, error) {
+	// Fields that belong to other controls have no meaning here, and a
+	// credential without a context would be silently ignored, so refuse both.
+	if request.Administration || request.ExecutionContext != nil {
+		return ctx, fileFailure(agentapi.UsageInvalid, "daemon: file controls take no administration or execution context fields")
+	}
+	var named struct {
+		Target protocol.FileTarget `json:"target"`
+	}
+	// The strict decode of the whole document runs later; this reads only the
+	// target.
+	if err := json.Unmarshal(request.Files, &named); err != nil {
+		return ctx, nil //nolint:nilerr // a malformed document is refused by the strict decode that follows
+	}
+	if named.Target.ContextID == "" {
+		if request.Caller != "" {
+			return ctx, fileFailure(agentapi.UsageInvalid, "daemon: an application credential needs a context; file requests without one are account-wide and take none")
+		}
+		return ctx, nil
+	}
+	if named.Target.HostID != c.hostID {
+		return ctx, nil // checkTarget refuses it with the right code.
+	}
+	if c.contexts == nil {
+		return ctx, fileFailure(agentapi.UsageInvalid, "daemon: this host cannot resolve execution contexts")
+	}
+	cwd, err := c.contexts(ctx, request, named.Target.ContextID)
+	if err != nil {
+		return ctx, err
+	}
+	return context.WithValue(ctx, fileScopeKey{}, fileScope{contextID: named.Target.ContextID, cwd: cwd}), nil
+}
+
+func scopeOf(ctx context.Context) fileScope {
+	scope, _ := ctx.Value(fileScopeKey{}).(fileScope)
+	return scope
+}
+
 // checkTarget refuses a request addressed to another host or OS account.
-func (c *fileController) checkTarget(target protocol.FileTarget) (protocol.FileTarget, error) {
+func (c *fileController) checkTarget(ctx context.Context, target protocol.FileTarget) (protocol.FileTarget, error) {
 	if target.HostID != c.hostID {
 		return protocol.FileTarget{}, fileFailure(agentapi.HostIdentityMismatch, "daemon: file request is for host %q, this host is %q", target.HostID, c.hostID)
 	}
 	if target.Account != "" && target.Account != c.account {
 		return protocol.FileTarget{}, fileFailure(agentapi.FileTargetMismatch, "daemon: file request is for account %q, the daemon runs as %q", target.Account, c.account)
 	}
-	return protocol.FileTarget{HostID: c.hostID, Account: c.account}, nil
+	scope := scopeOf(ctx)
+	if target.ContextID != scope.contextID {
+		return protocol.FileTarget{}, fileFailure(agentapi.UsageInvalid, "daemon: file request names a context that was not authorized")
+	}
+	return protocol.FileTarget{HostID: c.hostID, Account: c.account, ContextID: scope.contextID, Cwd: scope.cwd}, nil
 }
 
 // resolveFilePath turns a request path into the absolute path the operation
-// uses. Only absolute paths are accepted today. A later change resolves a
-// relative path against an authorized context's working directory here, after
-// the target check and before any file access, and nowhere else.
-func resolveFilePath(path string) (string, error) {
+// uses. A relative path resolves against the working directory of the
+// authorized context, which is the only place a context is applied, after the
+// target check and before any file access. Without a context a path must be
+// absolute.
+func resolveFilePath(path, cwd string) (string, error) {
 	if path == "" || len(path) > protocol.MaxFilePath || strings.ContainsRune(path, 0) {
 		return "", fileFailure(agentapi.UsageInvalid, "daemon: file path must be 1 to %d bytes without NUL", protocol.MaxFilePath)
 	}
 	if !filepath.IsAbs(path) {
-		return "", fileFailure(agentapi.UsageInvalid, "daemon: file path %q must be absolute", path)
+		if cwd == "" {
+			return "", fileFailure(agentapi.UsageInvalid, "daemon: file path %q must be absolute, or relative with a context", path)
+		}
+		path = filepath.Join(cwd, path)
+		if len(path) > protocol.MaxFilePath {
+			return "", fileFailure(agentapi.UsageInvalid, "daemon: resolved file path is longer than %d bytes", protocol.MaxFilePath)
+		}
 	}
 	return filepath.Clean(path), nil
 }
 
 // beginFileRequest runs the checks every operation shares.
-func (c *fileController) beginFileRequest(target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
-	return c.begin(target, path, canonicalFilePath)
+func (c *fileController) beginFileRequest(ctx context.Context, target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
+	return c.begin(ctx, target, path, canonicalFilePath)
 }
 
 // beginTreeRequest is beginFileRequest for list and search, whose path names a
 // directory (or a file to search) and is resolved in full, so a linked
 // workspace root such as /work/repos works. Reads, writes and patches resolve
 // only the parent.
-func (c *fileController) beginTreeRequest(target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
-	return c.begin(target, path, canonicalTreePath)
+func (c *fileController) beginTreeRequest(ctx context.Context, target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
+	return c.begin(ctx, target, path, canonicalTreePath)
 }
 
-func (c *fileController) begin(target protocol.FileTarget, path string, canonicalize func(string) (string, error)) (protocol.FileTarget, string, error) {
-	checked, err := c.checkTarget(target)
+func (c *fileController) begin(ctx context.Context, target protocol.FileTarget, path string, canonicalize func(string) (string, error)) (protocol.FileTarget, string, error) {
+	checked, err := c.checkTarget(ctx, target)
 	if err != nil {
 		return protocol.FileTarget{}, "", err
 	}
-	resolved, err := resolveFilePath(path)
+	resolved, err := resolveFilePath(path, scopeOf(ctx).cwd)
 	if err != nil {
 		return protocol.FileTarget{}, "", err
 	}

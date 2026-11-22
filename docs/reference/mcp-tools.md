@@ -10,7 +10,14 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_context_open` | `contexts.open` | idempotent | Open a durable execution context on a host |
 | `mesh_context_receipt` | `contexts.receipt` | read-only, idempotent | Look up a context open receipt by request key |
 | `mesh_context_update` | `contexts.update` | mutating | Update a context at an expected revision |
+| `mesh_copy` | `files.copy` | destructive | Copy a file or directory to or from a host |
 | `mesh_exec` | `sessions.create` | destructive, open-world | Run a keyed pipe command in an execution context |
+| `mesh_file_list` | `files.list` | read-only, idempotent | List a directory |
+| `mesh_file_patch` | `files.patch` | destructive | Apply exact text edits to a file |
+| `mesh_file_read` | `files.read` | read-only, idempotent | Read a page of a regular file |
+| `mesh_file_search` | `files.search` | read-only, idempotent | Search text files with a regular expression |
+| `mesh_file_write` | `files.write` | destructive | Write or create a file atomically |
+| `mesh_fleet_status` | `profile.status` | read-only, idempotent | Read signed fleet profile delivery status |
 | `mesh_host_inspect` | `hosts.inspect` | read-only, idempotent | Inspect one Mesh host and its notes |
 | `mesh_host_wake` | `hosts.wake` | idempotent | Wake a Mesh host |
 | `mesh_hosts_list` | `hosts.list` | read-only, idempotent | List Mesh hosts, reachability, and capabilities |
@@ -23,6 +30,8 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_job_status` | `sessions.inspect` | read-only, idempotent | Read durable status of a job |
 | `mesh_job_wait` | `sessions.wait` | read-only, idempotent | Wait for a job to finish |
 | `mesh_jobs_list` | `jobs.list` | read-only, idempotent | List keyed execution jobs on a host |
+| `mesh_profile_get` | `profile.show` | read-only, idempotent | Read this machine's host or fleet notes |
+| `mesh_profile_set` | `profile.set` | destructive | Replace this machine's host or fleet notes |
 | `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
 | `mesh_services_list` | `services.list` | read-only, idempotent | List Mesh serve routes |
 | `mesh_session_inspect` | `sessions.inspect` | read-only, idempotent | Passively inspect a terminal session |
@@ -102,6 +111,20 @@ Update a context's cwd, environment overlay, or label at expected_revision. Fail
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
   - `unset_env` (`array`, optional): Optional environment variable names to remove.
 
+## mesh_copy
+
+Copy a file or directory between this machine and one remote Mesh host over an authenticated connection, with no size limit beyond disk space. upload sends local_path to remote_path; download fetches remote_path to local_path. Files are replaced atomically, directories merge, permission bits are kept, and symlinks and special files are refused. Repeating a directory copy into an existing directory nests the source inside it, so it is not safe to repeat. Use mesh_file_write for small files.
+
+- Linked operation: `files.copy`
+- Hints: destructive
+- Arguments:
+  - `direction` (`string`, required) (upload, download): upload: local to host. download: host to local.
+  - `host` (`string`, required): Machine name or exact host ID of the remote host.
+  - `local_path` (`string`, required): Absolute path on the machine running mesh mcp.
+  - `recursive` (`boolean`, optional): Copy a directory and its contents.
+  - `remote_path` (`string`, required): Absolute path on the host.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 600000, default 120000).
+
 ## mesh_exec
 
 Run a keyed pipe job inside a durable execution context (requires mesh mcp --identity NAME). Pass exactly one of command (shell string, refused for shell=none) or argv (direct executable array). Waits up to wait_ms (default 10000, max 60000) and returns exit details plus up to output_bytes (default 16384, max 262144) of stdout and stderr with continuation cursors, or the opaque mj1 job handle with state=running if still in progress. Emits notifications/progress with observed byte counts when progressToken is set. Child cd/export never modifies the context. Pipe jobs have no controlling terminal. Terminal receipts are retained for 30 days; captured output (8 MiB suffix per stream) is retained for 7 days.
@@ -118,6 +141,89 @@ Run a keyed pipe job inside a durable execution context (requires mesh mcp --ide
   - `request_key` (`string`, required): Caller-chosen logical request key for idempotent dispatch and recovery via mesh_job_receipt.
   - `stdin` (`string`, optional) (closed, open): Pipe stdin mode: closed (default, /dev/null) or open (write with mesh_job_input).
   - `wait_ms` (`integer`, optional): Maximum milliseconds to wait for completion before returning running state (0 to 60000, default 10000).
+
+## mesh_file_list
+
+List one directory on a host in name order, without following symlinks. Entries report file, dir, symlink or other. Pages hold up to 1000 entries; nextCursor continues after the last name returned.
+
+- Linked operation: `files.list`
+- Hints: read-only, idempotent
+- Arguments:
+  - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
+  - `cursor` (`string`, optional): Opaque nextCursor from the previous page of this directory.
+  - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
+  - `limit` (`integer`, optional): Entries per page (1 to 1000, default 200).
+  - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_file_patch
+
+Apply up to 64 exact old_text to new_text edits, in order, to a file of at most 4 MiB whose SHA-256 matches expected_sha256. Each old_text must occur exactly once in the text as earlier edits left it (overlapping occurrences count as several); otherwise file.patch_mismatch answers and nothing is written.
+
+- Linked operation: `files.patch`
+- Hints: destructive
+- Arguments:
+  - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
+  - `edits` (`array`, required): Edits applied in order; each old_text must occur exactly once.
+  - `expected_sha256` (`string`, required): Lowercase SHA-256 of the file's current bytes, from mesh_file_read or an earlier write result.
+  - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
+  - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_file_read
+
+Read one page (at most 1 MiB) of a regular file on a host as the daemon account. The page is utf-8 text when exact, otherwise base64, and a text page never splits a character. Offsets are decimal strings. nextCursor continues the read and is bound to the host, account, path and file revision, so a replaced or changed file answers file.changed. sha256 (files up to 4 MiB, or any size with digest) is what mesh_file_write and mesh_file_patch need. Symlinks, devices, sockets and pipes are refused.
+
+- Linked operation: `files.read`
+- Hints: read-only, idempotent
+- Arguments:
+  - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
+  - `cursor` (`string`, optional): Opaque nextCursor from the previous page of this file.
+  - `digest` (`boolean`, optional): Also hash a file larger than 4 MiB.
+  - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
+  - `max_bytes` (`integer`, optional): Page size in bytes (1 to 1048576, default 1048576).
+  - `offset` (`string`, optional): First byte to read, as a nonnegative decimal string (default 0). Not with cursor.
+  - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_file_search
+
+Find lines matching a Go regular expression in the text files under a directory (or in one file) on a host. Never runs a shell or follows symlinks. Bounded: at most 10,000 directory entries visited, 1,000 matches and 1 MiB of encoded matches returned, 256 MiB read, files over 4 MiB and binary files skipped. truncated names the bound that stopped the search.
+
+- Linked operation: `files.search`
+- Hints: read-only, idempotent
+- Arguments:
+  - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
+  - `glob` (`string`, optional): Only search files whose base name matches this glob.
+  - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
+  - `max_matches` (`integer`, optional): Stop after this many matches (1 to 1000, default 1000).
+  - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
+  - `pattern` (`string`, required): Go regular expression (RE2 syntax) matched against each line.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_file_write
+
+Replace or create a regular file on a host with at most 1 MiB, through a temporary file and an atomic install in the same directory. Give exactly one of expected_sha256 (replace a file whose digest matches) or create_only (fail if the name exists). A failed precondition answers file.conflict and changes nothing. The result's revision and sha256 describe the version this call installed. Use mesh_copy for larger transfers.
+
+- Linked operation: `files.write`
+- Hints: destructive
+- Arguments:
+  - `content` (`string`, optional): New contents as UTF-8 text. Not with content_base64.
+  - `content_base64` (`string`, optional): New contents as standard base64 for binary data. Not with content.
+  - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
+  - `create_only` (`boolean`, optional): Create the file and fail with file.conflict if it exists.
+  - `expected_sha256` (`string`, optional): Lowercase SHA-256 of the file's current bytes, from mesh_file_read or an earlier write result.
+  - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
+  - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_fleet_status
+
+Read this machine's signed fleet profile replica and the delivery state to each saved fleet member, from local files only. Never contacts members.
+
+- Linked operation: `profile.status`
+- Hints: read-only, idempotent
+- Arguments: none
 
 ## mesh_host_inspect
 
@@ -261,6 +367,26 @@ List keyed execution jobs on one Mesh host (or scoped to one context handle) wit
   - `limit` (`integer`, optional): Maximum jobs to return (1 to 500, default 100).
   - `page` (`string`, optional): Opaque nextPage cursor from this host.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_profile_get
+
+Read the owner-written notes of this machine (scope host) or the signed fleet notes replica (scope fleet) without contacting peers. The revision is what mesh_profile_set needs as expected_revision; it is null for an absent profile.
+
+- Linked operation: `profile.show`
+- Hints: read-only, idempotent
+- Arguments:
+  - `scope` (`string`, optional) (host, fleet): host (default) or fleet.
+
+## mesh_profile_set
+
+Replace the notes of this machine (scope host) or publish the signed fleet notes (scope fleet, from a fleet administrator machine) at an expected revision. expected_revision is required (0 for an absent profile); a stale revision answers profile.conflict and changes nothing. The profile document is replaced whole, not merged. Fleet notes are queued to saved members and then delivered; mesh_fleet_status shows delivery.
+
+- Linked operation: `profile.set`
+- Hints: destructive
+- Arguments:
+  - `expected_revision` (`integer`, required): Revision read from mesh_profile_get; 0 for an absent profile.
+  - `profile` (`object`, required): The whole notes document; it replaces the current one.
+  - `scope` (`string`, optional) (host, fleet): host (default) or fleet.
 
 ## mesh_service_inspect
 

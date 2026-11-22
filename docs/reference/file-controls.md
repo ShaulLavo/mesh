@@ -53,4 +53,8 @@ Listing returns up to 1,000 entries per page. Its cursor is the last name return
 | `resource.limit` | A size bound was exceeded. Use `mesh cp` for larger transfers. |
 | `usage.invalid` | The request is malformed. |
 
-Code in `internal/cli` reaches these controls through `HostFiles` on a verified connection.
+## Contexts and the MCP tools
+
+A request may name an execution context in `target.contextId` and carry the application caller credential that owns it. The daemon authorizes the context on this host, refuses a closed one (`context.closed`) or another caller's (`context.not_found`), and resolves a relative path against its working directory. Absolute paths still work inside a context: it names a workspace, not a sandbox. Results repeat `target.contextId` and `target.cwd`, the workspace the work ran in.
+
+The native MCP server (`mesh mcp`) offers these controls as `mesh_file_read`, `mesh_file_list`, `mesh_file_search`, `mesh_file_write` and `mesh_file_patch`, through `HostFiles` in `internal/cli`, with a `context` handle argument. `mesh_copy` moves larger files with `copy.request`, and `mesh_fleet_status`, `mesh_profile_get` and `mesh_profile_set` read and replace this machine's host and fleet notes at an expected revision. `docs/reference/mcp-tools.md` lists every tool.
