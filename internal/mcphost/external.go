@@ -29,7 +29,8 @@ func (s *Supervisor) connectExternal(ctx context.Context, inst *instance, d Defi
 	if err := s.persist(ctx, inst); err != nil {
 		return nil, err
 	}
-	upstream, err := DialHTTP(HTTPUpstreamConfig{URL: d.URL, Headers: headers, ToolHeaders: gen.toolHeaders})
+	budget := &byteBudget{limit: instanceQueueBytes, parent: s.router.budget}
+	upstream, err := DialHTTP(HTTPUpstreamConfig{URL: d.URL, Headers: headers, ToolHeaders: gen.toolHeaders, budget: budget})
 	if err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, "connect to "+d.URL+": "+err.Error(), nil)
 	}

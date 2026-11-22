@@ -62,6 +62,8 @@ type stdioCall struct {
 	queue  []queuedEvent
 	bytes  int
 	failed error
+	// inHand marks queue[0] as being delivered to the caller right now.
+	inHand bool
 }
 
 // newStdioUpstream starts the reader and the cancellation writer. The
@@ -244,12 +246,14 @@ func (u *StdioUpstream) deliver(call *stdioCall, line []byte) error {
 }
 
 func (u *StdioUpstream) enqueueLocked(call *stdioCall, event mcpwire.Event, size int) {
-	if last := len(call.queue) - 1; last >= 0 && coalescible(call.queue[last].event, event) {
+	// The event in the caller's hands is never replaced under it.
+	if last := len(call.queue) - 1; last >= 0 && !(last == 0 && call.inHand) && coalescible(call.queue[last].event, event) {
 		u.budget.release(call.queue[last].size)
 		call.bytes -= call.queue[last].size
 		call.queue = call.queue[:last]
 	}
 	if call.bytes+size > callQueueBytes || !u.budget.take(size) {
+		u.dropQueuedLocked(call)
 		u.endLocked(call, ErrSlowConsumer, !event.Terminal)
 		return
 	}
@@ -370,31 +374,28 @@ func (u *StdioUpstream) abandon(call *stdioCall, sent bool) {
 	for _, queued := range call.queue {
 		u.budget.release(queued.size)
 	}
-	call.queue, call.bytes = nil, 0
+	call.queue, call.bytes, call.inHand = nil, 0, false
 	u.mu.Unlock()
 	if active && sent {
 		u.queueCancel(call.id)
 	}
 }
 
+// drain delivers one event at a time. The event in the caller's hands stays
+// charged to the call and the budgets until sink returns, so a stalled
+// caller is counted for everything it holds.
 func (u *StdioUpstream) drain(ctx context.Context, call *stdioCall, sink func(mcpwire.Event) error) error {
 	for {
-		events, failed := u.take(call)
-		for i, queued := range events {
-			if err := sink(queued.event); err != nil {
-				u.abandon(call, !events[i].event.Terminal)
+		queued, ok, failed := u.next(call)
+		if ok {
+			if err := u.deliverOne(ctx, call, queued, sink); err != nil || queued.event.Terminal {
 				return err
 			}
-			if queued.event.Terminal {
-				return nil
-			}
+			continue
 		}
 		if failed != nil {
 			u.abandon(call, false)
 			return failed
-		}
-		if len(events) > 0 {
-			continue
 		}
 		select {
 		case <-call.signal:
@@ -405,18 +406,56 @@ func (u *StdioUpstream) drain(ctx context.Context, call *stdioCall, sink func(mc
 	}
 }
 
-func (u *StdioUpstream) take(call *stdioCall) ([]queuedEvent, error) {
+func (u *StdioUpstream) deliverOne(ctx context.Context, call *stdioCall, queued queuedEvent, sink func(mcpwire.Event) error) error {
+	// Nothing reaches the caller once it has gone.
+	if err := ctx.Err(); err != nil {
+		u.abandon(call, !queued.event.Terminal)
+		return fmt.Errorf("mcp upstream: call cancelled: %w", err)
+	}
+	if err := sink(queued.event); err != nil {
+		u.abandon(call, !queued.event.Terminal)
+		return err
+	}
+	u.delivered(call)
+	return nil
+}
+
+// next returns the oldest queued event and marks it in hand, or the call's
+// failure once nothing is left.
+func (u *StdioUpstream) next(call *stdioCall) (queuedEvent, bool, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	events := call.queue
-	call.queue, call.bytes = nil, 0
-	for _, queued := range events {
+	if len(call.queue) == 0 {
+		return queuedEvent{}, false, call.failed
+	}
+	call.inHand = true
+	return call.queue[0], true, nil
+}
+
+func (u *StdioUpstream) delivered(call *stdioCall) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !call.inHand || len(call.queue) == 0 {
+		return
+	}
+	u.budget.release(call.queue[0].size)
+	call.bytes -= call.queue[0].size
+	call.queue = call.queue[1:]
+	call.inHand = false
+}
+
+// dropQueuedLocked releases everything the caller has not been handed, so
+// a failed slow caller stops holding shared budget at once.
+func (u *StdioUpstream) dropQueuedLocked(call *stdioCall) {
+	keep := 0
+	if call.inHand {
+		keep = 1
+	}
+	for _, queued := range call.queue[min(keep, len(call.queue)):] {
 		u.budget.release(queued.size)
+		call.bytes -= queued.size
 	}
-	if len(events) > 0 {
-		return events, nil
-	}
-	return nil, call.failed
+	call.queue = call.queue[:min(keep, len(call.queue))]
 }
 
 // byteBudget is a shared admission counter for queued reply bytes.

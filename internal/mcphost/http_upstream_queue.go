@@ -29,9 +29,31 @@ type eventQueue struct {
 	slow     bool
 	mismatch bool
 	wake     chan struct{}
+	// budget is the instance's shared reply budget, nil when unbounded.
+	budget *byteBudget
 }
 
-func newEventQueue() *eventQueue { return &eventQueue{wake: make(chan struct{}, 1)} }
+func newEventQueue(budget *byteBudget) *eventQueue {
+	return &eventQueue{wake: make(chan struct{}, 1), budget: budget}
+}
+
+func (q *eventQueue) takeBudget(size int) bool { return q.budget == nil || q.budget.take(size) }
+
+func (q *eventQueue) releaseBudget(size int) {
+	if q.budget != nil && size > 0 {
+		q.budget.release(size)
+	}
+}
+
+// close returns whatever the call still holds to the shared budget once its
+// pump and sink have both stopped.
+func (q *eventQueue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.releaseBudget(q.bytes)
+	q.bytes = 0
+	q.events, q.head, q.finished = nil, 0, true
+}
 
 func (q *eventQueue) signal() {
 	select {
@@ -48,8 +70,13 @@ func (q *eventQueue) push(event mcpwire.Event) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	queued := len(q.events) - q.head
-	if q.bytes+size > httpCallQueueBytes || (!event.Terminal && queued >= httpCallQueueEvents) {
+	if q.bytes+size > httpCallQueueBytes || (!event.Terminal && queued >= httpCallQueueEvents) || !q.takeBudget(size) {
 		q.slow, q.finished = true, true
+		for _, dropped := range q.events[q.head:] {
+			size := len(dropped.Message.Raw())
+			q.bytes -= size
+			q.releaseBudget(size)
+		}
 		q.events, q.head = nil, 0
 		q.signal()
 		return false
@@ -66,8 +93,10 @@ func (q *eventQueue) push(event mcpwire.Event) bool {
 // release returns a delivered event's bytes to the budget once the sink is done with it.
 func (q *eventQueue) release(event mcpwire.Event) {
 	q.mu.Lock()
-	q.bytes -= len(event.Message.Raw())
-	q.mu.Unlock()
+	defer q.mu.Unlock()
+	size := len(event.Message.Raw())
+	q.bytes -= size
+	q.releaseBudget(size)
 }
 
 // fail ends the queue with the reader's error.

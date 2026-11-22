@@ -115,6 +115,9 @@ func decodeJSONString(raw []byte) (string, bool) {
 // reparse validates rewritten bytes against the wire limits again, so a
 // rewrite that grows a message past the 3.5 MiB cap is caught here.
 func reparse(raw []byte) (mcpwire.Message, error) {
+	if len(raw) > mcpwire.MaxMessage {
+		return mcpwire.Message{}, fmt.Errorf("mcp host: rewritten message: %w", mcpwire.ErrTooLarge)
+	}
 	m, fault := mcpwire.Parse(raw)
 	if fault != nil {
 		return mcpwire.Message{}, fmt.Errorf("mcp host: rewritten message: %w", fault)

@@ -145,7 +145,7 @@ func TestByteBudgetCoversQueuedInDeliveryAndTerminal(t *testing.T) {
 }
 
 func TestQueueReleasesDequeuedPayloads(t *testing.T) {
-	q := newEventQueue()
+	q := newEventQueue(nil)
 	m, fault := mcpwire.Parse([]byte(progressFrame("p1", 1)))
 	if fault != nil {
 		t.Fatal(fault)

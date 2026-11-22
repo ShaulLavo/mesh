@@ -412,6 +412,24 @@ func TestOversizedRewriteIsRefused(t *testing.T) {
 	}
 }
 
+func TestOversizedRequestRewriteIsTooLarge(t *testing.T) {
+	h := newTestHost(t)
+	// The host's request ID and progress token are longer than the caller's,
+	// so this request crosses the cap only after the rewrite.
+	base := callRequest(t, `1`, toolParams("echo", `{"text":""}`, `"progressToken":"p"`))
+	// The ID swap alone grows the request by under 30 bytes; the token swap
+	// adds as much again.
+	padding := strings.Repeat("x", mcpwire.MaxMessage-30-len(base.Raw()))
+	req := callRequest(t, `1`, toolParams("echo", `{"text":"`+padding+`"}`, `"progressToken":"p"`))
+	if len(req.Raw()) > mcpwire.MaxMessage {
+		t.Fatalf("fixture request is already %d bytes", len(req.Raw()))
+	}
+	_, err := forward(t, h, h.route("a"), req)
+	if Classify(err).Code != codeMessageTooLarge {
+		t.Fatalf("oversized rewritten request: %v", err)
+	}
+}
+
 func eventually(t *testing.T, check func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(testHang)
