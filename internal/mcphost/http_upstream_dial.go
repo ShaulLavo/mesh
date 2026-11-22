@@ -1,4 +1,3 @@
-// Package mcphost runs hosted MCP servers on their owning machine.
 package mcphost
 
 import (
