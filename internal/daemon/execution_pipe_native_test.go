@@ -17,6 +17,7 @@ import (
 	"github.com/shaul/mesh/internal/mcphost/mcpfixture"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -48,11 +49,13 @@ func runNativePipeWorker(args []string) error {
 	options.StringVar(&b.LaunchDigest, "launch-digest", "", "")
 	options.StringVar(&b.Kind, "execution-kind", "", "")
 	options.StringVar(&b.Stdin, "execution-stdin", "", "")
-	var purpose string
+	var purpose, imageHint string
 	options.StringVar(&purpose, "purpose", "", "")
+	options.StringVar(&imageHint, "image-hint", "", "")
 	if err := options.Parse(args); err != nil {
 		return fmt.Errorf("parse fixture worker: %w", err)
 	}
+	release.AdoptDigestHint(imageHint)
 	b.Reservation.ID = cfg.ID
 	b.Reservation.Purpose = execution.PurposeForKind(b.Kind)
 	if string(b.Reservation.Purpose) != purpose {

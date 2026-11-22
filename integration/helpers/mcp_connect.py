@@ -150,6 +150,7 @@ def handle(req):
                 rec = PENDING.pop(key, None) if key else None
                 if rec is not None:
                     rec["ev"].set()
+            trace(f"release {tag} found={rec is not None}")
             send({
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -174,6 +175,7 @@ def handle(req):
                 if BY_TAG.get(tag) == key:
                     BY_TAG.pop(tag, None)
                 was_cancelled = rec["cancelled"]
+            trace(f"finished {tag} cancelled={was_cancelled}")
             if not was_cancelled:
                 send({
                     "jsonrpc": "2.0",
@@ -370,6 +372,7 @@ class ConnectClient:
             stderr=subprocess.PIPE,
         )
         self.next_id = 1
+        self.pending = b""
 
     def send_raw(self, obj):
         self.proc.stdin.write((json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8"))
@@ -386,10 +389,17 @@ class ConnectClient:
         return req_id
 
     def read_message(self, timeout=20.0):
-        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        require(bool(ready), f"timed out reading MCP stdout after {timeout}s")
-        line = self.proc.stdout.readline()
-        require(bool(line), "MCP connect closed stdout unexpectedly")
+        # Read the descriptor directly and keep our own buffer. A buffered
+        # readline can swallow a second reply that arrived in the same read, and
+        # select on the descriptor then never reports it.
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.pending:
+            ready, _, _ = select.select([self.proc.stdout], [], [], max(0.0, deadline - time.monotonic()))
+            require(bool(ready), f"timed out reading MCP stdout after {timeout}s")
+            chunk = os.read(self.proc.stdout.fileno(), 65536)
+            require(bool(chunk), "MCP connect closed stdout unexpectedly")
+            self.pending += chunk
+        line, _, self.pending = self.pending.partition(b"\n")
         return json.loads(line.decode("utf-8"))
 
     def call_tool(self, name, arguments=None, timeout=20.0):
@@ -473,7 +483,28 @@ def setup_client_device(binary, root, name, hosts_list, machine_names=None):
     return env, cfg, state, device_id
 
 
+def check_reader_keeps_back_to_back_lines():
+    """Two replies that arrive together must both be readable.
+
+    The client once waited on the file descriptor with select and then read a
+    buffered line, so the second of two replies sitting in the buffer was never
+    seen and a healthy run timed out. This proves the reader does not.
+    """
+    process = subprocess.Popen(["/bin/sh", "-c", "printf '{\"id\":1}\\n{\"id\":2}\\n'; sleep 30"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
+    try:
+        reader = ConnectClient.__new__(ConnectClient)
+        reader.proc = process
+        reader.pending = b""
+        got = [reader.read_message(timeout=10.0)["id"], reader.read_message(timeout=10.0)["id"]]
+        require(got == [1, 2], got)
+    finally:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def main():
+    check_reader_keeps_back_to_back_lines()
     root = Path(os.environ["HOME"]).parent / "mcp-connect"
     root.mkdir()
     binary = sys.argv[1]
@@ -674,7 +705,11 @@ def main():
             rel_req_id = client_a.request("tools/call", {"name": "release", "arguments": {"tag": "keep-me"}})
             replies = {}
             while len(replies) < 2:
-                msg = client_a.read_message(timeout=15.0)
+                try:
+                    msg = client_a.read_message(timeout=15.0)
+                except RuntimeError as exc:
+                    seen = trace_file.read_text(encoding="utf-8").splitlines()
+                    raise RuntimeError(f"{exc}; replies so far {sorted(replies)}; upstream trace {seen}") from exc
                 if "method" in msg:
                     continue
                 replies[msg["id"]] = msg

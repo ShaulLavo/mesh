@@ -22,6 +22,7 @@ import (
 	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/socketclose"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
 	"github.com/shaul/mesh/internal/updategate"
 	"path/filepath"
@@ -304,7 +305,10 @@ func (r *inputRelay) deliver(frame inputFrame) bool {
 	if err == nil {
 		return true
 	}
-	if frame.owner != nil {
+	// A PTY rejects writes once its child is gone, which can happen before the
+	// exit is recorded. The exit frame then ends this attachment; dropping it
+	// here would discard output and the exit status still queued for it.
+	if frame.owner != nil && !r.worker.exitFollows(frame.owner) {
 		r.worker.mu.Lock()
 		r.worker.dropLocked(frame.owner, "")
 		r.worker.mu.Unlock()
@@ -480,6 +484,9 @@ func (a *attachment) close() {
 		a.closed = true
 		close(a.done)
 		a.queueMu.Unlock()
+		// Late client input left unread would reset the connection (Linux) or
+		// drop the output and exit frame already written to it (macOS).
+		socketclose.DiscardQueued(a.conn)
 		_ = a.conn.Close()
 	})
 }
@@ -766,6 +773,41 @@ func (w *Worker) enqueueInput(owner *attachment, payload []byte) bool {
 	relay := w.input
 	w.mu.Unlock()
 	return relay.enqueue(owner, payload)
+}
+
+// hasExited reports whether the command already ended and finish has started
+// handing its exit frame to the attached client.
+func (w *Worker) hasExited() bool {
+	select {
+	case <-w.exited:
+		return true
+	default:
+		return false
+	}
+}
+
+// inputExitWait bounds how long refused input waits for the command's exit to
+// be recorded before its client is dropped as stuck.
+const inputExitWait = finalFlushTimeout
+
+// exitFollows reports whether the command's exit is recorded shortly after
+// input for owner was refused. Only the current owner waits: a replaced client
+// is already being detached by its writer.
+func (w *Worker) exitFollows(owner *attachment) bool {
+	w.mu.Lock()
+	owned := w.client == owner || w.finished
+	w.mu.Unlock()
+	if !owned {
+		return false
+	}
+	timer := time.NewTimer(inputExitWait)
+	defer timer.Stop()
+	select {
+	case <-w.exited:
+		return true
+	case <-timer.C:
+		return false
+	}
 }
 
 func (w *Worker) ownsAttachment(owner *attachment) bool {

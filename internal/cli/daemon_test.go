@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -380,13 +381,18 @@ func startDaemonControlServer(t *testing.T, requests int, handle func(transport.
 	return socketPath, done
 }
 
-func handleDaemonTestStream(stream net.Conn, handle func(transport.Conn, protocol.Control) error) error {
+func handleDaemonTestStream(stream net.Conn, handle func(transport.Conn, protocol.Control) error) (resultErr error) {
 	conn, err := transport.NewStreamConn(stream)
 	if err != nil {
 		_ = stream.Close()
 		return fmt.Errorf("open fixture control stream: %w", err)
 	}
 	defer conn.Close() //nolint:errcheck // test connection cleanup
+	defer func() {
+		if err := closeFixtureStream(stream); err != nil && resultErr == nil {
+			resultErr = err
+		}
+	}()
 	frame, err := conn.ReadFrame()
 	if err != nil {
 		return fmt.Errorf("read fixture control: %w", err)
@@ -411,6 +417,25 @@ func awaitDaemonServer(t *testing.T, done <-chan error) {
 	case <-time.After(testenv.HangTimeout):
 		t.Fatal("daemon test server did not finish")
 	}
+}
+
+// closeFixtureStream ends a fixture stream the way a daemon that finished its
+// reply does: half-close, then read what the client still sends until it
+// hangs up. Closing a Unix socket with unread client frames (a resize sent
+// right after the attach reply) makes the client read ECONNRESET instead of
+// EOF, which would turn an ordinary close into a client error.
+func closeFixtureStream(stream net.Conn) error {
+	unix, ok := stream.(*net.UnixConn)
+	if !ok {
+		return nil
+	}
+	_ = unix.CloseWrite()
+	// Generous hang cap for a client that never hangs up; it is not a speed limit.
+	_ = unix.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if _, err := io.Copy(io.Discard, unix); errors.Is(err, os.ErrDeadlineExceeded) {
+		return fmt.Errorf("fixture client did not hang up after the fixture closed its stream: %w", err)
+	}
+	return nil
 }
 
 func writeDaemonControl(conn transport.Conn, control protocol.Control) error {

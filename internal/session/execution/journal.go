@@ -52,6 +52,20 @@ func (j *Journal) lock(ctx context.Context) (*Fence, error) {
 	return j.files.LockExisting(ctx, "execution/journal.lock")
 }
 func (j *Journal) read(hash string) (Receipt, error) {
+	r, err := j.readRecord(hash)
+	if err != nil {
+		return r, err
+	}
+	err = j.files.Confirm(requestName(hash))
+	if err != nil {
+		r.Acceptance = string(Unconfirmed)
+	}
+	return r, err
+}
+
+// readRecord decodes a receipt without proving it durable, for callers that
+// only count or classify records and never act on their durability.
+func (j *Journal) readRecord(hash string) (Receipt, error) {
 	var r Receipt
 	if err := j.files.Read(requestName(hash), &r); err != nil {
 		return Receipt{}, err
@@ -62,16 +76,12 @@ func (j *Journal) read(hash string) (Receipt, error) {
 	if r.Binding.RequestHash != hash {
 		return Receipt{}, fmt.Errorf("execution: record hash mismatch")
 	}
-	err := j.files.Confirm(requestName(hash))
-	if err != nil {
-		r.Acceptance = string(Unconfirmed)
-	}
 	if r.Cwd == "" && r.Context != nil {
 		if snap, snapErr := j.ReadLaunchSnapshot(r); snapErr == nil && snap.Intent.Cwd != "" {
 			r.Cwd = snap.Intent.Cwd
 		}
 	}
-	return r, err
+	return r, nil
 }
 func (j *Journal) save(r Receipt) (Receipt, error) {
 	if err := r.validate(); err != nil {
@@ -211,7 +221,9 @@ func (j *Journal) activeEntry(name string) int {
 	if len(name) != 69 || filepath.Ext(name) != ".json" {
 		return 1
 	}
-	r, err := j.read(name[:64])
+	// Admission only counts active records; proving each one durable here made
+	// every create pay a full fsync round per retained receipt.
+	r, err := j.readRecord(name[:64])
 	if err != nil {
 		return 1
 	}
