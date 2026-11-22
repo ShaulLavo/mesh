@@ -206,7 +206,29 @@ func (c *fileController) beginFileRequest(target protocol.FileTarget, path strin
 	if err != nil {
 		return protocol.FileTarget{}, "", err
 	}
-	return checked, resolved, nil
+	canonical, err := canonicalFilePath(resolved)
+	if err != nil {
+		return protocol.FileTarget{}, "", err
+	}
+	c.stage("resolved", canonical)
+	return checked, canonical, nil
+}
+
+// canonicalFilePath resolves the symlinks in a path's parent directories once,
+// so ordinary paths such as /tmp on macOS or a linked workspace root work. The
+// last element stays as named and is never resolved. Everything after this
+// walks the canonical path with no-follow descriptors, so a component that is
+// swapped for a link during the operation is refused. Results and cursors
+// report and bind the canonical path.
+func canonicalFilePath(path string) (string, error) {
+	if path == "/" {
+		return path, nil
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return "", fileOSFailure("resolve", filepath.Dir(path), err)
+	}
+	return filepath.Join(parent, filepath.Base(path)), nil
 }
 
 // fileCursor is the opaque continuation token. It restates the binding the

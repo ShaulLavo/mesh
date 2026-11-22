@@ -10,32 +10,98 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 )
 
-// A symlink anywhere in a path is refused, not only in its last element, so a
-// parent that is swapped for a link cannot send an operation elsewhere.
-func TestFileOperationsRefuseSymlinkedParents(t *testing.T) {
+// A symlinked parent directory resolves once, up front, and the result and its
+// cursors name the canonical path. The last element is never resolved.
+func TestFileOperationsResolveSymlinkedParents(t *testing.T) {
 	f := newFileFixture(t)
-	if err := os.Mkdir(f.path("real"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	inside := f.put("real/a.txt", []byte("alpha\n"))
+	f.mkdir("real")
+	f.mkdir("real/sub")
+	inside := f.put("real/a.txt", patternBytes(protocol.MaxFilePage+100))
+	f.put("real/sub/b.txt", []byte("beta\n"))
 	if err := os.Symlink(f.path("real"), f.path("link")); err != nil {
 		t.Fatal(err)
 	}
-	viaLink := f.path("link/a.txt")
-	digest := digestHex([]byte("alpha\n"))
-	fileCode(t, f.read(protocol.FileReadRequest{Path: viaLink}), "file.not_regular")
-	fileCode(t, f.write(protocol.FileWriteRequest{Path: viaLink, Data: "x", ExpectedSHA256: digest}), "file.not_regular")
-	fileCode(t, f.write(protocol.FileWriteRequest{Path: f.path("link/new.txt"), Data: "x", CreateOnly: true}), "file.not_regular")
-	fileCode(t, f.patch(protocol.FilePatchRequest{Path: viaLink, ExpectedSHA256: digest, Edits: []protocol.FileEdit{{OldText: "alpha", NewText: "x"}}}), "file.not_regular")
-	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("link")}), "file.not_regular")
-	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: f.path("link"), Pattern: "alpha"}), "file.not_regular")
-	if _, err := os.Stat(f.path("real/new.txt")); err == nil {
-		t.Fatal("a write through a symlinked parent created a file")
+	if err := os.Symlink(inside, f.path("real/alias.txt")); err != nil {
+		t.Fatal(err)
 	}
-	f.requireContent(inside, []byte("alpha\n"))
-	response := f.read(protocol.FileReadRequest{Path: viaLink})
-	if !strings.Contains(response.Message, f.path("real")) {
-		t.Fatalf("the refusal does not name the link's target: %s", response.Message)
+	viaLink := f.path("link/a.txt")
+	first := f.readPage(protocol.FileReadRequest{Path: viaLink})
+	if first.Path != inside || first.NextCursor == "" {
+		t.Fatalf("read reports %q, want the canonical %q", first.Path, inside)
+	}
+	// The cursor is bound to the canonical path, so the real path continues it
+	// and so does the linked one.
+	for _, again := range []string{viaLink, inside} {
+		if page := f.readPage(protocol.FileReadRequest{Path: again, Cursor: first.NextCursor}); page.Start != first.End {
+			t.Fatalf("continuation through %s starts at %d", again, page.Start)
+		}
+	}
+	created := fileOK[protocol.FileWriteResult](t, f.write(protocol.FileWriteRequest{Path: f.path("link/new.txt"), Data: "x", CreateOnly: true}), protocol.TypeFileWriteResult)
+	if created.Path != f.path("real/new.txt") {
+		t.Fatalf("write reports %q", created.Path)
+	}
+	f.requireContent(f.path("real/new.txt"), []byte("x"))
+	patched := fileOK[protocol.FilePatchResult](t, f.patch(protocol.FilePatchRequest{Path: f.path("link/new.txt"), ExpectedSHA256: created.SHA256, Edits: []protocol.FileEdit{{OldText: "x", NewText: "y"}}}), protocol.TypeFilePatchResult)
+	if patched.Path != f.path("real/new.txt") {
+		t.Fatalf("patch reports %q", patched.Path)
+	}
+	list := fileOK[protocol.FileListResult](t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("link/sub")}), protocol.TypeFileListResult)
+	if list.Path != f.path("real/sub") || len(list.Entries) != 1 {
+		t.Fatalf("list reports %q with %d entries", list.Path, len(list.Entries))
+	}
+	search := f.search(protocol.FileSearchRequest{Path: f.path("link/sub"), Pattern: "beta"})
+	if len(search.Matches) != 1 || search.Matches[0].Path != f.path("real/sub/b.txt") {
+		t.Fatalf("search: %+v", search.Matches)
+	}
+	// The last element is still never followed.
+	fileCode(t, f.read(protocol.FileReadRequest{Path: f.path("link/alias.txt")}), "file.not_regular")
+	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("link")}), "file.not_regular")
+	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: f.path("link"), Pattern: "beta"}), "file.not_regular")
+	fileCode(t, f.read(protocol.FileReadRequest{Path: f.path("missing/a.txt")}), "file.not_found")
+}
+
+// A parent swapped for a symlink after the path was resolved is refused, and
+// nothing reaches the directory it points at.
+func TestFileOperationsRefuseAParentSwappedAfterResolution(t *testing.T) {
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "a.txt"), []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"read", "write", "patch", "list", "search"} {
+		f := newFileFixture(t)
+		f.mkdir("real")
+		f.put("real/a.txt", []byte("alpha\n"))
+		f.controller.hook = func(stage, _ string) {
+			if stage != "resolved" {
+				return
+			}
+			if err := os.Rename(f.path("real"), f.path("real.moved")); err != nil {
+				t.Error(err)
+			}
+			if err := os.Symlink(outside, f.path("real")); err != nil {
+				t.Error(err)
+			}
+		}
+		path, digest := f.path("real/a.txt"), digestHex([]byte("alpha\n"))
+		var response protocol.Control
+		switch operation {
+		case "read":
+			response = f.read(protocol.FileReadRequest{Path: path})
+		case "write":
+			response = f.write(protocol.FileWriteRequest{Path: f.path("real/new.txt"), Data: "x", CreateOnly: true})
+		case "patch":
+			response = f.patch(protocol.FilePatchRequest{Path: path, ExpectedSHA256: digest, Edits: []protocol.FileEdit{{OldText: "alpha", NewText: "x"}}})
+		case "list":
+			response = f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("real")})
+		default:
+			response = f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: f.path("real"), Pattern: "outside"})
+		}
+		fileCode(t, response, "file.not_regular")
+		if entries, _ := os.ReadDir(outside); len(entries) != 1 {
+			t.Fatalf("%s: the operation reached the directory the parent was swapped for: %v", operation, entries)
+		}
+		f.requireContent(f.path("real.moved/a.txt"), []byte("alpha\n"))
+		requireNoStagedFiles(t, f.path("real.moved"), outside)
 	}
 }
 
