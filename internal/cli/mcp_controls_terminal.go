@@ -87,6 +87,11 @@ func terminalToolData(response, control protocol.Control, job mcpnative.JobRef, 
 }
 
 func (c *mcpControls) runTerminalControl(ctx context.Context, operation string, job mcpnative.JobRef, ctxRef *mcpnative.ContextRef, timeout time.Duration, control protocol.Control) (mcpnative.CallOutcome, error) {
+	// Without an identity the request would carry whole-account authority;
+	// an agent reaches only terminal jobs its own identity created.
+	if c.caller == "" {
+		return c.identityRequiredOutcome(operation, job.HostID), nil
+	}
 	control.SessionID, control.Instance = job.SessionID, job.Instance
 	c.attachCaller(&control, ctxRef)
 	callCtx, cancel := context.WithTimeout(ctx, timeout)

@@ -46,6 +46,10 @@ func (c *mcpControls) poolServiceExchange(host HostRecord, last *protocol.HostIn
 // serviceCall resolves the host and runs one service operation, turning a
 // failure into the shared bounded error envelope.
 func (c *mcpControls) serviceCall(ctx context.Context, operation, hostArg string, timeout time.Duration, run func(context.Context, HostRecord, serviceExchange) (any, error)) (mcpnative.CallOutcome, error) {
+	// Passive discovery mode never changes a host.
+	if c.caller == "" {
+		return c.identityRequiredOutcome(operation, ""), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	host, err := c.resolveSessionHost(callCtx, hostArg)
@@ -286,6 +290,9 @@ func (c *mcpControls) RecoverSession(ctx context.Context, req mcpnative.SessionL
 }
 
 func (c *mcpControls) sessionLifecycle(ctx context.Context, operation string, req mcpnative.SessionLifecycleRequest, control protocol.Control, build func(HostRecord, protocol.Control) (any, error)) (mcpnative.CallOutcome, error) {
+	if c.caller == "" {
+		return c.identityRequiredOutcome(operation, ""), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveSessionHost(callCtx, req.Host)

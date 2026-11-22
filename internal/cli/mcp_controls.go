@@ -19,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -701,6 +702,9 @@ func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionRecei
 }
 
 func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputRequest) (mcpnative.CallOutcome, error) {
+	if c.caller == "" && req.Kind == execution.KindPTY {
+		return c.identityRequiredOutcome(agentSessionInput, req.Job.HostID), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveExactHostID(req.Job.HostID)
