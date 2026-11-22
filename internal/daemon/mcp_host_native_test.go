@@ -241,17 +241,24 @@ func TestHostedMCPNative(t *testing.T) {
 		}
 	})
 
+	// Both forms classify the same on every platform: a command that does
+	// not exist, and a runtime that a launcher such as env cannot find.
 	t.Run("missing runtime is classified", func(t *testing.T) {
-		f.publishMCP(t, mcphost.Definition{Name: "missing", Argv: []string{"/bin/sh", "-c", "exec /no/such/runtime"}})
-		_, reader := f.mcpStream(t, mcpframe.Route{Service: "missing", Caller: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
-		reply := readMCP(t, reader)[0]
-		if errorCode(reply) != "service.failed" || !strings.Contains(string(reply.ErrorObject()), "127") {
-			t.Fatalf("missing runtime: %s", reply.Raw())
+		for name, argv := range map[string][]string{
+			"missing-command": {"/no/such/server"},
+			"missing-runtime": {"/usr/bin/env", "mesh-no-such-runtime"},
+		} {
+			f.publishMCP(t, mcphost.Definition{Name: name, Argv: argv})
+			_, reader := f.mcpStream(t, mcpframe.Route{Service: name, Caller: a}, mcpToolCall(`1`, "echo", `{"text":"x"}`))
+			reply := readMCP(t, reader)[0]
+			if errorCode(reply) != "service.failed" || !strings.Contains(string(reply.ErrorObject()), "was not found") {
+				t.Fatalf("%s: %s", name, reply.Raw())
+			}
 		}
 	})
 
 	t.Run("remove stops workers", func(t *testing.T) {
-		for _, name := range []string{"fixture", "legacy", "missing"} {
+		for _, name := range []string{"fixture", "legacy", "missing-command", "missing-runtime"} {
 			if reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceDelete, RequestID: "rm", Service: name}); reply.Type != protocol.TypeMCPServiceResult {
 				t.Fatalf("remove %s: %+v", name, reply)
 			}

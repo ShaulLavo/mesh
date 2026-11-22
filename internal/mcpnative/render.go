@@ -39,7 +39,7 @@ func renderErrors(b *strings.Builder, errs []agentapi.Error) {
 			b.WriteByte('\n')
 		}
 		fmt.Fprintf(b, "[%s] %s", item.Code, escapeControlText(item.Message))
-		if hint := nextActionHint(item.Code); hint != "" {
+		if hint := nextActionHint(item.Operation, item.Code); hint != "" {
 			b.WriteString(" Next: " + hint)
 		}
 	}
@@ -65,7 +65,13 @@ var nextActionHints = map[agentapi.Code]string{
 	agentapi.ResourceLimit:            "Close unused contexts with mesh_context_close before opening another.",
 }
 
-func nextActionHint(code agentapi.Code) string {
+// nextActionHint picks the guidance for a failed operation. File and profile
+// operations have their own, because the job and context guidance names tools
+// that do not apply to them; every other operation keeps the shared hints.
+func nextActionHint(operation string, code agentapi.Code) string {
+	if hint := operationHint(operation, code); hint != "" {
+		return hint
+	}
 	return nextActionHints[code]
 }
 
@@ -164,6 +170,8 @@ func renderSuccessData(b *strings.Builder, data any) {
 		renderJobList(b, v)
 	case JobInputData:
 		fmt.Fprintf(b, "job %s stdin write %s offset=%s length=%d closed=%t", v.Job, v.WriteKey, v.Offset, v.Length, v.Closed)
+	default:
+		renderFileData(b, data)
 	}
 }
 

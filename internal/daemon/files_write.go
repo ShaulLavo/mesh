@@ -26,7 +26,7 @@ const newFilePermission uint32 = 0o644
 // same directory and a rename, so a reader sees the old or the new bytes and
 // never a mix. The caller's precondition is checked at commit.
 func (c *fileController) write(ctx context.Context, request protocol.FileWriteRequest) (protocol.FileWriteResult, error) {
-	target, path, err := c.beginFileRequest(request.Target, request.Path)
+	target, path, err := c.beginFileRequest(ctx, request.Target, request.Path)
 	if err != nil {
 		return protocol.FileWriteResult{}, err
 	}
@@ -299,7 +299,7 @@ func replaceByRename(location fileLocation, staged stagedFile, plan commitPlan) 
 // must occur exactly once in the text as the earlier edits left it, so an
 // ambiguous or stale edit fails instead of landing in the wrong place.
 func (c *fileController) patch(ctx context.Context, request protocol.FilePatchRequest) (protocol.FilePatchResult, error) {
-	target, path, err := c.beginFileRequest(request.Target, request.Path)
+	target, path, err := c.beginFileRequest(ctx, request.Target, request.Path)
 	if err != nil {
 		return protocol.FilePatchResult{}, err
 	}

@@ -261,6 +261,13 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 	if err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
 	}
+	cwd := d.Cwd
+	if cwd == "" {
+		cwd = s.cfg.HostDefaultCwd
+	}
+	if err := findCommand(d.Argv, cwd, d.Env); err != nil {
+		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
+	}
 	s.mu.Lock()
 	inst.rec.Generation++
 	inst.rec.Revision, inst.rec.Intent, inst.rec.State, inst.rec.Reason, inst.rec.ExitCode, inst.rec.Worker = d.Revision, intentRun, StateStarting, "", nil, nil
@@ -269,10 +276,6 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 	// The intent is durable before any process exists.
 	if err := s.persist(ctx, inst); err != nil {
 		return nil, err
-	}
-	cwd := d.Cwd
-	if cwd == "" {
-		cwd = s.cfg.HostDefaultCwd
 	}
 	ref, err := s.cfg.Launcher.Launch(ctx, LaunchSpec{Key: key, Argv: d.Argv, Cwd: cwd, Env: env})
 	if errors.Is(err, ErrLaunchUncertain) {

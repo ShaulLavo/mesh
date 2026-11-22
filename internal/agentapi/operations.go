@@ -70,6 +70,12 @@ var coreOperations = []Operation{
 	{Name: "hosts.wake", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Mutates: true, Summary: "Send a wake-on-LAN request for an approved host through an online peer.", Example: "mesh_host_wake"},
 	{Name: "services.inspect", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "Inspect one Mesh serve route on a host without opening its URL.", Example: "mesh_service_inspect"},
 	{Name: "jobs.list", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "List caller-owned keyed execution jobs on a host.", Example: "mesh_jobs_list"},
+	{Name: "files.read", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "Read one page of a regular file on a host as the daemon account.", Example: "mesh_file_read"},
+	{Name: "files.list", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "List one directory on a host without following symlinks.", Example: "mesh_file_list"},
+	{Name: "files.search", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Summary: "Search text files on a host with a bounded Go regular expression.", Example: "mesh_file_search"},
+	{Name: "files.write", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Mutates: true, Summary: "Replace or create a file on a host atomically at an expected digest.", Example: "mesh_file_write"},
+	{Name: "files.patch", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Mutates: true, Summary: "Apply exact text edits to a file on a host at an expected digest.", Example: "mesh_file_patch"},
+	{Name: "files.copy", Command: mcpSurfaceCommand, Implemented: true, MCPOnly: true, Network: true, Mutates: true, Summary: "Copy a file or directory between this machine and a host.", Example: "mesh_copy"},
 }
 
 const mcpSurfaceCommand = "mesh mcp"

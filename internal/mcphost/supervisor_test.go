@@ -324,7 +324,9 @@ func (f *supervisorFixture) jobActive(_ context.Context, _, _, job string) bool 
 func (f *supervisorFixture) publish(t *testing.T, d Definition) Definition {
 	t.Helper()
 	if d.Argv == nil {
-		d.Argv = []string{"fixture"}
+		// The fake launcher runs the fixture in process; the command only has
+		// to exist on this host.
+		d.Argv = []string{"/bin/sh"}
 	}
 	out, err := f.sup.Publish(t.Context(), d, 0)
 	if err != nil {

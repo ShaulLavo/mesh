@@ -40,6 +40,7 @@ type ProgressUpdate struct {
 // Controls is the transport-independent boundary between native MCP tool
 // handlers and Mesh's host/daemon control layer.
 type Controls interface {
+	FileControls
 	ListHosts(ctx context.Context, req ListHostsRequest) (CallOutcome, error)
 	InspectHost(ctx context.Context, req InspectHostRequest) (CallOutcome, error)
 	WakeHost(ctx context.Context, req WakeHostRequest) (CallOutcome, error)

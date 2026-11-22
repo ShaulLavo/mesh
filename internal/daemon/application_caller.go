@@ -107,7 +107,8 @@ func rejectStrayCaller(request protocol.Control) error {
 	if request.Caller == "" && !request.Administration && request.ExecutionContext == nil {
 		return nil
 	}
-	if protocol.IsExecutionControl(request.Type) || protocol.IsContextControl(request.Type) {
+	// File controls check the caller when they name a context.
+	if protocol.IsExecutionControl(request.Type) || protocol.IsContextControl(request.Type) || protocol.IsFileControl(request.Type) {
 		return nil
 	}
 	return &callerValidationError{err: fmt.Errorf("%s does not accept an application caller", request.Type)}
