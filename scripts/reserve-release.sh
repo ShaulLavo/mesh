@@ -35,7 +35,7 @@ effective_gate_sha() {
   local parent commit_changes
   while [[ $current != "$published_source" ]]; do
     parent=$(git rev-parse "${current}^1" 2>/dev/null) || break
-    commit_changes=$(git diff --name-only "$parent..$current") || return 1
+    commit_changes=$(git diff --name-only --no-renames "$parent..$current") || return 1
     if [[ -z $commit_changes ]] || classify_non_cask_changes "$commit_changes"; then
       printf '%s\n' "$current"
       return 0
@@ -169,7 +169,7 @@ if [[ $action == skip ]]; then
   exit 0
 fi
 
-changed=$(git diff --name-only "$published_source..$source_sha")
+changed=$(git diff --name-only --no-renames "$published_source..$source_sha")
 if ! classify_non_cask_changes "$changed"; then
   if [[ -z $requested_source ]] && maybe_reconcile_cask "$latest_tag" "$published_source" "$explicit_version"; then
     exit 0
@@ -221,7 +221,7 @@ check_green_gate "$source_sha"
 if [[ $GATE_STATUS != green ]]; then
   gate_sha=$(effective_gate_sha "$source_sha" "$published_source")
   if [[ $gate_sha != "$source_sha" && $gate_sha != "$published_source" ]]; then
-    trailing_changes=$(git diff --name-only "$gate_sha..$source_sha")
+    trailing_changes=$(git diff --name-only --no-renames "$gate_sha..$source_sha")
     if ! classify_non_cask_changes "$trailing_changes"; then
       check_green_gate "$gate_sha"
     fi
