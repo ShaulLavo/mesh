@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/shaul/mesh/internal/hostprofile"
 	"github.com/shaul/mesh/internal/protocol"
 )
 
@@ -389,8 +390,12 @@ func handleProfileSet(ctx context.Context, controls Controls, raw json.RawMessag
 	if document == "" || document == "null" || !strings.HasPrefix(document, "{") {
 		return CallOutcome{}, invalidParam("profile must be an object with schemaVersion, description, labels, warnings and instructions")
 	}
-	if len(document) > maxProfileDocument {
-		return CallOutcome{}, invalidParam("profile exceeds %d encoded bytes", maxProfileDocument)
+	limit := hostprofile.HostLimits.Encoded
+	if scope == ProfileScopeFleet {
+		limit = hostprofile.FleetLimits.Encoded
+	}
+	if len(document) > limit {
+		return CallOutcome{}, invalidParam("profile exceeds %d encoded bytes for %s notes", limit, scope)
 	}
 	out, err := controls.ProfileSet(ctx, ProfileSetRequest{Scope: scope, ExpectedRevision: *args.ExpectedRevision, Document: []byte(document)})
 	return wrapControl("mesh_profile_set", out, err)

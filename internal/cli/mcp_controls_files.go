@@ -61,7 +61,11 @@ func (c *mcpControls) openFileSession(ctx context.Context, operation string, ref
 		failure := failOutcome(operation, meta, agentError(err, operation, host.ID, agentapi.ProtocolUnsupported))
 		return fileSession{}, &failure, nil
 	}
-	target := protocol.FileTarget{HostID: host.ID, Account: meta.Account}
+	if info.Account == "" {
+		failure := failOutcome(operation, meta, agentapi.Fail(agentapi.ProtocolUnsupported, operation, host.ID, "The host did not report the OS account its daemon runs as, so a file request cannot name it exactly. Update the target daemon.").Err)
+		return fileSession{}, &failure, nil
+	}
+	target := protocol.FileTarget{HostID: host.ID, Account: info.Account}
 	session := fileSession{host: host, info: info, meta: meta}
 	session.files = HostFiles{Target: target, Exchange: c.fileExchange(host, retry)}
 	if ref.Context != nil {
@@ -118,7 +122,7 @@ func (c *mcpControls) FileRead(ctx context.Context, req mcpnative.FileReadReques
 	}
 	result, err := session.files.Read(ctx, protocol.FileReadRequest{Target: requestContext(req.Target), Path: req.Path, Offset: req.Offset, MaxBytes: req.MaxBytes, Cursor: req.Cursor, Digest: req.Digest})
 	if err != nil {
-		return failOutcome(opFilesRead, session.meta, agentError(err, opFilesRead, req.Path, agentapi.HostUnreachable)), nil
+		return failFile(opFilesRead, session, req.Target, agentError(err, opFilesRead, req.Path, agentapi.HostUnreachable), err), nil
 	}
 	meta := resultMeta(session.meta, req.Target, result.Target)
 	return okOutcome(opFilesRead, meta, mcpnative.FileReadData{
@@ -126,6 +130,21 @@ func (c *mcpControls) FileRead(ctx context.Context, req mcpnative.FileReadReques
 		Start: strconv.FormatUint(result.Start, 10), End: strconv.FormatUint(result.End, 10), Size: strconv.FormatUint(result.Size, 10),
 		EOF: result.EOF, Revision: result.Revision, SHA256: result.SHA256, NextCursor: result.NextCursor,
 	}), nil
+}
+
+// failFile reports a failed file request. The target names the context the
+// caller asked for; the workspace directory appears only when the daemon
+// authorized the context and said where the request ran.
+func failFile(operation string, session fileSession, ref mcpnative.FileTargetRef, failure agentapi.Error, err error) mcpnative.CallOutcome {
+	meta := *session.meta
+	if ref.Context != nil {
+		meta.ContextID = ref.Context.String()
+		var ran *FileRequestError
+		if errors.As(err, &ran) && ran.Target.ContextID == ref.Context.ContextID {
+			meta.Cwd = ran.Target.Cwd
+		}
+	}
+	return failOutcome(operation, &meta, failure)
 }
 
 func outcomeOr(failed *mcpnative.CallOutcome) mcpnative.CallOutcome {
@@ -144,7 +163,7 @@ func (c *mcpControls) FileList(ctx context.Context, req mcpnative.FileListReques
 	}
 	result, err := session.files.List(ctx, protocol.FileListRequest{Target: requestContext(req.Target), Path: req.Path, Limit: req.Limit, Cursor: req.Cursor})
 	if err != nil {
-		return failOutcome(opFilesList, session.meta, agentError(err, opFilesList, req.Path, agentapi.HostUnreachable)), nil
+		return failFile(opFilesList, session, req.Target, agentError(err, opFilesList, req.Path, agentapi.HostUnreachable), err), nil
 	}
 	meta := resultMeta(session.meta, req.Target, result.Target)
 	entries := make([]mcpnative.FileEntryData, len(result.Entries))
@@ -166,7 +185,7 @@ func (c *mcpControls) FileSearch(ctx context.Context, req mcpnative.FileSearchRe
 	}
 	result, err := session.files.Search(ctx, protocol.FileSearchRequest{Target: requestContext(req.Target), Path: req.Path, Pattern: req.Pattern, Glob: req.Glob, MaxMatches: req.MaxMatches})
 	if err != nil {
-		return failOutcome(opFilesSearch, session.meta, agentError(err, opFilesSearch, req.Path, agentapi.HostUnreachable)), nil
+		return failFile(opFilesSearch, session, req.Target, agentError(err, opFilesSearch, req.Path, agentapi.HostUnreachable), err), nil
 	}
 	meta := resultMeta(session.meta, req.Target, result.Target)
 	matches := make([]mcpnative.FileMatchData, len(result.Matches))
@@ -192,7 +211,7 @@ func (c *mcpControls) FileWrite(ctx context.Context, req mcpnative.FileWriteRequ
 		ExpectedSHA256: req.ExpectedSHA256, CreateOnly: req.CreateOnly,
 	})
 	if err != nil {
-		return failOutcome(opFilesWrite, session.meta, writeFailure(err, opFilesWrite, req.Path)), nil
+		return failFile(opFilesWrite, session, req.Target, writeFailure(err, opFilesWrite, req.Path), err), nil
 	}
 	meta := resultMeta(session.meta, req.Target, result.Target)
 	return okOutcome(opFilesWrite, meta, mcpnative.FileWriteData{
@@ -213,7 +232,7 @@ func (c *mcpControls) FilePatch(ctx context.Context, req mcpnative.FilePatchRequ
 	}
 	result, err := session.files.Patch(ctx, protocol.FilePatchRequest{Target: requestContext(req.Target), Path: req.Path, ExpectedSHA256: req.ExpectedSHA256, Edits: edits})
 	if err != nil {
-		return failOutcome(opFilesPatch, session.meta, writeFailure(err, opFilesPatch, req.Path)), nil
+		return failFile(opFilesPatch, session, req.Target, writeFailure(err, opFilesPatch, req.Path), err), nil
 	}
 	meta := resultMeta(session.meta, req.Target, result.Target)
 	return okOutcome(opFilesPatch, meta, mcpnative.FileWriteData{
@@ -257,6 +276,13 @@ func (c *mcpControls) Copy(ctx context.Context, req mcpnative.CopyRequest) (mcpn
 	if host.local {
 		return failOutcome(opFilesCopy, meta, agentapi.Usage(opFilesCopy, "mesh_copy moves files between this machine and a remote host. This host is the machine itself; use the file tools or ordinary tools here.").Err), nil
 	}
+	// A transfer keeps its own connection, so it holds one of the host's four
+	// stream slots for its whole length and waits for one before it dials.
+	release, err := c.pool.AcquireStream(ctx, host)
+	if err != nil {
+		return failOutcome(opFilesCopy, meta, agentError(err, opFilesCopy, host.ID, agentapi.HostUnreachable)), nil
+	}
+	defer release()
 	conn, info, err := openVerifiedHostInfo(ctx, host, c.app.dependencies.DialControl)
 	if err != nil {
 		return failOutcome(opFilesCopy, meta, agentError(err, opFilesCopy, host.ID, agentapi.HostUnreachable)), nil

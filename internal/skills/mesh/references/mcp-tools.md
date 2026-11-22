@@ -10,7 +10,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_context_open` | `contexts.open` | idempotent | Open a durable execution context on a host |
 | `mesh_context_receipt` | `contexts.receipt` | read-only, idempotent | Look up a context open receipt by request key |
 | `mesh_context_update` | `contexts.update` | mutating | Update a context at an expected revision |
-| `mesh_copy` | `files.copy` | destructive, idempotent | Copy a file or directory to or from a host |
+| `mesh_copy` | `files.copy` | destructive | Copy a file or directory to or from a host |
 | `mesh_exec` | `sessions.create` | destructive, open-world | Run a keyed pipe command in an execution context |
 | `mesh_file_list` | `files.list` | read-only, idempotent | List a directory |
 | `mesh_file_patch` | `files.patch` | destructive | Apply exact text edits to a file |
@@ -113,10 +113,10 @@ Update a context's cwd, environment overlay, or label at expected_revision. Fail
 
 ## mesh_copy
 
-Copy a file or directory between this machine and one remote Mesh host over an authenticated connection, with no size limit beyond disk space. upload sends local_path to remote_path; download fetches remote_path to local_path. Files are replaced atomically, directories merge, permission bits are kept, and symlinks and special files are refused. Use mesh_file_write for small files.
+Copy a file or directory between this machine and one remote Mesh host over an authenticated connection, with no size limit beyond disk space. upload sends local_path to remote_path; download fetches remote_path to local_path. Files are replaced atomically, directories merge, permission bits are kept, and symlinks and special files are refused. Repeating a directory copy into an existing directory nests the source inside it, so it is not safe to repeat. Use mesh_file_write for small files.
 
 - Linked operation: `files.copy`
-- Hints: destructive, idempotent
+- Hints: destructive
 - Arguments:
   - `direction` (`string`, required) (upload, download): upload: local to host. download: host to local.
   - `host` (`string`, required): Machine name or exact host ID of the remote host.
@@ -164,7 +164,7 @@ Apply up to 64 exact old_text to new_text edits, in order, to a file of at most 
 - Hints: destructive
 - Arguments:
   - `context` (`string`, optional): Opaque context handle (mc1.<hostId>.<contextId>) whose working directory resolves a relative path. Needs an application identity; the owning host authorizes it.
-  - `edits` (`array`, required): 
+  - `edits` (`array`, required): Edits applied in order; each old_text must occur exactly once.
   - `expected_sha256` (`string`, required): Lowercase SHA-256 of the file's current bytes, from mesh_file_read or an earlier write result.
   - `host` (`string`, optional): Machine name or exact host ID. Optional when context names the host.
   - `path` (`string`, required): Absolute path, or a path relative to the context's working directory (at most 4096 bytes).
@@ -385,7 +385,7 @@ Replace the notes of this machine (scope host) or publish the signed fleet notes
 - Hints: destructive
 - Arguments:
   - `expected_revision` (`integer`, required): Revision read from mesh_profile_get; 0 for an absent profile.
-  - `profile` (`object`, required): 
+  - `profile` (`object`, required): The whole notes document; it replaces the current one.
   - `scope` (`string`, optional) (host, fleet): host (default) or fleet.
 
 ## mesh_service_inspect

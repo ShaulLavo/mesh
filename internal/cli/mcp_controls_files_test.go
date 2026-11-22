@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -368,5 +369,125 @@ func TestMCPFleetNotesAndStatusReadLocalState(t *testing.T) {
 	replica := after.Envelope.Data.(agentapi.FleetSection)
 	if replica.Revision == nil || *replica.Revision != 1 || replica.Profile == nil || replica.Profile.Description != "fleet" {
 		t.Fatalf("fleet replica after a stale set: %+v", replica)
+	}
+}
+
+// A daemon that cannot name its account cannot be targeted exactly, so a
+// files-capable host without one is refused before any file control is sent.
+func TestMCPFileToolsRefuseAHostWithoutAnAccount(t *testing.T) {
+	f := newFileHostFixture(t)
+	f.account = ""
+	f.respond = func(protocol.Control) (protocol.Control, error) {
+		return fileResult(t, protocol.TypeFileReadResult, protocol.FileReadResult{}), nil
+	}
+	out, err := f.controls.FileRead(t.Context(), mcpnative.FileReadRequest{Target: mcpnative.FileTargetRef{Host: filesTestHostID}, Path: "/a", Timeout: 5 * time.Second})
+	if err != nil || !out.IsError || out.Envelope.Errors[0].Code != agentapi.ProtocolUnsupported {
+		t.Fatalf("a host without an account: %+v %v", out, err)
+	}
+	if len(f.requests()) != 0 {
+		t.Fatalf("a request was sent to a host without an account: %d", len(f.requests()))
+	}
+}
+
+// Errors after the daemon authorized a context keep the workspace; a failed
+// authorization shows the handle that was asked for and no directory.
+func TestMCPFileErrorsKeepTheContextAndWorkspace(t *testing.T) {
+	f := newFileHostFixture(t)
+	f.controls.caller = filesTestCallerID
+	handle := mcpnative.ContextRef{HostID: filesTestHostID, ContextID: filesTestContext}
+	call := func() mcpnative.CallOutcome {
+		out, err := f.controls.FileWrite(t.Context(), mcpnative.FileWriteRequest{Target: mcpnative.FileTargetRef{Context: &handle}, Path: "a.txt", Data: []byte("x"), ExpectedSHA256: strings.Repeat("a", 64), Timeout: 5 * time.Second})
+		if err != nil || !out.IsError {
+			t.Fatalf("write: %+v %v", out, err)
+		}
+		return out
+	}
+	detail, err := protocol.EncodeFileDocument(struct {
+		Target protocol.FileTarget `json:"target"`
+	}{protocol.FileTarget{HostID: filesTestHostID, Account: "remote-bob", ContextID: filesTestContext, Cwd: "/work/app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.respond = func(protocol.Control) (protocol.Control, error) {
+		return protocol.Control{Type: protocol.TypeError, ErrorCode: "file.conflict", Message: "digest differs", Files: detail}, nil
+	}
+	conflict := call()
+	if conflict.Envelope.Errors[0].Code != agentapi.FileConflict || conflict.Target == nil || conflict.Target.ContextID != handle.String() || conflict.Target.Cwd != "/work/app" {
+		t.Fatalf("an authorized conflict lost its workspace: %+v", conflict.Target)
+	}
+	f.respond = func(protocol.Control) (protocol.Control, error) {
+		return protocol.Control{Type: protocol.TypeError, ErrorCode: "context.not_found", Message: "no such context"}, nil
+	}
+	denied := call()
+	if denied.Envelope.Errors[0].Code != agentapi.ContextNotFound || denied.Target == nil || denied.Target.ContextID != handle.String() || denied.Target.Cwd != "" {
+		t.Fatalf("a refused context must show the handle and no directory: %+v", denied.Target)
+	}
+	f.respond = func(protocol.Control) (protocol.Control, error) {
+		return protocol.Control{}, errors.New("connection reset")
+	}
+	lost := call()
+	if lost.Envelope.Errors[0].Code != agentapi.RequestOutcomeUnknown || lost.Target == nil || lost.Target.Cwd != "" || lost.Target.ContextID != handle.String() {
+		t.Fatalf("a lost reply knows no directory: %+v", lost.Target)
+	}
+}
+
+// Copies are long operations: at most four to one host at a time, and a call
+// still queued when it is cancelled never dials.
+func TestMCPCopyWaitsForAStreamSlotAndCancelsWithoutDialing(t *testing.T) {
+	host := setupCommandTestHost(t)
+	var dials atomic.Int32
+	entered := make(chan struct{}, 8)
+	release := make(chan struct{})
+	dial := func(ctx context.Context, _ HostRecord) (transport.Conn, error) {
+		dials.Add(1)
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil, errors.New("test dial closed")
+	}
+	app := &application{dependencies: Dependencies{Now: time.Now, DialControl: dial}}
+	pool := newMCPHostPool(func(context.Context, HostRecord) (transport.Conn, error) { return nil, errors.New("unused") }, time.Now)
+	defer pool.Close()
+	controls := newMCPControls(app, pool, "")
+	source := filepath.Join(t.TempDir(), "source.txt")
+	writeCopyTestFile(t, source, "payload", 0o600)
+	request := mcpnative.CopyRequest{Host: host.host.ID, Direction: mcpnative.CopyUpload, LocalPath: source, RemotePath: "/tmp/remote.txt", Timeout: 30 * time.Second}
+
+	var running sync.WaitGroup
+	for range mcpPoolStreamLimit {
+		running.Add(1)
+		go func() {
+			defer running.Done()
+			_, _ = controls.Copy(t.Context(), request)
+		}()
+	}
+	for range mcpPoolStreamLimit {
+		<-entered
+	}
+	queued, cancel := context.WithCancel(t.Context())
+	finished := make(chan mcpnative.CallOutcome, 1)
+	go func() {
+		out, _ := controls.Copy(queued, request)
+		finished <- out
+	}()
+	select {
+	case <-entered:
+		t.Fatalf("a fifth copy dialed with four streams open: %d dials", dials.Load())
+	case <-time.After(300 * time.Millisecond):
+	}
+	cancel()
+	if out := <-finished; !out.IsError {
+		t.Fatalf("a cancelled queued copy succeeded: %+v", out)
+	}
+	if got := dials.Load(); got != int32(mcpPoolStreamLimit) {
+		t.Fatalf("the cancelled copy dialed: %d dials", got)
+	}
+	close(release)
+	running.Wait()
+	// Every slot was released, so a later copy gets one.
+	if _, err := controls.Copy(t.Context(), request); err != nil || dials.Load() != int32(mcpPoolStreamLimit)+1 {
+		t.Fatalf("a slot was not released: %v, %d dials", err, dials.Load())
 	}
 }

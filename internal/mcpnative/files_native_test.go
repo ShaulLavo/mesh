@@ -275,3 +275,53 @@ func TestFileToolCallOverTheWireCarriesTheTargetMeta(t *testing.T) {
 		t.Fatalf("reply: %s", raw)
 	}
 }
+
+// Copy repeated over an existing directory nests the source in it, so the tool
+// cannot claim to be safe to repeat.
+func TestCopyIsNotAdvertisedAsIdempotent(t *testing.T) {
+	for _, def := range DefaultRegistry().Definitions() {
+		if def.Name != "mesh_copy" {
+			continue
+		}
+		if def.Annotations.IdempotentHint == nil || *def.Annotations.IdempotentHint {
+			t.Fatalf("mesh_copy idempotentHint = %v, want false", def.Annotations.IdempotentHint)
+		}
+		return
+	}
+	t.Fatal("mesh_copy is not registered")
+}
+
+// Fleet notes may be larger than host notes, up to the CLI's own limits.
+func TestProfileSetAcceptsTheScopesOwnDocumentLimit(t *testing.T) {
+	big := `{"schemaVersion":1,"instructions":"` + strings.Repeat("x", 48<<10) + `"}`
+	stub := &stubControls{}
+	if _, err := callFileTool(t, stub, "mesh_profile_set", `{"scope":"fleet","expected_revision":0,"profile":`+big+`}`); err != nil {
+		t.Fatalf("a 48 KiB fleet document was refused: %v", err)
+	}
+	requireInvalid(t, "mesh_profile_set", `{"scope":"host","expected_revision":0,"profile":`+big+`}`, "exceeds")
+	huge := `{"schemaVersion":1,"instructions":"` + strings.Repeat("x", 97<<10) + `"}`
+	requireInvalid(t, "mesh_profile_set", `{"scope":"fleet","expected_revision":0,"profile":`+huge+`}`, "exceeds")
+}
+
+// A failed file operation gets its own recovery guidance, and the file hints
+// leave the job and context guidance alone.
+func TestHintsAreChosenByOperationAndCode(t *testing.T) {
+	render := func(operation string, code agentapi.Code) string {
+		return renderOutcomeText(errorEnvelope(operation, "t", code, "failed"), true)
+	}
+	if text := render("files.write", agentapi.RequestOutcomeUnknown); !strings.Contains(text, "mesh_file_read") || strings.Contains(text, "mesh_job_receipt") {
+		t.Fatalf("lost file write: %q", text)
+	}
+	if text := render("sessions.create", agentapi.RequestOutcomeUnknown); !strings.Contains(text, "mesh_job_receipt") {
+		t.Fatalf("job guidance changed: %q", text)
+	}
+	if text := render("contexts.get", agentapi.ContextNotFound); !strings.Contains(text, "mesh_context_list") {
+		t.Fatalf("context guidance was overwritten: %q", text)
+	}
+	if text := render("contexts.get", agentapi.ContextClosed); !strings.Contains(text, "mesh_context_open") {
+		t.Fatalf("context guidance was overwritten: %q", text)
+	}
+	if text := render("files.read", agentapi.ContextNotFound); !strings.Contains(text, "context handle") {
+		t.Fatalf("file context guidance missing: %q", text)
+	}
+}

@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -58,13 +57,7 @@ func (c *fileController) stage(stage, path string) {
 	}
 }
 
-func daemonAccount() string {
-	// The same name host.info reports, so a caller can put it in a target.
-	if account := currentDaemonAccount(); account != "" {
-		return account
-	}
-	return strconv.Itoa(os.Getuid())
-}
+func daemonAccount() string { return currentDaemonAccount() }
 
 // fileError carries the stable code a client acts on.
 type fileError struct {
@@ -122,13 +115,31 @@ func (c *fileController) HandleControl(ctx context.Context, request protocol.Con
 	}
 	resultType, result, err := c.dispatch(ctx, request)
 	if err != nil {
-		return fileErrorResponse(request, err), true, nil
+		return c.scopedErrorResponse(ctx, request, err), true, nil
 	}
 	data, err := protocol.EncodeFileDocument(result)
 	if err != nil {
 		return fileErrorResponse(request, err), true, nil
 	}
 	return protocol.Control{Type: resultType, RequestID: request.RequestID, Files: data}, true, nil
+}
+
+// scopedErrorResponse is the error reply for a request that ran in an
+// authorized context: it also names the workspace, so a caller can tell where
+// a refusal happened. A request refused before authorization names none.
+func (c *fileController) scopedErrorResponse(ctx context.Context, request protocol.Control, err error) protocol.Control {
+	response := fileErrorResponse(request, err)
+	scope := scopeOf(ctx)
+	if scope.contextID == "" {
+		return response
+	}
+	detail := struct {
+		Target protocol.FileTarget `json:"target"`
+	}{protocol.FileTarget{HostID: c.hostID, Account: c.account, ContextID: scope.contextID, Cwd: scope.cwd}}
+	if raw, encodeErr := protocol.EncodeFileDocument(detail); encodeErr == nil {
+		response.Files = raw
+	}
+	return response
 }
 
 func (c *fileController) dispatch(ctx context.Context, request protocol.Control) (string, any, error) {
@@ -190,13 +201,24 @@ type fileScopeKey struct{}
 // withScope authorizes the context the request names, if any, on this host
 // for the request's caller, before any path is looked at.
 func (c *fileController) withScope(ctx context.Context, request protocol.Control) (context.Context, error) {
+	// Fields that belong to other controls have no meaning here, and a
+	// credential without a context would be silently ignored, so refuse both.
+	if request.Administration || request.ExecutionContext != nil {
+		return ctx, fileFailure(agentapi.UsageInvalid, "daemon: file controls take no administration or execution context fields")
+	}
 	var named struct {
 		Target protocol.FileTarget `json:"target"`
 	}
 	// The strict decode of the whole document runs later; this reads only the
 	// target.
-	if err := json.Unmarshal(request.Files, &named); err != nil || named.Target.ContextID == "" {
+	if err := json.Unmarshal(request.Files, &named); err != nil {
 		return ctx, nil //nolint:nilerr // a malformed document is refused by the strict decode that follows
+	}
+	if named.Target.ContextID == "" {
+		if request.Caller != "" {
+			return ctx, fileFailure(agentapi.UsageInvalid, "daemon: an application credential needs a context; file requests without one are account-wide and take none")
+		}
+		return ctx, nil
 	}
 	if named.Target.HostID != c.hostID {
 		return ctx, nil // checkTarget refuses it with the right code.

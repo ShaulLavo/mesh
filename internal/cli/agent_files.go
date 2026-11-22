@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -97,7 +98,7 @@ func fileControl[R any](ctx context.Context, files HostFiles, requestType, resul
 		return result, err
 	}
 	if response.Type == protocol.TypeError {
-		return result, daemonResponseError(requestType, response.Message, response.ErrorCode)
+		return result, fileRequestError(response, daemonResponseError(requestType, response.Message, response.ErrorCode))
 	}
 	if response.Type != resultType {
 		return result, fmt.Errorf("cli: host answered %s with %s", requestType, response.Type)
@@ -106,4 +107,29 @@ func fileControl[R any](ctx context.Context, files HostFiles, requestType, resul
 		return result, fmt.Errorf("cli: %s result: %w", requestType, err)
 	}
 	return result, nil
+}
+
+// FileRequestError is a daemon refusal of a file request that also names the
+// workspace the request ran in. The daemon sends it only after it authorized
+// the request's context.
+type FileRequestError struct {
+	Err    error
+	Target protocol.FileTarget
+}
+
+func (e *FileRequestError) Error() string { return e.Err.Error() }
+func (e *FileRequestError) Unwrap() error { return e.Err }
+
+// fileRequestError attaches the workspace detail of an error reply, if any.
+func fileRequestError(response protocol.Control, err error) error {
+	if len(response.Files) == 0 {
+		return err
+	}
+	var detail struct {
+		Target protocol.FileTarget `json:"target"`
+	}
+	if json.Unmarshal(response.Files, &detail) != nil {
+		return err
+	}
+	return &FileRequestError{Err: err, Target: detail.Target}
 }

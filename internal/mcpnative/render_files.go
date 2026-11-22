@@ -8,22 +8,43 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 )
 
-func init() {
-	for code, hint := range map[agentapi.Code]string{
-		agentapi.FileNotFound:         "Check the path with mesh_file_list; a relative path resolves against the context's working directory.",
-		agentapi.FileNotRegular:       "Name the real path: symlinks, devices, sockets and pipes are refused.",
-		agentapi.FileChanged:          "The file changed since the cursor was issued; read it again from the start.",
-		agentapi.FileCursorInvalid:    "Use the nextCursor returned by mesh_file_read or mesh_file_list for this same host and path.",
-		agentapi.FileConflict:         "Read the file again with mesh_file_read for its current sha256 and retry; nothing was changed.",
-		agentapi.FilePatchMismatch:    "Make old_text match exactly one place, with more surrounding context, and retry; nothing was changed.",
-		agentapi.FilePermissionDenied: "The daemon account may not do this; pick a path it can reach.",
-		agentapi.FileTargetMismatch:   "The host runs as another account than the one named; re-read the target from mesh_host_inspect.",
-		agentapi.ContextNotFound:      "Open a context with mesh_context_open on this host, or pass an absolute path.",
-		agentapi.ContextClosed:        "Open a new context, or pass an absolute path.",
-		agentapi.ProfileConflict:      "Read the current revision with mesh_profile_get and send the edit again.",
-		agentapi.ProfileInvalid:       "Fix the profile document; see the mesh_profile_set schema for the allowed fields and limits.",
-	} {
-		nextActionHints[code] = hint
+// fileHints guide a failed files.* operation, and profileHints a failed
+// profile.* one. They are chosen by operation, so the shared job and context
+// hints stay as they are for everything else.
+var fileHints = map[agentapi.Code]string{
+	agentapi.FileNotFound:         "Check the path with mesh_file_list; a relative path resolves against the context's working directory.",
+	agentapi.FileNotRegular:       "Name the real path: symlinks, devices, sockets and pipes are refused.",
+	agentapi.FileChanged:          "The file changed since the cursor was issued; read it again from the start.",
+	agentapi.FileCursorInvalid:    "Use the nextCursor returned by mesh_file_read or mesh_file_list for this same host and path.",
+	agentapi.FileConflict:         "Read the file again with mesh_file_read for its current sha256 and retry; nothing was changed.",
+	agentapi.FilePatchMismatch:    "Make old_text match exactly one place, with more surrounding context, and retry; nothing was changed.",
+	agentapi.FilePermissionDenied: "The daemon account may not do this; pick a path it can reach.",
+	agentapi.FileTargetMismatch:   "The host runs as another account than the one named; re-read the target from mesh_host_inspect.",
+	agentapi.ContextNotFound:      "Check the context handle and the active --identity, or pass an absolute path.",
+	agentapi.ContextClosed:        "Open a new context with mesh_context_open, or pass an absolute path.",
+	agentapi.ResourceLimit:        "Send less data; use mesh_copy for files over 1 MiB.",
+}
+
+var profileHints = map[agentapi.Code]string{
+	agentapi.ProfileConflict: "Read the current revision with mesh_profile_get and send the edit again.",
+	agentapi.ProfileInvalid:  "Fix the profile document; see the mesh_profile_set schema for the allowed fields and limits.",
+}
+
+// lostWriteHint is for a write whose reply never arrived: it has no job
+// request key, so the way to learn its outcome is to read the file.
+const lostWriteHint = "Read the file with mesh_file_read and compare its sha256 before retrying; do not replay blindly."
+
+func operationHint(operation string, code agentapi.Code) string {
+	switch {
+	case strings.HasPrefix(operation, "files."):
+		if code == agentapi.RequestOutcomeUnknown && (operation == "files.write" || operation == "files.patch") {
+			return lostWriteHint
+		}
+		return fileHints[code]
+	case strings.HasPrefix(operation, "profile."):
+		return profileHints[code]
+	default:
+		return ""
 	}
 }
 

@@ -158,6 +158,21 @@ func (p *mcpHostPool) ExchangeShort(ctx context.Context, host HostRecord, req pr
 
 var errWaitBudgetExpired = errors.New("wait budget expired before dispatch")
 
+// AcquireStream reserves one of the host's separate long-operation slots until
+// release is called. A caller that dials its own connection, such as a file
+// transfer, holds one for the whole transfer so it counts against the same
+// limit as every other stream.
+func (p *mcpHostPool) AcquireStream(ctx context.Context, host HostRecord) (func(), error) {
+	bucket, err := p.bucket(host)
+	if err != nil {
+		return nil, &preDispatchError{err: err}
+	}
+	if err := acquireSlot(ctx, bucket.streamSlots); err != nil {
+		return nil, &preDispatchError{err: err}
+	}
+	return func() { <-bucket.streamSlots }, nil
+}
+
 // ExchangeStreamBudgeted acquires a stream slot and pooled connection within
 // deadline, then computes the remaining host wait timeout against deadline so
 // slot queuing or a cold dial counts against wait_ms and never sends a wait
