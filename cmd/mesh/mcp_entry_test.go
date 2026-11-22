@@ -36,6 +36,9 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 		{"mcp", "unexpected-arg"},
 		{"mcp", "--privacy"},
 		{"--privacy", "mcp"},
+		{"mcp", "--http", "127.0.0.1:0"},
+		{"mcp", "--http", "0.0.0.0:8765", "--identity", "agent"},
+		{"mcp", "--allow-origin", "http://127.0.0.1:3000"},
 		{"mcp", "--identity", "missing-id"},
 		{"mcp", "--identity", ""},
 	} {
