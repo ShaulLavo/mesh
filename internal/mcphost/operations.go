@@ -21,11 +21,14 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 	if !caller.current() {
 		return errRevoked
 	}
+	if err := s.precheck(caller, target, request); err != nil {
+		return err
+	}
 	inst, d, err := s.pick(ctx, caller, target)
 	if err != nil {
 		return err
 	}
-	gen, err := s.acquire(ctx, inst)
+	gen, d, _, err := s.acquireFor(ctx, inst, d.Revision)
 	if err != nil {
 		return err
 	}
@@ -53,7 +56,8 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 			s.release(inst, gen)
 		}
 	}()
-	route := Route{Caller: caller, Service: d.ID, Revision: gen.revision, Account: d.AccountLabel, Instance: inst.rec.ID, Generation: strconv.FormatInt(gen.number, 10), Upstream: gen.upstream, ServerInfo: gen.serverInfo}
+	serverInfo, _ := gen.discoveryInfo()
+	route := Route{Caller: caller, Service: d.ID, Revision: gen.revision, Account: d.AccountLabel, Instance: inst.rec.ID, Generation: strconv.FormatInt(gen.number, 10), Upstream: gen.upstream, ServerInfo: serverInfo}
 	emitted := false
 	counted := func(raw []byte, terminal bool) error {
 		emitted = true
@@ -131,55 +135,22 @@ func (s *Supervisor) hold(inst *instance, gen *generation) {
 // InstanceView is an instance as one caller may see it. It never carries
 // stderr, environment values or secret paths.
 type InstanceView struct {
-	ID          string          `json:"id"`
-	Shared      bool            `json:"shared"`
-	Mine        bool            `json:"mine"`
-	Default     bool            `json:"default,omitempty"`
-	State       string          `json:"state"`
-	Reason      string          `json:"reason,omitempty"`
-	ExitCode    *int            `json:"exitCode,omitempty"`
-	Revision    int64           `json:"revision"`
-	Generation  int64           `json:"generation"`
-	Active      int             `json:"active"`
-	Leases      int             `json:"leases"`
-	ServerInfo  json.RawMessage `json:"serverInfo,omitempty"`
-	LateReplies uint64          `json:"lateReplies,omitempty"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
-}
-
-// ServiceView is a definition with secrets reduced to their names.
-type ServiceView struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Revision       int64          `json:"revision"`
-	Transport      string         `json:"transport"`
-	Command        []string       `json:"command,omitempty"`
-	Cwd            string         `json:"cwd,omitempty"`
-	URL            string         `json:"url,omitempty"`
-	Lifecycle      string         `json:"lifecycle"`
-	IdleSeconds    int64          `json:"idleSeconds,omitempty"`
-	ReadySeconds   int64          `json:"readySeconds"`
-	InstancePolicy string         `json:"instancePolicy"`
-	AccountMode    string         `json:"accountMode"`
-	AccountLabel   string         `json:"accountLabel,omitempty"`
-	Disabled       bool           `json:"disabled,omitempty"`
-	EnvNames       []string       `json:"env,omitempty"`
-	SecretNames    []string       `json:"secretEnv,omitempty"`
-	HeaderNames    []string       `json:"secretHeaders,omitempty"`
-	Instances      []InstanceView `json:"instances"`
-}
-
-// Services lists every definition with the instances caller may see.
-// Command lines are included only for administrators.
-func (s *Supervisor) Services(caller Caller) []ServiceView {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	views := make([]ServiceView, 0, len(s.services))
-	for _, d := range s.services {
-		views = append(views, s.viewLocked(caller, d))
-	}
-	slices.SortFunc(views, func(a, b ServiceView) int { return compareStrings(a.Name, b.Name) })
-	return views
+	ID           string          `json:"id"`
+	ServiceID    string          `json:"serviceId,omitempty"`
+	Shared       bool            `json:"shared"`
+	Mine         bool            `json:"mine"`
+	Default      bool            `json:"default,omitempty"`
+	State        string          `json:"state"`
+	Reason       string          `json:"reason,omitempty"`
+	ExitCode     *int            `json:"exitCode,omitempty"`
+	Revision     int64           `json:"revision"`
+	Generation   int64           `json:"generation"`
+	Active       int             `json:"active"`
+	Leases       int             `json:"leases"`
+	ServerInfo   json.RawMessage `json:"serverInfo,omitempty"`
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
+	LateReplies  uint64          `json:"lateReplies,omitempty"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
 func compareStrings(a, b string) int {
@@ -193,46 +164,17 @@ func compareStrings(a, b string) int {
 	}
 }
 
-// Service shows one definition.
-func (s *Supervisor) Service(caller Caller, ref string) (ServiceView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, err := s.serviceLocked(ref)
-	if err != nil {
-		return ServiceView{}, err
-	}
-	return s.viewLocked(caller, d), nil
-}
-
-func (s *Supervisor) viewLocked(caller Caller, d Definition) ServiceView {
-	v := ServiceView{ID: d.ID, Name: d.Name, Revision: d.Revision, Transport: d.Transport, URL: d.URL, Lifecycle: d.Lifecycle,
-		IdleSeconds: int64(d.Idle / time.Second), ReadySeconds: int64(d.ReadyTimeout / time.Second), InstancePolicy: d.InstancePolicy,
-		AccountMode: d.AccountMode, AccountLabel: d.AccountLabel, Disabled: d.Disabled,
-		EnvNames: slices.Sorted(maps.Keys(d.Env)), SecretNames: slices.Sorted(maps.Keys(d.SecretEnv)), HeaderNames: slices.Sorted(maps.Keys(d.HeaderSecrets)),
-		Instances: []InstanceView{}}
-	if caller.Admin {
-		v.Command, v.Cwd = d.Argv, d.Cwd
-	}
-	for _, inst := range s.instances {
-		if inst.rec.ServiceID != d.ID || !visible(caller, inst) {
-			continue
-		}
-		v.Instances = append(v.Instances, s.instanceViewLocked(caller, inst))
-	}
-	slices.SortFunc(v.Instances, func(a, b InstanceView) int { return compareStrings(a.ID, b.ID) })
-	return v
-}
-
 func visible(caller Caller, inst *instance) bool {
 	return caller.Admin || inst.rec.Owner == "" || caller.owns(inst.rec.Owner)
 }
 
 func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceView {
 	r := inst.rec
-	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
+	v := InstanceView{ID: r.ID, ServiceID: r.ServiceID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
-		v.Active, v.ServerInfo = gen.active, gen.serverInfo
+		v.Active = gen.active
+		v.ServerInfo, v.Capabilities = gen.discoveryInfo()
 		if stdio, ok := gen.upstream.(*StdioUpstream); ok {
 			v.LateReplies = stdio.LateReplies()
 		}
@@ -273,17 +215,37 @@ func (s *Supervisor) adminInstance(target Target) ([]*instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	instanceID, err := resolveInstanceTarget(s.cfg.HostID, d.ID, target.Instance)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	inst := s.instances[target.Instance]
+	inst := s.instances[instanceID]
 	if inst == nil || inst.rec.ServiceID != d.ID {
-		return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrNotFound)
+		return nil, fmt.Errorf("instance %s of %s: %w", instanceID, d.Name, ErrNotFound)
 	}
 	return []*instance{inst}, nil
 }
 
+// requireOwned rejects process lifecycle and diagnostics calls against
+// external HTTP definitions, for which Mesh owns no process (PLAN §6.1).
+func (s *Supervisor) requireOwned(ref string) error {
+	d, err := s.service(ref)
+	if err != nil {
+		return err
+	}
+	if !d.Owned() {
+		return fmt.Errorf("service %s: %w (use probe, enable, disable or rm)", d.Name, ErrNotOwned)
+	}
+	return nil
+}
+
 // StartInstance starts the selected instance now, clearing a recorded failure.
 func (s *Supervisor) StartInstance(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -327,6 +289,9 @@ func (s *Supervisor) viewOf(caller Caller, inst *instance) InstanceView {
 // StopInstance stops the selected instances' processes and keeps their
 // definitions and identities.
 func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Target) ([]InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	instances, err := s.manageable(ctx, caller, target)
 	if err != nil {
 		return nil, err
@@ -343,6 +308,9 @@ func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Tar
 
 // Restart replaces the selected instance's process with a new generation.
 func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -359,6 +327,9 @@ func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) 
 
 // Logs returns the bounded private stderr ring of the selected instance.
 func (s *Supervisor) Logs(ctx context.Context, caller Caller, target Target, limit int) ([]byte, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > stderrLimit {
 		limit = stderrLimit
 	}
@@ -391,7 +362,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 	if job != "" && !s.jobActive(ctx, caller.Account, caller.App, job) {
 		return Lease{}, InstanceView{}, failure(codeNotFound, false, "job %s is not a running job of this caller", job)
 	}
-	inst, _, err := s.pick(ctx, caller, target)
+	inst, d, err := s.pick(ctx, caller, target)
 	if err != nil {
 		return Lease{}, InstanceView{}, err
 	}
@@ -405,7 +376,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 		return Lease{}, InstanceView{}, err
 	}
 	if ttl > 0 {
-		gen, err := s.acquire(ctx, inst)
+		gen, _, _, err := s.acquireFor(ctx, inst, d.Revision)
 		if err != nil {
 			return lease, s.viewOf(caller, inst), err
 		}

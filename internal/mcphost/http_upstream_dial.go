@@ -24,8 +24,9 @@ var (
 type httpEndpoint struct {
 	url *url.URL
 	// authority is the exact host:port the transport must ask us to dial.
-	authority string
-	targets   []netip.AddrPort
+	authority  string
+	targets    []netip.AddrPort
+	verifyDial func(ctx context.Context, target netip.AddrPort, dial func() (net.Conn, error)) (net.Conn, error)
 }
 
 // parseHTTPEndpoint accepts only plain http to 127.0.0.1, ::1 or localhost.
@@ -86,9 +87,12 @@ func (e httpEndpoint) dial(ctx context.Context, network, address string) (net.Co
 	dialer := net.Dialer{Timeout: loopbackDialTimeout}
 	var last error
 	for _, target := range e.targets {
-		conn, err := dialer.DialContext(ctx, "tcp", target.String())
+		conn, err := e.dialTarget(ctx, &dialer, target)
 		if err == nil {
-			return e.verifiedPeer(conn, target)
+			return conn, nil
+		}
+		if errors.Is(err, ErrManagedListenerMismatch) {
+			return nil, notSent(err)
 		}
 		last = err
 		if ctx.Err() != nil {
@@ -96,6 +100,20 @@ func (e httpEndpoint) dial(ctx context.Context, network, address string) (net.Co
 		}
 	}
 	return nil, notSent(fmt.Errorf("connect to MCP upstream: %w", last))
+}
+
+func (e httpEndpoint) dialTarget(ctx context.Context, dialer *net.Dialer, target netip.AddrPort) (net.Conn, error) {
+	dialOne := func() (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, "tcp", target.String())
+		if err != nil {
+			return nil, fmt.Errorf("dial %s: %w", target, err)
+		}
+		return e.verifiedPeer(conn, target)
+	}
+	if e.verifyDial != nil {
+		return e.verifyDial(ctx, target, dialOne)
+	}
+	return dialOne()
 }
 
 func (e httpEndpoint) verifiedPeer(conn net.Conn, target netip.AddrPort) (net.Conn, error) {

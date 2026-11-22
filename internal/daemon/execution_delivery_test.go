@@ -45,7 +45,7 @@ func testQueuedExecutionGrant(t *testing.T, partial bool) {
 	}
 	waitRelaySignal(t, entered, "first reply held at writer")
 	s := &clientServer{lifecycle: l}
-	if err := s.replyExecution(grantCtx, relay, protocol.Control{Type: protocol.TypeExecutionRequest, RequestID: "queued", RequestKey: key.Opaque}); err != nil {
+	if err := s.replyExecution(grantCtx, relay, nil, protocol.Control{Type: protocol.TypeExecutionRequest, RequestID: "queued", RequestKey: key.Opaque}); err != nil {
 		t.Fatal(err)
 	}
 	assertQueuedReceipt(t, relay, partial)

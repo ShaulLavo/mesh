@@ -25,6 +25,7 @@ const (
 	mcpWriteWatchdog = 30 * time.Second
 	mcpAccessDenied  = "access.denied"
 	mcpInstanceKey   = "instance"
+	mcpServiceKey    = "service"
 	mcpServicesKey   = "services"
 )
 
@@ -38,13 +39,13 @@ type mcpController struct {
 	sup      *mcphost.Supervisor
 }
 
-func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, stateDir string) (*mcpController, error) {
+func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, stateDir string, listings func(mcphost.ListingRevision)) (*mcpController, error) {
 	c := &mcpController{l: l, stateDir: stateDir}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "/"
 	}
-	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval})
+	sup, err := mcphost.NewSupervisor(mcphost.Config{Store: store, Launcher: mcpLauncher{l: l}, HostID: string(l.host.ID), GrantCurrent: c.grantCurrent, JobActive: c.jobActive, HostDefaultCwd: home, SweepInterval: mcpSweepInterval, ListingChanged: listings})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: configure MCP hosting: %w", err)
 	}
@@ -52,6 +53,11 @@ func startMCPHost(ctx context.Context, l *lifecycle, store *storage.Store, state
 		return nil, fmt.Errorf("daemon: restore MCP hosting: %w", err)
 	}
 	c.sup = sup
+	if listings != nil {
+		for _, rev := range sup.ListingRevisions() {
+			listings(rev)
+		}
+	}
 	return c, nil
 }
 
@@ -96,7 +102,7 @@ func (c *mcpController) jobActive(ctx context.Context, account, app, job string)
 		return false
 	}
 	r, err := journal.Exact(ctx, b)
-	if err != nil || r.Phase == executionTerminalPhase {
+	if err != nil || r.Phase == executionTerminalPhase || r.Key.Class == execution.InternalServiceClass {
 		return false
 	}
 	if app != "" {
@@ -175,9 +181,9 @@ func mcpErrorCode(err error) (string, bool) {
 		return resourceLimitCode, false
 	case errors.Is(err, mcphost.ErrConflict):
 		return "service.conflict", false
-	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrSecretFile), errors.As(err, new(*callerValidationError)):
+	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrNotOwned), errors.Is(err, mcphost.ErrSecretFile), errors.As(err, new(*callerValidationError)):
 		return executionUsageInvalidCode, false
-	case errors.Is(err, mcphost.ErrHTTPUnavailable), errors.Is(err, mcphost.ErrManagedHTTPUnsupported):
+	case errors.Is(err, mcphost.ErrHTTPUnavailable):
 		return "protocol.unsupported", false
 	default:
 		return stateUnavailableCode, true
@@ -192,7 +198,7 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 	target := mcphost.Target{Service: req.Service, Instance: req.Instance, New: req.New}
 	switch req.Type {
 	case protocol.TypeMCPCatalog:
-		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), mcpServicesKey: c.sup.Services(caller)}, nil)
+		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), "scope": mcphost.CallerScope(caller), mcpServicesKey: c.sup.Catalog(caller)}, nil)
 	case protocol.TypeMCPServiceUpsert:
 		return c.upsert(ctx, caller, req)
 	case protocol.TypeMCPServiceDelete:
@@ -202,6 +208,13 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
 	case protocol.TypeMCPServiceRestart:
 		view, err := c.sup.Restart(ctx, caller, target)
+		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
+	case protocol.TypeMCPServiceEnable:
+		return c.setDisabled(ctx, caller, req.Service, false)
+	case protocol.TypeMCPServiceDisable:
+		return c.setDisabled(ctx, caller, req.Service, true)
+	case protocol.TypeMCPServiceProbe:
+		view, err := c.sup.Probe(ctx, caller, target)
 		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
 	case protocol.TypeMCPServiceStop:
 		views, err := c.sup.StopInstance(ctx, caller, target)
@@ -226,6 +239,16 @@ func (c *mcpController) admin(caller mcphost.Caller, run func() (any, error)) (j
 	return mcpResult(run())
 }
 
+func (c *mcpController) setDisabled(ctx context.Context, caller mcphost.Caller, service string, disabled bool) (json.RawMessage, error) {
+	return c.admin(caller, func() (any, error) {
+		view, err := c.sup.SetDisabled(ctx, service, disabled)
+		if err != nil {
+			return nil, fmt.Errorf("update MCP service %s: %w", service, err)
+		}
+		return map[string]any{mcpServiceKey: view}, nil
+	})
+}
+
 func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req protocol.MCPServiceRequest) (json.RawMessage, error) {
 	return c.admin(caller, func() (any, error) {
 		var d mcphost.Definition
@@ -236,11 +259,11 @@ func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req p
 		if err != nil {
 			return nil, fmt.Errorf("publish MCP service: %w", err)
 		}
-		view, err := c.sup.Service(caller, saved.ID)
+		view, err := c.sup.CatalogService(caller, saved.ID)
 		if err != nil {
 			return nil, fmt.Errorf("show published MCP service: %w", err)
 		}
-		return map[string]any{"service": view}, nil
+		return map[string]any{mcpServiceKey: view}, nil
 	})
 }
 
@@ -284,7 +307,7 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 	host := string(c.l.host.ID)
 	caller, err := c.caller(lifetime, route.Caller)
 	if err == nil {
-		err = c.sup.Forward(lifetime, caller, mcphost.Target{Service: route.Service, Instance: route.Instance, New: route.New}, request, func(raw []byte, terminal bool) error {
+		err = c.sup.Forward(lifetime, caller, forwardTarget(route), request, func(raw []byte, terminal bool) error {
 			return writeMCPEvent(lifetime, conn, raw, terminal)
 		})
 	}
@@ -296,6 +319,14 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 		return fmt.Errorf("encode MCP error reply: %w", encodeErr)
 	}
 	return writeMCPEvent(lifetime, conn, reply, true)
+}
+
+func forwardTarget(route mcpframe.Route) mcphost.Target {
+	target := mcphost.Target{Service: route.Service, Instance: route.Instance, New: route.New, ExactID: route.ExactID}
+	if route.Expect != nil {
+		target.Expect = &mcphost.Expectation{Revision: route.Expect.Revision, Account: route.Expect.Account}
+	}
+	return target
 }
 
 // mcpForwardError gives daemon-level refusals their Mesh codes.

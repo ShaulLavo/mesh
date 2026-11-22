@@ -10,7 +10,10 @@ import (
 	"github.com/shaul/mesh/internal/mcpwire"
 )
 
-const tasksExtension = "io.modelcontextprotocol/tasks"
+const (
+	tasksExtension        = "io.modelcontextprotocol/tasks"
+	upstreamServerInfoKey = "com.github.shaullavo.mesh/upstreamServerInfo"
+)
 
 // HostedMethods are the requests a hosted route forwards. None needs an
 // optional client capability at the route; the upstream asks for what it
@@ -70,6 +73,8 @@ type Route struct {
 type Router struct {
 	ids           *hostIDs
 	continuations *continuations
+	// listings advances listing revisions from what passes through.
+	listings *listingRevisions
 	// budget bounds reply bytes queued across every stdio instance.
 	budget *byteBudget
 }
@@ -79,7 +84,7 @@ func NewRouter() (*Router, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Router{ids: ids, continuations: newContinuations(), budget: &byteBudget{limit: hostQueueBytes}}, nil
+	return &Router{ids: ids, continuations: newContinuations(), listings: newListingRevisions(nil), budget: &byteBudget{limit: hostQueueBytes}}, nil
 }
 
 // Emit receives restored messages for the caller. The last call carries the
@@ -151,6 +156,7 @@ func (r *Router) rewrite(request mcpwire.Message, state *upstreamState) (mcpwire
 
 func (r *Router) restore(route Route, request mcpwire.Message, restore restoration, event mcpwire.Event) ([]byte, error) {
 	m := event.Message
+	r.listings.observeEvent(route, request, m)
 	if m.Kind() == mcpwire.Notification && event.Terminal {
 		// A stdio server ends a listen by cancelling it. Downstream, a
 		// graceful close is one complete result.
@@ -195,6 +201,14 @@ func (r *Router) restoreResponse(route Route, request, m mcpwire.Message) ([]byt
 	tasks := []string{resultKey, "capabilities", "extensions", tasksExtension}
 	if request.Method() == mcpwire.MethodDiscover && member(raw, tasks...) != nil {
 		if raw, err = setMember(raw, tasks, nil); err != nil {
+			return nil, err
+		}
+	}
+	// Preserve the probed upstream server identity when an individual response
+	// omits io.modelcontextprotocol/serverInfo, so fresh direct tool calls still
+	// report com.github.shaullavo.mesh/upstreamServerInfo.
+	if m.Result() != nil && route.ServerInfo != nil && member(raw, resultKey, metaKey, mcpwire.ServerInfoKey) == nil && member(raw, resultKey, metaKey, upstreamServerInfoKey) == nil {
+		if raw, err = setMember(raw, []string{resultKey, metaKey, upstreamServerInfoKey}, route.ServerInfo); err != nil {
 			return nil, err
 		}
 	}

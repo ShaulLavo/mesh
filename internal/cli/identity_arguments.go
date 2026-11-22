@@ -73,7 +73,16 @@ func leadingDashIdentity(arg string) bool {
 	if !strings.HasPrefix(arg, "-") {
 		return false
 	}
-	_, err := identity.IdentityKey(arg)
+	if _, err := identity.IdentityKey(arg); err == nil {
+		return true
+	}
+	// Host-qualified MCP references (HOST/NAME) can start with '-' or '--'
+	// when HOST is a base64url canonical host ID.
+	host, service, ok := strings.Cut(arg, "/")
+	if !ok || service == "" || strings.Contains(service, "/") {
+		return false
+	}
+	_, err := identity.IdentityKey(host)
 	return err == nil
 }
 

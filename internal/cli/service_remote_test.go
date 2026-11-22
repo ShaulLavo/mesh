@@ -175,3 +175,13 @@ func testHostDeclaration(host HostRecord) *protocol.HostInfo {
 	}
 	return info
 }
+
+// previewRemoteService and upsertRemoteService run the shared preview and
+// publish checks over a dialed connection, as mesh serve does.
+func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer, service protocol.ServiceInfo) (protocol.ServicePreview, string, error) {
+	return previewServiceVia(ctx, host, dialServiceExchange(host, dial), service)
+}
+
+func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string) (remoteServicePublication, error) {
+	return upsertServiceVia(ctx, host, dialServiceExchange(host, dial), requested, preview, privateName)
+}

@@ -8,16 +8,27 @@ import (
 	"os"
 	"sync"
 
-	"github.com/shaul/mesh/internal/session"
+	"github.com/shaul/mesh/internal/mcpwire"
 )
 
 const lineOutputBytes = 8 << 20
 const lineOutputFrames = 4096
 const lineFrameGap = "frame_gap"
 
+// maxFramedLine allows mcpwire.MaxMessage JSON bytes plus a CRLF delimiter.
+const maxFramedLine = mcpwire.MaxMessage + 2
+
+type lineFrame struct {
+	data       []byte
+	oversizeID []byte
+}
+
+func (f lineFrame) present() bool { return len(f.data) > 0 || len(f.oversizeID) > 0 }
+func (f lineFrame) size() int     { return len(f.data) + len(f.oversizeID) }
+
 type lineOutput struct {
 	mu       sync.Mutex
-	frames   [lineOutputFrames][]byte
+	frames   [lineOutputFrames]lineFrame
 	earliest uint64
 	next     uint64
 	bytes    int
@@ -43,12 +54,12 @@ func (o *lineOutput) readFrom(file *os.File) <-chan struct{} {
 func (o *lineOutput) readLines(file *os.File) {
 	reader := bufio.NewReaderSize(file, 32<<10)
 	for {
-		line, err := readLine(reader)
+		frame, err := readLineFrame(reader)
 		if err == nil {
-			o.offer(line)
+			o.offerFrame(frame)
 			continue
 		}
-		o.finish(lineFault(line, err))
+		o.finish(lineFault(frame.data, err))
 		if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
 			// Once framing is lost, continue draining the child without keeping bytes.
 			_, _ = io.Copy(io.Discard, reader)
@@ -59,22 +70,49 @@ func (o *lineOutput) readLines(file *os.File) {
 
 var errLineTooLarge = errors.New("line exceeds worker frame limit")
 
-func readLine(reader *bufio.Reader) ([]byte, error) {
+func readLineFrame(reader *bufio.Reader) (lineFrame, error) {
 	line, err := reader.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
-		return bytes.Clone(line), workerExecutionError("read line", err)
+		return finishLineFrame(reader, bytes.Clone(line), err)
 	}
 	total := bytes.Clone(line)
 	for {
 		line, err = reader.ReadSlice('\n')
-		if len(line) > session.MaxLineBytes-len(total) {
-			return nil, errLineTooLarge
+		if len(line) > maxFramedLine-len(total) {
+			return recoverOversizedLine(reader, total, line, err)
 		}
 		total = append(total, line...)
 		if !errors.Is(err, bufio.ErrBufferFull) {
-			return total, workerExecutionError("read line", err)
+			return finishLineFrame(reader, total, err)
 		}
 	}
+}
+
+func finishLineFrame(reader *bufio.Reader, total []byte, err error) (lineFrame, error) {
+	if err != nil {
+		return lineFrame{data: total}, workerExecutionError("read line", err)
+	}
+	body := bytes.TrimSuffix(total[:len(total)-1], []byte("\r"))
+	if len(body) > mcpwire.MaxMessage {
+		return recoverOversizedLine(reader, total, nil, nil)
+	}
+	return lineFrame{data: total}, nil
+}
+
+func recoverOversizedLine(reader *bufio.Reader, total, tail []byte, readErr error) (lineFrame, error) {
+	if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) {
+		return lineFrame{}, errLineTooLarge
+	}
+	total = append(total, tail...)
+	id, err := mcpwire.DrainOversizedReply(reader, total, readErr == nil)
+	if err != nil {
+		return lineFrame{}, errLineTooLarge
+	}
+	rawID, err := id.MarshalJSON()
+	if err != nil {
+		return lineFrame{}, errLineTooLarge
+	}
+	return lineFrame{oversizeID: rawID}, nil
 }
 
 func lineFault(partial []byte, err error) string {
@@ -97,21 +135,22 @@ func (o *lineOutput) notify() {
 	o.changed = make(chan struct{})
 }
 
-func (o *lineOutput) offer(line []byte) {
+func (o *lineOutput) offerFrame(frame lineFrame) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed {
 		return
 	}
-	for o.next-o.earliest == lineOutputFrames || o.bytes+len(line) > lineOutputBytes {
+	size := frame.size()
+	for o.next-o.earliest == lineOutputFrames || o.bytes+size > lineOutputBytes {
 		index := o.earliest % lineOutputFrames
-		o.bytes -= len(o.frames[index])
-		o.frames[index] = nil
+		o.bytes -= o.frames[index].size()
+		o.frames[index] = lineFrame{}
 		o.earliest++
 	}
-	o.frames[o.next%lineOutputFrames] = line
+	o.frames[o.next%lineOutputFrames] = frame
 	o.next++
-	o.bytes += len(line)
+	o.bytes += size
 	o.notify()
 }
 
@@ -182,17 +221,17 @@ func (o *lineOutput) inputFault(next uint64) string {
 	return o.fault
 }
 
-func (o *lineOutput) readFrame(seq uint64) ([]byte, string, <-chan struct{}) {
+func (o *lineOutput) readLineFrame(seq uint64) (lineFrame, string, <-chan struct{}) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if fault := o.positionError(seq); fault != "" {
-		return nil, fault, nil
+		return lineFrame{}, fault, nil
 	}
 	if seq < o.next {
 		return o.frames[seq%lineOutputFrames], "", nil
 	}
 	if o.closed {
-		return nil, o.fault, nil
+		return lineFrame{}, o.fault, nil
 	}
-	return nil, "", o.changed
+	return lineFrame{}, "", o.changed
 }

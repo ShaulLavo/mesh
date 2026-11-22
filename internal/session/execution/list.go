@@ -206,7 +206,7 @@ func (j *Journal) readOwnedSnapshot(name, host, class, principal, contextID stri
 		return Receipt{}, false
 	}
 	r, err := j.read(name[:64])
-	if err != nil || r.Binding.Mode() == KindLine {
+	if err != nil || r.Binding.Mode() == KindLine || r.Key.Class == InternalServiceClass {
 		return Receipt{}, false
 	}
 	if r.Key.Host != host || r.Key.Class != class || r.Key.Principal != principal {

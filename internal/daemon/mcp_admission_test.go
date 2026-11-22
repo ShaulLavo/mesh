@@ -14,7 +14,8 @@ func mcpFrames(t *testing.T) []protocol.Frame {
 	t.Helper()
 	var frames []protocol.Frame
 	for _, kind := range []string{protocol.TypeMCPCatalog, protocol.TypeMCPServiceUpsert, protocol.TypeMCPServiceDelete, protocol.TypeMCPServiceStart,
-		protocol.TypeMCPServiceStop, protocol.TypeMCPServiceRestart, protocol.TypeMCPServiceLogs, protocol.TypeMCPServiceLease} {
+		protocol.TypeMCPServiceStop, protocol.TypeMCPServiceRestart, protocol.TypeMCPServiceEnable, protocol.TypeMCPServiceDisable, protocol.TypeMCPServiceProbe,
+		protocol.TypeMCPServiceLogs, protocol.TypeMCPServiceLease} {
 		frame, err := protocol.EncodeMCP(protocol.MCPServiceRequest{Type: kind, RequestID: "denied", Service: "fixture", Definition: json.RawMessage(`{"name":"x"}`)})
 		if err != nil {
 			t.Fatal(err)

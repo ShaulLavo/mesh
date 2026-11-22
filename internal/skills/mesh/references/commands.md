@@ -508,3 +508,241 @@ mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
 - `--http ADDR`: exact loopback host:port of the running listener.
 - `--identity NAME`: local application identity bound to the listener.
 - `--json`: write one agent result.
+
+## mesh session resize
+
+Resize a keyed terminal job while no person is attached.
+
+```sh
+mesh session resize --host HOST_ID 7K3D --instance INSTANCE --cols 120 --rows 40 --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
+- `--cols N`: terminal width.
+- `--rows N`: terminal height.
+
+## mesh session screen
+
+Read a keyed terminal job's rendered screen without resizing it.
+
+```sh
+mesh session screen --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
+- `--cols N`: preview width up to 160.
+- `--rows N`: preview height up to 24.
+
+## mesh mcp publish
+
+Publish or update a hosted MCP server definition on a host.
+
+```sh
+mesh mcp publish repo-tools --cwd /work/app --json -- ./repo-mcp
+```
+
+- `--host HOST`: target host (defaults to local).
+- `--cwd PATH`: working directory on the target host for a stdio server or --run.
+- `--env NAME=VALUE`: plain environment variable (repeatable).
+- `--secret-env NAME=PATH`: secret file path read into NAME at launch (mode 0600).
+- `--url URL`: loopback Streamable HTTP endpoint of an HTTP server.
+- `--header-secret HEADER=PATH`: credential header secret file sent to the HTTP server.
+- `--run COMMAND`: command that starts the HTTP server at --url.
+- `--run-cwd PATH`: working directory for --run (alias for --cwd when --run is set).
+- `--shared`: give every authorized caller one shared instance.
+- `--kept`: keep the server running instead of starting on demand (requires --shared).
+- `--probe`: probe server/discover and tool schemas immediately after publishing.
+- `--idle D`: idle timeout for an on-demand instance (default 15m).
+- `--ready-timeout D`: readiness probe timeout (default 30s).
+- `--account-mode MODE`: none or host-account.
+- `--account-label TEXT`: non-secret host account label shown to callers.
+- `--json`: write one agent result.
+
+## mesh mcp ls
+
+List hosted MCP servers across saved hosts without waking hosts or starting services.
+
+```sh
+mesh mcp ls --json
+```
+
+- `--host HOST`: limit listing to one machine name, exact host ID, or local.
+- `--identity NAME`: scope instances and private catalog cache to this application identity.
+- `--timeout D`: hard deadline for fleet queries (default 2s).
+- `--cached`: read private cached catalog entries without dialing hosts.
+- `--json`: write one agent result.
+
+## mesh mcp show
+
+Show one hosted MCP server definition and its instances.
+
+```sh
+mesh mcp show local/repo-tools --json
+```
+
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp start
+
+Start a hosted MCP server instance and verify stateless 2026-07-28 readiness.
+
+```sh
+mesh mcp start local/repo-tools --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp stop
+
+Stop a hosted MCP server's running instances while keeping its definition.
+
+```sh
+mesh mcp stop local/repo-tools --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle; omit to stop all managed instances.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp restart
+
+Replace a hosted MCP server instance with a fresh process generation.
+
+```sh
+mesh mcp restart local/repo-tools --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp probe
+
+Probe a hosted MCP server's stateless 2026-07-28 readiness and tool schemas.
+
+```sh
+mesh mcp probe local/search --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp enable
+
+Enable a disabled hosted MCP server definition.
+
+```sh
+mesh mcp enable local/search --json
+```
+
+- `--json`: write one agent result.
+
+## mesh mcp disable
+
+Disable a hosted MCP server definition and stop active instances.
+
+```sh
+mesh mcp disable local/search --json
+```
+
+- `--json`: write one agent result.
+
+## mesh mcp logs
+
+Read a hosted MCP server instance's bounded private stderr ring.
+
+```sh
+mesh mcp logs local/repo-tools --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp rm
+
+Remove a hosted MCP server definition and stop its running instances.
+
+```sh
+mesh mcp rm local/repo-tools --json
+```
+
+- `--json`: write one agent result.
+
+## mesh mcp profile show
+
+Show gateway profiles and each selected service's state without starting services.
+
+```sh
+mesh mcp profile show dev --json
+```
+
+- `--identity NAME`: read host catalogs as this application identity.
+- `--cached`: show the file only, without asking hosts for service states.
+- `--json`: write one agent result.
+
+## mesh mcp profile add
+
+Create a gateway profile or select one hosted MCP server in it by stable host and service ID.
+
+```sh
+mesh mcp profile add dev pc/repo-tools --alias repo --json
+```
+
+- `--native GROUPS`: all, none, or a comma list of native groups.
+- `--alias NAME`: display alias for the selected service.
+- `--include PATTERN`: expose only matching upstream names (repeatable).
+- `--exclude PATTERN`: hide matching upstream names (repeatable).
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: read host catalogs as this application identity.
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile rm
+
+Remove a gateway profile, or one selected service from it.
+
+```sh
+mesh mcp profile rm dev repo --json
+```
+
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile alias
+
+Rename a selected service's display alias; exposed names do not change.
+
+```sh
+mesh mcp profile alias dev repo code --json
+```
+
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile repair
+
+Find a removed and re-published service by its recorded name and rebind the entry with explicit confirmation.
+
+```sh
+mesh mcp profile repair dev repo --confirm --json
+```
+
+- `--confirm`: rebind the entry to the service now published under its recorded name.
+- `--identity NAME`: read host catalogs as this application identity.
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.

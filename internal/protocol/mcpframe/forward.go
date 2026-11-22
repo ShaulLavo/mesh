@@ -16,6 +16,18 @@ type Route struct {
 	New      bool   `json:"new,omitempty"`
 	// Caller is the application credential, as in protocol.Control.Caller.
 	Caller protocol.CallerCredential `json:"caller,omitempty"`
+	// ExactID makes Service a stable service ID only, never a name. The
+	// aggregate gateway always sets it.
+	ExactID bool `json:"exactId,omitempty"`
+	// Expect is the service revision and account the gateway resolved; the
+	// host refuses the request when the service moved on.
+	Expect *RouteExpect `json:"expect,omitempty"`
+}
+
+// RouteExpect is the service state a request was resolved against.
+type RouteExpect struct {
+	Revision int64  `json:"revision"`
+	Account  string `json:"account"`
 }
 
 // EncodeForward builds the opening frame of an H3 stream.

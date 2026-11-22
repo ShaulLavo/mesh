@@ -41,6 +41,10 @@ func (w *Worker) serve(conn net.Conn) {
 		w.executionControl(conn, msg)
 		return
 	}
+	if err == nil && (msg.Type == protocol.TypeExecutionInput || msg.Type == protocol.TypeExecutionResize || msg.Type == protocol.TypeExecutionScreen) {
+		w.serveTerminalControl(conn, msg)
+		return
+	}
 	if err == nil && msg.Type == protocol.TypeAgentBegin {
 		w.serveAgent(conn, msg)
 		return
@@ -214,6 +218,13 @@ func (w *Worker) serve(conn net.Conn) {
 	w.recordAttachment()
 
 	defer func() {
+		// After the command exits, the writer owns the connection: it flushes
+		// the queued output and the exit frame, then closes. Closing here first
+		// would discard them.
+		if w.hasExited() {
+			<-c.done
+			return
+		}
 		w.mu.Lock()
 		w.dropLocked(c, "")
 		w.mu.Unlock()
@@ -247,6 +258,11 @@ func (w *Worker) serve(conn net.Conn) {
 		switch f.Kind {
 		case protocol.KindInput:
 			if !w.enqueueInput(c, f.Payload) {
+				if w.exitFollows(c) {
+					// Input that raced the exit has nowhere to go. Keep reading
+					// until the writer closes the connection after the exit frame.
+					continue
+				}
 				return
 			}
 		case protocol.KindControl:

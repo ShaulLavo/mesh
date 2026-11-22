@@ -70,3 +70,21 @@ an explicit indirect requirement. The sorted `go list -mod=readonly -deps
 ./cmd/mesh` comparison showed no package changes. M1 tests the wire packages
 directly. The SDK dependency and both wire packages are absent from the
 production command graph until the appropriate consumers land.
+
+## Hosted direct-connect benchmark (M8)
+
+Measured with matched `-tags mesh_integration` builds on `linux/amd64` (`go1.27.4`)
+against a compiled Go stateless `2026-07-28` stdio fixture (`echo` and 2 MiB `big`
+tool calls, exact payload verified on every sample, isolated loopback daemon and
+separate client device identity). Full raw samples are kept under
+`.internal/bench-results/mcp-m8/`.
+
+| Mode | Cold start p50 / p95 | Warm call p50 / p95 | 2 MiB throughput | Processes | Frontend / Daemon RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct local stdio | 1.11 / 1.26 ms | 0.01 / 0.02 ms | 409.4 MiB/s | 1 | 19.4 MiB / — |
+| Hosted (`mesh mcp connect`, local Unix) | 75.04 / 121.55 ms | 0.80 / 1.07 ms | 32.6 MiB/s | 4 | 58.9 / 75.8 MiB |
+| Hosted (`mesh mcp connect`, remote mTLS WS) | 153.64 / 228.71 ms | 2.06 / 2.77 ms | 38.4 MiB/s | 4 | 60.9 / 70.9 MiB |
+
+Warm hosted round-trip overhead is under 1 ms over local Unix and ~2 ms over
+authenticated pinned mTLS WebSocket, with sub-second cold start including on-demand
+worker launch and `server/discover` readiness probing.

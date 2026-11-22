@@ -100,6 +100,8 @@ func TestIdentityArgumentsPreserveOptionParsing(t *testing.T) {
 		{name: "unknown long", args: []string{id, "--typo"}, wantError: "unknown flag: --typo"},
 		{name: "unknown short", args: []string{id, "-z"}, wantError: "unknown shorthand flag: 'z'"},
 		{name: "malformed id", args: []string{"-not-a-key"}, wantError: "unknown shorthand flag: 'n'"},
+		{name: "malformed qualified id", args: []string{"-not-a-key/svc"}, wantError: "unknown shorthand flag: 'n'"},
+		{name: "qualified id", args: []string{id + "/repo-tools", "-r"}, want: []string{id + "/repo-tools"}, resume: true},
 		{name: "noncanonical id", args: []string{id[:42] + "V"}, wantError: "unknown shorthand flag: 'k'"},
 		{name: "help", args: []string{id, "--help"}},
 	}

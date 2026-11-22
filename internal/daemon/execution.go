@@ -60,7 +60,7 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 	}
 	if request.Type == protocol.TypeExecutionRequest {
 		r, err := l.lookupExecution(ctx, journal, key)
-		if r.Binding.Mode() == execution.KindLine {
+		if r.Binding.Mode() == execution.KindLine || r.Key.Class == execution.InternalServiceClass {
 			return executionResponse(request, execution.Receipt{}, execution.ErrNotFound)
 		}
 		return executionResponse(request, r, err)
@@ -163,7 +163,7 @@ func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.
 		return key, err
 	}
 	if local, _ := ctx.Value(localClientKey{}).(bool); local {
-		key.Class = "local-account"
+		key.Class = executionLocalAccountClass
 		key.Principal = "daemon-account"
 		return key, executionBoundaryError("execution.go executionKey", key.Validate())
 	}
@@ -171,7 +171,7 @@ func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.
 	if !ok || peer.Identity == "" {
 		return key, fmt.Errorf("execution: trusted connection required")
 	}
-	key.Class = "device"
+	key.Class = executionDeviceClass
 	key.Principal = peer.Identity
 	return key, executionBoundaryError("execution.go executionKey", key.Validate())
 }
@@ -345,8 +345,21 @@ func wireExecutionStreams(streams []execution.StreamResult) []protocol.Execution
 
 // The relay carries the grant of the requesting connection until the frame
 // leaves its queue. This also covers partial receipts in error replies.
-func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, request protocol.Control) error {
-	reply, _, err := s.lifecycle.HandleControl(ctx, request)
+// executionRequestContext ends an output read when its client disconnects. A
+// read may wait up to a minute for a busy stream, and on a local socket the
+// client loop's context lives as long as the daemon, so a reader that left
+// would otherwise keep waiting and announced until its timer ran out.
+func executionRequestContext(ctx context.Context, lookahead *frameLookahead, request protocol.Control) (context.Context, context.CancelFunc) {
+	if request.Type != protocol.TypeExecutionLogs || lookahead == nil {
+		return ctx, func() {}
+	}
+	return lookahead.watch(ctx)
+}
+
+func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {
+	requestCtx, cancel := executionRequestContext(ctx, lookahead, request)
+	reply, _, err := s.lifecycle.HandleControl(requestCtx, request)
+	cancel()
 	if err != nil {
 		reply = clientRequestError(request, err)
 		decorateApplicationError(&reply, request, err)

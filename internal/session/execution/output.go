@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // Output retains confirmations only for this reader lifetime and anchored file identities.
@@ -65,8 +67,71 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	defer s.leave()
 	return s.readPage(ctx, value, size)
 }
+
+// Tail reads up to size bytes from the retained end of stream directly, so
+// small limits always return the newest captured bytes rather than paging from
+// the oldest retained offset.
+func (o *Output) Tail(ctx context.Context, b Binding, stream string, size int) ([]byte, error) {
+	size, err := validatePageSize(size)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(b.Streams(), stream) {
+		return nil, fmt.Errorf("execution: stream unavailable for this kind")
+	}
+	s, err := o.stream(b, stream)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.enter(ctx); err != nil {
+		return nil, err
+	}
+	defer s.leave()
+	return s.readTail(ctx, size)
+}
+
+func (s *streamStore) readTail(ctx context.Context, size int) ([]byte, error) {
+	gate, err := s.readerFence(ctx, unix.LOCK_SH)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = gate.Close() }()
+	m, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	if s.binding.Mode() != KindPTY {
+		identity, err := s.confirmManifest(s.path("manifest.json"))
+		if err != nil {
+			return nil, err
+		}
+		s.confirmed[s.path("manifest.json")] = identity
+	}
+	if m.Expired || m.End <= m.Earliest {
+		return nil, nil
+	}
+	start := m.Earliest
+	limit := uint64(size) //nolint:gosec // validatePageSize bounds size to [1, MaxPage]
+	if span := m.End - m.Earliest; span > limit {
+		start = m.End - limit
+	}
+	tailLen := int(m.End - start) //nolint:gosec // bounded by limit <= MaxPage
+	out := make([]byte, 0, tailLen)
+	for _, seg := range m.Segments {
+		if seg.Start+uint64(seg.Size) <= start || seg.Start >= m.End { //nolint:gosec // segment size is non-negative
+			continue
+		}
+		if err := s.copyPageSegment(seg, start, m.End, &out); err != nil {
+			return nil, err
+		}
+	}
+	if len(out) != tailLen {
+		return nil, fmt.Errorf("execution: incomplete capture tail")
+	}
+	return out, nil
+}
 func (s *streamStore) readPage(ctx context.Context, value string, size int) (Page, error) {
-	gate, err := s.files.lockShared(ctx, s.path("stream.lock"))
+	gate, err := s.readerFence(ctx, unix.LOCK_SH)
 	if err != nil {
 		return Page{}, err
 	}
@@ -83,7 +148,7 @@ func (s *streamStore) readPage(ctx context.Context, value string, size int) (Pag
 	if err != nil {
 		return Page{}, err
 	}
-	gate, err = s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err = s.readerFence(ctx, unix.LOCK_EX)
 	if err != nil {
 		return Page{}, err
 	}
@@ -165,7 +230,7 @@ func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamRes
 		return err
 	}
 	defer s.leave()
-	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err := s.readerFence(ctx, unix.LOCK_EX)
 	if err != nil {
 		return err
 	}

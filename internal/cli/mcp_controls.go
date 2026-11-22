@@ -19,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -72,6 +73,7 @@ func hostCapabilitiesFromInfo(info protocol.HostInfo) *agentapi.HostCapabilities
 		ExecutionPipe:    info.ExecutionPipeSupported,
 		ExecutionContext: info.ExecutionContextSupported,
 		Files:            info.FilesSupported,
+		MCPHosting:       info.MCPHostingSupported,
 	}
 }
 
@@ -378,6 +380,7 @@ func (c *mcpControls) ListServices(ctx context.Context, req mcpnative.ListServic
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
+	envelope = c.withHostedServices(ctx, hosts, envelope, req.Timeout)
 	return mcpnative.CallOutcome{Envelope: envelope, Target: target, IsError: envelope.Status == agentapi.StatusError}, nil
 }
 
@@ -413,6 +416,9 @@ func (c *mcpControls) InspectService(ctx context.Context, req mcpnative.InspectS
 				Target:   target,
 			}, nil
 		}
+	}
+	if out, ok := c.inspectHosted(ctx, host, req.Name, req.Timeout, target); ok {
+		return out, nil
 	}
 	return failOutcome("services.inspect", target, agentapi.Fail(agentapi.ServiceNotFound, "services.inspect", req.Name, fmt.Sprintf("No service named %q on host %s.", req.Name, host.ID)).Err), nil
 }
@@ -568,12 +574,36 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 		MaxBytes:  req.MaxBytes,
 	}
 	c.attachCaller(&control, req.Context)
-	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
+	sent, response, info, err := c.exchangeOutputRead(callCtx, host, control)
 	target := c.targetMeta(host, info)
 	if err != nil {
-		return failOutcome("sessions.logs", target, agentError(err, "sessions.logs", host.ID, agentapi.HostUnreachable)), nil
+		return failOutcome("sessions.logs", target, outputReadError(err, host.ID)), nil
 	}
-	return c.jobOutputOutcome(control, response, host.ID, target)
+	return c.jobOutputOutcome(sent, response, host.ID, target)
+}
+
+// exchangeOutputRead sends one output read on a long-stream slot. A read can
+// wait on a busy stream for its whole deadline, so it must not hold one of the
+// short-control slots that signal and cancel need. The host's wait is what
+// remains of the deadline when the request leaves, less the reply margin.
+func (c *mcpControls) exchangeOutputRead(ctx context.Context, host HostRecord, control protocol.Control) (protocol.Control, protocol.Control, protocol.HostInfo, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return protocol.Control{}, protocol.Control{}, protocol.HostInfo{}, errors.New("output read requires a deadline")
+	}
+	sent := control
+	response, info, err := c.pool.ExchangeStreamBudgeted(ctx, host, deadline, func(timeoutMS int) protocol.Control {
+		sent.TimeoutMillis = min(protocol.MaxExecutionWaitMillis, max(1, timeoutMS-executionReadMarginMillis))
+		return sent
+	})
+	return sent, response, info, err
+}
+
+func outputReadError(err error, hostID string) agentapi.Error {
+	if errors.Is(err, errWaitBudgetExpired) {
+		return agentapi.Fail(agentapi.StateUnavailable, "sessions.logs", hostID, "No connection to the host was free before the read's deadline.").Err
+	}
+	return agentError(err, "sessions.logs", hostID, agentapi.HostUnreachable)
 }
 
 func (c *mcpControls) jobOutputOutcome(control, response protocol.Control, hostID string, target *mcpnative.TargetMeta) (mcpnative.CallOutcome, error) {
@@ -702,6 +732,9 @@ func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionRecei
 }
 
 func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputRequest) (mcpnative.CallOutcome, error) {
+	if c.caller == "" && req.Kind == execution.KindPTY {
+		return c.identityRequiredOutcome(agentSessionInput, req.Job.HostID), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveExactHostID(req.Job.HostID)
@@ -709,13 +742,14 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 		return mcpnative.CallOutcome{}, err
 	}
 	control := protocol.Control{
-		Type:        protocol.TypeExecutionInput,
-		SessionID:   req.Job.SessionID,
-		Instance:    req.Job.Instance,
-		WriteKey:    req.WriteKey,
-		InputOffset: req.Offset,
-		InputBytes:  req.Data,
-		InputEOF:    req.EOF,
+		Type:          protocol.TypeExecutionInput,
+		SessionID:     req.Job.SessionID,
+		Instance:      req.Job.Instance,
+		WriteKey:      req.WriteKey,
+		InputOffset:   req.Offset,
+		InputBytes:    req.Data,
+		InputEOF:      req.EOF,
+		ExecutionKind: req.Kind,
 	}
 	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
@@ -947,13 +981,13 @@ func (c *mcpControls) loadSessions(ctx context.Context, host HostRecord, operati
 		if err != nil {
 			return agentSessionSnapshot{}, err
 		}
-		return agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}, nil
+		return agentSessionSnapshot{rows: liveAgentSessionRows(localPersonSessions(rows)), freshness: agentapi.FreshnessLive}, nil
 	}
 	return c.app.loadAgentRemoteSessionsBy(ctx, host, operation, c.listRemoteSessions)
 }
 
 func (c *mcpControls) listRemoteSessions(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{Type: protocol.TypeList, Lean: true}, true)
+	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{Type: protocol.TypeList, Lean: true, HumanSessionOnly: true}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -971,10 +1005,13 @@ func (c *mcpControls) listRemoteSessions(ctx context.Context, host HostRecord) (
 
 func (c *mcpControls) inspectSession(ctx context.Context, host HostRecord, id string, cols, rows int) (SessionInspection, error) {
 	if host.local {
+		if !localPersonSession(id) {
+			return SessionInspection{}, agentapi.Fail(agentapi.SessionNotFound, agentSessionsInspect, id, "No such session on this host.")
+		}
 		return inspectAgentLocalSession(ctx, host, id, cols, rows)
 	}
 	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{
-		Type: protocol.TypeInspect, SessionID: id, PreviewCols: cols, PreviewRows: rows,
+		Type: protocol.TypeInspect, SessionID: id, PreviewCols: cols, PreviewRows: rows, HumanSessionOnly: true,
 	}, true)
 	if err != nil {
 		return SessionInspection{}, err

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
@@ -18,6 +19,8 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if err := validateRequestID(req); err != nil {
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
+	ctx, cancel := executionReadWait(ctx, req)
+	defer cancel()
 	if _, err := l.executionKey(ctx, "binding-admission"); err != nil {
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
@@ -32,7 +35,14 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if b.Mode() == execution.KindLine {
 		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
 	}
+	if peeked, _ := journal.Peek(ctx, b); peeked.Key.Class == execution.InternalServiceClass {
+		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
+	}
 	if err := l.authorizeBoundExecution(ctx, req, journal, b); err != nil {
+		if journalBusy(err) {
+			// A typed execution failure carries state.unavailable, which callers retry.
+			return executionResponse(req, execution.Receipt{}, executionBoundaryError("execution control", err))
+		}
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	r, err := journal.Exact(admittedContext(ctx), b)
@@ -58,10 +68,22 @@ func (l *lifecycle) authorizeBoundExecution(ctx context.Context, req protocol.Co
 	if r.Key.Host != "" {
 		return authorizeExecutionOwner(ctx, req, r.Key)
 	}
+	// A journal lock that timed out says nothing about ownership. Reporting it
+	// as a denial told the job's own owner, under load, that it no longer owned
+	// its job, with no hint to retry.
+	if journalBusy(err) {
+		return executionBoundaryError("authorize bound execution", err)
+	}
 	if req.Caller != "" || req.ExecutionContext != nil {
 		return errors.Join(errCallerDenied, err)
 	}
 	return nil
+}
+
+// journalBusy reports a journal read that ran out of time waiting for its
+// lock, as opposed to a receipt that is missing or unreadable.
+func journalBusy(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {
@@ -69,6 +91,10 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 	switch req.Type {
 	case protocol.TypeExecutionInput:
 		return l.executionInput(ctx, req, r, response)
+	case protocol.TypeExecutionResize:
+		return l.executionResize(ctx, req, r, response)
+	case protocol.TypeExecutionScreen:
+		return l.executionScreen(ctx, req, r, response)
 	case protocol.TypeExecutionInspect:
 		if r.Phase == "uncertain" {
 			return response, execution.ErrUnknown
@@ -136,24 +162,46 @@ func (l *lifecycle) executionLogPage(ctx context.Context, req protocol.Control, 
 	return execution.Page{}, execution.ErrResultExpired
 }
 
+// executionReadWait gives an output read its caller's remaining wait, from
+// before the first output-stream fence: a result that just appeared is
+// confirmed under the same stream lock while the receipt is refreshed. A busy
+// stream then holds the read up to that budget, not the short default lock
+// wait that answered a 30 s request with a failure after about 2 s. The
+// protocol boundary already limits the value to 1 through 60000.
+func executionReadWait(ctx context.Context, req protocol.Control) (context.Context, context.CancelFunc) {
+	if req.Type != protocol.TypeExecutionLogs || req.TimeoutMillis == 0 {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
+	return execution.WithCallerWait(ctx), cancel
+}
+
 func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {
 	if req.TimeoutMillis < 1 || req.TimeoutMillis > 60000 {
 		return executionResponse(req, r, fmt.Errorf("execution: invalid wait deadline"))
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
 	defer cancel()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	// A short command finishes within milliseconds, so the first checks come
+	// quickly and back off to the steady rate a long command needs.
+	interval, started := executionWaitFirstPoll, time.Now()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		response, err := l.executionWaitResult(ctx, req, j, r)
 		if err != nil || response.ExecutionWait == executionWaitCompleted {
 			return response, executionBoundaryError("execution control", err)
 		}
+		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			response.ExecutionWait = "timed_out"
 			return response, nil
-		case <-ticker.C:
+		case <-timer.C:
+		}
+		interval = min(interval*2, executionWaitPollCap)
+		if time.Since(started) < executionWaitFastWindow {
+			interval = min(interval, executionWaitFastCap)
 		}
 	}
 }
@@ -268,9 +316,52 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 const executionTerminalPhase = "terminal"
 const executionWaitCompleted = "completed"
 
-func (l *lifecycle) pipeSession(id string) bool {
+const (
+	executionWaitFirstPoll = 2 * time.Millisecond
+	executionWaitPollCap   = 100 * time.Millisecond
+	// A check of a pending job reads one missing file, so the first second
+	// polls often enough that a command finishing then is reported promptly.
+	executionWaitFastCap    = 10 * time.Millisecond
+	executionWaitFastWindow = time.Second
+)
+
+// privateSession reports a worker whose output belongs to its caller or to
+// Mesh itself, which public-session routes such as scoped output and
+// recovery never serve: pipe and framed workers, managed service and app
+// workers, keyed terminal jobs owned by an application or an internal
+// service, and any session whose ownership evidence cannot be read. Only a
+// person's session and a terminal job proven to be account- or device-owned
+// stay public.
+func (l *lifecycle) privateSession(ctx context.Context, id string) bool {
 	if !isCanonicalSessionID(id) {
 		return false
 	}
-	return worker.ReservedPurpose(filepath.Join(l.sessionsDir, id)).IsPipe()
+	dir := filepath.Join(l.sessionsDir, id)
+	if ref, ok := worker.ReservedAllocation(dir); ok && ref.Purpose == session.Execution {
+		return !l.accountOwnedExecution(ctx, ref)
+	}
+	return !worker.PersonSession(dir)
 }
+
+// accountOwnedExecution reads the owner of a keyed terminal job. Only jobs
+// keyed by the daemon account or a device stay public sessions.
+func (l *lifecycle) accountOwnedExecution(ctx context.Context, ref session.Reservation) bool {
+	journal, err := l.executionJournal()
+	if err != nil {
+		return false
+	}
+	b, err := l.executionOutput.Binding(ref.ID, ref.Instance, string(l.host.ID))
+	if err != nil {
+		return false
+	}
+	r, err := journal.Peek(ctx, b)
+	if err != nil {
+		return false
+	}
+	return r.Key.Class == executionDeviceClass || r.Key.Class == executionLocalAccountClass
+}
+
+const (
+	executionDeviceClass       = "device"
+	executionLocalAccountClass = "local-account"
+)

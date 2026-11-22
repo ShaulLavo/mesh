@@ -17,6 +17,7 @@ import (
 	"github.com/shaul/mesh/internal/mcphost/mcpfixture"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/release"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -29,6 +30,9 @@ func runNativePipeDaemon(role string, args []string) error {
 	}
 	if len(args) != 0 && args[0] == mcpFixtureRole {
 		return executionBoundaryError("run MCP fixture", mcpfixture.Run(os.Stdin, os.Stdout, os.Stderr))
+	}
+	if len(args) != 0 && args[0] == mcpHTTPFixtureRole {
+		return executionBoundaryError("run MCP HTTP fixture", runMCPHTTPFixture(args[1:]))
 	}
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
 }
@@ -48,11 +52,13 @@ func runNativePipeWorker(args []string) error {
 	options.StringVar(&b.LaunchDigest, "launch-digest", "", "")
 	options.StringVar(&b.Kind, "execution-kind", "", "")
 	options.StringVar(&b.Stdin, "execution-stdin", "", "")
-	var purpose string
+	var purpose, imageHint string
 	options.StringVar(&purpose, "purpose", "", "")
+	options.StringVar(&imageHint, "image-hint", "", "")
 	if err := options.Parse(args); err != nil {
 		return fmt.Errorf("parse fixture worker: %w", err)
 	}
+	release.AdoptDigestHint(imageHint)
 	b.Reservation.ID = cfg.ID
 	b.Reservation.Purpose = execution.PurposeForKind(b.Kind)
 	if string(b.Reservation.Purpose) != purpose {

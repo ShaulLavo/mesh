@@ -188,10 +188,10 @@ func TestLineDuplexGapFencesInputBeforeFaultDelivery(t *testing.T) {
 	if _, err := reader.ReadFrame(); err != nil {
 		t.Fatal(err)
 	}
-	w.pipe.lines.offer([]byte("first\n"))
+	w.pipe.lines.offerFrame(lineFrame{data: []byte("first\n")})
 	awaitPipeChannel(t, slow.first)
 	for range lineOutputFrames + 1 {
-		w.pipe.lines.offer([]byte("past reader\n"))
+		w.pipe.lines.offerFrame(lineFrame{data: []byte("past reader\n")})
 	}
 	if f, err := reader.ReadFrame(); err != nil || f.Seq != 0 {
 		t.Fatalf("first held frame: %+v %v", f, err)

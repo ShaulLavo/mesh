@@ -1,6 +1,7 @@
 package mcphost
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -8,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"sync"
@@ -47,6 +50,23 @@ type LaunchSpec struct {
 	Argv []string
 	Cwd  string
 	Env  []string
+	// PlainPipe runs the process on a plain pipe worker (stdin closed,
+	// stdout and stderr captured) instead of the MCP line worker.
+	PlainPipe bool
+}
+
+// WorkerWaiter is optionally implemented by a Launcher to signal when a
+// managed worker exits without polling.
+type WorkerWaiter interface {
+	Wait(ctx context.Context, ref WorkerRef) error
+}
+
+// ManagedHTTPGuard verifies loopback port availability before spawn and proves
+// listener ownership for the exact reserved worker before any HTTP request or
+// credential header is written.
+type ManagedHTTPGuard interface {
+	CheckPortFree(ctx context.Context, targets []netip.AddrPort) error
+	VerifyManagedDial(ctx context.Context, ref WorkerRef, target netip.AddrPort, dial func() (net.Conn, error)) (net.Conn, error)
 }
 
 // Launcher owns worker processes for the supervisor. The daemon implements it
@@ -68,8 +88,9 @@ var (
 	ErrDenied          = errors.New("mcp instance belongs to another caller")
 	ErrLimit           = errors.New("mcp host limit reached")
 	ErrConflict        = errors.New("mcp service changed")
-	// ErrManagedHTTPUnsupported refuses --run HTTP definitions in this release.
-	ErrManagedHTTPUnsupported = errors.New("Mesh-managed HTTP server processes (--run) are not supported yet; start the server yourself and publish its --url")
+	// ErrNotOwned reports a process lifecycle operation against an external
+	// HTTP server for which Mesh owns no process.
+	ErrNotOwned = errors.New("external HTTP service has no Mesh-managed process")
 )
 
 const (
@@ -89,6 +110,9 @@ type Config struct {
 	Store    Store
 	Launcher Launcher
 	Now      func() time.Time
+	// HostID is the owning host's canonical Mesh ID, used to validate mi1
+	// instance handles on dispatch and management controls.
+	HostID string
 	// GrantCurrent reports whether grant is still the account's current
 	// grant incarnation. Leases, continuations and isolated instances of a
 	// retired grant are retired, even if the device was approved again.
@@ -102,6 +126,9 @@ type Config struct {
 	// SweepInterval is how often leases and retired grants are swept; zero
 	// means 30 seconds.
 	SweepInterval time.Duration
+	// ListingChanged receives each service's new listing revision, for the
+	// mcp topic of state.watch.
+	ListingChanged func(ListingRevision)
 }
 
 type Supervisor struct {
@@ -115,20 +142,37 @@ type Supervisor struct {
 	services  map[string]Definition
 	byName    map[string]string
 	instances map[string]*instance
+	// endpoints maps each claimed managed-HTTP loopback target to the instance
+	// ID that currently owns, starts, drains or has a pending stop on it.
+	endpoints map[netip.AddrPort]string
 
 	tasks   sync.Mutex
 	closing bool
 }
 
+type drainingGen struct {
+	gen  *generation
+	done chan struct{}
+	err  error
+}
+
+type discoverySnapshot struct {
+	serverInfo   json.RawMessage
+	capabilities json.RawMessage
+}
+
 type instance struct {
 	persisting sync.Mutex
 
-	rec      InstanceRecord
-	current  *generation
-	starting chan struct{}
-	idle     *time.Timer
-	retry    *time.Timer
-	backoff  time.Duration
+	rec             InstanceRecord
+	current         *generation
+	starting        chan struct{}
+	draining        []*drainingGen
+	idle            *time.Timer
+	retry           *time.Timer
+	backoff         time.Duration
+	lastProbeState  string
+	lastProbeReason string
 	// stops counts explicit stops, so callers waiting across one give up.
 	stops int
 }
@@ -140,12 +184,28 @@ type generation struct {
 	upstream Upstream
 	// tools holds the compiled x-mcp-header rules of an HTTP upstream's
 	// current tools/list, read by the H5 client for every tools/call.
-	tools      atomic.Pointer[ToolHeaders]
-	serverInfo json.RawMessage
-	active     int
-	requests   int
-	listens    int
-	draining   bool
+	tools     atomic.Pointer[ToolHeaders]
+	discovery atomic.Pointer[discoverySnapshot]
+	active    int
+	requests  int
+	listens   int
+	draining  bool
+	stopDrain func(context.Context)
+}
+
+func (g *generation) setDiscovery(serverInfo, capabilities json.RawMessage) {
+	g.discovery.Store(&discoverySnapshot{
+		serverInfo:   bytes.Clone(serverInfo),
+		capabilities: bytes.Clone(capabilities),
+	})
+}
+
+func (g *generation) discoveryInfo() (json.RawMessage, json.RawMessage) {
+	snap := g.discovery.Load()
+	if snap == nil {
+		return nil, nil
+	}
+	return snap.serverInfo, snap.capabilities
 }
 
 func NewSupervisor(cfg Config) (*Supervisor, error) {
@@ -162,7 +222,15 @@ func NewSupervisor(cfg Config) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Supervisor{cfg: cfg, router: router, services: map[string]Definition{}, byName: map[string]string{}, instances: map[string]*instance{}}, nil
+	router.listings.notify = cfg.ListingChanged
+	return &Supervisor{
+		cfg:       cfg,
+		router:    router,
+		services:  map[string]Definition{},
+		byName:    map[string]string{},
+		instances: map[string]*instance{},
+		endpoints: map[netip.AddrPort]string{},
+	}, nil
 }
 
 // Start loads the store, adopts surviving workers by exact reservation and
@@ -178,9 +246,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		s.services[d.ID], s.byName[d.Name] = d, d.ID
 	}
 	for _, r := range records {
-		if _, ok := s.services[r.ServiceID]; ok {
-			s.instances[r.ID] = &instance{rec: r}
-		}
+		s.loadInstanceLocked(r)
 	}
 	adopt := slices.Collect(maps.Values(s.instances))
 	s.mu.Unlock()
@@ -198,6 +264,22 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	s.startKept()
 	s.detach(s.sweepLoop)
 	return nil
+}
+
+func (s *Supervisor) loadInstanceLocked(r InstanceRecord) {
+	d, ok := s.services[r.ServiceID]
+	if !ok {
+		return
+	}
+	inst := &instance{rec: r}
+	s.instances[r.ID] = inst
+	// Pre-claim managed HTTP endpoints for instances that may have a live or
+	// pending-stop worker until recovery settles them.
+	if d.Owned() && d.Transport == TransportHTTP && (r.Generation > 0 || r.StopPending != nil) {
+		if ep, err := parseHTTPEndpoint(d.URL); err == nil {
+			_ = s.claimEndpointsLocked(inst.rec.ID, ep.targets)
+		}
+	}
 }
 
 // Close stops supervision. Workers keep running for the next daemon to adopt.
@@ -235,6 +317,7 @@ func (s *Supervisor) finishStart(inst *instance) {
 	defer s.mu.Unlock()
 	close(inst.starting)
 	inst.starting = nil
+	s.maybeReleaseEndpointsLocked(inst)
 }
 
 func stopTimer(t *time.Timer) {
@@ -307,6 +390,7 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 	if d.Lifecycle == LifecycleKept && !d.Disabled {
 		s.detach(func(ctx context.Context) { s.ensureKept(ctx, d.ID) })
 	}
+	s.router.listings.published(d)
 	return d, nil
 }
 
@@ -318,11 +402,6 @@ func publishable(d Definition) (Definition, error) {
 	}
 	if d.Transport == TransportHTTP && newHTTPUpstream == nil {
 		return d, fmt.Errorf("service %s: %w", d.Name, ErrHTTPUnavailable)
-	}
-	if len(d.RunArgv) > 0 {
-		// The managed process's stdout is not MCP framing, so it needs a
-		// plain pipe worker rather than the line worker stdio servers use.
-		return d, fmt.Errorf("service %s: %w", d.Name, ErrManagedHTTPUnsupported)
 	}
 	if d.Lifecycle == LifecycleKept && d.InstancePolicy != PolicyShared {
 		return d, invalid("a kept service has no caller to own an isolated instance; use --shared")
@@ -352,18 +431,69 @@ func (s *Supervisor) retireRevisionLocked(d Definition) {
 			continue
 		}
 		inst.current = nil
-		s.drainLocked(gen)
+		s.drainLocked(inst, gen)
 	}
 }
 
-func (s *Supervisor) drainLocked(gen *generation) {
+func (s *Supervisor) drainLocked(inst *instance, gen *generation) {
 	gen.draining = true
-	stop := func(ctx context.Context) { s.stopGeneration(ctx, gen) }
+	drain := &drainingGen{gen: gen, done: make(chan struct{})}
+	inst.draining = append(inst.draining, drain)
+	var once sync.Once
+	stop := func(ctx context.Context) {
+		once.Do(func() {
+			defer close(drain.done)
+			err := s.stopGeneration(ctx, gen)
+			s.mu.Lock()
+			drain.err = err
+			if err == nil {
+				inst.draining = slices.DeleteFunc(inst.draining, func(d *drainingGen) bool { return d == drain })
+				s.maybeReleaseEndpointsLocked(inst)
+			} else if gen.ref.SessionID != "" {
+				ref := gen.ref
+				inst.rec.StopPending = &ref
+				inst.rec.State = StateUncertain
+				inst.rec.Reason = "previous worker termination is unresolved: " + err.Error()
+			}
+			s.mu.Unlock()
+			if err != nil {
+				_ = s.persist(ctx, inst)
+			}
+		})
+	}
+	gen.stopDrain = stop
 	if gen.active == 0 {
 		s.detach(stop)
 		return
 	}
 	time.AfterFunc(drainGrace, func() { s.detach(stop) })
+}
+
+func (s *Supervisor) claimEndpointsLocked(instID string, targets []netip.AddrPort) error {
+	for _, target := range targets {
+		if owner, taken := s.endpoints[target]; taken && owner != instID {
+			return fmt.Errorf("managed HTTP endpoint %s is already claimed by another instance", target)
+		}
+	}
+	for _, target := range targets {
+		s.endpoints[target] = instID
+	}
+	return nil
+}
+
+func (s *Supervisor) maybeReleaseEndpointsLocked(inst *instance) {
+	if inst.current != nil || inst.starting != nil || len(inst.draining) > 0 || inst.rec.StopPending != nil {
+		return
+	}
+	s.releaseEndpointsLocked(inst.rec.ID)
+}
+
+func (s *Supervisor) releaseEndpointsLocked(instID string) {
+	for target, owner := range s.endpoints {
+		if owner == instID {
+			delete(s.endpoints, target)
+		}
+	}
 }
 
 // detach runs task under the supervisor's lifetime, never a caller's: a
@@ -385,11 +515,11 @@ func (s *Supervisor) detach(task func(context.Context)) bool {
 
 // stopGeneration stops one replaced generation's exact worker. Stopping twice
 // is harmless: the launcher stops by reservation, never by label.
-func (s *Supervisor) stopGeneration(ctx context.Context, gen *generation) {
+func (s *Supervisor) stopGeneration(ctx context.Context, gen *generation) error {
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
 	_ = gen.upstream.Close()
-	_ = s.stopWorker(ctx, gen.ref)
+	return s.stopWorker(ctx, gen.ref)
 }
 
 // stopWorker stops the generation's process, if Mesh owns one.
@@ -434,6 +564,7 @@ func (s *Supervisor) Remove(ctx context.Context, name string) error {
 	for _, inst := range stopping {
 		delete(s.instances, inst.rec.ID)
 	}
+	s.router.listings.removed(d)
 	return nil
 }
 

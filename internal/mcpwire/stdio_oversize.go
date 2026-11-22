@@ -3,7 +3,7 @@ package mcpwire
 import (
 	"bufio"
 	"bytes"
-	"encoding/json/jsontext"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,34 +26,49 @@ type OversizedStdioRequest struct {
 func (*OversizedStdioRequest) Error() string { return ErrTooLarge.Error() }
 func (*OversizedStdioRequest) Unwrap() error { return ErrTooLarge }
 
+// DrainOversizedReply drains an oversized stdio reply line through its newline
+// delimiter within MaxStdioDrain and returns its verified JSON-RPC response ID
+// when both framing and envelope attribution remain intact.
+func DrainOversizedReply(r *bufio.Reader, prefix []byte, delimited bool) (ID, error) {
+	tail := &stdioDrain{
+		reader:    r,
+		remaining: MaxMessage + MaxStdioDrain - len(prefix),
+		delimited: delimited,
+	}
+	id := oversizedReplyID(io.MultiReader(bytes.NewReader(prefix), tail))
+	if _, err := io.Copy(io.Discard, tail); err != nil {
+		return ID{}, fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, err)
+	}
+	if !id.Valid() {
+		return ID{}, fmt.Errorf("%w: oversized stdio reply has no verified response ID: %w", ErrFramingLost, ErrTooLarge)
+	}
+	return id, nil
+}
+
 func (s *StdioReader) rejectOversize(prefix []byte, readErr error, reply bool) error {
 	if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, readErr)
+	}
+	if reply {
+		id, err := DrainOversizedReply(s.r, prefix, readErr == nil)
+		if err != nil {
+			return err
+		}
+		return &OversizedStdioReply{ID: id}
 	}
 	tail := &stdioDrain{
 		reader:    s.r,
 		remaining: MaxMessage + MaxStdioDrain - len(prefix),
 		delimited: readErr == nil,
 	}
-	var id ID
-	if reply {
-		id = oversizedReplyID(io.MultiReader(bytes.NewReader(prefix), tail))
-	} else {
-		id = oversizedRequestID(io.MultiReader(bytes.NewReader(prefix), tail))
-	}
+	id := oversizedRequestID(io.MultiReader(bytes.NewReader(prefix), tail))
 	if _, err := io.Copy(io.Discard, tail); err != nil {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, err)
 	}
-	if !reply {
-		if id.Valid() {
-			return &OversizedStdioRequest{ID: id}
-		}
-		return ErrTooLarge
+	if id.Valid() {
+		return &OversizedStdioRequest{ID: id}
 	}
-	if !id.Valid() {
-		return fmt.Errorf("%w: oversized stdio reply has no verified response ID: %w", ErrFramingLost, ErrTooLarge)
-	}
-	return &OversizedStdioReply{ID: id}
+	return ErrTooLarge
 }
 
 type stdioDrain struct {
@@ -76,7 +91,7 @@ func (d *stdioDrain) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	if _, err := d.reader.Peek(1); err != nil {
-		// The decoder expects EOF after a valid object. EOF from the pipe
+		// The scanner expects EOF after a valid object. EOF from the pipe
 		// cannot stand in for the missing frame delimiter.
 		d.err = fmt.Errorf("stdio drain ended without a delimiter: %w", err)
 		return 0, d.err
@@ -93,41 +108,11 @@ func (d *stdioDrain) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// The JSON decoder skips compound values token by token. The reader budget
-// also bounds buffering of indivisible strings and numbers.
-const maxStdioAttributionToken = MaxMessage + 4096
-
-type attributionReader struct {
-	io.Reader
-	offset int64
-	limit  int64
-}
-
-func (r *attributionReader) Read(p []byte) (int, error) {
-	remaining := r.limit - r.offset
-	if remaining <= 0 {
-		return 0, errors.New("stdio attribution token exceeds the byte limit")
-	}
-	n, err := r.Reader.Read(p[:min(int64(len(p)), remaining)])
-	r.offset += int64(n)
-	if errors.Is(err, io.EOF) {
-		return n, io.EOF
-	}
-	if err != nil {
-		return n, fmt.Errorf("read oversized stdio envelope: %w", err)
-	}
-	return n, nil
-}
-
-type oversizedEnvelope struct {
-	source    *attributionReader
-	decoder   *jsontext.Decoder
-	id        ID
-	version   bool
-	hasResult bool
-	hasMethod bool
-	request   bool
-}
+const (
+	oversizeScanBufSize = 4096
+	maxOversizeKeyBytes = 4096
+	maxOversizeDepth    = 10000
+)
 
 func oversizedReplyID(r io.Reader) ID {
 	return oversizedEnvelopeID(r, false)
@@ -137,110 +122,594 @@ func oversizedRequestID(r io.Reader) ID {
 	return oversizedEnvelopeID(r, true)
 }
 
+// oversizeScanner validates a JSON-RPC envelope directly from a small fixed
+// buffer, stream-discarding skipped scalars (even multi-megabyte strings or
+// numbers) without buffering them in memory.
+type oversizeScanner struct {
+	r         *bufio.Reader
+	request   bool
+	id        ID
+	seenID    bool
+	version   bool
+	hasResult bool
+	hasMethod bool
+	hasParams bool
+}
+
 func oversizedEnvelopeID(r io.Reader, request bool) ID {
-	source := &attributionReader{Reader: r}
-	m := oversizedEnvelope{source: source, decoder: jsontext.NewDecoder(source), request: request}
-	token, err := m.next()
-	if err != nil || token.Kind() != '{' {
+	sc := oversizeScanner{r: bufio.NewReaderSize(r, oversizeScanBufSize), request: request}
+	if !sc.expectByte('{') || !sc.readTopFields() || !sc.version || !sc.seenID {
 		return ID{}
 	}
-	if !m.readFields() || !m.version {
+	if request && !sc.hasMethod {
 		return ID{}
 	}
-	if request && !m.hasMethod {
+	if !request && !sc.hasResult {
 		return ID{}
 	}
-	if !request && !m.hasResult {
+	if !sc.expectEOF() {
 		return ID{}
 	}
-	if _, err := m.next(); !errors.Is(err, io.EOF) {
-		return ID{}
-	}
-	return m.id
+	return sc.id
 }
 
-func (m *oversizedEnvelope) next() (jsontext.Token, error) {
-	m.source.limit = m.decoder.InputOffset() + maxStdioAttributionToken
-	token, err := m.decoder.ReadToken()
-	if errors.Is(err, io.EOF) {
-		return token, io.EOF
+func (s *oversizeScanner) readTopFields() bool {
+	c, ok := s.nextNonSpace()
+	if !ok {
+		return false
 	}
-	if err != nil {
-		return token, fmt.Errorf("read oversized stdio token: %w", err)
+	if c == '}' {
+		return true
 	}
-	return token, nil
-}
-
-func (m *oversizedEnvelope) readFields() bool {
+	if err := s.r.UnreadByte(); err != nil {
+		return false
+	}
 	for {
-		token, err := m.next()
-		if err != nil {
+		name, known, ok := s.readTopKey()
+		if !ok || !s.expectByte(':') {
 			return false
 		}
-		if token.Kind() == '}' {
+		if !s.readTopField(name, known) {
+			return false
+		}
+		c, ok := s.nextNonSpace()
+		if !ok {
+			return false
+		}
+		if c == '}' {
 			return true
 		}
-		if token.Kind() != '"' || !m.readField(token.String()) {
+		if c != ',' {
 			return false
 		}
 	}
 }
 
-func (m *oversizedEnvelope) readField(name string) bool {
+func (s *oversizeScanner) readTopKey() (string, bool, bool) {
+	c, ok := s.nextNonSpace()
+	if !ok || c != '"' {
+		return "", false, false
+	}
+	raw, truncated, ok := s.scanString(maxOversizeKeyBytes)
+	if !ok {
+		return "", false, false
+	}
+	if truncated {
+		return "", false, true
+	}
+	var name string
+	if json.Unmarshal(raw, &name) != nil {
+		return "", false, false
+	}
+	return name, true, true
+}
+
+func (s *oversizeScanner) readTopField(name string, known bool) bool {
+	if !known {
+		return s.skipValue(false)
+	}
 	switch name {
 	case "id":
-		return m.readID()
+		return s.readID()
 	case "jsonrpc":
-		token, err := m.next()
-		m.version = err == nil && token.Kind() == '"' && token.String() == jsonRPCVersion
-		return m.version
+		return s.readVersion()
 	case "method":
-		if !m.request || m.hasMethod {
-			return false
-		}
-		token, err := m.next()
-		m.hasMethod = err == nil && token.Kind() == '"' && token.String() != ""
-		return m.hasMethod
+		return s.readMethod()
 	case "params":
-		if !m.request {
+		if !s.request || s.hasParams {
 			return false
 		}
-		return m.skipValue(false)
+		s.hasParams = true
+		return s.skipValue(false)
 	case keyResult, "error":
-		if m.request || m.hasResult {
+		if s.request || s.hasResult {
 			return false
 		}
-		m.hasResult = true
-		return m.skipValue(true)
+		s.hasResult = true
+		return s.skipValue(true)
 	default:
-		return m.skipValue(false)
+		return s.skipValue(false)
 	}
 }
 
-func (m *oversizedEnvelope) readID() bool {
-	m.source.limit = m.decoder.InputOffset() + maxStdioAttributionToken
-	kind := m.decoder.PeekKind()
-	if kind != '"' && kind != '0' {
+func (s *oversizeScanner) readVersion() bool {
+	if s.version {
 		return false
 	}
-	raw, err := m.decoder.ReadValue()
-	if err != nil || len(raw) > MaxMessage {
+	c, ok := s.nextNonSpace()
+	if !ok || c != '"' {
 		return false
 	}
-	m.id, _ = ParseID(raw)
-	return m.id.Valid()
+	raw, truncated, ok := s.scanString(64)
+	if !ok || truncated {
+		return false
+	}
+	var v string
+	s.version = json.Unmarshal(raw, &v) == nil && v == jsonRPCVersion
+	return s.version
 }
 
-func (m *oversizedEnvelope) skipValue(objectOnly bool) bool {
-	depth := m.decoder.StackDepth()
-	token, err := m.next()
-	if err != nil || (objectOnly && token.Kind() != '{') {
+func (s *oversizeScanner) readMethod() bool {
+	if !s.request || s.hasMethod {
 		return false
 	}
-	for m.decoder.StackDepth() > depth {
-		if _, err := m.next(); err != nil {
+	c, ok := s.nextNonSpace()
+	if !ok || c != '"' {
+		return false
+	}
+	raw, truncated, ok := s.scanString(maxOversizeKeyBytes)
+	if !ok || truncated {
+		return false
+	}
+	var method string
+	s.hasMethod = json.Unmarshal(raw, &method) == nil && method != ""
+	return s.hasMethod
+}
+
+func (s *oversizeScanner) readID() bool {
+	if s.seenID {
+		return false
+	}
+	c, ok := s.nextNonSpace()
+	if !ok {
+		return false
+	}
+	var raw []byte
+	switch {
+	case c == '"':
+		var truncated bool
+		raw, truncated, ok = s.scanString(MaxMessage)
+		if !ok || truncated {
+			return false
+		}
+	case c == '-' || (c >= '0' && c <= '9'):
+		var truncated bool
+		raw, truncated, ok = s.scanNumber(c, MaxMessage)
+		if !ok || truncated {
+			return false
+		}
+	default:
+		return false
+	}
+	s.id, ok = ParseID(raw)
+	s.seenID = ok && s.id.Valid()
+	return s.seenID
+}
+
+type containerState uint8
+
+const (
+	expectObjKeyOrEnd containerState = iota + 1
+	expectObjColon
+	expectObjValue
+	expectObjCommaOrEnd
+	expectArrValueOrEnd
+	expectArrCommaOrEnd
+)
+
+// skipValue stream-validates one JSON value without buffering skipped scalars
+// or relying on Go call-stack recursion.
+func (s *oversizeScanner) skipValue(objectOnly bool) bool {
+	c, ok := s.nextNonSpace()
+	if !ok {
+		return false
+	}
+	if objectOnly && c != '{' {
+		return false
+	}
+	stack := make([]containerState, 0, 16)
+	if !s.consumeValueStart(c, &stack) {
+		return false
+	}
+	for len(stack) > 0 {
+		top := len(stack) - 1
+		if !s.stepContainer(&stack, top) {
 			return false
 		}
 	}
 	return true
+}
+
+func (s *oversizeScanner) stepContainer(stack *[]containerState, top int) bool {
+	c, ok := s.nextNonSpace()
+	if !ok {
+		return false
+	}
+	switch (*stack)[top] {
+	case expectObjKeyOrEnd, expectObjColon, expectObjValue, expectObjCommaOrEnd:
+		return s.stepObject(stack, top, c)
+	case expectArrValueOrEnd, expectArrCommaOrEnd:
+		return s.stepArray(stack, top, c)
+	default:
+		return false
+	}
+}
+
+func (s *oversizeScanner) stepObject(stack *[]containerState, top int, c byte) bool {
+	switch (*stack)[top] {
+	case expectObjKeyOrEnd:
+		if c == '}' {
+			*stack = (*stack)[:top]
+			return true
+		}
+		if c != '"' || !s.skipStringBody() {
+			return false
+		}
+		(*stack)[top] = expectObjColon
+		return true
+	case expectObjColon:
+		if c != ':' {
+			return false
+		}
+		(*stack)[top] = expectObjValue
+		return true
+	case expectObjValue:
+		(*stack)[top] = expectObjCommaOrEnd
+		return s.consumeValueStart(c, stack)
+	case expectObjCommaOrEnd:
+		if c == '}' {
+			*stack = (*stack)[:top]
+			return true
+		}
+		if c != ',' {
+			return false
+		}
+		next, ok := s.nextNonSpace()
+		if !ok || next != '"' || !s.skipStringBody() {
+			return false
+		}
+		(*stack)[top] = expectObjColon
+		return true
+	case expectArrValueOrEnd, expectArrCommaOrEnd:
+		return false
+	default:
+		return false
+	}
+}
+
+func (s *oversizeScanner) stepArray(stack *[]containerState, top int, c byte) bool {
+	if c == ']' {
+		*stack = (*stack)[:top]
+		return true
+	}
+	if (*stack)[top] == expectArrValueOrEnd {
+		(*stack)[top] = expectArrCommaOrEnd
+		return s.consumeValueStart(c, stack)
+	}
+	if c != ',' {
+		return false
+	}
+	next, ok := s.nextNonSpace()
+	if !ok {
+		return false
+	}
+	return s.consumeValueStart(next, stack)
+}
+
+func (s *oversizeScanner) consumeValueStart(c byte, stack *[]containerState) bool {
+	switch {
+	case c == '{':
+		if len(*stack) >= maxOversizeDepth {
+			return false
+		}
+		*stack = append(*stack, expectObjKeyOrEnd)
+		return true
+	case c == '[':
+		if len(*stack) >= maxOversizeDepth {
+			return false
+		}
+		*stack = append(*stack, expectArrValueOrEnd)
+		return true
+	case c == '"':
+		return s.skipStringBody()
+	case c == '-' || (c >= '0' && c <= '9'):
+		_, _, ok := s.scanNumber(c, 0)
+		return ok
+	case c == 't':
+		return s.expectLiteral("true"[1:])
+	case c == 'f':
+		return s.expectLiteral("false"[1:])
+	case c == 'n':
+		return s.expectLiteral("null"[1:])
+	default:
+		return false
+	}
+}
+
+func (s *oversizeScanner) nextNonSpace() (byte, bool) {
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return 0, false
+		}
+		if !isJSONSpace(c) {
+			return c, true
+		}
+	}
+}
+
+func (s *oversizeScanner) expectByte(want byte) bool {
+	c, ok := s.nextNonSpace()
+	return ok && c == want
+}
+
+func (s *oversizeScanner) expectEOF() bool {
+	for {
+		c, err := s.r.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return true
+		}
+		if err != nil || !isJSONSpace(c) {
+			return false
+		}
+	}
+}
+
+func (s *oversizeScanner) expectLiteral(rest string) bool {
+	for i := range len(rest) {
+		c, err := s.r.ReadByte()
+		if err != nil || c != rest[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// skipStringBody validates a JSON string after its opening '"' in bounded
+// chunks without allocating or accumulating the scalar bytes.
+func (s *oversizeScanner) skipStringBody() bool {
+	_, _, ok := s.scanString(0)
+	return ok
+}
+
+type boundedCapture struct {
+	max       int
+	out       []byte
+	truncated bool
+}
+
+func newBoundedCapture(maxCapture int) boundedCapture {
+	if maxCapture <= 0 {
+		return boundedCapture{}
+	}
+	return boundedCapture{max: maxCapture, out: make([]byte, 0, min(maxCapture, 128))}
+}
+
+func (c *boundedCapture) put(b byte) {
+	if c.max <= 0 || c.truncated {
+		return
+	}
+	if len(c.out) >= c.max {
+		c.out = nil
+		c.truncated = true
+		return
+	}
+	c.out = append(c.out, b)
+}
+
+// scanString validates a JSON string after its opening '"'. When maxCapture > 0
+// it captures the raw JSON token (including quotes) up to maxCapture bytes;
+// if the string exceeds maxCapture, capture stops and truncated is true while
+// the remainder is still strictly validated in O(1) memory.
+func (s *oversizeScanner) scanString(maxCapture int) ([]byte, bool, bool) {
+	capBuf := newBoundedCapture(maxCapture)
+	capBuf.put('"')
+	for {
+		c, err := s.r.ReadByte()
+		if err != nil {
+			return nil, false, false
+		}
+		if c == '"' {
+			capBuf.put('"')
+			return capBuf.out, capBuf.truncated, true
+		}
+		if !s.scanStringChar(c, capBuf.put) {
+			return nil, false, false
+		}
+	}
+}
+
+func (s *oversizeScanner) scanStringChar(c byte, capture func(byte)) bool {
+	if c < 0x20 {
+		return false
+	}
+	if c == '\\' {
+		capture('\\')
+		return s.scanEscape(capture)
+	}
+	if c < 0x80 {
+		capture(c)
+		return true
+	}
+	return s.scanUTF8(c, capture)
+}
+
+func (s *oversizeScanner) scanEscape(capture func(byte)) bool {
+	c, err := s.r.ReadByte()
+	if err != nil {
+		return false
+	}
+	switch c {
+	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+		capture(c)
+		return true
+	case 'u':
+		capture('u')
+		for range 4 {
+			h, err := s.r.ReadByte()
+			if err != nil || !isHexDigit(h) {
+				return false
+			}
+			capture(h)
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *oversizeScanner) scanUTF8(b0 byte, capture func(byte)) bool {
+	capture(b0)
+	var extra int
+	var minNext, maxNext byte = 0x80, 0xBF
+	switch {
+	case b0 >= 0xC2 && b0 <= 0xDF:
+		extra = 1
+	case b0 == 0xE0:
+		extra, minNext = 2, 0xA0
+	case b0 >= 0xE1 && b0 <= 0xEC || b0 >= 0xEE && b0 <= 0xEF:
+		extra = 2
+	case b0 == 0xED:
+		extra, maxNext = 2, 0x9F
+	case b0 == 0xF0:
+		extra, minNext = 3, 0x90
+	case b0 >= 0xF1 && b0 <= 0xF3:
+		extra = 3
+	case b0 == 0xF4:
+		extra, maxNext = 3, 0x8F
+	default:
+		return false
+	}
+	for i := range extra {
+		b, err := s.r.ReadByte()
+		if err != nil {
+			return false
+		}
+		lo, hi := byte(0x80), byte(0xBF)
+		if i == 0 {
+			lo, hi = minNext, maxNext
+		}
+		if b < lo || b > hi {
+			return false
+		}
+		capture(b)
+	}
+	return true
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// scanNumber validates a JSON number starting with first in O(1) memory,
+// capturing up to maxCapture bytes when maxCapture > 0.
+func (s *oversizeScanner) scanNumber(first byte, maxCapture int) ([]byte, bool, bool) {
+	capBuf := newBoundedCapture(maxCapture)
+	if !s.scanIntegerPart(first, capBuf.put) {
+		return nil, false, false
+	}
+	if !s.scanNumberTail(capBuf.put) {
+		return nil, false, false
+	}
+	return capBuf.out, capBuf.truncated, true
+}
+
+func (s *oversizeScanner) scanIntegerPart(first byte, capture func(byte)) bool {
+	c := first
+	capture(c)
+	if c == '-' {
+		var err error
+		c, err = s.r.ReadByte()
+		if err != nil || c < '0' || c > '9' {
+			return false
+		}
+		capture(c)
+	}
+	if c == '0' {
+		return true
+	}
+	return s.scanDigits(capture)
+}
+
+func (s *oversizeScanner) scanNumberTail(capture func(byte)) bool {
+	next, err := s.r.ReadByte()
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	if next == '.' {
+		capture('.')
+		if !s.scanRequiredDigits(capture) {
+			return false
+		}
+		next, err = s.r.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return true
+		}
+		if err != nil {
+			return false
+		}
+	}
+	if next == 'e' || next == 'E' {
+		capture(next)
+		return s.scanExponent(capture)
+	}
+	return s.r.UnreadByte() == nil
+}
+
+func (s *oversizeScanner) scanDigits(capture func(byte)) bool {
+	for {
+		c, err := s.r.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return true
+		}
+		if err != nil {
+			return false
+		}
+		if c < '0' || c > '9' {
+			return s.r.UnreadByte() == nil
+		}
+		capture(c)
+	}
+}
+
+func (s *oversizeScanner) scanRequiredDigits(capture func(byte)) bool {
+	c, err := s.r.ReadByte()
+	if err != nil || c < '0' || c > '9' {
+		return false
+	}
+	capture(c)
+	return s.scanDigits(capture)
+}
+
+func (s *oversizeScanner) scanExponent(capture func(byte)) bool {
+	c, err := s.r.ReadByte()
+	if err != nil {
+		return false
+	}
+	if c == '+' || c == '-' {
+		capture(c)
+		return s.scanRequiredDigits(capture)
+	}
+	if c < '0' || c > '9' {
+		return false
+	}
+	capture(c)
+	return s.scanDigits(capture)
 }

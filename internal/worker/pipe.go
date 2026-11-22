@@ -167,16 +167,17 @@ func (w *Worker) runPipe(attempt *execution.Attempt, mode, sockPath string) (int
 	started = true
 	defer w.abortPipe()
 	p.childStarted()
-	if err := attempt.Started(); err != nil {
-		return 0, fmt.Errorf("record child start: %w", err)
-	}
-	executionBoundary(w.cfg.Dir, "after_spawn")
+	// The start record and the metadata are independent durable writes, so
+	// they share one flush round. publishPipe joins both before anything
+	// becomes visible to the daemon.
+	startRecorded := make(chan error, 1)
+	go func() { startRecorded <- attempt.Started() }()
 	meta := Meta{Build: build, Reservation: w.cfg.Reservation, ID: w.cfg.ID, PID: w.cmd.Process.Pid, Command: w.cfg.Command, Cwd: w.cfg.Cwd, State: StateDetached, CreatedAt: time.Now(), BootID: BootID(), Label: w.cfg.Label, ExecutionKind: mode}
-	return w.serveStartedPipe(attempt, p, readers, sockPath, meta)
+	return w.serveStartedPipe(attempt, p, readers, sockPath, meta, startRecorded)
 }
 
-func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []*pipeReader, sockPath string, meta Meta) (int, error) {
-	ln, err := w.publishPipe(attempt, sockPath, meta)
+func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, readers []*pipeReader, sockPath string, meta Meta, startRecorded <-chan error) (int, error) {
+	ln, err := w.publishPipe(attempt, sockPath, meta, startRecorded)
 	if err != nil {
 		return 0, err
 	}
@@ -204,9 +205,15 @@ func (w *Worker) serveStartedPipe(attempt *execution.Attempt, p *childPipes, rea
 	return w.finishPipe(attempt, readers, p.stdout, lineDone, stopReaders, meta)
 }
 
-func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta Meta) (net.Listener, error) {
-	if err := WriteMeta(w.cfg.Dir, meta); err != nil {
-		return nil, err
+func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta Meta, startRecorded <-chan error) (net.Listener, error) {
+	metaErr := WriteMeta(w.cfg.Dir, meta)
+	// Always receive, so the start record never outlives the attempt it uses.
+	if err := <-startRecorded; err != nil {
+		return nil, fmt.Errorf("record child start: %w", err)
+	}
+	executionBoundary(w.cfg.Dir, "after_spawn")
+	if metaErr != nil {
+		return nil, metaErr
 	}
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
@@ -222,20 +229,52 @@ func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta M
 func (w *Worker) openPipeReaders(p *childPipes) ([]*pipeReader, error) {
 	b := *w.cfg.Execution
 	state := filepath.Dir(filepath.Dir(w.cfg.Dir))
-	readers := make([]*pipeReader, 0, len(b.Streams()))
-	for _, stream := range b.Streams() {
-		capture, err := execution.OpenCapture(state, b, stream)
-		if err != nil {
-			abortPipeCaptures(readers)
-			return nil, workerExecutionError("initialize pipe capture", err)
-		}
+	streams := b.Streams()
+	captures, err := openAll(streams, func(stream string) (*execution.Capture, error) {
+		return execution.OpenCapture(state, b, stream)
+	})
+	if err != nil {
+		return nil, workerExecutionError("initialize pipe capture", err)
+	}
+	readers := make([]*pipeReader, 0, len(streams))
+	for i, stream := range streams {
 		file := p.stderr
 		if stream == execution.StreamStdout {
 			file = p.stdout
 		}
-		readers = append(readers, &pipeReader{file: file, capture: capture, done: make(chan string, 1)})
+		readers = append(readers, &pipeReader{file: file, capture: captures[i], done: make(chan string, 1)})
 	}
 	return readers, nil
+}
+
+// openAll opens one capture per stream together, because each initializes its
+// own durable files and running them side by side pays one flush round instead
+// of one per stream. If any fails, the ones that opened are aborted.
+func openAll[C interface{ Abort() }](streams []string, open func(string) (C, error)) ([]C, error) {
+	opened := make([]C, len(streams))
+	errs := make([]error, len(streams))
+	var group sync.WaitGroup
+	for i, stream := range streams {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			opened[i], errs[i] = open(stream)
+		}()
+	}
+	group.Wait()
+	if err := errors.Join(errs...); err != nil {
+		abortOpened(opened, errs)
+		return nil, err
+	}
+	return opened, nil
+}
+
+func abortOpened[C interface{ Abort() }](opened []C, errs []error) {
+	for i, capture := range opened {
+		if errs[i] == nil {
+			capture.Abort()
+		}
+	}
 }
 
 func abortPipeCaptures(readers []*pipeReader) {
@@ -298,7 +337,7 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []*pipeReader, s
 	}
 	ended := time.Now().UTC()
 	result := execution.Result{Binding: *w.cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: captureComplete}
-	finishPipeCapture(readers, reasons, &result, finalFlushTimeout)
+	finishPipeCaptures(readers, reasons, &result)
 	if err := attempt.Finish(result); err != nil {
 		return code, workerExecutionError("record pipe result", err)
 	}
@@ -310,6 +349,12 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []*pipeReader, s
 		w.flushLineAttachment()
 	}
 	return code, nil
+}
+
+// finishPipeCaptures is the final save of every stream when a pipe job ends.
+// It has its own budget, separate from the attachment flush.
+func finishPipeCaptures(readers []*pipeReader, reasons []string, result *execution.Result) {
+	finishPipeCapture(readers, reasons, result, pipeCaptureFlushBudget)
 }
 
 func finishPipeCapture(readers []*pipeReader, reasons []string, result *execution.Result, budget time.Duration) {
@@ -330,6 +375,14 @@ func finishPipeCapture(readers []*pipeReader, reasons []string, result *executio
 }
 
 const pipeDrainCutoff = "drain_timeout"
+
+// pipeCaptureFlushBudget bounds the final capture commit after the drain. A
+// busy pipe job exits with up to the 1 MiB capture queue still to write, and
+// on a loaded disk (load average 35 on the PC, #318) that commit took longer
+// than the attachment flush budget: the worker then dropped the tail, recorded
+// no capture, and left readers on a stream that never reached EOF. A variable
+// so tests can shorten it.
+var pipeCaptureFlushBudget = 30 * time.Second
 
 // pipeDrainTotal bounds the whole drain, so a descendant that keeps writing
 // cannot hold the worker open. It is longer than the silence window because

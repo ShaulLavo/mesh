@@ -281,7 +281,7 @@ func (f *nativePipeDaemon) instanceID(t *testing.T, credential protocol.CallerCr
 	t.Helper()
 	reply := f.mcpControl(t, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, RequestID: "ls", Caller: credential})
 	var out struct {
-		Services []mcphost.ServiceView `json:"services"`
+		Services []mcphost.CatalogService `json:"services"`
 	}
 	if err := json.Unmarshal(reply.Result, &out); err != nil {
 		t.Fatal(err)
