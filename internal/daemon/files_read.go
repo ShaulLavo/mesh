@@ -18,7 +18,7 @@ import (
 // verifies the file's revision after reading, so a page never mixes bytes from
 // two versions of a file.
 func (c *fileController) read(ctx context.Context, request protocol.FileReadRequest) (protocol.FileReadResult, error) {
-	target, path, err := c.beginFileRequest(request.Target, request.Path)
+	target, path, err := c.beginFileRequest(ctx, request.Target, request.Path)
 	if err != nil {
 		return protocol.FileReadResult{}, err
 	}

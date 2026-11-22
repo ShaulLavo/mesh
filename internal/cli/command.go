@@ -405,7 +405,7 @@ func NewCommand(dependencies Dependencies) *Command {
 	updates := app.updateCommand()
 	updates.AddCommand(app.updateConfigurationCommand())
 	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), updates, app.skillCommand(), app.mcpCommand(), device, versionCommand())...)
-	root.AddCommand(app.fileControlCommand(), app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand(), updateReaderCommand(), sshHelperCommand())
+	root.AddCommand(app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand(), updateReaderCommand(), sshHelperCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
 	protectAgentFlagErrors(root, app.agent)
 	return identityArgumentCommand(root, app.agent)

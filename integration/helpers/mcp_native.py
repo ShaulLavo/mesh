@@ -1,5 +1,6 @@
 """Drive the real mesh mcp stdio server against an isolated second remote daemon."""
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -423,6 +424,184 @@ def exercise_host_mismatch_and_revocation(fixture):
         rev_client.terminate()
 
 
+def tool_data(reply):
+    require("result" in reply, f"tool call failed at the protocol level: {reply}")
+    return reply["result"]["structuredContent"]
+
+
+def require_tool_error(reply, code, context):
+    require("result" in reply and reply["result"]["isError"], f"{context}: expected a tool error, got {reply}")
+    got = reply["result"]["structuredContent"]["errors"][0]["code"]
+    require(got == code, f"{context}: expected {code}, got {got}: {reply}")
+
+
+def exercise_file_tools(fixture):
+    host_id = fixture.remote_id
+    work = fixture.root / "filetools"
+    work.mkdir()
+    client = MCPClient(fixture.binary, fixture.environment)
+    try:
+        hosts = client.call_tool("mesh_hosts_list", {"timeout_ms": 5000})
+        remote = next(h for h in tool_data(hosts)["data"]["hosts"] if h.get("hostId") == host_id)
+        require(remote["capabilities"].get("files") is True, f"files capability missing: {remote}")
+
+        # Create, then read back, with the exact target on every result.
+        path = str(work / "a.txt")
+        created = client.call_tool("mesh_file_write", {"host": host_id, "path": path, "content": "hello\n", "create_only": True})
+        data = tool_data(created)["data"]
+        require(not created["result"]["isError"] and data["created"] and data["size"] == "6", f"create failed: {created}")
+        meta = created["result"]["_meta"]["com.github.shaullavo.mesh/target"]
+        require(meta["hostId"] == host_id and meta["account"], f"write target is not exact: {meta}")
+        digest = hashlib.sha256(b"hello\n").hexdigest()
+        require(data["sha256"] == digest and (work / "a.txt").read_text() == "hello\n", f"write result: {data}")
+
+        read = tool_data(client.call_tool("mesh_file_read", {"host": host_id, "path": path}))["data"]
+        require(read["data"] == "hello\n" and read["encoding"] == "utf-8" and read["eof"] and read["sha256"] == digest and read["target"]["hostId"] == host_id, f"read: {read}")
+
+        # A digest conflict changes nothing, and the right digest replaces atomically.
+        conflict = client.call_tool("mesh_file_write", {"host": host_id, "path": path, "content": "other\n", "expected_sha256": "0" * 64})
+        require_tool_error(conflict, "file.conflict", "wrong digest")
+        require((work / "a.txt").read_text() == "hello\n", "a conflicting write changed the file")
+        replaced = client.call_tool("mesh_file_write", {"host": host_id, "path": path, "content": "hello world\n", "expected_sha256": digest})
+        require(not replaced["result"]["isError"], f"replace failed: {replaced}")
+        again = client.call_tool("mesh_file_write", {"host": host_id, "path": path, "content": "x", "create_only": True})
+        require_tool_error(again, "file.conflict", "create_only on an existing file")
+
+        # Patch: exact edit lands, an ambiguous or absent old_text changes nothing.
+        digest = hashlib.sha256(b"hello world\n").hexdigest()
+        ambiguous = client.call_tool("mesh_file_patch", {"host": host_id, "path": path, "expected_sha256": digest, "edits": [{"old_text": "o", "new_text": "0"}]})
+        require_tool_error(ambiguous, "file.patch_mismatch", "ambiguous patch")
+        patched = client.call_tool("mesh_file_patch", {"host": host_id, "path": path, "expected_sha256": digest, "edits": [{"old_text": "world", "new_text": "mesh"}]})
+        require(not patched["result"]["isError"] and (work / "a.txt").read_text() == "hello mesh\n", f"patch failed: {patched}")
+
+        # Binary content travels as Base64 both ways.
+        blob = bytes([0, 1, 2, 0xFF, 0xFE, 10])
+        binary_path = str(work / "blob.bin")
+        wrote = client.call_tool("mesh_file_write", {"host": host_id, "path": binary_path, "content_base64": base64.b64encode(blob).decode(), "create_only": True})
+        require(not wrote["result"]["isError"], f"binary write failed: {wrote}")
+        got = tool_data(client.call_tool("mesh_file_read", {"host": host_id, "path": binary_path}))["data"]
+        require(got["encoding"] == "base64" and base64.b64decode(got["data"]) == blob, f"binary read: {got}")
+
+        # Payload bounds: a write over 1 MiB is refused before anything is sent.
+        too_big = client.call_tool("mesh_file_write", {"host": host_id, "path": str(work / "big.txt"), "content": "x" * (1 << 20) + "y", "create_only": True})
+        require(too_big.get("error", {}).get("code") == -32602 and not (work / "big.txt").exists(), f"oversize write: {too_big}")
+
+        # A read continues across pages, and a replaced file ends the continuation.
+        large = work / "large.txt"
+        large.write_bytes(b"0123456789abcdef\n" * 160000)
+        first = tool_data(client.call_tool("mesh_file_read", {"host": host_id, "path": str(large), "max_bytes": 1 << 20}))["data"]
+        require(first["nextCursor"] and not first["eof"] and first["end"] == str(1 << 20), f"first page: {first}")
+        second = tool_data(client.call_tool("mesh_file_read", {"host": host_id, "path": str(large), "cursor": first["nextCursor"], "max_bytes": 1 << 20}))["data"]
+        require(second["start"] == first["end"], f"continuation: {second}")
+        replacement = work / "large.new"
+        replacement.write_bytes(large.read_bytes())
+        os.rename(replacement, large)
+        changed = client.call_tool("mesh_file_read", {"host": host_id, "path": str(large), "cursor": second["nextCursor"]})
+        require_tool_error(changed, "file.changed", "continuation after replacement")
+
+        # Symlinks, pipes and sockets are refused, and listing and search work.
+        os.mkfifo(work / "pipe")
+        os.symlink(work / "a.txt", work / "link")
+        for name in ("pipe", "link"):
+            refused = client.call_tool("mesh_file_read", {"host": host_id, "path": str(work / name)})
+            require_tool_error(refused, "file.not_regular", f"read of {name}")
+        listing = tool_data(client.call_tool("mesh_file_list", {"host": host_id, "path": str(work)}))["data"]
+        kinds = {e["name"]: e["kind"] for e in listing["entries"]}
+        require(kinds.get("a.txt") == "file" and kinds.get("link") == "symlink" and kinds.get("pipe") == "other", f"listing: {kinds}")
+        found = tool_data(client.call_tool("mesh_file_search", {"host": host_id, "path": str(work), "pattern": "hello m\\w+"}))["data"]
+        require([m["path"] for m in found["matches"]] == [str(work / "a.txt")] and found["matches"][0]["line"] == 1, f"search: {found}")
+        relative = client.call_tool("mesh_file_read", {"host": host_id, "path": "a.txt"})
+        require(relative.get("error", {}).get("code") == -32602, f"relative path without a context: {relative}")
+
+        # mesh_copy moves a directory both ways with no size limit.
+        source = fixture.root / "copy-source"
+        source.mkdir()
+        (source / "one.txt").write_text("copied\n")
+        remote_copy = work / "copied"
+        up = client.call_tool("mesh_copy", {"host": host_id, "direction": "upload", "local_path": str(source), "remote_path": str(remote_copy), "recursive": True})
+        require(not up["result"]["isError"] and (remote_copy / "one.txt").read_text() == "copied\n", f"upload failed: {up}")
+        back = fixture.root / "copy-back"
+        down = client.call_tool("mesh_copy", {"host": host_id, "direction": "download", "local_path": str(back), "remote_path": str(remote_copy), "recursive": True})
+        require(not down["result"]["isError"] and (back / "one.txt").read_text() == "copied\n", f"download failed: {down}")
+
+        # Profile and fleet tools act on this machine at an expected revision.
+        profile = tool_data(client.call_tool("mesh_profile_get", {}))["data"]
+        require(profile["state"] == "absent", f"profile before: {profile}")
+        document = {"schemaVersion": 1, "description": "integration", "instructions": "be careful"}
+        set_one = client.call_tool("mesh_profile_set", {"expected_revision": 0, "profile": document})
+        require(not set_one["result"]["isError"] and tool_data(set_one)["data"]["revision"] == 1, f"profile set: {set_one}")
+        stale = client.call_tool("mesh_profile_set", {"expected_revision": 0, "profile": dict(document, description="stale edit")})
+        require_tool_error(stale, "profile.conflict", "stale profile revision")
+        after = tool_data(client.call_tool("mesh_profile_get", {}))["data"]
+        require(after["revision"] == 1 and after["profile"]["description"] == "integration", f"profile after: {after}")
+        fleet = client.call_tool("mesh_fleet_status", {})
+        require(not fleet["result"]["isError"] and "members" in tool_data(fleet)["data"], f"fleet status: {fleet}")
+        rc, _ = client.close_eof()
+        require(rc == 0, f"file tool client EOF exit = {rc}")
+    finally:
+        client.terminate()
+
+
+def exercise_file_contexts(fixture):
+    host_id = fixture.remote_id
+    work = fixture.root / "ctxfiles"
+    work.mkdir()
+    for name in ("filer", "stranger"):
+        res = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
+        require(res.returncode == 0 and not res.stderr, f"identity create {name} failed: {res.stdout!r} {res.stderr!r}")
+
+    filer = MCPClient(fixture.binary, fixture.environment, args=("--identity", "filer"))
+    try:
+        opened = filer.call_tool("mesh_context_open", {"host": host_id, "request_key": "file-ctx-1", "cwd": str(work), "shell": "sh"})
+        require(not opened["result"]["isError"], f"context open failed: {opened}")
+        handle = tool_data(opened)["data"]["handle"]
+
+        # A relative path resolves inside the context, and the handle alone names the host.
+        wrote = filer.call_tool("mesh_file_write", {"context": handle, "path": "rel.txt", "content": "relative\n", "create_only": True})
+        require(not wrote["result"]["isError"], f"relative write failed: {wrote}")
+        target = wrote["result"]["_meta"]["com.github.shaullavo.mesh/target"]
+        require(target["hostId"] == host_id and target["contextId"] == handle and target["cwd"] == str(work), f"workspace missing from the target: {target}")
+        require((work / "rel.txt").read_text() == "relative\n", "the write did not land in the context directory")
+        digest = tool_data(wrote)["data"]["sha256"]
+
+        read = tool_data(filer.call_tool("mesh_file_read", {"context": handle, "path": "rel.txt"}))["data"]
+        require(read["data"] == "relative\n" and read["path"] == str(work / "rel.txt") and read["target"]["cwd"] == str(work), f"relative read: {read}")
+        listing = tool_data(filer.call_tool("mesh_file_list", {"context": handle, "path": "."}))["data"]
+        require([e["name"] for e in listing["entries"]] == ["rel.txt"], f"relative list: {listing}")
+        found = tool_data(filer.call_tool("mesh_file_search", {"context": handle, "path": ".", "pattern": "relative"}))["data"]
+        require(len(found["matches"]) == 1 and found["matches"][0]["path"] == str(work / "rel.txt"), f"relative search: {found}")
+        patched = filer.call_tool("mesh_file_patch", {"context": handle, "path": "rel.txt", "expected_sha256": digest, "edits": [{"old_text": "relative", "new_text": "patched"}]})
+        require(not patched["result"]["isError"] and (work / "rel.txt").read_text() == "patched\n", f"relative patch: {patched}")
+
+        # Another identity on the same account and host cannot use the context.
+        stranger = MCPClient(fixture.binary, fixture.environment, args=("--identity", "stranger"))
+        try:
+            denied = stranger.call_tool("mesh_file_read", {"context": handle, "path": "rel.txt"})
+            require_tool_error(denied, "context.not_found", "another identity's context")
+            absolute = stranger.call_tool("mesh_file_read", {"host": host_id, "path": str(work / "rel.txt")})
+            require(not absolute["result"]["isError"], f"an absolute read needs no context: {absolute}")
+        finally:
+            stranger.terminate()
+
+        # No identity, no context.
+        anonymous = MCPClient(fixture.binary, fixture.environment)
+        try:
+            refused = anonymous.call_tool("mesh_file_read", {"context": handle, "path": "rel.txt"})
+            require_tool_error(refused, "usage.invalid", "a context handle without an identity")
+        finally:
+            anonymous.terminate()
+
+        # Closing the context ends the workspace.
+        closed = filer.call_tool("mesh_context_close", {"context": handle})
+        require(not closed["result"]["isError"], f"context close failed: {closed}")
+        after = filer.call_tool("mesh_file_read", {"context": handle, "path": "rel.txt"})
+        require_tool_error(after, "context.closed", "read in a closed context")
+        rc, _ = filer.close_eof()
+        require(rc == 0, f"file context client EOF exit = {rc}")
+    finally:
+        filer.terminate()
+
+
 def read_exec_with_progress(client, req_id, expected_token, timeout=15.0):
     progress_values = []
     while True:
@@ -801,10 +980,12 @@ def main():
             exercise_short_and_long_jobs(fixture)
             exercise_contexts_exec_and_isolation(fixture)
             exercise_long_job_input_cancel_and_eof(fixture)
+            exercise_file_tools(fixture)
+            exercise_file_contexts(fixture)
             exercise_host_mismatch_and_revocation(fixture)
         finally:
             fixture.close()
-    print("PASS: native MCP stdio server verified across fresh connect, contexts, mesh_exec, app isolation, short/long jobs, CLI parity, wait vs job cancel, EOF, identity mismatch, and live revocation")
+    print("PASS: native MCP stdio server verified across fresh connect, contexts, mesh_exec, app isolation, file tools, file contexts, copy, profile tools, short/long jobs, CLI parity, wait vs job cancel, EOF, identity mismatch, and live revocation")
 
 
 if __name__ == "__main__":

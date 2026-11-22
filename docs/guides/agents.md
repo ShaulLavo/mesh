@@ -69,3 +69,24 @@ Create a per-agent application identity once with `mesh mcp identity create NAME
 Tool results carry the same agent envelope in `structuredContent` and a bounded summary in `content`. Opaque context handles (`mc1.<hostId>.<contextId>`) and job handles (`mj1.<hostId>.<sessionId>.<instance>`) let a fresh `mesh mcp --identity NAME` process open/update/close working contexts, run keyed pipe commands with `mesh_exec`, or inspect, wait on, read output from, send stdin to, signal, cancel, or remove durable jobs as its very first request without discovery. A retried `mesh_context_open` and `mesh_context_receipt` return the original revision-1 snapshot; call `mesh_context_get` for the current state. Cancelling a wait or closing stdin never cancels an accepted job.
 
 `mesh_terminal_open`, `mesh_terminal_input`, `mesh_terminal_resize` and `mesh_terminal_screen` run terminal jobs in a context; they reach only jobs the identity created, and input and resize return `terminal.attached` while a person is attached. `mesh_service_start`, `mesh_service_stop`, `mesh_service_publish`, `mesh_service_unpublish`, `mesh_apps_list`, `mesh_session_hibernate` and `mesh_session_recover` use the same host controls and restrictions as `mesh serve`, `mesh unserve`, `mesh app list`, `mesh hibernate` and `mesh recover`, without attaching to anything.
+
+## Run the native MCP loopback HTTP server
+
+When a local MCP client speaks stateless `2026-07-28` over Streamable HTTP, bind the native frontend to one explicit loopback address and application identity:
+
+```sh
+mesh mcp identity create codex
+mesh mcp --http 127.0.0.1:8765 --identity codex
+```
+
+Mesh exposes the same native tool catalog (including contexts and `mesh_exec`) through the shared dispatch core, listening only on the given loopback IP and port at `/mcp`. It matches the exact configured `Host` and port, accepts an absent `Origin` or an explicitly configured exact loopback origin (`--allow-origin http://127.0.0.1:3000`), rejects `GET` and `DELETE` with `405`, and ignores incoming `Mcp-Session-Id` and `Last-Event-ID` headers.
+
+Every `POST /mcp` requires `Authorization: Bearer TOKEN` from the private `0600` token file tied to that listener and identity (path printed on stderr; the token value is never logged). Responses use `application/json` or request-scoped `text/event-stream` (`Accept` must include both). Closing the response stream cancels the in-flight HTTP request and never cancels an accepted Mesh job.
+
+To rotate the bearer token and immediately retire active streams using the old token:
+
+```sh
+mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
+```
+
+Read the updated private token file to configure the client with the new token. Standard HTTP endpoints stay local and private on loopback; do not expose `mesh mcp --http` through `mesh serve` or any public port.

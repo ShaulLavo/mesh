@@ -202,8 +202,12 @@ func (a *application) setProfile(cmd *cobra.Command, file string, expected uint6
 	if err != nil {
 		return profileFailure(err)
 	}
-	result := agentapi.ProfileWrite{Revision: p.Revision, Digest: p.Digest(), Changed: changed, Committed: true, Publication: "complete", Members: []agentapi.Delivery{}}
-	return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: result})
+	return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: hostProfileWrite(p, changed)})
+}
+
+// hostProfileWrite is the result of a committed host profile write.
+func hostProfileWrite(p hostprofile.HostProfile, changed bool) agentapi.ProfileWrite {
+	return agentapi.ProfileWrite{Revision: p.Revision, Digest: p.Digest(), Changed: changed, Committed: true, Publication: "complete", Members: []agentapi.Delivery{}}
 }
 
 func readProfileInput(cmd *cobra.Command, path string) ([]byte, error) {

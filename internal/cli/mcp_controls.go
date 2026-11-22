@@ -72,6 +72,7 @@ func hostCapabilitiesFromInfo(info protocol.HostInfo) *agentapi.HostCapabilities
 	return &agentapi.HostCapabilities{
 		ExecutionPipe:    info.ExecutionPipeSupported,
 		ExecutionContext: info.ExecutionContextSupported,
+		Files:            info.FilesSupported,
 	}
 }
 

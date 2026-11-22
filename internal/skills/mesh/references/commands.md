@@ -497,6 +497,18 @@ mesh context receipt --host HOST_ID --identity codex --request-key ctx-1 --json
 - `--timeout D`: finite request deadline.
 - `--request-key KEY`: request key used to open.
 
+## mesh mcp token rotate
+
+Rotate the bearer token for a running loopback MCP HTTP listener and retire streams using the old token.
+
+```sh
+mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
+```
+
+- `--http ADDR`: exact loopback host:port of the running listener.
+- `--identity NAME`: local application identity bound to the listener.
+- `--json`: write one agent result.
+
 ## mesh session resize
 
 Resize a keyed terminal job while no person is attached.
