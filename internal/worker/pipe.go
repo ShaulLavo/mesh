@@ -298,7 +298,7 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []*pipeReader, s
 	}
 	ended := time.Now().UTC()
 	result := execution.Result{Binding: *w.cfg.Execution, Termination: executionTermination(state, code), EndedAt: &ended, Capture: captureComplete}
-	finishPipeCapture(readers, reasons, &result, pipeCaptureFlushBudget)
+	finishPipeCaptures(readers, reasons, &result)
 	if err := attempt.Finish(result); err != nil {
 		return code, workerExecutionError("record pipe result", err)
 	}
@@ -310,6 +310,12 @@ func (w *Worker) finishPipe(attempt *execution.Attempt, readers []*pipeReader, s
 		w.flushLineAttachment()
 	}
 	return code, nil
+}
+
+// finishPipeCaptures is the final save of every stream when a pipe job ends.
+// It has its own budget, separate from the attachment flush.
+func finishPipeCaptures(readers []*pipeReader, reasons []string, result *execution.Result) {
+	finishPipeCapture(readers, reasons, result, pipeCaptureFlushBudget)
 }
 
 func finishPipeCapture(readers []*pipeReader, reasons []string, result *execution.Result, budget time.Duration) {
@@ -335,8 +341,9 @@ const pipeDrainCutoff = "drain_timeout"
 // busy pipe job exits with up to the 1 MiB capture queue still to write, and
 // on a loaded disk (load average 35 on the PC, #318) that commit took longer
 // than the attachment flush budget: the worker then dropped the tail, recorded
-// no capture, and left readers on a stream that never reached EOF.
-const pipeCaptureFlushBudget = 30 * time.Second
+// no capture, and left readers on a stream that never reached EOF. A variable
+// so tests can shorten it.
+var pipeCaptureFlushBudget = 30 * time.Second
 
 // pipeDrainTotal bounds the whole drain, so a descendant that keeps writing
 // cannot hold the worker open. It is longer than the silence window because

@@ -66,4 +66,19 @@ func TestExecutionReadWaitBelongsToLogsAndWait(t *testing.T) {
 	if _, err := DecodeControl([]byte(base + TypeExecutionSignal + `"}`)); err == nil {
 		t.Error("signal accepted a caller wait")
 	}
+	// An explicit value is a request to wait, so it must be a real wait.
+	for _, kind := range []string{TypeExecutionLogs, TypeExecutionWait} {
+		for _, bad := range []string{`0`, `-1`, `60001`, `"1"`, `null`, `1.5`} {
+			raw := `{"requestId":"r","sessionId":"7K3D","instance":"i","timeoutMillis":` + bad + `,"type":"` + kind + `"}`
+			if _, err := DecodeControl([]byte(raw)); err == nil {
+				t.Errorf("%s accepted timeoutMillis %s", kind, bad)
+			}
+		}
+		for _, good := range []string{`1`, `60000`} {
+			raw := `{"requestId":"r","sessionId":"7K3D","instance":"i","timeoutMillis":` + good + `,"type":"` + kind + `"}`
+			if _, err := DecodeControl([]byte(raw)); err != nil {
+				t.Errorf("%s rejected timeoutMillis %s: %v", kind, good, err)
+			}
+		}
+	}
 }

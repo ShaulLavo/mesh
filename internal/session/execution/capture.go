@@ -270,10 +270,7 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := c.yieldUnlessFinal(ctx, b); err != nil {
-		return StreamResult{}, err
-	}
-	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err := s.writerTurn(ctx, !b.final)
 	if err != nil {
 		return StreamResult{}, err
 	}

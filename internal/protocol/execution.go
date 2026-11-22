@@ -244,8 +244,15 @@ func executionInteger(name string, raw []byte) error {
 	if bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, &n) != nil || (name == "depth" && n != 0) {
 		return fmt.Errorf("execution: invalid %s", name)
 	}
+	if name == "timeoutMillis" && (n < 1 || n > MaxExecutionWaitMillis) {
+		return fmt.Errorf("execution: timeoutMillis must be 1 to %d", MaxExecutionWaitMillis)
+	}
 	return nil
 }
+
+// MaxExecutionWaitMillis bounds how long one wait or output read may hold the host.
+const MaxExecutionWaitMillis = 60000
+
 func executionString(raw []byte) error {
 	var value string
 	if bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, &value) != nil || strings.ContainsRune(value, 0) {

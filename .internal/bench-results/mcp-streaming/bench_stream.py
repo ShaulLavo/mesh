@@ -139,6 +139,22 @@ def exec_job(client, context, key, command):
     return created
 
 
+def resumed_offset(start, expected, resync):
+    """Check one page's start against the previous page's end.
+
+    Pages must be contiguous, except right after a reported gap, where the
+    reader resumes at the earliest retained byte: never earlier than where it
+    stopped. Returns how many bytes that gap skipped.
+    """
+    if expected is None:
+        return 0
+    if not resync:
+        require(start == expected, f"page at {start} after {expected} with no gap")
+        return 0
+    require(start >= expected, f"page after a gap resumed at {start}, before {expected}")
+    return start - expected
+
+
 def tail(client, fixture, context, run):
     started = time.monotonic()
     created = exec_job(client, context, f"tail-{run}", PACED)
@@ -147,26 +163,27 @@ def tail(client, fixture, context, run):
     cursor = ""
     session_dir = fixture.remote / "s" / job.split(".")[2]
     first_byte, read, expected, gaps, pages, worker_peak = None, 0, None, [], 0, None
-    first_offset = None
+    first_offset, resync, skipped = None, False, 0
     while True:
         reply = output(client, job, cursor)
         page = data(reply)
         if reply["result"]["isError"]:
             gaps.append(reply["result"]["structuredContent"]["errors"])
             require(bool(page.get("earliestCursor")), f"error without an earliest cursor: {reply}")
-            cursor = page["earliestCursor"]
+            cursor, resync = page["earliestCursor"], True
             continue
         if page.get("gap"):
             gaps.append({"reason": page.get("reason"), "start": page.get("start")})
+            resync = True
         chunk = page.get("data", "")
         if chunk:
             first_byte = first_byte or time.monotonic() - started
+            start = int(page["start"])
             # A read without a cursor starts at the earliest retained byte.
-            first_offset = int(page["start"]) if first_offset is None else first_offset
-            expected = int(page["start"]) if expected is None else expected
-            require(chunk == "a" * len(chunk), f"unexpected bytes at {page.get('start')}")
-            require(int(page["start"]) == expected or gaps, f"page at {page.get('start')} after {expected} with no gap")
-            expected = int(page["start"]) + len(chunk)
+            first_offset = start if first_offset is None else first_offset
+            require(chunk == "a" * len(chunk), f"unexpected bytes at {start}")
+            skipped += resumed_offset(start, expected, resync)
+            expected, resync = start + len(chunk), False
             read += len(chunk)
             pages += 1
         pid = worker_pid(session_dir)
@@ -182,7 +199,7 @@ def tail(client, fixture, context, run):
     elapsed = time.monotonic() - started
     return job, {"timeToFirstByteMs": round(first_byte * 1000, 1), "firstOffset": first_offset,
                  "closeReason": close_reason, "endOffset": expected,
-                 "bytesRead": read, "pages": pages,
+                 "bytesRead": read, "bytesSkippedAtGaps": skipped, "pages": pages,
                  "gaps": gaps, "seconds": round(elapsed, 3), "throughputMiBps": round(read / MIB / elapsed, 1),
                  "worker": worker_peak}
 

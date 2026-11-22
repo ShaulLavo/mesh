@@ -52,9 +52,6 @@ const (
 	// Only the attachment writer waits on the socket, so this deadline cannot
 	// delay PTY reads.
 	attachmentWriteTimeout = 5 * time.Second
-	// A per-frame deadline alone lets many slow writes extend shutdown for
-	// minutes. Bound the complete flush too.
-	finalFlushTimeout = 5 * time.Second
 	// A command can exit before Spawn's readiness probe becomes the real attach.
 	// Keep the completed worker available long enough for that second dial.
 	firstAttachTimeout = 5 * time.Second
@@ -70,6 +67,10 @@ const (
 	inputQueueFrameLimit = 256
 	inputQueueByteLimit  = 8 << 20
 )
+
+// A per-frame deadline alone lets many slow writes extend shutdown for
+// minutes. Bound the complete flush too. A variable so tests can shorten it.
+var finalFlushTimeout = 5 * time.Second
 
 func validateTerminalSize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {

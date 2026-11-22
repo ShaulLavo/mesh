@@ -146,7 +146,7 @@ func executionReadMillis(ctx context.Context) int {
 	if !ok {
 		return 0
 	}
-	return min(60000, max(1, int(time.Until(deadline)/time.Millisecond)-executionReadMarginMillis))
+	return min(protocol.MaxExecutionWaitMillis, max(1, int(time.Until(deadline)/time.Millisecond)-executionReadMarginMillis))
 }
 
 const executionReadMarginMillis = 100
