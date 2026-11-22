@@ -276,7 +276,7 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	app := &application{dependencies: Dependencies{Now: time.Now}}
 
 	// 1. resolveExactHostID rejects machine name "pc" even though "pc" exists in hosts.json.
-	controls := newMCPControls(app, newMCPHostPool(nil, time.Now))
+	controls := newMCPControls(app, newMCPHostPool(nil, time.Now), "")
 	defer controls.pool.Close()
 	if _, err := controls.resolveExactHostID("pc"); err == nil {
 		t.Fatal("resolveExactHostID accepted machine name 'pc'")
@@ -285,12 +285,12 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 		t.Fatalf("resolveExactHostID(%q) = %+v, %v", hostID, got, err)
 	}
 
-	// 2. Pre-dispatch identity mismatch on keyed JobInput returns host.identity_mismatch (not input.outcome_unknown).
+	// 2. Pre-dispatch identity mismatch on keyed JobInput and Exec returns host.identity_mismatch.
 	mismatchPool := newMCPHostPool(func(context.Context, HostRecord) (transport.Conn, error) {
 		return nil, errors.Join(transport.ErrAuthentication, transport.ErrDestinationIdentityMismatch)
 	}, time.Now)
 	defer mismatchPool.Close()
-	mismatchControls := newMCPControls(app, mismatchPool)
+	mismatchControls := newMCPControls(app, mismatchPool, "mac1_test_cred")
 	offset := uint64(0)
 	out, err := mismatchControls.JobInput(t.Context(), mcpnative.JobInputRequest{
 		Job:      mcpnative.JobRef{HostID: hostID, SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"},
@@ -302,16 +302,27 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	if err != nil || !out.IsError || len(out.Envelope.Errors) == 0 || out.Envelope.Errors[0].Code != agentapi.HostIdentityMismatch {
 		t.Fatalf("expected host.identity_mismatch on pre-dispatch input failure, got out=%+v err=%v", out, err)
 	}
+	execOut, err := mismatchControls.Exec(t.Context(), mcpnative.ExecRequest{
+		Context:     mcpnative.ContextRef{HostID: hostID, ContextID: "0123456789abcdef0123456789abcdef"},
+		RequestKey:  "k-exec-mismatch",
+		Argv:        []string{"/bin/true"},
+		Stdin:       "closed",
+		WaitMS:      1000,
+		OutputBytes: 4096,
+	}, nil)
+	if err != nil || !execOut.IsError || len(execOut.Envelope.Errors) == 0 || execOut.Envelope.Errors[0].Code != agentapi.HostIdentityMismatch {
+		t.Fatalf("expected host.identity_mismatch on pre-dispatch exec failure, got out=%+v err=%v", execOut, err)
+	}
 
 	// 3. Remote target omits frontend account when host omits Account, and reports remote Account when present.
-	// 4. Slow dial (650ms > old 500ms margin) with WaitMS=300 returns timed_out with receipt, not host.unreachable.
+	// 4. Slow dial (250ms) with WaitMS=700 succeeds within deadline and reports remote Account.
 	slowDial := func(_ context.Context, h HostRecord) (transport.Conn, error) {
-		time.Sleep(650 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 		return newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) {
 			if req.Type == protocol.TypeHostInfo {
 				return protocol.Control{
 					Type: protocol.TypeHostInfoResult,
-					Host: &protocol.HostInfo{ID: h.ID, MeshIdentity: h.MeshIdentity, MachineName: "pc", NameRevision: 1, Account: "remote-bob", ExecutionPipeSupported: true},
+					Host: &protocol.HostInfo{ID: h.ID, MeshIdentity: h.MeshIdentity, MachineName: "pc", NameRevision: 1, Account: "remote-bob", ExecutionPipeSupported: true, ExecutionContextSupported: true},
 				}, nil
 			}
 			return protocol.Control{
@@ -326,10 +337,10 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	}
 	slowPool := newMCPHostPool(slowDial, time.Now)
 	defer slowPool.Close()
-	slowControls := newMCPControls(app, slowPool)
+	slowControls := newMCPControls(app, slowPool, "")
 	waitOut, err := slowControls.JobWait(t.Context(), mcpnative.JobWaitRequest{
 		Job:    mcpnative.JobRef{HostID: hostID, SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"},
-		WaitMS: 300,
+		WaitMS: 700,
 	}, nil)
 	if err != nil || waitOut.IsError || waitOut.Target == nil || waitOut.Target.Account != "remote-bob" {
 		t.Fatalf("queued/cold wait failed or wrong remote account: out=%+v err=%v", waitOut, err)
@@ -342,5 +353,59 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	// Remote host without Account omits target.Account (never stamps frontend account).
 	if got := slowControls.targetAccount(host, protocol.HostInfo{}); got != "" {
 		t.Fatalf("expected empty remote account when host omits it, got %q", got)
+	}
+
+	// 5. Paged context.list follows ContextNextCursor until empty and propagates UncertainJobs.
+	var listPages atomic.Int32
+	pagedDial := func(_ context.Context, h HostRecord) (transport.Conn, error) {
+		return newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) {
+			if req.Type == protocol.TypeHostInfo {
+				return protocol.Control{
+					Type: protocol.TypeHostInfoResult,
+					Host: &protocol.HostInfo{ID: h.ID, MeshIdentity: h.MeshIdentity, MachineName: "pc", NameRevision: 1, Account: "remote-bob", ExecutionContextSupported: true},
+				}, nil
+			}
+			if req.Type == protocol.TypeContextList {
+				listPages.Add(1)
+				if req.ExecutionContext == nil || req.ExecutionContext.Cursor == "" {
+					return protocol.Control{
+						Type:              protocol.TypeContextResult,
+						ContextNextCursor: "page-2",
+						ContextInfos: []protocol.ExecutionContextInfo{{
+							HostID: h.ID, ContextID: "0123456789abcdef0123456789abcdef",
+							Handle: protocol.ContextHandle(h.ID, "0123456789abcdef0123456789abcdef"),
+							State:  protocol.ContextStateOpen, Revision: 1, Cwd: "/tmp", Shell: protocol.ContextShellSh,
+							RunningJobs: 1, UncertainJobs: 2,
+						}},
+					}, nil
+				}
+				if req.ExecutionContext.Cursor != "page-2" {
+					return protocol.Control{}, fmt.Errorf("unexpected cursor %q", req.ExecutionContext.Cursor)
+				}
+				return protocol.Control{
+					Type: protocol.TypeContextResult,
+					ContextInfos: []protocol.ExecutionContextInfo{{
+						HostID: h.ID, ContextID: "fedcba9876543210fedcba9876543210",
+						Handle: protocol.ContextHandle(h.ID, "fedcba9876543210fedcba9876543210"),
+						State:  protocol.ContextStateClosed, Revision: 3, Cwd: "/work", Shell: protocol.ContextShellNone,
+					}},
+				}, nil
+			}
+			return protocol.Control{Type: protocol.TypeError, ErrorCode: "usage.invalid", Message: "unexpected"}, nil
+		}), nil
+	}
+	pagedPool := newMCPHostPool(pagedDial, time.Now)
+	defer pagedPool.Close()
+	pagedControls := newMCPControls(app, pagedPool, "mac1_test_cred")
+	listOut, err := pagedControls.ListContexts(t.Context(), mcpnative.ListContextsRequest{Host: hostID, Timeout: 2 * time.Second})
+	if err != nil || listOut.IsError || listOut.Target == nil || listOut.Target.Account != "remote-bob" {
+		t.Fatalf("paged ListContexts failed: out=%+v err=%v", listOut, err)
+	}
+	if listPages.Load() != 2 {
+		t.Fatalf("context.list pages = %d, want 2", listPages.Load())
+	}
+	contextsData, ok := listOut.Envelope.Data.(agentapi.ExecutionContexts)
+	if !ok || len(contextsData.Contexts) != 2 || contextsData.Contexts[0].UncertainJobs != 2 || contextsData.Contexts[1].Revision != 3 {
+		t.Fatalf("unexpected paged contexts data: %#v", listOut.Envelope.Data)
 	}
 }

@@ -243,6 +243,7 @@ type ExecutionReceipt struct {
 	Result             *ExecutionResult `json:"result"`
 	ContextID          string           `json:"contextId,omitempty"`
 	ContextRevision    *uint64          `json:"contextRevision,string,omitempty"`
+	Cwd                string           `json:"cwd,omitempty"`
 }
 
 // ScopeSubject identifies the authenticated key without legacy output-bearing records.

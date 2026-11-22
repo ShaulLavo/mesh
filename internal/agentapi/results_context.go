@@ -27,8 +27,9 @@ type ExecutionContext struct {
 
 // ExecutionContexts is a list result.
 type ExecutionContexts struct {
-	HostID   string             `json:"hostId"`
-	Contexts []ExecutionContext `json:"contexts"`
+	HostID     string             `json:"hostId"`
+	Contexts   []ExecutionContext `json:"contexts"`
+	NextCursor string             `json:"nextCursor,omitempty"`
 }
 
 // ApplicationIdentity describes a local caller identity without its secret.
