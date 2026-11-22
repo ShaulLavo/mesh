@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -133,5 +134,23 @@ func TestServiceLookupFailuresKeepTheirCause(t *testing.T) {
 	var failure *agentapi.Failure
 	if !errors.As(err, &failure) || failure.Err.Code != agentapi.ServiceNotFound {
 		t.Fatalf("unpublish of an absent route = %v, want service.not_found", err)
+	}
+}
+
+// A failed start never hands an agent the route's saved command or its last
+// output, which can carry credentials; the diagnostic stays with the owner.
+func TestServiceStartFailureKeepsOwnerDiagnostic(t *testing.T) {
+	host := HostRecord{ID: testTerminalHost, MachineName: "pc"}
+	diagnostic := `route /dev did not start: exited (session 7K3D, command "API_TOKEN=SECRET-IN-COMMAND ./serve")` + "\n\nlast output:\nkey=SECRET-IN-OUTPUT\n" + strings.Repeat("x", 4096)
+	refusing := func(_ context.Context, request protocol.Control, _ *string) (protocol.Control, protocol.HostInfo, error) {
+		return protocol.Control{Type: protocol.TypeError, RequestID: request.RequestID, Message: diagnostic}, protocol.HostInfo{}, nil
+	}
+	_, err := startStopServiceVia(t.Context(), host, refusing, protocol.TypeServiceStart, "service start", "dev")
+	failure := boundedAgentError(ownerOnlyDiagnostic(err, "services.start", host, "/dev"), "services.start", host.ID)
+	if strings.Contains(failure.Message, "SECRET") || len(failure.Message) > 512 || !strings.Contains(failure.Message, "/dev") {
+		t.Fatalf("start failure shown to the agent = %q", failure.Message)
+	}
+	if failure.Code == agentapi.HostUnreachable {
+		t.Fatalf("a host refusal read as unreachable: %+v", failure)
 	}
 }

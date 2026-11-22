@@ -105,10 +105,28 @@ func (c *mcpControls) startStopService(ctx context.Context, req mcpnative.Servic
 		}
 		status, err := startStopServiceVia(ctx, host, recording, requestType, label, name)
 		if err != nil {
-			return nil, err
+			return nil, ownerOnlyDiagnostic(err, operation, host, req.Name)
 		}
 		return c.serviceChange(host, privateName, status, ""), nil
 	})
+}
+
+// ownerOnlyDiagnostic replaces a host's refusal of a start or stop with a
+// fixed account of it. The host's text can carry the route's saved command
+// and its last output, which may hold credentials; those stay in the owner's
+// log and in mesh serve start on the host.
+func ownerOnlyDiagnostic(err error, operation string, host HostRecord, route string) error {
+	var refused *ControlError
+	if !errors.As(err, &refused) {
+		return err
+	}
+	code := controlAgentCode(refused.Code)
+	if code == agentapi.InternalError {
+		code = agentapi.StateUnavailable
+	}
+	message := fmt.Sprintf("%s refused %s for route %s. The full diagnostic stays with the owner: the daemon log on %s, or mesh serve start %s --host %s there. mesh_service_inspect shows the route's state.",
+		HostLabel(host), operation, safeRemoteText(route), HostLabel(host), safeRemoteText(route), HostLabel(host))
+	return agentapi.Fail(code, operation, host.ID, message)
 }
 
 func (c *mcpControls) serviceChange(host HostRecord, privateName string, service protocol.ServiceInfo, warning string) agentapi.ServiceChange {
