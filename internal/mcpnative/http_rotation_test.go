@@ -275,6 +275,23 @@ type rotationHarness struct {
 	// idle receives when net/http marks a connection idle, which happens
 	// after the client may already have read the whole response.
 	idle chan struct{}
+	// before runs once net/http has read a request, before the frontend
+	// sees it; after runs once the frontend's handler has returned, before
+	// net/http finishes the response and marks the connection idle.
+	before atomic.Pointer[func(*http.Request)]
+	after  atomic.Pointer[func(*http.Request)]
+}
+
+func (h *rotationHarness) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if f := h.before.Load(); f != nil {
+		(*f)(r)
+	}
+	defer func() {
+		if f := h.after.Load(); f != nil {
+			(*f)(r)
+		}
+	}()
+	h.srv.ServeHTTP(w, r)
 }
 
 func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) *rotationHarness {
@@ -288,7 +305,8 @@ func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewUnstartedServer(srv)
+	h := &rotationHarness{gate: gate, srv: srv}
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(h.serveHTTP))
 	srv.Attach(ts.Config)
 	idle := make(chan struct{}, 16)
 	track := ts.Config.ConnState
@@ -310,7 +328,9 @@ func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) 
 		_ = srv.Shutdown(context.Background())
 		ts.Close()
 	})
-	return &rotationHarness{gate: gate, srv: srv, ts: ts, idle: idle}
+	h.ts = ts
+	h.idle = idle
+	return h
 }
 
 func (h *rotationHarness) dial(t *testing.T, request []byte) net.Conn {
@@ -570,37 +590,131 @@ func TestHTTPRotationStopsPreAdmissionFault(t *testing.T) {
 	})
 }
 
-// net/http writes the SSE terminating chunk after the handler has returned;
-// rotation must stop that write too.
-func TestHTTPRotationStopsSSETerminatorAfterHandlerReturns(t *testing.T) {
-	var gate atomic.Pointer[rotationGate]
-	runRotationCase(t, rotationCase{
-		marker:  "0\r\n\r\n",
-		request: rotationCallRequest(rotationWaitBody(`,"progressToken":"p7"`)),
-		controls: &stubControls{waitFn: func(_ context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
-			total := float64(req.WaitMS)
-			notify(ProgressUpdate{Progress: 1, Total: &total, Message: "waiting"})
-			awaitCapped(gate.Load().firstSent)
-			return completedWait(req), nil
-		}},
-		gateRef:     &gate,
-		wantRetired: 0,
-	})
+// sentWhenHandlerReturns records how many bytes the first connection had
+// carried when the frontend's handler returned. Rotation treats a returned
+// handler as finished output, so nothing may follow on the socket.
+func (h *rotationHarness) sentWhenHandlerReturns() <-chan int {
+	out := make(chan int, 1)
+	after := func(*http.Request) {
+		select {
+		case out <- len(h.gate.conn(0).sentBytes()):
+		default:
+		}
+	}
+	h.after.Store(&after)
+	return out
 }
 
-// A request whose body never completes ends without a status from the
-// handler; net/http's implicit 200 must not follow rotation.
-func TestHTTPRotationStopsImplicitStatusAfterTruncatedBody(t *testing.T) {
-	gate := newRotationGate("HTTP/1.1 200 OK")
-	h := startRotationHarness(t, gate, ServerOptions{Controls: &stubControls{}})
+// assertNothingAfterHandler closes the client once the handler has returned,
+// so a kept-alive connection ends too; the server records any write it makes
+// before noticing.
+func assertNothingAfterHandler(t *testing.T, h *rotationHarness, client net.Conn, atReturn <-chan int) []byte {
+	t.Helper()
+	var n int
+	select {
+	case n = <-atReturn:
+	case <-time.After(rotationHangCap):
+		t.Fatal("stuck waiting for the handler to return")
+	}
+	_ = client.Close()
+	c := h.gate.conn(0)
+	waitPhase(t, c.closed, "the connection to close")
+	sent := c.sentBytes()
+	if len(sent) > n {
+		t.Fatalf("net/http wrote %d bytes after the handler returned: %q", len(sent)-n, sent[n:])
+	}
+	return sent
+}
+
+// A chunked SSE stream ends with a terminator net/http writes after the
+// handler returns; the stream must be complete when the handler returns.
+func TestHTTPSSEStreamWritesNothingAfterHandlerReturns(t *testing.T) {
+	var gate atomic.Pointer[rotationGate]
+	gate.Store(newRotationGate(""))
+	h := startRotationHarness(t, gate.Load(), ServerOptions{Controls: &stubControls{waitFn: func(_ context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+		total := float64(req.WaitMS)
+		notify(ProgressUpdate{Progress: 1, Total: &total, Message: "waiting"})
+		awaitCapped(gate.Load().firstSent)
+		return completedWait(req), nil
+	}}})
+	atReturn := h.sentWhenHandlerReturns()
+	client := h.dial(t, rotationCallRequest(rotationWaitBody(`,"progressToken":"p7"`)))
+	sent := assertNothingAfterHandler(t, h, client, atReturn)
+	if !bytes.Contains(sent, []byte(`"id":7`)) {
+		t.Fatalf("SSE stream never delivered its result: %q", sent)
+	}
+}
+
+// A request whose body never completes ends without a reply from the
+// handler; net/http must not add an implicit 200 after it.
+func TestHTTPTruncatedBodyWritesNothingAfterHandlerReturns(t *testing.T) {
+	h := startRotationHarness(t, newRotationGate(""), ServerOptions{Controls: &stubControls{}})
+	atReturn := h.sentWhenHandlerReturns()
 	body := rotationWaitBody("")
 	client := h.dial(t, []byte(rawRequestHead(testHTTPToken, mcpwire.MethodCallTool, "mesh_job_wait", len(body))+body[:len(body)/2]))
 	if tcp, ok := client.(*net.TCPConn); ok {
 		_ = tcp.CloseWrite()
 	}
-	waitPhase(t, gate.entered, "net/http's implicit status")
-	res := waitRotation(t, h.rotate(), 0)
-	assertNothingAfter(t, gate, res)
+	assertNothingAfterHandler(t, h, client, atReturn)
+}
+
+// A complete new-token POST that net/http has read but the frontend has not
+// yet authenticated carries no old-token output; rotation must leave its
+// connection alone.
+func TestHTTPRotationKeepsUnauthenticatedNewTokenRequest(t *testing.T) {
+	h := startRotationHarness(t, newRotationGate(""), ServerOptions{Controls: &stubControls{}})
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	t.Cleanup(func() { closeOnce(resume) })
+	before := func(*http.Request) {
+		close(paused)
+		awaitCapped(resume)
+	}
+	h.before.Store(&before)
+	client := h.dial(t, newTokenListRequest())
+	waitPhase(t, paused, "the new-token request to be read")
+
+	waitRotation(t, h.rotate(), 0)
+	closeOnce(resume)
+	assertListReply(t, bufio.NewReader(client))
+}
+
+// The client can read a complete reply and send its next request before
+// net/http marks the connection idle; a finished old-token reply must not get
+// that connection closed under the new-token request.
+func TestHTTPRotationKeepsConnectionWithFinishedReply(t *testing.T) {
+	h := startRotationHarness(t, newRotationGate(""), ServerOptions{Controls: &stubControls{}})
+	returned := make(chan struct{})
+	resume := make(chan struct{})
+	t.Cleanup(func() { closeOnce(resume) })
+	var once sync.Once
+	after := func(*http.Request) {
+		once.Do(func() {
+			close(returned)
+			awaitCapped(resume)
+		})
+	}
+	h.after.Store(&after)
+	body := rotationListBody()
+	client := h.dial(t, []byte(rawRequestHead(testHTTPToken, mcpwire.MethodListTools, "", len(body))+body))
+	br := bufio.NewReader(client)
+	assertListReply(t, br)
+	waitPhase(t, returned, "the old-token handler to return")
+	if _, err := client.Write(newTokenListRequest()); err != nil {
+		t.Fatal(err)
+	}
+
+	waitRotation(t, h.rotate(), 0)
+	closeOnce(resume)
+	assertListReply(t, br)
+}
+
+func closeOnce(ch chan struct{}) {
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
 }
 
 // Rotation must not leave an old request's deadline behind on a connection
