@@ -140,12 +140,13 @@ type generation struct {
 	upstream Upstream
 	// tools holds the compiled x-mcp-header rules of an HTTP upstream's
 	// current tools/list, read by the H5 client for every tools/call.
-	tools      atomic.Pointer[ToolHeaders]
-	serverInfo json.RawMessage
-	active     int
-	requests   int
-	listens    int
-	draining   bool
+	tools        atomic.Pointer[ToolHeaders]
+	serverInfo   json.RawMessage
+	capabilities json.RawMessage
+	active       int
+	requests     int
+	listens      int
+	draining     bool
 }
 
 func NewSupervisor(cfg Config) (*Supervisor, error) {

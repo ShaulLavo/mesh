@@ -88,3 +88,7 @@ mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
 ```
 
 Read the updated private token file to configure the client with the new token. Standard HTTP endpoints stay local and private on loopback; do not expose `mesh mcp --http` through `mesh serve` or any public port.
+
+## Host and connect to MCP servers across the fleet
+
+To host third-party stateless `2026-07-28` MCP servers on their owning machine, list them passively across saved hosts with `mesh mcp ls --json`, and connect directly from any approved Mesh device with `mesh mcp connect HOST/NAME --identity NAME`, see the [Hosted MCP guide](hosted-mcp.md).

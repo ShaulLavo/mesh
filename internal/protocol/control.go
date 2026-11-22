@@ -196,6 +196,7 @@ type HostInfo struct {
 	FilesSupported            bool               `json:"filesSupported,omitempty"`
 	ExecutionPipeSupported    bool               `json:"executionPipeSupported,omitempty"`
 	ExecutionContextSupported bool               `json:"executionContextSupported,omitempty"`
+	MCPHostingSupported       bool               `json:"mcpHostingSupported,omitempty"`
 	ID                        string             `json:"id"`
 	MeshIdentity              string             `json:"meshIdentity"`
 	Account                   string             `json:"account,omitempty"`

@@ -131,20 +131,21 @@ func (s *Supervisor) hold(inst *instance, gen *generation) {
 // InstanceView is an instance as one caller may see it. It never carries
 // stderr, environment values or secret paths.
 type InstanceView struct {
-	ID          string          `json:"id"`
-	Shared      bool            `json:"shared"`
-	Mine        bool            `json:"mine"`
-	Default     bool            `json:"default,omitempty"`
-	State       string          `json:"state"`
-	Reason      string          `json:"reason,omitempty"`
-	ExitCode    *int            `json:"exitCode,omitempty"`
-	Revision    int64           `json:"revision"`
-	Generation  int64           `json:"generation"`
-	Active      int             `json:"active"`
-	Leases      int             `json:"leases"`
-	ServerInfo  json.RawMessage `json:"serverInfo,omitempty"`
-	LateReplies uint64          `json:"lateReplies,omitempty"`
-	UpdatedAt   time.Time       `json:"updatedAt"`
+	ID           string          `json:"id"`
+	Shared       bool            `json:"shared"`
+	Mine         bool            `json:"mine"`
+	Default      bool            `json:"default,omitempty"`
+	State        string          `json:"state"`
+	Reason       string          `json:"reason,omitempty"`
+	ExitCode     *int            `json:"exitCode,omitempty"`
+	Revision     int64           `json:"revision"`
+	Generation   int64           `json:"generation"`
+	Active       int             `json:"active"`
+	Leases       int             `json:"leases"`
+	ServerInfo   json.RawMessage `json:"serverInfo,omitempty"`
+	Capabilities json.RawMessage `json:"capabilities,omitempty"`
+	LateReplies  uint64          `json:"lateReplies,omitempty"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
 // ServiceView is a definition with secrets reduced to their names.
@@ -232,7 +233,7 @@ func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceV
 	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
-		v.Active, v.ServerInfo = gen.active, gen.serverInfo
+		v.Active, v.ServerInfo, v.Capabilities = gen.active, gen.serverInfo, gen.capabilities
 		if stdio, ok := gen.upstream.(*StdioUpstream); ok {
 			v.LateReplies = stdio.LateReplies()
 		}

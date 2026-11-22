@@ -10,7 +10,10 @@ import (
 	"github.com/shaul/mesh/internal/mcpwire"
 )
 
-const tasksExtension = "io.modelcontextprotocol/tasks"
+const (
+	tasksExtension        = "io.modelcontextprotocol/tasks"
+	upstreamServerInfoKey = "com.github.shaullavo.mesh/upstreamServerInfo"
+)
 
 // HostedMethods are the requests a hosted route forwards. None needs an
 // optional client capability at the route; the upstream asks for what it
@@ -195,6 +198,14 @@ func (r *Router) restoreResponse(route Route, request, m mcpwire.Message) ([]byt
 	tasks := []string{resultKey, "capabilities", "extensions", tasksExtension}
 	if request.Method() == mcpwire.MethodDiscover && member(raw, tasks...) != nil {
 		if raw, err = setMember(raw, tasks, nil); err != nil {
+			return nil, err
+		}
+	}
+	// Preserve the probed upstream server identity when an individual response
+	// omits io.modelcontextprotocol/serverInfo, so fresh direct tool calls still
+	// report com.github.shaullavo.mesh/upstreamServerInfo.
+	if m.Result() != nil && route.ServerInfo != nil && member(raw, resultKey, metaKey, mcpwire.ServerInfoKey) == nil && member(raw, resultKey, metaKey, upstreamServerInfoKey) == nil {
+		if raw, err = setMember(raw, []string{resultKey, metaKey, upstreamServerInfoKey}, route.ServerInfo); err != nil {
 			return nil, err
 		}
 	}

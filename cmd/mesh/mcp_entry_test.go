@@ -41,6 +41,12 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 		{"mcp", "--allow-origin", "http://127.0.0.1:3000"},
 		{"mcp", "--identity", "missing-id"},
 		{"mcp", "--identity", ""},
+		{"mcp", "connect"},
+		{"mcp", "connect", "badref", "--identity", "codex"},
+		{"mcp", "connect", "local/svc"},
+		{"mcp", "connect", "local/svc", "--identity", "missing-id"},
+		{"mcp", "connect", "local/svc", "--identity", "codex", "--privacy"},
+		{"mcp", "connect", "local/svc", "--bogus"},
 	} {
 		stdout, stderr, exit := runMCPEntry(t, root, config, state, args)
 		if exit != 2 || len(stdout) != 0 || len(stderr) == 0 {
@@ -48,8 +54,8 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 		}
 	}
 
-	// `mesh mcp --help` and `-h` must write help to stderr with zero stdout bytes.
-	for _, args := range [][]string{{"mcp", "--help"}, {"mcp", "-h"}} {
+	// `mesh mcp --help`, `-h`, and `mesh mcp connect --help` must write help to stderr with zero stdout bytes.
+	for _, args := range [][]string{{"mcp", "--help"}, {"mcp", "-h"}, {"mcp", "connect", "--help"}, {"mcp", "connect", "-h"}} {
 		stdout, stderr, exit := runMCPEntry(t, root, config, state, args)
 		if exit != 0 || len(stdout) != 0 || !bytes.Contains(stderr, []byte("Usage:")) {
 			t.Fatalf("%v: exit=%d stdout=%q stderr=%q (want exit=0, empty stdout, help on stderr)", args, exit, stdout, stderr)

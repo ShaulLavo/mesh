@@ -316,7 +316,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 		_ = s.stopWorker(ctx, ref)
 		return nil, err
 	}
-	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info)}, nil
+	return &generation{number: key.Generation, revision: d.Revision, ref: ref, upstream: upstream, serverInfo: serverInfoOf(info), capabilities: capabilitiesOf(info)}, nil
 }
 
 // failStart classifies an early exit, such as a missing runtime, by the
