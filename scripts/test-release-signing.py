@@ -128,24 +128,24 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
 
     def test_original_reader_jobs_are_required_before_finalization(self):
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
-        self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", finalize)
+        self.assertIn("needs: [reserve, publish, publication-native]", finalize)
         condition = next(line for line in finalize.splitlines() if line.startswith("    if:"))
         self.assertNotIn("always()", condition)
-        readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
-        self.assertIn("scripts/run-original-update-readers.py", readers)
-        self.assertNotIn("continue-on-error", readers)
+        native = WORKFLOW[WORKFLOW.index("\n  publication-native:\n"):WORKFLOW.index("\n  finalize:\n")]
+        self.assertIn("scripts/run-original-update-readers.py", native)
+        self.assertNotIn("continue-on-error", native)
 
     def test_original_reader_tools_have_artifact_download_permission(self):
-        readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
-        permissions = readers.split("    permissions:\n", 1)[1].split("    strategy:\n", 1)[0]
+        native = WORKFLOW[WORKFLOW.index("\n  publication-native:\n"):WORKFLOW.index("\n  finalize:\n")]
+        permissions = native.split("    permissions:\n", 1)[1].split("    timeout-minutes:\n", 1)[0]
         self.assertIn("      contents: read\n", permissions)
         self.assertIn("      actions: read\n", permissions)
         self.assertNotIn(": write", permissions)
-        self.assertIn("fixtures.release_tool download", readers)
+        self.assertIn("fixtures.release_tool download", native)
 
     def test_signer_readers_and_finalize_reuse_the_exact_source_tool_uploads(self):
-        publish = WORKFLOW[WORKFLOW.index("\n  publish:\n"):WORKFLOW.index("\n  verify-readers:\n")]
-        readers = WORKFLOW[WORKFLOW.index("\n  verify-readers:\n"):WORKFLOW.index("\n  finalize:\n")]
+        publish = WORKFLOW[WORKFLOW.index("\n  publish:\n"):WORKFLOW.index("\n  publication-native:\n")]
+        native = WORKFLOW[WORKFLOW.index("\n  publication-native:\n"):WORKFLOW.index("\n  finalize:\n")]
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
         proofs = (ROOT / ".github/workflows/update-proofs.yml").read_text()
         for key in ("linux-amd64", "linux-arm64", "darwin-arm64"):
@@ -156,9 +156,9 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
             self.assertIn(f"      tool-{key}: ${{{{ matrix.key == '{key}' && steps.tool-upload.outputs.artifact-id || '' }}}}", proofs)
         self.assertIn("ARTIFACT: ${{ needs.prove-transition.outputs.tool-linux-amd64 }}", publish)
         self.assertNotIn("go build", publish)
-        self.assertIn("ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}", readers)
+        self.assertIn("ARTIFACT: ${{ needs.publish.outputs[format('tool-{0}', matrix.key)] }}", native)
         self.assertIn("ARTIFACT: ${{ needs.publish.outputs['tool-linux-amd64'] }}", finalize)
-        for job in (readers, finalize):
+        for job in (native, finalize):
             download = next(line for line in job.splitlines() if "fixtures.release_tool download" in line)
             self.assertTrue(download.endswith('"$RUNNER_TEMP/release-source-tools" "$ARTIFACT"'), download)
 

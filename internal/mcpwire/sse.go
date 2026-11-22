@@ -66,7 +66,7 @@ func readSSEField(line, data []byte, name string) ([]byte, string, error) {
 	case "event":
 		name = string(value)
 	case "id", "retry":
-		return nil, "", peerError("SSE resumption field is outside the Mesh profile")
+		// Resumption fields are inert: Mesh never sends Last-Event-ID or reconnects.
 	case "data":
 		if data != nil {
 			data = append(data, '\n')
