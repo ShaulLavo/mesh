@@ -340,7 +340,7 @@ Stop a route's run command now. Its listeners stay bound. A route with an idle w
 
 ## mesh_service_unpublish
 
-Remove one route from its host, the same as mesh unserve, stopping its run command if it has one.
+Remove one route from its host, the same as mesh unserve, stopping its run command if it has one. Returns service.not_found only when the host's own route list shows the route absent; unlike mesh unserve --host, which succeeds then. A retry after a lost reply therefore reports service.not_found once the first attempt removed the route. Any other error leaves the route's state unknown; read it with mesh_service_inspect before retrying.
 
 - Linked operation: `services.unpublish`
 - Hints: destructive, idempotent

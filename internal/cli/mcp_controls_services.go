@@ -126,22 +126,31 @@ func (c *mcpControls) serviceChange(host HostRecord, privateName string, service
 }
 
 func (c *mcpControls) UnpublishService(ctx context.Context, req mcpnative.ServiceRouteRequest) (mcpnative.CallOutcome, error) {
-	const operation = "services.unpublish"
-	return c.serviceCall(ctx, operation, req.Host, req.Timeout, func(ctx context.Context, host HostRecord, exchange serviceExchange) (any, error) {
-		name, err := serviceNameFromRoute(req.Name)
-		if err != nil {
-			return nil, agentapi.Usage(operation, err.Error())
-		}
-		// Like mesh unserve, a route the host does not serve is an error,
-		// not a silent success.
-		if _, found, err := existingServiceVia(ctx, host, exchange, name); err != nil || !found {
-			return nil, errors.Join(err, routeNotFound(operation, host, req.Name, found))
-		}
-		if err := deleteServiceVia(ctx, host, exchange, name); err != nil {
-			return nil, err
-		}
-		return agentapi.ServiceRemoval{HostID: host.ID, Name: name, Removed: true}, nil
+	return c.serviceCall(ctx, "services.unpublish", req.Host, req.Timeout, func(ctx context.Context, host HostRecord, exchange serviceExchange) (any, error) {
+		return unpublishVia(ctx, host, exchange, req.Name)
 	})
+}
+
+// unpublishVia removes one route. service.not_found means the host's own
+// listing proved the route absent; a failed listing keeps its own cause, and
+// a retry after an uncertain reply is answered by that listing.
+func unpublishVia(ctx context.Context, host HostRecord, exchange serviceExchange, route string) (agentapi.ServiceRemoval, error) {
+	const operation = "services.unpublish"
+	name, err := serviceNameFromRoute(route)
+	if err != nil {
+		return agentapi.ServiceRemoval{}, agentapi.Usage(operation, err.Error())
+	}
+	_, found, err := existingServiceVia(ctx, host, exchange, name)
+	if err != nil {
+		return agentapi.ServiceRemoval{}, err
+	}
+	if !found {
+		return agentapi.ServiceRemoval{}, agentapi.Fail(agentapi.ServiceNotFound, operation, host.ID, fmt.Sprintf("route %s is not served by %s", safeRemoteText(route), HostLabel(host)))
+	}
+	if err := deleteServiceVia(ctx, host, exchange, name); err != nil {
+		return agentapi.ServiceRemoval{}, err
+	}
+	return agentapi.ServiceRemoval{HostID: host.ID, Name: name, Removed: true}, nil
 }
 
 func (c *mcpControls) PublishService(ctx context.Context, req mcpnative.PublishServiceRequest) (mcpnative.CallOutcome, error) {
@@ -151,14 +160,7 @@ func (c *mcpControls) PublishService(ctx context.Context, req mcpnative.PublishS
 		return failOutcome(operation, nil, agentapi.Fail(agentapi.UsageInvalid, operation, req.Host, err.Error()).Err), nil
 	}
 	return c.serviceCall(ctx, operation, req.Host, req.Timeout, func(ctx context.Context, host HostRecord, exchange serviceExchange) (any, error) {
-		existing := func(ctx context.Context, name string) (protocol.ServiceInfo, bool, error) {
-			return existingServiceVia(ctx, host, exchange, name)
-		}
-		requested, err := serviceRequestFromFlags(ctx, host, req.Target, flags, existing)
-		if err != nil {
-			return nil, agentapi.Usage(operation, err.Error())
-		}
-		publication, err := publishServiceVia(ctx, host, exchange, requested)
+		publication, err := publishVia(ctx, host, exchange, req.Target, flags)
 		if err != nil {
 			return nil, err
 		}
@@ -166,11 +168,30 @@ func (c *mcpControls) PublishService(ctx context.Context, req mcpnative.PublishS
 	})
 }
 
-func routeNotFound(operation string, host HostRecord, route string, found bool) error {
-	if found {
-		return nil
+// serviceLookupError marks a failed read of the host's current routes, so it
+// is reported as what it is and never as bad input.
+type serviceLookupError struct{ err error }
+
+func (e *serviceLookupError) Error() string { return e.err.Error() }
+func (e *serviceLookupError) Unwrap() error { return e.err }
+
+func publishVia(ctx context.Context, host HostRecord, exchange serviceExchange, target string, flags serveFlags) (remoteServicePublication, error) {
+	existing := func(ctx context.Context, name string) (protocol.ServiceInfo, bool, error) {
+		service, found, err := existingServiceVia(ctx, host, exchange, name)
+		if err != nil {
+			return service, found, &serviceLookupError{err: err}
+		}
+		return service, found, nil
 	}
-	return agentapi.Fail(agentapi.ServiceNotFound, operation, host.ID, fmt.Sprintf("route %s is not served by %s", safeRemoteText(route), HostLabel(host)))
+	requested, err := serviceRequestFromFlags(ctx, host, target, flags, existing)
+	var lookup *serviceLookupError
+	if errors.As(err, &lookup) {
+		return remoteServicePublication{}, lookup.err
+	}
+	if err != nil {
+		return remoteServicePublication{}, agentapi.Usage("services.publish", err.Error())
+	}
+	return publishServiceVia(ctx, host, exchange, requested)
 }
 
 func existingServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, name string) (protocol.ServiceInfo, bool, error) {

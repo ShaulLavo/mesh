@@ -101,7 +101,7 @@ func serviceToolSpecs() []ToolSpec {
 			Title:       "Remove a private route",
 			Operation:   "services.unpublish",
 			Group:       groupServices,
-			Description: "Remove one route from its host, the same as mesh unserve, stopping its run command if it has one.",
+			Description: "Remove one route from its host, the same as mesh unserve, stopping its run command if it has one. Returns service.not_found only when the host's own route list shows the route absent; unlike mesh unserve --host, which succeeds then. A retry after a lost reply therefore reports service.not_found once the first attempt removed the route. Any other error leaves the route's state unknown; read it with mesh_service_inspect before retrying.",
 			InputSchema: routeSchema(maxTimeoutMS),
 			Annotations: destructiveAnnotations(true),
 			Handler:     handleServiceUnpublish,

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -103,5 +104,34 @@ func TestPublishChecksPrivateNameBeforeUpsert(t *testing.T) {
 		if upserts.Load() != tc.upserts || (tc.upserts == 0) != (err != nil) {
 			t.Fatalf("current name %q: upserts=%d err=%v", tc.current, upserts.Load(), err)
 		}
+	}
+}
+
+// A failed read of the host's routes is reported as that failure. Only a
+// listing that succeeds and lacks the route is service.not_found, and only
+// bad options are usage.invalid.
+func TestServiceLookupFailuresKeepTheirCause(t *testing.T) {
+	host := HostRecord{ID: testTerminalHost, MachineName: "pc"}
+	unreachable := errors.New("read service.list response: connection reset")
+	failing := func(context.Context, protocol.Control, *string) (protocol.Control, protocol.HostInfo, error) {
+		return protocol.Control{}, protocol.HostInfo{}, unreachable
+	}
+	if _, err := unpublishVia(t.Context(), host, failing, "/dev"); !errors.Is(err, unreachable) {
+		t.Fatalf("unpublish with a failed lookup = %v, want the lookup error", err)
+	}
+	flags, err := publishFlags(mcpnative.PublishServiceRequest{Target: "3000", Route: "/dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publishVia(t.Context(), host, failing, "3000", flags); !errors.Is(err, unreachable) {
+		t.Fatalf("publish with a failed lookup = %v, want the lookup error", err)
+	}
+	empty := func(context.Context, protocol.Control, *string) (protocol.Control, protocol.HostInfo, error) {
+		return protocol.Control{Type: protocol.TypeServiceListed, Services: []protocol.ServiceInfo{}}, protocol.HostInfo{}, nil
+	}
+	_, err = unpublishVia(t.Context(), host, empty, "/dev")
+	var failure *agentapi.Failure
+	if !errors.As(err, &failure) || failure.Err.Code != agentapi.ServiceNotFound {
+		t.Fatalf("unpublish of an absent route = %v, want service.not_found", err)
 	}
 }
