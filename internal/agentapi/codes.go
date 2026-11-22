@@ -38,6 +38,14 @@ const (
 	InputClosed              Code = "input.closed"
 	InputBackpressure        Code = "input.backpressure"
 	InternalError            Code = "internal.error"
+	FileNotFound             Code = "file.not_found"
+	FileNotRegular           Code = "file.not_regular"
+	FileChanged              Code = "file.changed"
+	FileCursorInvalid        Code = "file.cursor_invalid"
+	FileConflict             Code = "file.conflict"
+	FilePatchMismatch        Code = "file.patch_mismatch"
+	FilePermissionDenied     Code = "file.permission_denied"
+	FileTargetMismatch       Code = "file.target_mismatch"
 	ContextNotFound          Code = "context.not_found"
 	ContextClosed            Code = "context.closed"
 	ContextConflict          Code = "context.conflict"
@@ -62,5 +70,7 @@ var Codes = map[Code]ErrorClass{
 	InputOutcomeUnknown: {Exit: 1}, InputKeyConflict: {Exit: 1}, InputOffsetMismatch: {Exit: 1},
 	InputClosed: {Exit: 1}, InputBackpressure: {Exit: 1, Retryable: true},
 	ResultExpired: {Exit: 1}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
+	FileNotFound: {Exit: 1}, FileNotRegular: {Exit: 1}, FileChanged: {Exit: 1}, FileCursorInvalid: {Exit: 1},
+	FileConflict: {Exit: 1}, FilePatchMismatch: {Exit: 1}, FilePermissionDenied: {Exit: 1}, FileTargetMismatch: {Exit: 1},
 	ContextNotFound: {Exit: 1}, ContextClosed: {Exit: 1}, ContextConflict: {Exit: 1},
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -292,7 +293,10 @@ func TestStdioCanonicalIDCancellationActiveThroughDeliveryAndOversizedID(t *test
 	}()
 
 	req1 := mcpReq(`"reuse-id"`, "tools/call", `,"name":"mesh_job_wait","arguments":{"job":"`+testJob+`","wait_ms":1000}`)
-	req1 = bytes.Replace(req1, []byte(`"clientCapabilities":{}`), []byte(`"clientCapabilities":{},"progressToken":"pt-late"`), 1)
+	req1 = bytes.Replace(req1, []byte(`"io.modelcontextprotocol/clientCapabilities":{}`), []byte(`"io.modelcontextprotocol/clientCapabilities":{},"progressToken":"pt-late"`), 1)
+	if !bytes.Contains(req1, []byte(`"progressToken":"pt-late"`)) {
+		t.Fatalf("failed to inject progressToken into test request: %s", req1)
+	}
 	if err := mcpwire.WriteStdio(clientOut, req1); err != nil {
 		t.Fatal(err)
 	}
@@ -369,5 +373,71 @@ func TestStdioToolHandlerErrorsUseAgentEnvelope(t *testing.T) {
 	}
 	if !resp.Result.IsError || resp.Result.StructuredContent.Status != agentapi.StatusError || len(resp.Result.StructuredContent.Errors) != 1 || resp.Result.StructuredContent.Errors[0].Code != agentapi.StateUnavailable {
 		t.Fatalf("unexpected tool error envelope: %s", raw)
+	}
+}
+
+func TestStdioOmitsProgressCallbackWithoutProgressToken(t *testing.T) {
+	ctxHandle := "mc1." + testHostID + "." + testInstance
+	jobHandle := "mj1." + testHostID + ".7K3D." + testInstance
+	var sawNotify atomic.Bool
+	controls := &stubControls{
+		execFn: func(_ context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+			if notify != nil {
+				sawNotify.Store(true)
+			}
+			return CallOutcome{Envelope: okEnvelope("sessions.create", ExecResultData{Job: jobHandle, RequestKey: req.RequestKey, State: "exited"})}, nil
+		},
+	}
+	out, reader, _, _ := startTestServer(t, ServerOptions{Version: "0.1.0-test", Controls: controls})
+
+	req := mcpReq("1", "tools/call", `,"name":"mesh_exec","arguments":{"context":"`+ctxHandle+`","request_key":"no-tok","argv":["/bin/true"]}`)
+	if err := mcpwire.WriteStdio(out, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Read(); err != nil {
+		t.Fatal(err)
+	}
+	if sawNotify.Load() {
+		t.Fatal("expected nil notify callback when request has no progressToken")
+	}
+}
+
+func TestExecArgsStrictCommandArgvExclusivitySchemaAndEncodedCap(t *testing.T) {
+	ctxHandle := "mc1." + testHostID + "." + testInstance
+	// 1. Both command and empty argv MUST be rejected with InvalidParams (-32602).
+	for _, rawArgs := range []string{
+		`{"context":"` + ctxHandle + `","request_key":"k1","command":"echo hi","argv":[]}`,
+		`{"context":"` + ctxHandle + `","request_key":"k2","command":"","argv":["/bin/true"]}`,
+		`{"context":"` + ctxHandle + `","request_key":"k3","command":""}`,
+		`{"context":"` + ctxHandle + `","request_key":"k4","argv":[]}`,
+	} {
+		if _, err := parseExecArgs(json.RawMessage(rawArgs)); err == nil {
+			t.Fatalf("parseExecArgs accepted invalid command/argv combination: %s", rawArgs)
+		}
+	}
+
+	// 2. mesh_exec InputSchema must encode exclusivity between command and argv.
+	reg := DefaultRegistry()
+	spec, ok := reg.Lookup("mesh_exec")
+	if !ok {
+		t.Fatal("mesh_exec not registered")
+	}
+	if !bytes.Contains(spec.InputSchema, []byte(`"oneOf"`)) {
+		t.Fatalf("mesh_exec InputSchema does not encode command/argv exclusivity: %s", spec.InputSchema)
+	}
+
+	// 3. Valid 8,000-byte escaped env value (>40 KiB after JSON escaping) must be rejected before dispatch.
+	escapedVal := strings.Repeat("\x01", 8000)
+	payload, err := json.Marshal(map[string]any{
+		"context":     ctxHandle,
+		"request_key": "k-big-env",
+		"argv":        []string{"/bin/true"},
+		"env":         map[string]string{"BIG": escapedVal},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseExecArgs(payload); err == nil {
+		t.Fatal("parseExecArgs accepted 8000-byte escaped env that exceeds 40 KiB Mesh control cap")
 	}
 }

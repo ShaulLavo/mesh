@@ -42,7 +42,7 @@ Run `mesh COMMAND --help` for the same text. A bare name is a host or a session,
 | [`mesh unserve`](#mesh-unserve) | Remove one private service |
 | [`mesh daemon`](#mesh-daemon) | Run this host's coordinator |
 | [`mesh device`](#mesh-device) | Approve device keys for this daemon's OS account |
-| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP stdio server |
+| [`mesh mcp`](#mesh-mcp) | Run the stateless native MCP stdio server and manage agent identities |
 | [`mesh private-names`](#mesh-private-names) | Manage private DNS and wildcard certificates |
 | [`mesh shell-init`](#mesh-shell-init) | Print opt-in directory and history recovery hooks |
 | [`mesh skill`](#mesh-skill) | Show and manage the embedded Mesh agent skill |
@@ -125,7 +125,7 @@ SETUP
 
   daemon [command] [--flags]                            Run this host's coordinator
   device [command]                                      Approve device keys for this daemon's OS account
-  mcp [command]                                         Run the stateless native MCP stdio server
+  mcp [command] [--flags]                               Run the stateless native MCP stdio server and manage agent identities
   private-names [command]                               Manage private DNS and wildcard certificates
   shell-init bash|zsh [--flags]                         Print opt-in directory and history recovery hooks
   skill [command] [--flags]                             Show and manage the embedded Mesh agent skill
@@ -2004,6 +2004,9 @@ Run Mesh's stateless MCP 2026-07-28 server over stdio.
 stdout carries only newline-delimited JSON-RPC MCP messages;
 diagnostics and startup errors go to stderr.
 
+Pass --identity NAME to enable durable execution contexts and mesh_exec.
+Without --identity, only passive native discovery is enabled.
+
 Usage:
   mesh mcp [flags]
   mesh mcp [command]
@@ -2020,7 +2023,8 @@ Available Commands:
   stop        Stop a hosted MCP server's processes and keep its definition
 
 Flags:
-  -h, --help   help for mcp
+  -h, --help              help for mcp
+      --identity string   local application identity created with mesh mcp identity create NAME
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

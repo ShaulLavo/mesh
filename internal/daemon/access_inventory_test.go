@@ -19,7 +19,7 @@ func TestScopedDenialInventoryCoversActualControlOwners(t *testing.T) {
 	for name := range deniedScopedActions {
 		denied[name] = true
 	}
-	for _, path := range []string{"server.go", "relay.go", "lifecycle.go", "execution.go", "execution_output.go", "execution_context.go", "execution_context_jobs.go", "application_caller.go", "recovery.go", "copy.go", "apps.go", "agent_context.go", "services.go", "certificates.go", "wake.go", "state_requests.go", "update.go"} {
+	for _, path := range []string{"server.go", "relay.go", "lifecycle.go", "execution.go", "execution_output.go", "execution_context.go", "execution_context_jobs.go", "application_caller.go", "recovery.go", "copy.go", "apps.go", "agent_context.go", "files.go", "files_read.go", "files_list.go", "files_write.go", "files_serve.go", "services.go", "certificates.go", "wake.go", "state_requests.go", "update.go"} {
 		checkScopedOwnerTypes(t, path, constants, denied)
 	}
 }

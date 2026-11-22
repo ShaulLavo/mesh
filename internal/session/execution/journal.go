@@ -66,6 +66,11 @@ func (j *Journal) read(hash string) (Receipt, error) {
 	if err != nil {
 		r.Acceptance = string(Unconfirmed)
 	}
+	if r.Cwd == "" && r.Context != nil {
+		if snap, snapErr := j.ReadLaunchSnapshot(r); snapErr == nil && snap.Intent.Cwd != "" {
+			r.Cwd = snap.Intent.Cwd
+		}
+	}
 	return r, err
 }
 func (j *Journal) save(r Receipt) (Receipt, error) {
@@ -142,7 +147,7 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	if err := binding.Validate(); err != nil {
 		return Receipt{}, false, err
 	}
-	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent}
+	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent, Cwd: i.Cwd}
 	if hooks.decorate != nil {
 		hooks.decorate(&r)
 	}
