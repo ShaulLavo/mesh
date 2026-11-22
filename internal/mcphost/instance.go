@@ -268,6 +268,9 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 		}
 		return nil, s.failStart(ctx, inst, key, ref, err.Error())
 	}
+	s.mu.Lock()
+	inst.rec.Worker = &ref
+	s.mu.Unlock()
 	if err := s.settle(ctx, inst, StateReady, "", nil); err != nil {
 		_ = upstream.Close()
 		return nil, err

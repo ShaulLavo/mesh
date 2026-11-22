@@ -65,14 +65,15 @@ func (m mcpLauncher) Launch(ctx context.Context, spec mcphost.LaunchSpec) (mcpho
 		// Never launch a second worker for it.
 		return m.ref(r.Binding), mcphost.ErrLaunchUncertain
 	}
-	return m.dispatch(ctx, journal, r.Binding, intent, env)
+	return m.dispatch(ctx, journal, r, intent, env)
 }
 
-func (m mcpLauncher) dispatch(ctx context.Context, journal *execution.Journal, b execution.Binding, intent execution.Intent, env []string) (mcphost.WorkerRef, error) {
+func (m mcpLauncher) dispatch(ctx context.Context, journal *execution.Journal, r execution.Receipt, intent execution.Intent, env []string) (mcphost.WorkerRef, error) {
+	b := r.Binding
 	if err := journal.Dispatch(ctx, b, intent); err != nil {
 		return mcphost.WorkerRef{}, errors.Join(mcphost.ErrLaunchUncertain, err)
 	}
-	executionDaemonBoundary(m.l.sessionsDir, "before_mcp_worker_launch", execution.Receipt{Binding: b})
+	executionDaemonBoundary(m.l.sessionsDir, "before_mcp_worker_launch", r)
 	ref := b.Reservation
 	launched, err := m.l.launch(worker.LaunchConfig{SessionsDir: m.l.sessionsDir, HostID: string(m.l.host.ID), Executable: m.l.executable, Reservation: &ref, Execution: &b, Command: intent.Command, Cwd: intent.Cwd, Env: env, Label: "agent request " + ref.Instance})
 	if err != nil {
@@ -86,7 +87,7 @@ func (m mcpLauncher) dispatch(ctx context.Context, journal *execution.Journal, b
 	if launched.Meta.Reservation == nil || *launched.Meta.Reservation != ref {
 		return m.ref(b), mcphost.ErrLaunchUncertain
 	}
-	executionDaemonBoundary(m.l.sessionsDir, "before_mcp_publication", execution.Receipt{Binding: b})
+	executionDaemonBoundary(m.l.sessionsDir, "before_mcp_publication", r)
 	if _, err := journal.Published(ctx, b); err != nil {
 		return m.ref(b), errors.Join(mcphost.ErrLaunchUncertain, err)
 	}

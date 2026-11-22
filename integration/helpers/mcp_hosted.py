@@ -6,12 +6,13 @@ import subprocess
 import sys
 
 from pipe_execution import PipeFixture
-from terminal_window import print_diagnostics, require
+from terminal_window import eventually, print_diagnostics, require
 
 # A minimal stateless MCP 2026-07-28 server: it answers server/discover and
 # writes one diagnostic line to stderr.
 SERVER = r"""#!/bin/sh
 echo "hosted fixture stderr line" >&2
+printf x >> "$0.launches"
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\("[^"]*"\).*/\1/p')
   case $line in
@@ -32,6 +33,31 @@ def mesh(fixture, *arguments, ok=True):
 
 def show(fixture, name):
     return json.loads(mesh(fixture, "show", name, "--json").stdout)
+
+
+def launches(server):
+    path = Path(str(server) + ".launches")
+    return len(path.read_bytes()) if path.exists() else 0
+
+
+def crash_during_restart(fixture, server, stage):
+    """Kill the daemon at a launch boundary of the next generation, then restart it."""
+    instance = show(fixture, "shtools")["instances"][0]
+    before = launches(server)
+    hold = fixture.local / (".pipe-hold-" + stage)
+    hold.write_text(f"{instance['id']}/{instance['generation'] + 1}")
+    reached = Path(str(hold) + ".reached")
+    restart = subprocess.Popen([fixture.binary, "mcp", "restart", "shtools"], env=fixture.environment,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        eventually(reached.exists, f"{stage} was not reached")
+        fixture.crash_daemon()
+    finally:
+        restart.wait(timeout=30)
+        hold.unlink()
+        reached.unlink(missing_ok=True)
+    fixture.start_local_daemon()
+    return before, show(fixture, "shtools")["instances"][0]
 
 
 def main():
@@ -55,6 +81,23 @@ def main():
 
         mesh(fixture, "restart", "shtools")
         require(show(fixture, "shtools")["instances"][0]["generation"] == 2, "restart kept the old generation")
+
+        # Crash after the worker started but before its publication: the
+        # restarted daemon adopts that exact worker and launches nothing new.
+        before, instance = crash_during_restart(fixture, server, "before_mcp_publication")
+        require(instance["state"] == "ready" and instance["generation"] == 3, instance)
+        require(launches(server) == before + 1, "the published worker was launched twice")
+        print("PASS: a worker started before publication is adopted after a daemon crash", flush=True)
+
+        # Crash after dispatch but before the launch: whether a worker exists is
+        # unknown, so Mesh refuses a second launch instead of guessing.
+        before, instance = crash_during_restart(fixture, server, "before_mcp_worker_launch")
+        require(instance["state"] == "uncertain", instance)
+        refused = mesh(fixture, "start", "shtools", "--instance", instance["id"], ok=False)
+        require(refused.returncode != 0 and "service.unavailable" in refused.stderr, refused.stderr)
+        require(launches(server) == before, "an uncertain launch was repeated")
+        print("PASS: an uncertain launch is reported and never repeated", flush=True)
+
         require("stopped" in mesh(fixture, "stop", "shtools").stdout, "stop did not stop the instance")
 
         refused = mesh(fixture, "publish", "oauth", "--account-mode", "per-user", "--", "/bin/true", ok=False)
