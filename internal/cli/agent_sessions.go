@@ -76,7 +76,7 @@ func (a *application) sessionCommand() *cobra.Command {
 		return nil
 	}}
 	group.Flags().Bool("json", false, "write one agent result")
-	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand(), a.sessionCreateCommand(), a.sessionRequestCommand(), a.sessionWaitCommand(), a.sessionInputCommand(), a.sessionLogsCommand(), a.sessionSignalCommand(), a.sessionKillCommand(), a.sessionRemoveCommand())
+	group.AddCommand(a.sessionListCommand(), a.sessionInspectCommand(), a.sessionCreateCommand(), a.sessionRequestCommand(), a.sessionWaitCommand(), a.sessionInputCommand(), a.sessionLogsCommand(), a.sessionSignalCommand(), a.sessionKillCommand(), a.sessionRemoveCommand(), a.sessionResizeCommand(), a.sessionScreenCommand())
 	return group
 }
 

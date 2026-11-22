@@ -64,6 +64,8 @@ type Controls interface {
 	JobSignal(ctx context.Context, req JobSignalRequest) (CallOutcome, error)
 	JobCancel(ctx context.Context, req JobRefRequest) (CallOutcome, error)
 	JobRemove(ctx context.Context, req JobRefRequest) (CallOutcome, error)
+	TerminalControls
+	ServiceControls
 }
 
 type ListHostsRequest struct {
@@ -221,7 +223,10 @@ type JobInputRequest struct {
 	Offset   *uint64
 	Data     []byte
 	EOF      bool
-	Timeout  time.Duration
+	// Kind is the job kind the tool writes to: pipe stdin or terminal keys.
+	// The host refuses the other kind, so the two never mix.
+	Kind    string
+	Timeout time.Duration
 }
 
 type JobSignalRequest struct {

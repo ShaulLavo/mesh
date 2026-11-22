@@ -73,6 +73,9 @@ type HTTPUpstreamConfig struct {
 	// tool from the account's current schema, and false when the tool is not
 	// known yet.
 	ToolHeaders func(tool string) (mcpwire.ParameterHeaders, bool)
+	// budget is the instance's shared reply budget (section 2.5), whose
+	// parent is the host's. Calls that overflow it fail as slow consumers.
+	budget *byteBudget
 }
 
 // newHTTPUpstream is set by the H5 client's own file. Definitions with a URL

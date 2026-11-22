@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -15,11 +16,8 @@ func (l *lifecycle) executionInput(ctx context.Context, req protocol.Control, r 
 	if err != nil {
 		return response, executionBoundaryError("execution stdin", err)
 	}
-	if r.Binding.Mode() != execution.KindPipe {
-		return response, execution.ErrInstance
-	}
-	if r.Binding.Stdin != execution.StdinOpen {
-		return response, execution.ErrInputClosed
+	if err := inputMode(r.Binding, req.ExecutionKind, intent); err != nil {
+		return response, err
 	}
 	if intent == nil || r.Phase == executionTerminalPhase || r.Binding.Reservation.BootID != worker.BootID() {
 		response.InputReceipt, err = l.executionOutput.Input(r.Binding, req.WriteKey, intent, req.InputBytes)
@@ -49,6 +47,30 @@ func (l *lifecycle) executionInput(ctx context.Context, req protocol.Control, r 
 	return response, nil
 }
 
+// inputMode admits pipe stdin to open pipe jobs and keyed key presses to
+// terminal jobs. A terminal has no end of file to close. A request that names
+// the kind it expects (the MCP tools do) never reaches the other kind, so
+// terminal keys and pipe stdin never mix.
+func inputMode(b execution.Binding, expected string, intent *session.InputReceipt) error {
+	if expected != "" && expected != b.Mode() {
+		return &protocol.ExecutionValidationError{Err: fmt.Errorf("execution: this job is kind %s, not %s", b.Mode(), expected)}
+	}
+	switch b.Mode() {
+	case execution.KindPipe:
+		if b.Stdin != execution.StdinOpen {
+			return execution.ErrInputClosed
+		}
+		return nil
+	case execution.KindPTY:
+		if intent != nil && intent.Closed {
+			return &protocol.ExecutionValidationError{Err: fmt.Errorf("execution: terminal input has no end of file; send the terminal's end-of-file key (ctrl+d) as bytes")}
+		}
+		return nil
+	default:
+		return execution.ErrInstance
+	}
+}
+
 func executionInputError(code string) error {
 	switch code {
 	case protocol.ErrorCodeInstanceMismatch:
@@ -63,6 +85,10 @@ func executionInputError(code string) error {
 		return execution.ErrInputFull
 	case "resource.limit":
 		return execution.ErrInputLimit
+	case execution.CodeTerminalAttached:
+		return execution.ErrTerminalAttached
+	case execution.CodeTerminalClosed:
+		return execution.ErrTerminalClosed
 	default:
 		return fmt.Errorf("worker input: %w", execution.ErrInputUnknown)
 	}

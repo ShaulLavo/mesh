@@ -280,17 +280,36 @@ func TestDialIsBoundToTheApprovedAuthority(t *testing.T) {
 	}
 }
 
+// listenWithOtherFamilyFree listens on a port that nothing else holds on the
+// other loopback family, so "localhost" can only reach this server. A busy
+// host may run an unrelated server on the same port number there.
+func listenWithOtherFamilyFree(t *testing.T, host, other string) net.Listener {
+	t.Helper()
+	for range 32 {
+		listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+		if err != nil {
+			t.Skipf("cannot listen on %s: %v", host, err)
+		}
+		_, port, _ := net.SplitHostPort(listener.Addr().String())
+		probe, err := net.Listen("tcp", net.JoinHostPort(other, port))
+		if err == nil {
+			_ = probe.Close()
+			return listener
+		}
+		_ = listener.Close()
+	}
+	t.Fatal("no port free on both loopback families")
+	return nil
+}
+
 func TestLocalhostReachesEitherLoopbackFamily(t *testing.T) {
 	serve := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		writeJSON(w, http.StatusOK, okResult(requestID(t, body)))
 	})
-	for name, listen := range map[string]string{"IPv4": "127.0.0.1:0", "IPv6 only": "[::1]:0"} {
+	for name, family := range map[string][2]string{"IPv4": {"127.0.0.1", "::1"}, "IPv6 only": {"::1", "127.0.0.1"}} {
 		t.Run(name, func(t *testing.T) {
-			listener, err := net.Listen("tcp", listen)
-			if err != nil {
-				t.Skipf("cannot listen on %s: %v", listen, err)
-			}
+			listener := listenWithOtherFamilyFree(t, family[0], family[1])
 			server := httptest.NewUnstartedServer(serve)
 			server.Listener = listener
 			server.Start()

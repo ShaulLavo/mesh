@@ -1,0 +1,320 @@
+// Package mcpfixture is a small stateless MCP 2026-07-28 stdio server for
+// tests. Its tools exercise large replies, progress, cancellation,
+// multi-round input, subscriptions and protocol faults.
+package mcpfixture
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Env names that change the fixture's behaviour.
+const (
+	// EnvMode selects "legacy" (refuses discovery like a pre-2026 server),
+	// "bad-after-probe" (answers discovery, then sends results without
+	// resultType) or "exit" (exits before reading anything).
+	EnvMode = "MESH_MCP_FIXTURE_MODE"
+	// EnvSecret is printed to stderr at start, as a careless server would.
+	EnvSecret = "MESH_MCP_FIXTURE_SECRET" //nolint:gosec // The name of a variable, not a credential.
+)
+
+type server struct {
+	out    *bufio.Writer
+	stderr io.Writer
+	mode   string
+	secret string
+	mu     sync.Mutex
+
+	pending  sync.Map // request ID string -> chan struct{} closed on cancel
+	listens  sync.Map // subscription ID raw -> struct{}
+	calls    int
+	instance string
+}
+
+type request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type callParams struct {
+	Name           string                     `json:"name"`
+	Arguments      map[string]json.RawMessage `json:"arguments"`
+	RequestState   *string                    `json:"requestState"`
+	InputResponses map[string]json.RawMessage `json:"inputResponses"`
+	Meta           map[string]json.RawMessage `json:"_meta"`
+}
+
+// Run serves MCP on stdin and stdout until stdin closes.
+func Run(stdin io.Reader, stdout, stderr io.Writer) error {
+	return RunEnv(stdin, stdout, stderr, os.Getenv)
+}
+
+var instances atomic.Int64
+
+// RunEnv is Run with an explicit environment, for in-process tests.
+func RunEnv(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string) error {
+	s := &server{out: bufio.NewWriterSize(stdout, 64<<10), stderr: stderr, mode: getenv(EnvMode), secret: getenv(EnvSecret),
+		instance: strconv.Itoa(os.Getpid()) + "." + strconv.FormatInt(instances.Add(1), 10)}
+	if s.mode == "exit" {
+		_, _ = fmt.Fprintln(stderr, "fixture: exiting at start")
+		return fmt.Errorf("fixture exit mode")
+	}
+	if s.secret != "" {
+		_, _ = fmt.Fprintf(stderr, "fixture: using token %s\n", s.secret)
+	}
+	reader := bufio.NewReaderSize(stdin, 64<<10)
+	// Like a real server, closing stdin ends the process without waiting for
+	// requests still in progress.
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			go s.handle(line)
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("fixture: read stdin: %w", err)
+		}
+	}
+}
+
+func (s *server) write(value any) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	s.writeRaw(raw)
+}
+
+func (s *server) writeRaw(raw []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, _ = s.out.Write(raw)
+	_ = s.out.WriteByte('\n')
+	_ = s.out.Flush()
+}
+
+// JSON-RPC and MCP member names the fixture writes.
+const (
+	keyJSONRPC   = "jsonrpc"
+	jsonRPC      = "2.0"
+	keyMeta      = "_meta"
+	keyType      = "type"
+	keyText      = "text"
+	keyName      = "name"
+	toolExit     = "exit"
+	toolProgress = "progress"
+)
+
+// reply sends a raw result object, exactly as given.
+func (s *server) reply(id json.RawMessage, result map[string]any) {
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "id": id, "result": result})
+}
+
+// notify sends one server notification.
+func (s *server) notify(method string, params map[string]any) {
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "method": method, "params": params})
+}
+
+func subscription(id any) map[string]any {
+	return map[string]any{"io.modelcontextprotocol/subscriptionId": id}
+}
+
+func (s *server) result(id json.RawMessage, result map[string]any) {
+	if _, ok := result["resultType"]; !ok && s.mode != "bad-after-probe" {
+		result["resultType"] = "complete"
+	}
+	s.reply(id, result)
+}
+
+func (s *server) fail(id json.RawMessage, code int, message string) {
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "id": id, "error": map[string]any{"code": code, "message": message}})
+}
+
+func (s *server) handle(line []byte) {
+	var req request
+	if err := json.Unmarshal(line, &req); err != nil {
+		return
+	}
+	if req.ID == nil {
+		s.notification(req)
+		return
+	}
+	switch req.Method {
+	case "server/discover":
+		s.discover(req)
+	case "tools/list":
+		s.result(req.ID, map[string]any{"tools": tools(), "ttlMs": 60000, "cacheScope": "private"})
+	case "tools/call":
+		s.call(req)
+	case "subscriptions/listen":
+		s.listen(req)
+	default:
+		s.fail(req.ID, -32601, "method not found")
+	}
+}
+
+func (s *server) notification(req request) {
+	if req.Method != "notifications/cancelled" {
+		return
+	}
+	var params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	_ = json.Unmarshal(req.Params, &params)
+	_, _ = fmt.Fprintf(s.stderr, "fixture: cancelled %s\n", params.RequestID)
+	if done, ok := s.pending.LoadAndDelete(string(params.RequestID)); ok {
+		close(done.(chan struct{}))
+	}
+	if _, ok := s.listens.LoadAndDelete(string(params.RequestID)); ok {
+		_, _ = fmt.Fprintf(s.stderr, "fixture: listen ended %s\n", params.RequestID)
+	}
+}
+
+func (s *server) discover(req request) {
+	if s.mode == "legacy" {
+		s.fail(req.ID, -32601, "method not found")
+		return
+	}
+	s.reply(req.ID, map[string]any{
+		"resultType":        "complete",
+		"supportedVersions": []string{"2026-07-28"},
+		"capabilities":      map[string]any{"tools": map[string]any{"listChanged": true}},
+		"ttlMs":             60000,
+		"cacheScope":        "private",
+		keyMeta:             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{keyName: "mesh-fixture", "version": "1"}},
+	})
+}
+
+func tools() []map[string]any {
+	names := []string{"echo", "big", "slow", toolProgress, "ask", "whoami", "garbage", "touch", toolExit}
+	out := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		out = append(out, map[string]any{keyName: name, "inputSchema": map[string]any{keyType: "object"}})
+	}
+	return out
+}
+
+func text(value string) map[string]any {
+	return textBlock(value, false)
+}
+
+func textBlock(value string, isError bool) map[string]any {
+	result := map[string]any{"content": []map[string]any{{keyType: keyText, keyText: value}}}
+	if isError {
+		result["isError"] = true
+	}
+	return result
+}
+
+func (s *server) call(req request) {
+	var p callParams
+	_ = json.Unmarshal(req.Params, &p)
+	s.mu.Lock()
+	s.calls++
+	calls := s.calls
+	s.mu.Unlock()
+	switch p.Name {
+	case "echo":
+		var value string
+		_ = json.Unmarshal(p.Arguments[keyText], &value)
+		s.result(req.ID, text(value))
+	case "big":
+		n, _ := strconv.Atoi(string(p.Arguments["bytes"]))
+		s.result(req.ID, text(strings.Repeat("x", n)))
+	case "slow":
+		s.slow(req)
+	case toolProgress:
+		s.progress(req, p)
+	case "ask":
+		s.ask(req, p)
+	case "whoami":
+		sum := sha256.Sum256([]byte(s.secret))
+		s.result(req.ID, text(fmt.Sprintf("instance=%s calls=%d secret-digest=%s", s.instance, calls, hex.EncodeToString(sum[:4]))))
+	case "garbage":
+		s.writeRaw([]byte("this is not json"))
+	case "touch":
+		s.listens.Range(func(key, _ any) bool {
+			s.notify("notifications/tools/list_changed", map[string]any{keyMeta: subscription(json.RawMessage(key.(string)))})
+			return true
+		})
+		s.result(req.ID, text("touched"))
+	case toolExit:
+		s.result(req.ID, text("exiting"))
+		time.Sleep(50 * time.Millisecond)
+		os.Exit(3)
+	default:
+		s.fail(req.ID, -32602, "unknown tool")
+	}
+}
+
+func (s *server) slow(req request) {
+	done := make(chan struct{})
+	s.pending.Store(string(req.ID), done)
+	select {
+	case <-done:
+	case <-time.After(time.Minute):
+		s.result(req.ID, text("slow finished"))
+	}
+}
+
+func (s *server) progress(req request, p callParams) {
+	n, _ := strconv.Atoi(string(p.Arguments["count"]))
+	token := p.Meta["progressToken"]
+	for i := range n {
+		if token != nil {
+			s.notify("notifications/progress", map[string]any{"progressToken": token, toolProgress: i + 1, "total": n})
+		}
+	}
+	s.result(req.ID, text(fmt.Sprintf("progressed %d", n)))
+}
+
+func (s *server) ask(req request, p callParams) {
+	if p.InputResponses == nil {
+		schema := map[string]any{keyType: "object", "properties": map[string]any{keyName: map[string]any{keyType: "string"}}}
+		s.reply(req.ID, map[string]any{
+			"resultType":    "input_required",
+			"requestState":  "fixture-state-1",
+			"inputRequests": map[string]any{keyName: map[string]any{"method": "elicitation/create", "params": map[string]any{"message": "Name?", "requestedSchema": schema}}},
+		})
+		return
+	}
+	if p.RequestState == nil || *p.RequestState != "fixture-state-1" {
+		s.result(req.ID, textBlock("bad state", true))
+		return
+	}
+	var answer struct {
+		Content struct {
+			Name string `json:"name"`
+		} `json:"content"`
+	}
+	_ = json.Unmarshal(p.InputResponses[keyName], &answer)
+	s.result(req.ID, text("hello "+answer.Content.Name))
+}
+
+func (s *server) listen(req request) {
+	var p struct {
+		Notifications map[string]json.RawMessage `json:"notifications"`
+	}
+	_ = json.Unmarshal(req.Params, &p)
+	acknowledged := map[string]any{}
+	if string(p.Notifications["toolsListChanged"]) == "true" {
+		acknowledged["toolsListChanged"] = true
+	}
+	s.listens.Store(string(req.ID), struct{}{})
+	s.notify("notifications/subscriptions/acknowledged", map[string]any{"notifications": acknowledged, keyMeta: subscription(req.ID)})
+}

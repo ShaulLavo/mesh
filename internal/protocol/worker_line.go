@@ -10,6 +10,11 @@ import (
 	"github.com/shaul/mesh/internal/session"
 )
 
+// LineTail as a worker.line.attach LastSeq starts the attachment at the next
+// stdout frame. The attach reply reports the actual starting frame in LastSeq
+// and the next stdin offset in InputOffset.
+const LineTail = ^uint64(0)
+
 // DecodeLineInput decodes one stdin frame from an exclusive worker connection.
 // The first control binds the exact reservation and next output frame. After
 // that, KindData carries stdout lines numbered from zero. KindInput carries

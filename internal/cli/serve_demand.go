@@ -321,6 +321,22 @@ func (a *application) serveStartStopCommand(start bool) *cobra.Command {
 	return command
 }
 
+// startStopServiceVia starts or stops one on-demand route and returns the
+// status its host acknowledged.
+func startStopServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, requestType, operation, name string) (protocol.ServiceInfo, error) {
+	response, _, err := exchange(ctx, protocol.Control{Type: requestType, ServiceName: name}, nil)
+	if err != nil {
+		return protocol.ServiceInfo{}, err
+	}
+	if response.Type == protocol.TypeError {
+		return protocol.ServiceInfo{}, remoteServiceResponseError(host, operation, response)
+	}
+	if response.Type != protocol.TypeOK || response.ServiceName != name || response.Service == nil {
+		return protocol.ServiceInfo{}, fmt.Errorf("host %s returned an invalid %s acknowledgement", HostLabel(host), operation)
+	}
+	return validateRemoteService(*response.Service)
+}
+
 func (a *application) runServeStartStop(cmd *cobra.Command, route, hostID string, timeout time.Duration, start bool) error {
 	name, err := serviceNameFromRoute(route)
 	if err != nil {
@@ -347,17 +363,7 @@ func (a *application) runServeStartStop(cmd *cobra.Command, route, hostID string
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), wait)
 	defer cancel()
-	response, _, err := remoteServiceRequest(ctx, selected.Host, a.dependencies.DialControl, protocol.Control{Type: requestType, ServiceName: name}, nil)
-	if err != nil {
-		return err
-	}
-	if response.Type == protocol.TypeError {
-		return remoteServiceResponseError(selected.Host, operation, response)
-	}
-	if response.Type != protocol.TypeOK || response.ServiceName != name || response.Service == nil {
-		return fmt.Errorf("host %s returned an invalid %s acknowledgement", HostLabel(selected.Host), operation)
-	}
-	status, err := validateRemoteService(*response.Service)
+	status, err := startStopServiceVia(ctx, selected.Host, dialServiceExchange(selected.Host, a.dependencies.DialControl), requestType, operation, name)
 	if err != nil {
 		return err
 	}

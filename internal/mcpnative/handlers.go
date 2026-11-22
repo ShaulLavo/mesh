@@ -490,7 +490,7 @@ func handleJobInput(ctx context.Context, controls Controls, raw json.RawMessage,
 		return CallOutcome{}, err
 	}
 	out, err := controls.JobInput(ctx, JobInputRequest{
-		Job: ref, Context: ctxRef, WriteKey: args.WriteKey, Offset: offset, Data: data, EOF: args.EOF, Timeout: timeout,
+		Job: ref, Context: ctxRef, WriteKey: args.WriteKey, Offset: offset, Data: data, EOF: args.EOF, Kind: jobKindPipe, Timeout: timeout,
 	})
 	return wrapControl("mesh_job_input", out, err)
 }

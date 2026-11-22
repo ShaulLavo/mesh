@@ -35,6 +35,7 @@ func schemaRefreshed(ctx context.Context) bool {
 type httpUpstream struct {
 	client      *httpClient
 	toolHeaders func(string) (mcpwire.ParameterHeaders, bool)
+	budget      *byteBudget
 	closed      chan struct{}
 	closeOnce   sync.Once
 }
@@ -48,7 +49,7 @@ func openHTTPUpstream(config HTTPUpstreamConfig) (Upstream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &httpUpstream{client: newHTTPClient(endpoint, credentials), toolHeaders: config.ToolHeaders, closed: make(chan struct{})}, nil
+	return &httpUpstream{client: newHTTPClient(endpoint, credentials), toolHeaders: config.ToolHeaders, budget: config.budget, closed: make(chan struct{})}, nil
 }
 
 func validCredentials(headers http.Header) ([]credentialHeader, error) {
@@ -138,16 +139,18 @@ func (u *httpUpstream) Call(ctx context.Context, request mcpwire.Message, sink f
 	if err != nil {
 		return u.callError(ctx, err)
 	}
-	queue := newEventQueue()
+	queue := newEventQueue(u.budget)
 	pumped := make(chan struct{})
 	go func() {
 		defer close(pumped)
 		pump(stream, queue)
 	}()
-	// Closing the stream ends the pump, so no goroutine outlives the call.
+	// Closing the stream ends the pump, so no goroutine outlives the call,
+	// and nothing the call queued stays charged to the instance.
 	defer func() {
 		stream.close()
 		<-pumped
+		queue.close()
 	}()
 	return u.callError(ctx, deliver(callCtx, queue, sink))
 }
