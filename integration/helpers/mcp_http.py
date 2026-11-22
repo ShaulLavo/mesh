@@ -489,7 +489,7 @@ def exercise_application_identity_isolation(fixture, root):
 def main():
     binary = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="mesh-mcp-http-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         check_startup_usage_errors(binary, root)
 
         (root / "fleet").mkdir()

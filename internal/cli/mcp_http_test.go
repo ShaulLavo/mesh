@@ -14,6 +14,7 @@ import (
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpwire"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/testenv"
 	"github.com/shaul/mesh/internal/transport"
 )
 
@@ -82,12 +83,13 @@ func TestMCPHTTPValidationAndTokenFileSecurity(t *testing.T) {
 		t.Fatalf("public origin accepted: stdout=%q err=%v", stdout, err)
 	}
 
-	symlinkPath := filepath.Join(t.TempDir(), "link.json")
-	if err := os.Symlink(filepath.Join(t.TempDir(), "real.json"), symlinkPath); err != nil {
+	symlinkDir := canonicalTempDir(t)
+	symlinkPath := filepath.Join(symlinkDir, "link.json")
+	if err := os.Symlink(filepath.Join(symlinkDir, "real.json"), symlinkPath); err != nil {
 		t.Fatal(err)
 	}
-	if stdout, _, err := executeCommand(t, Dependencies{}, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-http", "--token-file", symlinkPath); err == nil || stdout != "" {
-		t.Fatalf("symlink token file accepted: stdout=%q err=%v", stdout, err)
+	if stdout, _, err := executeCommand(t, Dependencies{}, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-http", "--token-file", symlinkPath); err == nil || stdout != "" || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("symlink token file accepted or wrong error: stdout=%q err=%v", stdout, err)
 	}
 }
 
@@ -97,7 +99,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 		t.Fatalf("create identity: %v", err)
 	}
 
-	tokenPath := filepath.Join(t.TempDir(), "mcp-http-token.json")
+	tokenPath := filepath.Join(canonicalTempDir(t), "mcp-http-token.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -124,21 +126,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 	}()
 
 	// Wait until the private 0600 token file appears.
-	var record mcpHTTPTokenFile
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, err := os.ReadFile(tokenPath) //nolint:gosec // test temp file
-		if err == nil && json.Unmarshal(raw, &record) == nil && record.Token != "" {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	if record.Token == "" {
-		cancel()
-		<-done
-		stderrBytes, _ := os.ReadFile(stderrFile.Name())
-		t.Fatalf("token file never populated (stderr=%q)", stderrBytes)
-	}
+	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile, testenv.HangTimeout)
 
 	info, err := os.Lstat(tokenPath)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
@@ -148,7 +136,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 		t.Fatalf("unexpected token record: %+v", record)
 	}
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
+	httpClient := &http.Client{Timeout: testenv.HangTimeout}
 	skillBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_skill","arguments":{}}}`
 
 	postSkill := func(tok string) int {
@@ -230,7 +218,7 @@ func TestMCPHTTPLiveLifecycleRotateAndCleanup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP server exit error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testenv.HangTimeout):
 		t.Fatal("HTTP server did not exit promptly")
 	}
 	stdoutBytes, err := os.ReadFile(stdoutFile.Name())
@@ -292,7 +280,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		}), nil
 	}
 
-	tokenPath := filepath.Join(t.TempDir(), "review-a.json")
+	tokenPath := filepath.Join(canonicalTempDir(t), "review-a.json")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr-*")
@@ -309,18 +297,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		<-done
 	}()
 
-	var record mcpHTTPTokenFile
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, err := os.ReadFile(tokenPath) //nolint:gosec // test temp file
-		if err == nil && json.Unmarshal(raw, &record) == nil && record.Token != "" {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	if record.Token == "" {
-		t.Fatal("token file did not appear")
-	}
+	record := waitForMCPHTTPTokenFile(t, tokenPath, done, stderrFile, testenv.HangTimeout)
 
 	jobHandle := "mj1." + hostID + ".7K3D.0123456789abcdef0123456789abcdef"
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_job_status","arguments":{"job":"` + jobHandle + `"}}}`
@@ -334,7 +311,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 	req.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
 	req.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
 	req.Header.Set(mcpwire.NameHeader, "mesh_job_status")
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: testenv.HangTimeout}).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +329,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		if string(caller) != wantID.Credential.Encode() {
 			t.Fatalf("HTTP control Caller = %q, want encoded review-a credential", caller)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testenv.HangTimeout):
 		t.Fatal("HTTP daemon control was not received")
 	}
 
@@ -384,7 +361,7 @@ func TestMCPHTTPForwardsCallerIdentityToDaemon(t *testing.T) {
 		if string(caller) != wantID.Credential.Encode() {
 			t.Fatalf("stdio control Caller = %q, want encoded review-a credential", caller)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testenv.HangTimeout):
 		t.Fatal("stdio daemon control was not received")
 	}
 	_ = stdinW.Close()
@@ -403,7 +380,7 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 		t.Fatal(err)
 	}
 
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	realDir := filepath.Join(root, "real")
 	if err := os.MkdirAll(realDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -415,8 +392,8 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 
 	// 1. Symlinked parent directory must be refused (bounded context so regression never hangs).
 	symTokenPath := filepath.Join(symParent, "sub", "tok.json")
-	if err := runCommandBounded(t, 2*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", symTokenPath); err == nil {
-		t.Fatal("symlinked parent directory was accepted")
+	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", symTokenPath); err == nil || !strings.Contains(err.Error(), "sym-parent") {
+		t.Fatalf("symlinked parent directory accepted or wrong error: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(realDir, "sub", "tok.json")); !os.IsNotExist(err) {
 		t.Fatalf("token file created through symlinked parent: %v", err)
@@ -428,8 +405,8 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 	if err := os.WriteFile(existing, []byte(sentinel), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runCommandBounded(t, 2*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", existing); err == nil {
-		t.Fatal("existing unrelated regular file was overwritten")
+	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-a", "--token-file", existing); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("existing unrelated regular file overwritten or wrong error: %v", err)
 	}
 	got, err := os.ReadFile(existing) //nolint:gosec // test temp file
 	if err != nil || string(got) != sentinel {
@@ -454,21 +431,10 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 		<-done1
 	}()
 
-	var rec1 mcpHTTPTokenFile
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		raw, err := os.ReadFile(sharedPath) //nolint:gosec // test temp file
-		if err == nil && json.Unmarshal(raw, &rec1) == nil && rec1.Token != "" {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	if rec1.Token == "" {
-		t.Fatal("first listener did not publish sharedPath")
-	}
+	rec1 := waitForMCPHTTPTokenFile(t, sharedPath, done1, stderr1, testenv.HangTimeout)
 
-	if err := runCommandBounded(t, 2*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-b", "--token-file", sharedPath); err == nil {
-		t.Fatal("second listener overwrote live listener token file")
+	if err := runCommandBounded(t, 15*time.Second, "mcp", "--http", "127.0.0.1:0", "--identity", "agent-b", "--token-file", sharedPath); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("second listener overwrote live listener token file or wrong error: %v", err)
 	}
 	rawAfter, err := os.ReadFile(sharedPath) //nolint:gosec // test temp file
 	if err != nil {
@@ -478,6 +444,37 @@ func TestMCPHTTPTokenFileRejectsSymlinkParentExistingFileAndSharedPath(t *testin
 	if err := json.Unmarshal(rawAfter, &recAfter); err != nil || recAfter.Identity != "agent-a" || recAfter.Token != rec1.Token {
 		t.Fatalf("first listener token file was altered by second listener: %+v", recAfter)
 	}
+}
+
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	canonical, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve canonical temp dir: %v", err)
+	}
+	return canonical
+}
+
+func waitForMCPHTTPTokenFile(t *testing.T, tokenPath string, done chan error, stderrFile *os.File, timeout time.Duration) mcpHTTPTokenFile {
+	t.Helper()
+	var record mcpHTTPTokenFile
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(tokenPath) //nolint:gosec // test temp file
+		if err == nil && json.Unmarshal(raw, &record) == nil && record.Token != "" {
+			return record
+		}
+		select {
+		case runErr := <-done:
+			done <- runErr
+			stderrBytes, _ := os.ReadFile(stderrFile.Name())
+			t.Fatalf("MCP HTTP listener exited before publishing %s: err=%v stderr=%q", tokenPath, runErr, stderrBytes)
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+	stderrBytes, _ := os.ReadFile(stderrFile.Name())
+	t.Fatalf("token file %s never populated within %s (stderr=%q)", tokenPath, timeout, stderrBytes)
+	return mcpHTTPTokenFile{}
 }
 
 func runCommandBounded(t *testing.T, timeout time.Duration, args ...string) error {
