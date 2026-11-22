@@ -434,3 +434,31 @@ func (h *harness) tick(step time.Duration) func() {
 		<-done
 	}
 }
+
+// A call is bound to the revision the gateway last read from the host's
+// catalog, never to an older listing it loaded from the private cache (the
+// CI failure of 78104b2a: a listen's refresh setup loaded a pre-publish
+// listing and every call was refused as stale).
+func TestCallsBindTheCatalogRevisionNotACachedListing(t *testing.T) {
+	svc := &fakeService{name: "repo", tools: []string{"echo"}}
+	h := newHarness(t, svc)
+	h.cache = NewFileCache(filepath.Join(t.TempDir(), "cache"), func(string) string { return "scope" })
+	h.open()
+	sel := h.profile().Services[0]
+	h.do("1", mcpwire.MethodListTools, "")
+	h.catalog.setRevision(sel.HostID, sel.ServiceID, 2)
+	h.open()
+	// One catalog read at revision 2 that stores no listing, then the
+	// pre-publish listing loaded from the cache, as a listen's setup does.
+	if _, _, err := newCatalogMemo(h.gw).lookup(context.Background(), sel); err != nil {
+		t.Fatal(err)
+	}
+	if l := h.gw.cached(listingKey{route: keyOf(sel), method: mcpwire.MethodListTools}); l == nil || l.Revision != 1 {
+		t.Fatalf("the pre-publish listing was not cached: %+v", l)
+	}
+	name, _, _ := EncodedName(Identity{sel.HostID, sel.ServiceID, KindTool, "echo"})
+	h.do("3", mcpwire.MethodCallTool, `"name":"`+name+`","arguments":{}`)
+	if e := svc.lastExpect(); e == nil || e.Revision != 2 {
+		t.Fatalf("a call was bound to a cached pre-publish listing: %+v", e)
+	}
+}

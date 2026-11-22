@@ -49,10 +49,23 @@ class Client:
         self.proc = subprocess.Popen([binary, "mcp", *args], env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.replies = {}
+        # stderr is drained continuously, so a chatty frontend never blocks
+        # on a full pipe, and kept for failure reports.
+        self.stderr = bytearray()
+        threading.Thread(target=self.drain, daemon=True).start()
         self.events = {}
         self.cond = threading.Condition()
         self.next_id = 1
         threading.Thread(target=self.read, daemon=True).start()
+
+    def drain(self):
+        for line in self.proc.stderr:
+            self.stderr += line
+
+    def diagnostics(self):
+        text = self.stderr.decode(errors="replace")
+        lines = [ln for ln in text.splitlines() if "transport: stage=" not in ln]
+        return f"replies={self.replies} stderr={lines[-40:]}"
 
     def read(self):
         for line in self.proc.stdout:
@@ -94,7 +107,7 @@ class Client:
         key = json.dumps(sub)
         with self.cond:
             require(self.cond.wait_for(lambda: len(self.events.get(key, [])) >= count, timeout),
-                    f"listen {sub}: wanted {count} events, have {self.events.get(key)}")
+                    f"listen {sub}: wanted {count} events, have {self.events.get(key)} {self.diagnostics()}")
             return list(self.events[key])
 
     def cancel(self, req_id):
@@ -103,7 +116,7 @@ class Client:
     def close(self):
         self.proc.stdin.close()
         rc = self.proc.wait(timeout=10)
-        return rc, self.proc.stderr.read().decode(errors="replace")
+        return rc, self.stderr.decode(errors="replace")
 
     def kill(self):
         if self.proc.poll() is None:
@@ -118,7 +131,7 @@ def wait_for(client, sub, match, what, timeout=20):
             if any(match(e) for e in client.events.get(json.dumps(sub), [])):
                 return
             remaining = deadline - time.monotonic()
-            require(remaining > 0, f"{what}: {client.events.get(json.dumps(sub))}")
+            require(remaining > 0, f"{what}: {client.events.get(json.dumps(sub))} {client.diagnostics()}")
             client.cond.wait(remaining)
 
 
@@ -415,7 +428,14 @@ def rejections(binary, env, env_c, env_a, env_b, host_a, host_b, repo_a, repo_b)
                                                 "inputResponses": answer("ok", "y")}), "a reference for another operation")
         stale = first_round(gw, ask_a)
         publish(binary, env_a, "repo", "--env", "REV=2", *stdio_command("stdio-a"))
-        require_invalid(gw.tool(ask_a, requestState=stale, inputResponses=answer("first", "x")), "a reference from an older revision")
+        # The gateway last resolved the old revision, so the host may first
+        # refuse the call itself as stale; resolved again, the reference is
+        # refused as invalid state. Neither reaches the service.
+        retry = gw.tool(ask_a, requestState=stale, inputResponses=answer("first", "x"))
+        if (retry.get("result") or {}).get("isError"):
+            require(retry["result"]["structuredContent"]["errors"][0]["code"] == "catalog.stale", f"stale binding: {retry}")
+            retry = gw.tool(ask_a, requestState=stale, inputResponses=answer("first", "x"))
+        require_invalid(retry, "a reference from an older revision")
         before_restart = first_round(gw, ask_b)
         run_mesh(binary, env_b, "mcp", "restart", "repo", "--json", check_rc=0)
         require_invalid(gw.tool(ask_b, requestState=before_restart, inputResponses=answer("first", "x")), "a reference from a replaced instance")
@@ -446,7 +466,8 @@ def subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b):
         require(sorted(acked["resourceSubscriptions"]) == sorted([readme_a, readme_b]), f"acknowledged subset {acked}")
         gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [readme_http]}}, "quiet")
         require(gw.wait_events("quiet", 1)[0]["params"]["notifications"]["resourceSubscriptions"] == [readme_http], "quiet ack")
-        gw.tool(exposed_name(host_a, repo_a, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        touched = gw.tool(exposed_name(host_a, repo_a, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        require(text_of(touched) == "touched", f"touch failed: {touched}")
         # The upstream's own list change and the host's listing revision can
         # each report the change, so wait for each event rather than a count.
         wait_for(gw, "active", lambda e: e["method"] == "notifications/resources/updated" and e["params"]["uri"] == readme_a and e["params"]["x-rev"] == 2,
@@ -454,7 +475,8 @@ def subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b):
         wait_for(gw, "active", lambda e: e["method"] == "notifications/tools/list_changed", "tools list change")
         time.sleep(0.5)
         require(len(gw.events.get('"quiet"', [])) == 1, "the quiet listen received another stream's events")
-        gw.tool(exposed_name(host_a, search, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        touched = gw.tool(exposed_name(host_a, search, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        require(text_of(touched) == "touched", f"touch failed: {touched}")
         require(gw.wait_events("quiet", 2)[1]["params"]["uri"] == readme_http, "HTTP upstream update")
         # Saturation: the frontend carries at most four listens at once.
         extra = [gw.start("subscriptions/listen", {"notifications": {"toolsListChanged": True}}, f"extra-{i}") for i in range(2)]
@@ -464,7 +486,8 @@ def subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b):
         require(mesh_code(refused_listen) == "resource.limit", f"a fifth listen was admitted: {refused_listen}")
         gw.cancel("extra-0")
         time.sleep(0.3)
-        gw.tool(exposed_name(host_b, repo_b, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        touched = gw.tool(exposed_name(host_b, repo_b, "t", "touch"), {"uri": "file:///docs/readme.md"})
+        require(text_of(touched) == "touched", f"touch failed: {touched}")
         wait_for(gw, "active", lambda e: e["params"].get("uri") == readme_b, "independent cancellation stopped another listen")
         require('"extra-0"' not in gw.replies, "a cancelled listen got a reply")
         gw.tool(exposed_name(host_b, repo_b, "t", "end_listens"))

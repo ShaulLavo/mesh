@@ -343,6 +343,7 @@ func (f *fanIn) partEnded(ctx context.Context, part *listenPart, raw []byte, err
 	if err != nil {
 		err = f.g.routeError(part.sel, f.g.explainLoss(ctx, part, err))
 	}
+	f.g.opts.Log(fmt.Sprintf("mesh mcp: upstream listen of %s for %s ended: %v\n", part.sel.Alias, idText(f.req), err))
 	f.end(err)
 }
 
@@ -667,6 +668,7 @@ func (f *fanIn) flush() (bool, error) {
 	if !done {
 		return false, nil
 	}
+	f.g.opts.Log(fmt.Sprintf("mesh mcp: listen %s ended: %v\n", idText(f.req), reason))
 	if reason != nil {
 		return true, reason
 	}
@@ -732,4 +734,9 @@ func jitter(d time.Duration) time.Duration {
 	// A 32-bit fraction of d keeps the arithmetic within int64.
 	fraction := time.Duration(binary.LittleEndian.Uint32(b[:]))
 	return d/2 + d/(1<<32)*fraction
+}
+
+func idText(req mcpwire.Message) string {
+	raw, _ := req.ID().MarshalJSON()
+	return string(raw)
 }

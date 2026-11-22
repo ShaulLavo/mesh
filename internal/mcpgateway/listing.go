@@ -255,6 +255,9 @@ func (g *Gateway) observeFailure(sel Selection, rf *mcpconnect.RouteFailure) {
 	case agentapi.GatewayNotFound:
 		g.dropRoute(keyOf(sel))
 	}
+	if rf.Code == agentapi.CatalogStale || state == agentapi.GatewayNotFound {
+		g.forgetResolved(sel)
+	}
 	if rf.Code == agentapi.CatalogStale {
 		g.invalidate(sel)
 	}
@@ -356,6 +359,7 @@ func (m *catalogMemo) lookup(ctx context.Context, sel Selection) (HostCatalog, C
 		r.catalog, r.err = m.g.opts.Catalog.Services(ctx, sel.HostID)
 		if r.err == nil {
 			m.g.observeScope(sel.HostID, r.catalog.Scope)
+			m.g.observeCatalog(sel.HostID, r.catalog)
 		}
 	})
 	if r.err != nil {
@@ -382,6 +386,27 @@ func (g *Gateway) observeScope(hostID, scope string) {
 	g.mu.Lock()
 	g.hostScope[hostID] = scope
 	g.mu.Unlock()
+}
+
+// observeCatalog records every service state a host's catalog reported,
+// and forgets services it no longer lists.
+func (g *Gateway) observeCatalog(hostID string, catalog HostCatalog) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key := range g.resolved {
+		if key[0] == hostID {
+			delete(g.resolved, key)
+		}
+	}
+	for _, e := range catalog.Entries {
+		g.resolved[[2]string{hostID, e.ServiceID}] = resolvedService{scope: catalog.Scope, expect: Expect{Revision: e.Revision, Account: e.Account}}
+	}
+}
+
+func (g *Gateway) forgetResolved(sel Selection) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.resolved, [2]string{sel.HostID, sel.ServiceID})
 }
 
 func catalogStateError(sel Selection, e CatalogEntry) error {

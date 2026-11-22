@@ -128,9 +128,10 @@ again.
 
 Calls go to the owning host over the same authenticated stream as
 `mesh mcp connect`, by exact service ID, carrying the service revision and
-account the gateway resolved. A service that was published again since
-refuses the call with `catalog.stale` and the gateway retires its cached
-listing; a service removed and published again never receives the old ID's
+account the gateway last read from the host's catalog (never one from a
+cached listing). A service that was published again since refuses the call
+with `catalog.stale`; the gateway retires its cached listing and reads the
+catalog again for the next call; a service removed and published again never receives the old ID's
 calls, even under a name equal to that ID. A changed instance pin takes
 effect on the next request. Unknown names and URIs get `-32602`. Hosted
 failures inside `tools/call` are tool execution errors (`isError: true` with

@@ -136,7 +136,16 @@ type Gateway struct {
 	// hostGen fences saves started before a host's listings were retired.
 	hostScope map[string]string
 	hostGen   map[string]uint64
-	watches   *hostWatches
+	// resolved is the service state this frontend last read from each
+	// host's catalog. Calls are bound to it, never to a cached listing
+	// that may predate a publish.
+	resolved map[[2]string]resolvedService
+	watches  *hostWatches
+}
+
+type resolvedService struct {
+	scope  string
+	expect Expect
 }
 
 // routeKey names one route: a service, and the instance a profile pins.
@@ -187,6 +196,7 @@ func New(opts Options) (*Gateway, error) {
 		starts:    map[string]chan struct{}{},
 		hostScope: map[string]string{},
 		hostGen:   map[string]uint64{},
+		resolved:  map[[2]string]resolvedService{},
 	}
 	g.watches = newHostWatches(g)
 	return g, nil
@@ -383,18 +393,18 @@ func rewriteRequest(req mcpwire.Message, path []string, value json.RawMessage) (
 	return msg, nil
 }
 
-// resolveExpect binds a call to the service state the gateway resolved: the
-// one its current listing came from, or the host's catalog now.
+// resolveExpect binds a call to the service state this frontend last read
+// from the host's catalog, reading it now when it has none. A cached
+// listing never supplies it: one loaded from disk can predate a publish.
 func (g *Gateway) resolveExpect(ctx context.Context, sel Selection) (*Expect, error) {
 	g.mu.Lock()
-	scope := g.hostScope[sel.HostID]
-	for key, l := range g.listings {
-		if key.route == keyOf(sel) && scope != "" && l.Scope == scope {
-			g.mu.Unlock()
-			return &Expect{Revision: l.Revision, Account: l.Account}, nil
-		}
-	}
+	known, ok := g.resolved[[2]string{sel.HostID, sel.ServiceID}]
+	current := ok && known.scope == g.hostScope[sel.HostID]
 	g.mu.Unlock()
+	if current {
+		expect := known.expect
+		return &expect, nil
+	}
 	_, entry, err := newCatalogMemo(g).lookup(ctx, sel)
 	if err != nil {
 		return nil, err
