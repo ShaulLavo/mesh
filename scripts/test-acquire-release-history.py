@@ -115,12 +115,28 @@ class HistoryTests(unittest.TestCase):
         # slides into the first page's range, so a single pass would miss it.
         self.assertEqual([item["id"] for item in found], [10, 8, 7, 6, 5, 4, 3, 2, 1])
 
-    def test_api_drops_repeats_when_a_release_is_published_between_pages(self):
+    def test_api_rereads_when_a_release_is_published_between_pages(self):
         releases = [{"id": number} for number in range(10, 0, -1)]
         run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 11})})
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
             found = HISTORY.api("endpoint", 4)
         self.assertEqual([item["id"] for item in found], list(range(11, 0, -1)))
+
+    def test_api_does_not_accept_a_read_where_a_published_release_came_and_went(self):
+        releases = [{"id": number} for number in range(6, 0, -1)]
+        # A release appears before page 2 (so page 2 repeats id 5) and is gone
+        # before page 3, which would hide release 3 from a read that only deduplicated.
+        run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 100}), 2: lambda items: items.pop(0)})
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            found = HISTORY.api("endpoint", 2)
+        self.assertEqual([item["id"] for item in found], [6, 5, 4, 3, 2, 1])
+
+    def test_api_refuses_a_page_that_repeats_an_id(self):
+        repeated = self.page([{"id": 1}, {"id": 1}])
+        with mock.patch.object(HISTORY.subprocess, "run", return_value=repeated) as command:
+            with self.assertRaisesRegex(RuntimeError, "did not hold still"):
+                HISTORY.api("endpoint", 2)
+        self.assertEqual(command.call_count, HISTORY.LISTING_READS)
 
     def test_api_refuses_a_listing_that_never_holds_still(self):
         releases = [{"id": number} for number in range(1000, 0, -1)]
