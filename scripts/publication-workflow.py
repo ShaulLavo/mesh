@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -131,6 +132,35 @@ def fetch_child(repository, artifact, destination):
         extract(archive, destination)
 
 
+def parse_platform_handoff(value, current_attempt):
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", value):
+        raise ValueError("publication handoff requires each platform's exact artifact ID and attempt")
+    ident, attempt = map(int, value.split(":"))
+    if attempt > current_attempt:
+        raise ValueError("publication evidence cannot come from a newer attempt")
+    return ident, attempt
+
+
+def fetch_platforms(repository, run, current_attempt, handoff, destination):
+    if run <= 0 or current_attempt <= 0 or set(handoff) != set(RUNNERS):
+        raise ValueError("publication platform fetch requires a positive run, attempt and exact platform set")
+    attempts, pins = {}, {}
+    for platform, value in sorted(handoff.items()):
+        ident, attempt = parse_platform_handoff(value, current_attempt)
+        expected_name = f"publication-platform-{platform.replace('/', '-')}-attempt-{attempt}"
+        artifact = installed_artifacts.api(f"repos/{repository}/actions/artifacts/{ident}")
+        if (artifact.get("id") != ident or artifact.get("name") != expected_name
+                or artifact.get("expired") is not False or installed_artifacts.artifact_run(artifact) != run):
+            raise ValueError(f"publication platform artifact {expected_name} differs from its same-run upload")
+        pins[expected_name], attempts[platform] = artifact_pin(artifact), attempt
+    if len({pin["id"] for pin in pins.values()}) != len(RUNNERS):
+        raise ValueError("publication platform handoff has duplicate artifact IDs")
+    destination.mkdir(exist_ok=False)
+    for name, pin in pins.items():
+        fetch_child(repository, pin, destination / name)
+    return attempts
+
+
 def cleanup(root):
     control, proof = root / "publication-control", root / "publication-proof"
     control.mkdir(exist_ok=True)
@@ -171,6 +201,12 @@ def main():
     intake.add_argument("platform", choices=tuple(RUNNERS))
     intake.add_argument("harness")
     intake.add_argument("destination", type=Path)
+    platforms_cmd = commands.add_parser("fetch-platforms")
+    platforms_cmd.add_argument("repository")
+    platforms_cmd.add_argument("run", type=int)
+    platforms_cmd.add_argument("attempt", type=int)
+    platforms_cmd.add_argument("handoff", type=json.loads)
+    platforms_cmd.add_argument("destination", type=Path)
     remove = commands.add_parser("cleanup")
     remove.add_argument("root", type=Path)
     args = parser.parse_args()
@@ -182,6 +218,9 @@ def main():
         return
     if args.command == "fetch":
         fetch(args.repository, args.run, args.directory, args.platform, args.harness, args.destination)
+        return
+    if args.command == "fetch-platforms":
+        print(json.dumps(fetch_platforms(args.repository, args.run, args.attempt, args.handoff, args.destination), sort_keys=True))
         return
     cleanup(args.root)
 

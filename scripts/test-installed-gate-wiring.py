@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
-PIN = "9f30ad52593969dd9a6c49133885750fdb7f893a"
+PIN = "156d9c865adf9aaaab09b069c4f4f2e794fbc2e0"
 WORKFLOWS = ROOT / ".github/workflows"
 CI = (WORKFLOWS / "ci.yml").read_text()
 RELEASE = (WORKFLOWS / "release.yml").read_text()
@@ -185,28 +185,78 @@ class InstalledGateWiringTests(unittest.TestCase):
             self.assert_only_cache_save_is_optional(changed)
 
     def test_publication_uses_the_actual_signed_reserved_draft(self):
+        self.assertEqual(re.findall(r"^  MESH_PUBLICATION_HARNESS: ([0-9a-f]{40})$", RELEASE, re.M), [PIN])
+        self.assertNotIn("\n  verify-readers:\n", RELEASE)
+        self.assertNotIn("installed-catchup.yml@", RELEASE)
         installed = GATE.job(RELEASE, "publication-native")
-        self.assert_consumer(installed, "prove-transition")
         self.assertEqual(field(installed, "needs"), "[reserve, prove-transition, publish]")
         self.assertEqual(field(installed, "if"), field(GATE.job(RELEASE, "publish"), "if"))
-        for setting in ("publication_only: true", "release_version: ${{ needs.reserve.outputs.version }}",
-                        "release_source: ${{ needs.reserve.outputs.source }}", "release_run: ${{ fromJSON(github.run_id) }}"):
+        self.assertIn("permissions:\n      contents: read\n      actions: read", installed)
+        self.assertNotIn("write", installed)
+        self.assertNotIn("secrets:", installed)
+        self.assertNotIn("continue-on-error", installed)
+        self.assertNotIn("43151893803", installed)
+        self.assertEqual(re.findall(r"^          - platform: (.+)$", installed, re.M),
+                         ["linux/amd64", "linux/arm64", "darwin/arm64"])
+        for setting in ("ref: ${{ env.MESH_PUBLICATION_HARNESS }}", "persist-credentials: false",
+                        "artifact-ids: ${{ needs.publish.outputs.publication-plan-artifact || '0' }}",
+                        "artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}",
+                        "PRODUCER_PREFIX: update-native",
+                        "PRODUCER_RUN: ${{ needs.prove-transition.outputs.worker_artifact_run }}",
+                        "PRODUCER_SOURCE: ${{ needs.prove-transition.outputs.worker_artifact_source }}",
+                        "--publication-platform-plan \"$PUBLICATION_PLAN\" --publication-plan-sha256 \"$PLAN_SHA\"",
+                        "scripts/prove-installed-catchup.py",
+                        "scripts/run-original-update-readers.py",
+                        "scripts/publication-jobs.py record-platform",
+                        "name: publication-platform-${{ matrix.key }}-attempt-${{ github.run_attempt }}"):
             self.assertIn(setting, installed)
-        harness = (WORKFLOWS / "installed-catchup.yml").read_text()
-        self.assertIn("      release_run:\n        type: number\n", harness)
+        for key, platform in (("linux-amd64", "linux/amd64"), ("linux-arm64", "linux/arm64"), ("darwin-arm64", "darwin/arm64")):
+            self.assertIn(f"{key}: ${{{{ job.status == 'success' && matrix.platform == '{platform}' && steps.handoff.outputs.pin || '' }}}}", installed)
+        exercise = GATE.step(installed, "Exercise signed draft native cases, original permitted readers, and record evidence")
+        self.assertNotIn("export TMPDIR=", exercise)
+        self.assertLess(exercise.index("scripts/prove-installed-catchup.py"), exercise.index("mktemp -d /tmp/ms-XXXXXX"))
+        self.assertLess(exercise.index("mktemp -d /tmp/ms-XXXXXX"), exercise.index("scripts/run-original-update-readers.py"))
+        self.check_publication_exercise_scratch_scope(exercise)
+
+    def check_publication_exercise_scratch_scope(self, exercise):
+        with tempfile.TemporaryDirectory(prefix="pub-exercise-") as temporary:
+            log = Path(temporary) / "calls.tsv"
+            stub = 'python3() { printf "%s\\t%s\\t%s\\n" "$1" "${TMPDIR:-}" "${MESH_SHORT_TMP:-}" >> "$CALL_LOG"; }\n'
+            env = dict(os.environ, CALL_LOG=str(log), RUNNER_TEMP=temporary, PUBLICATION_PLAN=temporary + "/plan.json",
+                       PLAN_SHA="a" * 64, HAS_BASELINE="false", VERSION="v0.1.99", SOURCE="b" * 40,
+                       KEY="darwin-arm64", PLATFORM="darwin/arm64", MESH_RELEASE_TRUST_CACHE=temporary + "/trust",
+                       TMPDIR=temporary + "/outer", MESH_SHORT_TMP="")
+            self.assertEqual(GATE.status(stub + GATE.run_script(exercise), env), 0)
+            rows = [line.split("\t") for line in log.read_text().splitlines()]
+            self.assertEqual([row[0] for row in rows], [
+                "scripts/prove-installed-catchup.py",
+                "scripts/run-original-update-readers.py",
+                "scripts/publication-jobs.py",
+            ])
+            self.assertEqual(rows[0][1:], [temporary + "/outer", ""])
+            self.assertEqual(rows[2][1:], [temporary + "/outer", ""])
+            self.assertTrue(rows[1][1].startswith("/tmp/ms-") and rows[1][1] == rows[1][2], rows[1])
+            self.assertFalse(Path(rows[1][1]).exists())
         publish = GATE.job(RELEASE, "publish")
         self.assertLess(publish.index("name: Upload signed draft assets"), publish.index("name: update-publication-trust"))
+        self.assertLess(publish.index("scripts/prepare-draft-intake.py documents"), publish.index("scripts/publication-jobs.py reduced-plan"))
         self.assertIn("path: ${{ runner.temp }}/mesh-release-trust", publish)
+        self.assertIn("publication-plan-artifact: ${{ steps.publication-plan-upload.outputs.artifact-id }}", publish)
+        self.assertIn("publication-plan-sha256: ${{ steps.publication-plan.outputs.plan_sha }}", publish)
         self.assertIn("draft: true", GATE.job(RELEASE, "prove-transition"))
 
     def test_failed_or_skipped_installed_gate_cannot_finalize(self):
         finalize = GATE.job(RELEASE, "finalize")
-        self.assertEqual(field(finalize, "needs"), "[reserve, publish, verify-readers, publication-native]")
+        self.assertEqual(field(finalize, "needs"), "[reserve, publish, publication-native]")
+        self.assertIn("scripts/publication-workflow.py fetch-platforms", finalize)
+        self.assertIn("MESH_PUBLICATION_PLAN: ${{ runner.temp }}/publication-plan/plan.json", finalize)
+        self.assertIn("MESH_PUBLICATION_PLAN_SHA256: ${{ needs.publish.outputs.publication-plan-sha256 }}", finalize)
+        self.assertIn("MESH_PUBLICATION_ATTEMPTS: ${{ steps.platform-evidence.outputs.attempts }}", finalize)
         condition = next(line for line in finalize.splitlines() if line.startswith("    if:"))
         self.assertNotIn("always()", condition)
         condition = field(finalize, "if")
         values = {"needs.reserve.outputs.action": "publish", "github.ref": "refs/heads/main",
-                  "needs.verify-readers.result": "success", "needs.publication-native.result": "success"}
+                  "needs.publication-native.result": "success"}
         self.assertEqual(condition_status(condition, **values), 0)
         for context in values:
             for rejected in ("failure", "skipped", "cancelled", ""):
