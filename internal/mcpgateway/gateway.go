@@ -88,6 +88,7 @@ type Gateway struct {
 	listings  map[listingKey]*Listing
 	statuses  map[routeKey]Status
 	refreshMu map[listingKey]*sync.Mutex
+	starts    map[string]chan struct{}
 }
 
 type routeKey struct{ host, service string }
@@ -130,6 +131,7 @@ func New(opts Options) (*Gateway, error) {
 		listings:  map[listingKey]*Listing{},
 		statuses:  map[routeKey]Status{},
 		refreshMu: map[listingKey]*sync.Mutex{},
+		starts:    map[string]chan struct{}{},
 	}, nil
 }
 

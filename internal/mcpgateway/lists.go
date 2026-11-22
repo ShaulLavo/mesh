@@ -300,6 +300,7 @@ func keepsCache(code agentapi.Code) bool { return cacheKeepingCodes[code] }
 func (g *Gateway) observeFailure(sel Selection, rf *mcpconnect.RouteFailure) {
 	state := stateForCode(rf.Code)
 	g.setStatusCode(sel, state, rf.Code, rf.Message)
+	g.opts.Log(fmt.Sprintf("mesh mcp: %s is %s (%s): %s\n", sel.Alias, state, rf.Code, rf.Message))
 	if state == agentapi.GatewayUnauthorized || state == agentapi.GatewayIdentityChanged {
 		g.dropHost(sel.HostID)
 	}

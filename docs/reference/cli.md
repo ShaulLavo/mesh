@@ -2022,6 +2022,7 @@ Available Commands:
   identity    Manage per-agent application identities
   logs        Print a hosted MCP server instance's recent stderr
   ls          List hosted MCP servers across saved Mesh hosts
+  profile     Manage aggregate gateway profiles in mcp-profiles.json
   publish     Publish an MCP server hosted on a Mesh machine
   restart     Replace a hosted MCP server instance's process
   rm          Remove a hosted MCP server and stop its processes
@@ -2035,6 +2036,7 @@ Flags:
   -h, --help                       help for mcp
       --http string                bind the native Streamable HTTP server on one loopback host:port (for example 127.0.0.1:8765)
       --identity string            local application identity created with mesh mcp identity create NAME
+      --profile string             serve the aggregate gateway for one profile from mcp-profiles.json (native tools plus selected hosted services)
       --token-file string          private 0600 file path for the HTTP bearer token record (requires --http)
 
 Global Flags:
@@ -2172,6 +2174,132 @@ Flags:
       --identity string    scope visible instances and private catalog cache to this application identity
       --json               write one agent result
       --timeout duration   hard deadline for fleet queries (100ms to 30s) (default 2s)
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp profile
+
+```text
+Manage aggregate gateway profiles in mcp-profiles.json
+
+Usage:
+  mesh mcp profile [flags]
+  mesh mcp profile [command]
+
+Available Commands:
+  add         Create a profile or select one hosted service in it
+  alias       Rename a service's alias; exposed names do not change
+  repair      Rebind an entry whose service was removed and published again, by name
+  rm          Remove a profile, or one service from it
+  show        Show gateway profiles and the state of each selected service
+
+Flags:
+  -h, --help   help for profile
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+
+Use "mesh mcp profile [command] --help" for more information about a command.
+```
+
+## mesh mcp profile add
+
+```text
+Create a profile or select one hosted service in it
+
+Usage:
+  mesh mcp profile add NAME [HOST/SERVICE] [flags]
+
+Flags:
+      --alias string             display alias for the service (default: its name)
+      --exclude stringArray      hide upstream names matching this pattern (repeatable)
+      --expected-revision uint   fail unless mcp-profiles.json is still at this revision
+  -h, --help                     help for add
+      --identity string          read the host catalog as this application identity
+      --include stringArray      expose only upstream names matching this pattern (repeatable)
+      --instance string          pin an instance ID or mi1 handle
+      --json                     write one agent result
+      --native string            native groups: all, none, or a comma list of hosts,contexts,exec,sessions,services,terminal,files,fleet
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp profile alias
+
+```text
+Rename a service's alias; exposed names do not change
+
+Usage:
+  mesh mcp profile alias NAME OLD NEW [flags]
+
+Flags:
+      --expected-revision uint   fail unless mcp-profiles.json is still at this revision
+  -h, --help                     help for alias
+      --json                     write one agent result
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp profile repair
+
+```text
+Rebind an entry whose service was removed and published again, by name
+
+Usage:
+  mesh mcp profile repair NAME ALIAS [flags]
+
+Flags:
+      --confirm                  bind the entry to the service now published under its recorded name
+      --expected-revision uint   fail unless mcp-profiles.json is still at this revision
+  -h, --help                     help for repair
+      --identity string          read the host catalog as this application identity
+      --json                     write one agent result
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp profile rm
+
+```text
+Remove a profile, or one service from it
+
+Usage:
+  mesh mcp profile rm NAME [ALIAS] [flags]
+
+Flags:
+      --expected-revision uint   fail unless mcp-profiles.json is still at this revision
+  -h, --help                     help for rm
+      --json                     write one agent result
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp profile show
+
+```text
+Show gateway profiles and the state of each selected service
+
+Usage:
+  mesh mcp profile show [NAME] [flags]
+
+Flags:
+      --cached                   show the file only, without asking hosts for service states
+      --expected-revision uint   fail unless mcp-profiles.json is still at this revision
+  -h, --help                     help for show
+      --identity string          read the host catalog as this application identity
+      --json                     write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")

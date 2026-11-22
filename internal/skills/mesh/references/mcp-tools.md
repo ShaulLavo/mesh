@@ -33,6 +33,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_profile_get` | `profile.show` | read-only, idempotent | Read this machine's host or fleet notes |
 | `mesh_profile_set` | `profile.set` | destructive | Replace this machine's host or fleet notes |
 | `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
+| `mesh_service_lease` | `mcp.lease` | idempotent | Hold a hosted MCP server instance running |
 | `mesh_services_list` | `services.list` | read-only, idempotent | List Mesh serve routes |
 | `mesh_session_inspect` | `sessions.inspect` | read-only, idempotent | Passively inspect a terminal session |
 | `mesh_sessions_list` | `sessions.list` | read-only, idempotent | List terminal sessions on a host |
@@ -398,6 +399,21 @@ Inspect one Mesh serve route on a host without opening its URL or triggering on-
   - `host` (`string`, required): Machine name or exact host ID.
   - `name` (`string`, required): Exact serve route name.
   - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (100 to 60000, default 5000).
+
+## mesh_service_lease
+
+Hold or release one hosted MCP server instance for a renewable TTL of at most 24 hours, so an on-demand instance stays running for upstream work Mesh cannot see. Pass the same lease_id to renew; ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.
+
+- Linked operation: `mcp.lease`
+- Hints: idempotent
+- Arguments:
+  - `host` (`string`, required): Machine name, exact host ID, or local.
+  - `instance` (`string`, optional): Instance ID or mi1 handle; omit for this caller's default or the shared instance.
+  - `job` (`string`, optional): Optional running native job ID that bounds the lease.
+  - `lease_id` (`string`, optional): Existing lease to renew or release.
+  - `service` (`string`, required): Hosted MCP server name or ID on that host.
+  - `timeout_ms` (`integer`, optional): Hard deadline in milliseconds (default 5000).
+  - `ttl_seconds` (`integer`, required): Lease lifetime in seconds; 0 releases the lease.
 
 ## mesh_services_list
 

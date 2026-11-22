@@ -47,6 +47,8 @@ class Core:
 
     def tools(self):
         names = ["echo", "whoami", "a_b", "a", "b", LONG_TOOL, "ask2", "rich", "touch", "end_listens", "slow"]
+        # The benchmark widens the listing with plain tools.
+        names += [f"t{i:03d}" for i in range(int(os.environ.get("GW_EXTRA_TOOLS", "0")))]
         return [{"name": n, "title": n.upper(), "inputSchema": {"type": "object"},
                  "annotations": {"readOnlyHint": n in ("echo", "whoami")},
                  "x-vendor": {"label": self.label, "big": 12345678901234567890},
@@ -110,7 +112,9 @@ class Core:
         with self.lock:
             self.calls += 1
             calls = self.calls
-        if name in ("echo", "a_b", "a", "b", LONG_TOOL):
+        if name == "big":
+            return self.complete(req_id, {"content": [{"type": "text", "text": "x" * int(args.get("bytes", 0))}]})
+        if name in ("echo", "a_b", "a", "b", LONG_TOOL) or name.startswith("t0"):
             return self.complete(req_id, {"content": [{"type": "text", "text": f"{self.label}:{name}:{args.get('text', '')}"}]})
         if name == "whoami":
             return self.complete(req_id, {"content": [{"type": "text", "text": f"{self.label} pid={self.pid} calls={calls}"}]})

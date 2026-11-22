@@ -18,7 +18,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const mcpProfileTimeout = 2 * time.Second
+const (
+	mcpProfileTimeout     = 2 * time.Second
+	mcpProfileCommandName = "profile"
+)
 
 type mcpProfileFlags struct {
 	asJSON           bool
@@ -43,7 +46,7 @@ func (f *mcpProfileFlags) expected(cmd *cobra.Command) *uint64 {
 }
 
 func (a *application) mcpProfileCommand() *cobra.Command {
-	profile := &cobra.Command{Use: "profile COMMAND", Short: "Manage aggregate gateway profiles in mcp-profiles.json", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	profile := &cobra.Command{Use: mcpProfileCommandName, Short: "Manage aggregate gateway profiles in mcp-profiles.json", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return cmd.Help()
 	}}
 	profile.SetOut(a.dependencies.Stdout)

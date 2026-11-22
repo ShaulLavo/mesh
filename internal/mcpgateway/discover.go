@@ -3,6 +3,7 @@ package mcpgateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -10,7 +11,30 @@ import (
 	"github.com/shaul/mesh/internal/mcpwire"
 )
 
-const discoverTTL = time.Minute
+const (
+	discoverTTL = time.Minute
+	// startsPerHost bounds concurrent first-use discoveries on one host,
+	// each of which may start an on-demand instance, so a wide profile does
+	// not launch every worker on a host at once.
+	startsPerHost = 2
+)
+
+// startSlot waits for one of the host's discovery slots.
+func (g *Gateway) startSlot(ctx context.Context, hostID string) (func(), error) {
+	g.mu.Lock()
+	slots := g.starts[hostID]
+	if slots == nil {
+		slots = make(chan struct{}, startsPerHost)
+		g.starts[hostID] = slots
+	}
+	g.mu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait to discover a service on %s: %w", hostID, ctx.Err())
+	}
+}
 
 // discovery returns a route's upstream capabilities, fetching server/discover
 // when the cached one is expired or from another revision. Discovery starts
@@ -24,7 +48,12 @@ func (g *Gateway) discovery(ctx context.Context, downstream mcpwire.Message, sel
 	if err != nil {
 		return nil, err
 	}
+	release, err := g.startSlot(ctx, sel.HostID)
+	if err != nil {
+		return nil, err
+	}
 	result, err := g.exchange(ctx, sel, req)
+	release()
 	if err != nil {
 		return nil, err
 	}

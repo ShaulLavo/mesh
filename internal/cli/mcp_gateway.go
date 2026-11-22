@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"path/filepath"
 
@@ -85,7 +86,7 @@ func (a *application) runMCPGateway(cmd *cobra.Command, profileName string, hasI
 	if hasIdentity {
 		caller = protocol.CallerCredential(identity.Credential.Encode())
 	}
-	gateway, err := newMCPGateway(a, pool, store, profileName, caller)
+	gateway, err := newMCPGateway(a, pool, store, profileName, caller, cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
@@ -106,7 +107,7 @@ func (a *application) runMCPGateway(cmd *cobra.Command, profileName string, hasI
 	return nil
 }
 
-func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, profileName string, caller protocol.CallerCredential) (*mcpgateway.Gateway, error) {
+func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, profileName string, caller protocol.CallerCredential, stderr io.Writer) (*mcpgateway.Gateway, error) {
 	version := release.Metadata().Version
 	native, err := mcpnative.NewGatewayNative(mcpnative.ServerOptions{Version: version, Controls: newMCPControls(a, pool, caller)})
 	if err != nil {
@@ -146,6 +147,7 @@ func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, p
 		CursorSecret: secret,
 		ServerInfo:   serverInfo,
 		Now:          a.dependencies.Now,
+		Log:          func(line string) { _, _ = io.WriteString(stderr, line) },
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialize MCP gateway: %w", err)

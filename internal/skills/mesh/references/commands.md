@@ -615,3 +615,67 @@ mesh mcp rm local/repo-tools --json
 ```
 
 - `--json`: write one agent result.
+
+## mesh mcp profile show
+
+Show gateway profiles and each selected service's state without starting services.
+
+```sh
+mesh mcp profile show dev --json
+```
+
+- `--identity NAME`: read host catalogs as this application identity.
+- `--cached`: show the file only, without asking hosts for service states.
+- `--json`: write one agent result.
+
+## mesh mcp profile add
+
+Create a gateway profile or select one hosted MCP server in it by stable host and service ID.
+
+```sh
+mesh mcp profile add dev pc/repo-tools --alias repo --json
+```
+
+- `--native GROUPS`: all, none, or a comma list of native groups.
+- `--alias NAME`: display alias for the selected service.
+- `--include PATTERN`: expose only matching upstream names (repeatable).
+- `--exclude PATTERN`: hide matching upstream names (repeatable).
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: read host catalogs as this application identity.
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile rm
+
+Remove a gateway profile, or one selected service from it.
+
+```sh
+mesh mcp profile rm dev repo --json
+```
+
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile alias
+
+Rename a selected service's display alias; exposed names do not change.
+
+```sh
+mesh mcp profile alias dev repo code --json
+```
+
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
+
+## mesh mcp profile repair
+
+Find a removed and re-published service by its recorded name and rebind the entry with explicit confirmation.
+
+```sh
+mesh mcp profile repair dev repo --confirm --json
+```
+
+- `--confirm`: rebind the entry to the service now published under its recorded name.
+- `--identity NAME`: read host catalogs as this application identity.
+- `--expected-revision N`: fail unless mcp-profiles.json is still at revision N.
+- `--json`: write one agent result.
