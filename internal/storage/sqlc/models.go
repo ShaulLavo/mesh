@@ -42,6 +42,20 @@ type Host struct {
 	LastSeenAt    int64
 }
 
+type McpInstance struct {
+	ID        string
+	ServiceID string
+	Record    string
+}
+
+type McpService struct {
+	ID        string
+	Name      string
+	Revision  int64
+	Transport string
+	Record    string
+}
+
 type PrivateAppState struct {
 	Key  string
 	Data []byte
