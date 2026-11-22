@@ -359,15 +359,21 @@ result=$(GH_LATEST_TAG=v0.1.44 GH_GREEN_SHAS="$merged_head" WORKFLOW_SHA="$merge
 grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx "source=$merged_head" <<<"$result"
 grep -Fqx 'version=v0.1.46' <<<"$result"
-# Deleting a code file while writing identical bytes to Casks/mesh.rb (git rename)
+# Deleting a code file while writing identical bytes to Casks/mesh.rb (git R100 rename)
 # MUST NOT be treated as Cask-only or inherit its parent's green CI!
+git -C "$checkout" rm -q Casks/mesh.rb
 printf 'unique rename payload 1234567890\n' >"$checkout/code.go"
 git -C "$checkout" add code.go
-git -C "$checkout" commit -qm 'add code.go'
+git -C "$checkout" commit -qm 'add code.go without Cask'
 rename_parent=$(git -C "$checkout" rev-parse HEAD)
-git -C "$checkout" mv -f code.go Casks/mesh.rb
+mkdir -p "$checkout/Casks"
+git -C "$checkout" mv code.go Casks/mesh.rb
 git -C "$checkout" commit -qm 'rename code.go into Casks/mesh.rb'
 rename_head=$(git -C "$checkout" rev-parse HEAD)
+[[ $(git -C "$checkout" diff -M --name-status "$rename_parent..$rename_head") == R100* ]] || {
+  echo 'FAIL: rename regression fixture did not produce an R100 rename' >&2
+  exit 1
+}
 git -C "$checkout" push -q origin main
 cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask4.rb"
 result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask4.rb" GH_GREEN_SHAS="$rename_parent" WORKFLOW_SHA="$rename_head" run_reserve "" "")
