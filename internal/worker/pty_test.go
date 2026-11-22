@@ -137,7 +137,7 @@ func installDrainCapture(t *testing.T, w *Worker) {
 		t.Fatal(err)
 	}
 	binding := execution.NewBinding(execution.Key{Host: "host", Class: "local-account", Principal: "account", Opaque: "drain"}, execution.Intent{Kind: "pty"}, ref, nil)
-	w.capture, err = execution.OpenCapture(root, binding)
+	w.capture, err = execution.OpenCapture(root, binding, execution.KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}

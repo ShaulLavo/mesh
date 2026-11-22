@@ -32,6 +32,11 @@ const (
 	LogsCursorInvalid        Code = "logs.cursor_invalid"
 	ResultExpired            Code = "result.expired"
 	SessionInstanceMismatch  Code = "session.instance_mismatch"
+	InputOutcomeUnknown      Code = "input.outcome_unknown"
+	InputKeyConflict         Code = "input.key_conflict"
+	InputOffsetMismatch      Code = "input.offset_mismatch"
+	InputClosed              Code = "input.closed"
+	InputBackpressure        Code = "input.backpressure"
 	InternalError            Code = "internal.error"
 )
 
@@ -51,5 +56,7 @@ var Codes = map[Code]ErrorClass{
 	FleetRevisionConflict: {Exit: 1}, FleetStale: {Exit: 1}, SkillConflict: {Exit: 1}, SkillUnsafePath: {Exit: 2}, InternalError: {Exit: 1},
 	RequestKeyConflict: {Exit: 1}, RequestInProgress: {Exit: 1, Retryable: true}, RequestNotFound: {Exit: 1},
 	RequestOutcomeUnknown: {Exit: 1}, LogsCursorExpired: {Exit: 1}, LogsCursorInvalid: {Exit: 1}, SessionInstanceMismatch: {Exit: 1},
+	InputOutcomeUnknown: {Exit: 1}, InputKeyConflict: {Exit: 1}, InputOffsetMismatch: {Exit: 1},
+	InputClosed: {Exit: 1}, InputBackpressure: {Exit: 1, Retryable: true},
 	ResultExpired: {Exit: 1}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 }

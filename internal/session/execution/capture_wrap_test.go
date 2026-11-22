@@ -17,7 +17,7 @@ func TestCaptureSixteenMiBSuffixAndConcurrentReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = files.Close() }()
-	capture := &Capture{store: newStreamStore(files, b)}
+	capture := &Capture{store: newStreamStore(files, b, KindPTY)}
 	if err := capture.initialize(); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestCaptureSixteenMiBSuffixAndConcurrentReaders(t *testing.T) {
 	if err != nil || len(page.Bytes) != MaxPage || !bytes.Equal(page.Bytes, bytes.Repeat([]byte{'q'}, MaxPage)) {
 		t.Fatalf("max page: bytes=%d error=%v", len(page.Bytes), err)
 	}
-	entries, err := files.Names(streamPath(b, "."))
+	entries, err := files.Names(streamPath(b, KindPTY, "."))
 	if err != nil {
 		t.Fatal(err)
 	}

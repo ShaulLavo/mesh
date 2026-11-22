@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/shaul/mesh/internal/session"
 )
 
 const (
@@ -20,6 +22,12 @@ const (
 	TypeExecutionSignal  = "execution.signal"
 	TypeExecutionKill    = "execution.kill"
 	TypeExecutionRemove  = "execution.remove"
+	TypeExecutionInput   = "execution.input"
+	TypeExecutionInspect = "execution.inspect"
+	TypeWorkerPipeProbe  = "worker.pipe.probe"
+	TypeWorkerLineAttach = "worker.line.attach"
+	TypeWorkerLineInput  = "worker.line.input"
+	TypeWorkerLineRetire = "worker.line.retire"
 )
 
 type ExecutionTermination struct {
@@ -59,7 +67,7 @@ func validateExecutionRaw(payload []byte) error {
 	if !executionCandidate(payload) {
 		return nil
 	}
-	if len(payload) > 40<<10 || !utf8.Valid(payload) {
+	if len(payload) > maxExecutionInputPayload || !utf8.Valid(payload) {
 		return fmt.Errorf("execution: invalid raw size or UTF-8")
 	}
 	scan := scanExecutionFields(payload)
@@ -69,7 +77,7 @@ func validateExecutionRaw(payload []byte) error {
 	if scan.err != nil {
 		return fmt.Errorf("execution: raw envelope: %w", scan.err)
 	}
-	if len(payload) > 40<<10 || !utf8.Valid(payload) || scan.duplicate {
+	if len(payload) > executionPayloadLimit(scan.kind) || scan.duplicate {
 		return fmt.Errorf("execution: invalid raw size, UTF-8 or duplicate field")
 	}
 	kind := scan.kind
@@ -81,8 +89,20 @@ func validateExecutionRaw(payload []byte) error {
 	return validateExecutionRequired(kind, scan.fields)
 }
 
+const maxExecutionInputPayload = (session.MaxInputBytes+2)/3*4 + 4096
+
+func executionPayloadLimit(kind string) int {
+	if kind == TypeExecutionInput || kind == TypeWorkerLineInput {
+		return maxExecutionInputPayload
+	}
+	return 40 << 10
+}
+
 const executionTypeField = "type"
 const requestIDField = "requestId"
+const sessionIDField = "sessionId"
+
+const ErrorCodeInstanceMismatch = "session.instance_mismatch"
 
 type executionFields struct {
 	fields               map[string]json.RawMessage
@@ -152,7 +172,7 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		return validateExecutionBoundField(kind, name, raw)
 	}
 	switch name {
-	case "kind", "cwd", "term":
+	case "stdin", "kind", "cwd", "term":
 		return executionString(raw)
 	case "command":
 		return executionArguments(raw)
@@ -282,21 +302,35 @@ type ExecutionPage struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
-func isExecutionRequest(kind string) bool {
+// IsExecutionControl identifies host execution requests. Local worker-only
+// controls are admitted by the worker socket.
+func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect:
 		return true
 	default:
 		return false
 	}
 }
+
+func isExecutionRequest(kind string) bool {
+	return IsExecutionControl(kind) || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire
+}
+
 func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	if kind == TypeExecutionRequest {
 		return fmt.Errorf("execution: unexpected field %s", name)
 	}
+	if (kind == TypeExecutionInput || kind == TypeWorkerLineInput) && name != sessionIDField && name != "instance" {
+		return validateExecutionInputField(name, raw)
+	}
 	switch name {
-	case "sessionId", "instance":
+	case sessionIDField, "instance":
 		return executionString(raw)
+	case "writeKey":
+		if kind == TypeWorkerLineRetire {
+			return executionString(raw)
+		}
 	case "stream", "cursor":
 		if kind == TypeExecutionLogs {
 			return executionString(raw)
@@ -317,15 +351,33 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	return fmt.Errorf("execution: unexpected field %s", name)
 }
 
+func validateExecutionInputField(name string, raw json.RawMessage) error {
+	switch name {
+	case "writeKey", "inputOffset", "inputBytes":
+		return executionString(raw)
+	case "inputEOF":
+		if bytes.Equal(raw, []byte("true")) || bytes.Equal(raw, []byte("false")) {
+			return nil
+		}
+	}
+	return fmt.Errorf("execution: invalid input field %s", name)
+}
+
 func validateExecutionRequired(kind string, fields map[string]json.RawMessage) error {
 	required := []string{executionTypeField, "requestId"}
 	if kind == TypeExecutionCreate || kind == TypeExecutionRequest {
 		required = append(required, "requestKey")
 	} else {
-		required = append(required, "sessionId", "instance")
+		required = append(required, sessionIDField, "instance")
 	}
 	if kind == TypeExecutionCreate {
 		required = append(required, "kind", "command", "cwd")
+	}
+	if kind == TypeExecutionInput || kind == TypeWorkerLineInput || kind == TypeWorkerLineRetire {
+		required = append(required, "writeKey")
+		if fields["inputOffset"] == nil && (fields["inputBytes"] != nil || fields["inputEOF"] != nil) {
+			return fmt.Errorf("execution: input writes require an offset")
+		}
 	}
 	for _, name := range required {
 		if fields[name] == nil {
@@ -333,4 +385,17 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 		}
 	}
 	return nil
+}
+
+func (c Control) InputIntent() (*session.InputReceipt, error) {
+	if err := session.ValidateWriteKey(c.WriteKey); err != nil {
+		return nil, &ExecutionValidationError{Err: err}
+	}
+	if c.InputOffset == nil {
+		return nil, nil
+	}
+	if len(c.InputBytes) > session.MaxInputBytes || (len(c.InputBytes) == 0 && !c.InputEOF) || *c.InputOffset > ^uint64(0)-uint64(len(c.InputBytes)) {
+		return nil, &ExecutionValidationError{Err: fmt.Errorf("execution: invalid stdin write; provide bytes or EOF")}
+	}
+	return &session.InputReceipt{WriteKey: c.WriteKey, Offset: *c.InputOffset, Length: len(c.InputBytes), Closed: c.InputEOF}, nil
 }

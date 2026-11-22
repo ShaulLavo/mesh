@@ -96,6 +96,14 @@ func (c *socketConn) ReadFrame() (protocol.Frame, error) {
 }
 
 func (c *socketConn) WriteFrame(frame protocol.Frame) error {
+	return c.write(frame, nil)
+}
+
+func (c *socketConn) writeAdmittedControl(frame protocol.Frame, admit func() error) error {
+	return c.write(frame, admit)
+}
+
+func (c *socketConn) write(frame protocol.Frame, admit func() error) error {
 	payload, err := encodeFrame(frame)
 	if err != nil {
 		return err
@@ -106,6 +114,11 @@ func (c *socketConn) WriteFrame(frame protocol.Frame) error {
 		err := errors.New("transport: scoped grant no longer current")
 		c.fail(err)
 		return err
+	}
+	if admit != nil {
+		if err := admit(); err != nil {
+			return err
+		}
 	}
 	var writeErr error
 	if c.stream != nil {

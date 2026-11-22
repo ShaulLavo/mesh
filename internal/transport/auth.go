@@ -96,6 +96,7 @@ type AuthenticatedPeer struct {
 
 func (p AuthenticatedPeer) Class() access.Class     { return p.grant.Class }
 func (p AuthenticatedPeer) Binding() access.Binding { return p.grant.Scoped }
+func (p AuthenticatedPeer) Current() bool           { return p.grant.Current != nil && p.grant.Current() }
 
 type peerKey struct{}
 
@@ -463,6 +464,10 @@ func containsAuthProtocol(r *http.Request) bool {
 type authorizedConn struct {
 	Conn
 	grant Authorization
+}
+
+func (c *authorizedConn) writeAdmittedControl(frame protocol.Frame, admit func() error) error {
+	return WriteAdmittedControl(c.Conn, frame, admit)
 }
 
 func (c *authorizedConn) ReadFrame() (protocol.Frame, error) {

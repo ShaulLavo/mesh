@@ -47,7 +47,7 @@ func (j *Journal) outputCandidate(ctx context.Context, entries []os.DirEntry) (R
 			slots++
 			continue
 		}
-		if len(r.Result.Streams) == 0 || r.OutputExpired {
+		if r.OutputRetainUntil == nil || r.OutputExpired {
 			continue
 		}
 		slots++
@@ -86,8 +86,17 @@ func (j *Journal) markOutputExpired(ctx context.Context, b Binding) error {
 	return err
 }
 func (j *Journal) deleteOutputBytes(ctx context.Context, b Binding) error {
-	s := newStreamStore(j.files, b)
-	gate, err := j.files.LockExisting(ctx, streamPath(b, "stream.lock"))
+	for _, stream := range b.Streams() {
+		if err := j.deleteStreamBytes(ctx, b, stream); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (j *Journal) deleteStreamBytes(ctx context.Context, b Binding, stream string) error {
+	s := newStreamStore(j.files, b, stream)
+	gate, err := j.files.LockExisting(ctx, s.path("stream.lock"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -103,12 +112,15 @@ func (j *Journal) deleteOutputBytes(ctx context.Context, b Binding) error {
 		return err
 	}
 	if !m.Closed {
-		return ErrProtected
+		if b.Mode() == KindPTY {
+			return ErrProtected
+		}
+		m.Closed, m.CloseReason = true, interrupted
 	}
 	m.Expired = true
 	m.Earliest = m.End
 	m.Segments = nil
-	if _, err := j.files.Publish(streamPath(b, "manifest.json"), m, false); err != nil {
+	if _, err := j.files.Publish(s.path("manifest.json"), m, false); err != nil {
 		return err
 	}
 	return s.prune(ctx, m)
@@ -120,5 +132,37 @@ func (j *Journal) retireOutputPayload(ctx context.Context, b Binding) error {
 	return j.files.Remove(attempt(b, "result.json"), "execution/.barrier")
 }
 func outputDue(r Receipt, now time.Time) bool {
-	return r.Phase == phaseTerminal && r.Result != nil && len(r.Result.Streams) > 0 && (r.OutputExpired || (r.OutputRetainUntil != nil && !now.Before(*r.OutputRetainUntil)))
+	return r.Phase == phaseTerminal && r.OutputRetainUntil != nil && (r.OutputExpired || !now.Before(*r.OutputRetainUntil))
+}
+
+func (j *Journal) interruptedPipe(ctx context.Context, b Binding) (Result, error) {
+	r := Result{Binding: b, Termination: Termination{Kind: interrupted, Reason: "host_reboot"}, Capture: "incomplete"}
+	for _, stream := range b.Streams() {
+		s := newStreamStore(j.files, b, stream)
+		summary, err := s.interrupted(ctx)
+		if err != nil {
+			return Result{}, err
+		}
+		r.Streams = append(r.Streams, summary)
+	}
+	return r, nil
+}
+
+func (s *streamStore) interrupted(ctx context.Context) (StreamResult, error) {
+	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	if err != nil {
+		return StreamResult{}, err
+	}
+	defer func() { _ = gate.Close() }()
+	m, err := s.load()
+	if err != nil {
+		return StreamResult{}, err
+	}
+	if !m.Closed {
+		m.Closed, m.CloseReason = true, interrupted
+		if _, err := s.files.Publish(s.path("manifest.json"), m, false); err != nil {
+			return StreamResult{}, err
+		}
+	}
+	return m.summary(), s.prune(ctx, m)
 }

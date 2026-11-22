@@ -131,7 +131,10 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 		return Receipt{}, false, err
 	}
 	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent}
-	if binding.RequestHash != k.Hash() {
+	if (binding.Mode() == KindLine) != (k.Class == InternalServiceClass) {
+		return r, false, fmt.Errorf("execution: invalid internal request namespace")
+	}
+	if binding.RequestHash != k.Hash() || binding.Mode() != i.Kind || binding.Stdin != i.Stdin {
 		return r, false, fmt.Errorf("execution: reservation namespace mismatch")
 	}
 	if err := j.files.Ensure(filepath.Dir(attempt(binding, "reference.json"))); err != nil {
@@ -185,7 +188,7 @@ func (j *Journal) activeEntry(name string) int {
 	if r.Phase != phaseTerminal {
 		return 1
 	}
-	if len(r.Result.Streams) > 0 && !r.OutputExpired {
+	if r.OutputRetainUntil != nil && !r.OutputExpired {
 		return 1
 	}
 	return 0
@@ -266,7 +269,7 @@ func (j *Journal) NotStarted(ctx context.Context, b Binding, reason string) (Rec
 		return Receipt{}, ErrUnknown
 	}
 	// The launcher can use this only when exec.Start proved no worker was created.
-	return j.terminal(r, Result{Binding: b, Termination: Termination{Kind: notStarted, Reason: reason}, Capture: captureNotRecorded})
+	return j.terminal(r, Result{Binding: b, Termination: Termination{Kind: notStarted, Reason: reason}, Capture: CaptureNotRecorded})
 }
 func (j *Journal) snapshot(ctx context.Context, hash string) (Receipt, error) {
 	gate, err := j.lock(ctx)
@@ -287,9 +290,15 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 	var result Result
 	resultErr := errResultPending
 	if snapshot.Phase != phaseTerminal {
-		output := &Output{files: j.files, streams: make(map[Binding]*streamStore)}
+		output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
 		result, resultErr = output.Result(ctx, snapshot.Binding)
 		if resultErr != nil && !IsResultPending(resultErr) {
+			return snapshot, resultErr
+		}
+	}
+	if IsResultPending(resultErr) && snapshot.Binding.Mode() != KindPTY && snapshot.Binding.Reservation.BootID != j.boot && j.startedBeforeReboot(snapshot) {
+		result, resultErr = j.interruptedPipe(ctx, snapshot.Binding)
+		if resultErr != nil {
 			return snapshot, resultErr
 		}
 	}
@@ -320,6 +329,14 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 	}
 	return r, nil
 }
+func (j *Journal) startedBeforeReboot(r Receipt) bool {
+	if r.LaunchOutcome == outcomeStarted {
+		return true
+	}
+	name := attempt(r.Binding, "started.json")
+	var started Binding
+	return j.files.Read(name, &started) == nil && started == r.Binding && j.files.Confirm(name) == nil
+}
 func (j *Journal) abandonReserved(r Receipt) (Receipt, error) {
 	var d dispatch
 	err := j.files.Read(attempt(r.Binding, "dispatch.json"), &d)
@@ -331,7 +348,7 @@ func (j *Journal) abandonReserved(r Receipt) (Receipt, error) {
 	if r.Owner == j.owner {
 		return r, nil
 	}
-	return j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "coordinator_replaced"}, Capture: captureNotRecorded})
+	return j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "coordinator_replaced"}, Capture: CaptureNotRecorded})
 }
 func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	if r.Phase == phaseTerminal {
@@ -347,7 +364,7 @@ func (j *Journal) terminal(r Receipt, result Result) (Receipt, error) {
 	r.Phase = phaseTerminal
 	r.Result = &result
 	r.TerminalAt = &now
-	if len(result.Streams) > 0 {
+	if len(result.Streams) > 0 || (r.Binding.Mode() != KindPTY && result.EndedAt != nil) {
 		outputUntil := now.Add(7 * 24 * time.Hour)
 		r.OutputRetainUntil = &outputUntil
 	}

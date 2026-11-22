@@ -18,6 +18,7 @@ const hostFlag = "--host"
 const limitFlag = "--limit"
 const skillDirFlag = "--dir"
 const fileFlag = "--file"
+const instanceFlag = "--instance"
 const rootOperand = "ROOT"
 const skillsRootSummary = "existing skills root"
 const jsonFlagSummary = "write one agent result"
@@ -47,18 +48,19 @@ var Operations = []Operation{
 	{Name: "sessions.list", Command: "mesh session list", Implemented: true, Network: true, Flags: sessionReadFlags(true), Summary: "Read a bounded page of sessions without attaching.", Example: "mesh session list --host HOST_ID --json"},
 	{Name: "sessions.inspect", Command: "mesh session inspect", Args: sessionIDValue, Implemented: true, Network: true, Flags: sessionReadFlags(false), Summary: "Read live or saved session details without attaching.", Example: "mesh session inspect --host HOST_ID SESSION_ID --json"},
 	{Name: "profile.show", Command: "mesh profile show", Implemented: true, Flags: []Flag{{Name: fleetFlag, Summary: "read the local signed fleet replica"}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Read this machine’s owner-written notes.", Example: "mesh profile show --json"},
-	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "publish signed notes to saved fleet members"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--file", Value: pathFlagValue, Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
+	{Name: "profile.set", Command: "mesh profile set", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "publish signed notes to saved fleet members"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: fileFlag, Value: pathFlagValue, Required: true, Summary: "editable JSON file, or - for stdin"}, {Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this write"}}, Summary: "Replace this machine’s notes at an expected revision.", Example: "mesh profile set --file PATH --expected-revision 0 --json"},
 	{Name: "profile.edit", Command: "mesh profile edit", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Summary: "edit signed fleet notes"}}, Summary: "Edit this machine’s notes with VISUAL or EDITOR, for humans only.", Example: "mesh profile edit"},
 	{Name: "profile.status", Command: "mesh profile status", Implemented: true, Mutates: true, Flags: []Flag{{Name: fleetFlag, Required: true, Summary: "read fleet delivery state"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--retry", Summary: "reset pending and stale delivery age"}}, Summary: "Read local fleet delivery state without contacting members.", Example: "mesh profile status --fleet --json"},
-	{Name: "skill.show", Command: "mesh skill show", Implemented: true, Flags: []Flag{{Name: fileFlag, Value: "PATH", Summary: "embedded file to print"}}, Summary: "Print exact embedded skill bytes without reading configuration.", Example: "mesh skill show"},
+	{Name: "skill.show", Command: "mesh skill show", Implemented: true, Flags: []Flag{{Name: fileFlag, Value: pathFlagValue, Summary: "embedded file to print"}}, Summary: "Print exact embedded skill bytes without reading configuration.", Example: "mesh skill show"},
 	{Name: "skill.install", Command: "mesh skill install", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: true, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Install the managed Mesh skill.", Example: "mesh skill install --dir ROOT --json"},
 	{Name: "skill.update", Command: "mesh skill update", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: false, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Update the managed Mesh skill.", Example: "mesh skill update --dir ROOT --json"},
 	{Name: "skill.status", Command: "mesh skill status", Implemented: true, Mutates: false, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: false, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Inspect the managed Mesh skill and its registration.", Example: "mesh skill status --dir ROOT --json"},
 	{Name: "skill.uninstall", Command: "mesh skill uninstall", Implemented: true, Mutates: true, Flags: []Flag{{Name: skillDirFlag, Value: rootOperand, Required: true, Summary: skillsRootSummary}, {Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Uninstall the managed Mesh skill.", Example: "mesh skill uninstall --dir ROOT --json"},
-	{Name: "sessions.create", Command: "mesh session create", Args: "-- command [args...]", Implemented: true, Network: true, Mutates: true, Flags: executionFlags(true), Summary: "Start one keyed detached PTY command on an online host.", Example: "mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true"},
+	{Name: "sessions.create", Command: "mesh session create", Args: "-- command [args...]", Implemented: true, Network: true, Mutates: true, Flags: executionFlags(true), Summary: "Start one keyed detached command on an online host.", Example: "mesh session create --host HOST_ID --kind pty --request-key job-17 --cwd /work --json -- /usr/bin/true"},
 	{Name: "sessions.request", Command: "mesh session request", Implemented: true, Network: true, Flags: executionFlags(false), Summary: "Read a durable request receipt without launching work.", Example: "mesh session request --host HOST_ID --request-key job-17 --json"},
 	{Name: "sessions.wait", Command: "mesh session wait", Args: sessionIDValue, Implemented: true, Network: true, Mutates: false, Flags: executionControlFlags("wait"), Summary: "Wait for a durable exact-instance result.", Example: "mesh session wait --host HOST_ID 7K3D --instance INSTANCE --json"},
-	{Name: "sessions.logs", Command: "mesh session logs", Args: sessionIDValue, Implemented: true, Network: true, Mutates: false, Flags: executionControlFlags("logs"), Summary: "Read exact bounded PTY bytes with independent cursors.", Example: "mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json"},
+	{Name: "sessions.logs", Command: "mesh session logs", Args: sessionIDValue, Implemented: true, Network: true, Mutates: false, Flags: executionControlFlags("logs"), Summary: "Read exact bounded output bytes with independent cursors.", Example: "mesh session logs --host HOST_ID 7K3D --instance INSTANCE --json"},
+	{Name: "sessions.input", Command: "mesh session input", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("input"), Summary: "Write pipe stdin once or look up a saved write key.", Example: "mesh session input --host HOST_ID 7K3D --instance INSTANCE --write-key eof --offset 0 --eof --json"},
 	{Name: "sessions.signal", Command: "mesh session signal", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("signal"), Summary: "Signal one exact keyed command instance.", Example: "mesh session signal --host HOST_ID 7K3D --instance INSTANCE --json"},
 	{Name: "sessions.kill", Command: "mesh session kill", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("kill"), Summary: "Stop one exact keyed command instance.", Example: "mesh session kill --host HOST_ID 7K3D --instance INSTANCE --json"},
 	{Name: "sessions.remove", Command: "mesh session rm", Args: sessionIDValue, Implemented: true, Network: true, Mutates: true, Flags: executionControlFlags("remove"), Summary: "Remove finished output while retaining the creation receipt.", Example: "mesh session rm --host HOST_ID 7K3D --instance INSTANCE --json"},
@@ -128,7 +130,7 @@ func invocationWords(args []string) []string {
 
 func valueFlag(arg string) bool {
 	switch arg {
-	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", "--file", expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, cursorFlag, limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", maxBytesFlag, colsFlag, rowsFlag, "--instance", "--stream", "--signal":
+	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", fileFlag, expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, cursorFlag, limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", maxBytesFlag, colsFlag, rowsFlag, instanceFlag, "--stream", "--signal", "--stdin", "--offset", "--write-key", "--base64", "--text":
 		return true
 	}
 	return false
@@ -137,7 +139,7 @@ func valueFlag(arg string) bool {
 func sessionReadFlags(list bool) []Flag {
 	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "machine name or exact host ID"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "hard deadline from 100ms to 60s"}}
 	if !list {
-		return append(flags, Flag{Name: "--preview", Summary: "include a preview at most 80 by 24"})
+		return append(flags, Flag{Name: "--preview", Summary: "include a preview at most 80 by 24"}, Flag{Name: instanceFlag, Value: "INSTANCE", Summary: "inspect an exact keyed command receipt"})
 	}
 	return append(flags, Flag{Name: "--all", Summary: "include ended sessions"}, Flag{Name: "--detail", Summary: "include launch command and directory"}, Flag{Name: limitFlag, Value: "N", Summary: "page size from 1 to 500"}, Flag{Name: "--page", Value: tokenValue, Summary: "nextPage token from this host"})
 }
@@ -145,15 +147,24 @@ func sessionReadFlags(list bool) []Flag {
 func executionFlags(create bool) []Flag {
 	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: "--request-key", Value: "KEY", Required: true, Summary: "saved logical request key"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: timeoutFlag, Value: "D", Summary: "finite request deadline"}}
 	if create {
-		return append(flags, Flag{Name: "--kind", Value: "pty", Required: true, Summary: "explicit PTY kind"}, Flag{Name: "--cwd", Value: "PATH", Required: true, Summary: "absolute target directory"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: colsFlag, Value: "N", Summary: "terminal width"}, Flag{Name: rowsFlag, Value: "N", Summary: "terminal height"})
+		return append(flags, Flag{Name: "--kind", Value: "KIND", Required: true, Summary: "pty or pipe"}, Flag{Name: "--cwd", Value: pathFlagValue, Required: true, Summary: "absolute target directory"}, Flag{Name: "--stdin", Value: "MODE", Summary: "pipe stdin, closed or open"}, Flag{Name: "--term", Value: "TERM", Summary: "terminal type"}, Flag{Name: colsFlag, Value: "N", Summary: "terminal width"}, Flag{Name: rowsFlag, Value: "N", Summary: "terminal height"})
 	}
 	return flags
 }
 
 func executionControlFlags(kind string) []Flag {
-	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: "--instance", Value: "INSTANCE", Required: true, Summary: "exact creation receipt instance"}, {Name: timeoutFlag, Value: "D", Summary: "finite deadline"}}
+	flags := []Flag{{Name: hostFlag, Value: hostValue, Required: true, Summary: "online target"}, {Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: instanceFlag, Value: "INSTANCE", Required: true, Summary: "exact creation receipt instance"}, {Name: timeoutFlag, Value: "D", Summary: "finite deadline"}}
 	if kind == "logs" {
-		flags = append(flags, Flag{Name: "--stream", Value: "pty", Summary: "exact PTY stream"}, Flag{Name: cursorFlag, Value: tokenValue, Summary: "independent output cursor"}, Flag{Name: maxBytesFlag, Value: "N", Summary: "page size from 1 to 1048576"})
+		flags = append(flags, Flag{Name: "--stream", Value: "STREAM", Summary: "pty, stdout or stderr"}, Flag{Name: cursorFlag, Value: tokenValue, Summary: "independent output cursor"}, Flag{Name: maxBytesFlag, Value: "N", Summary: "page size from 1 to 1048576"})
+	}
+	if kind == "input" {
+		flags = append(flags,
+			Flag{Name: "--write-key", Value: "KEY", Required: true, Summary: "saved logical write key"},
+			Flag{Name: "--offset", Value: "N", Summary: "expected byte offset, omitted for lookup"},
+			Flag{Name: "--text", Value: "TEXT", Summary: "exact text bytes"},
+			Flag{Name: "--base64", Value: "DATA", Summary: "Base64-encoded bytes"},
+			Flag{Name: fileFlag, Value: pathFlagValue, Summary: "read local bytes, or use - for stdin"},
+			Flag{Name: "--eof", Summary: "close pipe stdin after these bytes"})
 	}
 	if kind == "signal" {
 		flags = append(flags, Flag{Name: "--signal", Value: "SIGNAL", Required: true, Summary: "process group signal"})

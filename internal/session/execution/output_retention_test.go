@@ -24,7 +24,7 @@ func terminalOutputFixture(t *testing.T) (*Journal, Key, Intent, []string, Recei
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Close() })
-	capture, err := OpenCapture(j.files.root.Name(), r.Binding)
+	capture, err := OpenCapture(j.files.root.Name(), r.Binding, KindPTY)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestTerminalOutputQuotaPreservesReceiptAndRecovery(t *testing.T) {
 }
 func TestOutputExpiryFailurePreservesBytesAndRetries(t *testing.T) {
 	j, k, _, _, r := terminalOutputFixture(t)
-	s := newStreamStore(j.files, r.Binding)
+	s := newStreamStore(j.files, r.Binding, KindPTY)
 	m, err := s.load()
 	if err != nil {
 		t.Fatal(err)
@@ -93,14 +93,14 @@ func TestOutputExpiryFailurePreservesBytesAndRetries(t *testing.T) {
 	if err := j.expireOutput(t.Context(), r.Binding); err == nil {
 		t.Fatal("expiry acknowledged a failed tombstone")
 	}
-	if _, err := j.files.root.Stat(streamPath(r.Binding, m.Segments[0].Name)); err != nil {
+	if _, err := j.files.root.Stat(streamPath(r.Binding, KindPTY, m.Segments[0].Name)); err != nil {
 		t.Fatal("deleted bytes before tombstone")
 	}
 	j.files.fault = nil
 	if err := j.expireOutput(t.Context(), r.Binding); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := j.files.root.Stat(streamPath(r.Binding, m.Segments[0].Name)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := j.files.root.Stat(streamPath(r.Binding, KindPTY, m.Segments[0].Name)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("expired bytes retained without a consumer")
 	}
 	if retained, err := j.Lookup(t.Context(), k); err != nil || !retained.OutputExpired || retained.Result == nil {

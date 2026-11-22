@@ -106,6 +106,7 @@ type Worker struct {
 	operationMu      sync.Mutex
 	capture          *execution.Capture
 	captureReason    string
+	pipe             *pipeExecution
 	executionClients *executionClients
 	cfg              Config
 	sid              protocol.SessionID
@@ -477,6 +478,9 @@ func Run(cfg Config) (int, error) {
 	if cfg.Cwd == "" {
 		cfg.Cwd, _ = os.Getwd()
 	}
+	if cfg.Execution != nil && cfg.Execution.Mode() != execution.KindPTY {
+		return runPipe(cfg, sid, sockPath)
+	}
 	if err := validateTerminalSize(cfg.Cols, cfg.Rows); err != nil {
 		return 0, fmt.Errorf("worker: invalid terminal size: %w", err)
 	}
@@ -499,7 +503,7 @@ func Run(cfg Config) (int, error) {
 		if err := childExitSupported(); err != nil {
 			return 0, err
 		}
-		capture, err = execution.OpenCapture(filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution)
+		capture, err = execution.OpenCapture(filepath.Dir(filepath.Dir(cfg.Dir)), *cfg.Execution, execution.KindPTY)
 		if err != nil {
 			return 0, fmt.Errorf("worker: initialize capture: %w", err)
 		}

@@ -1,5 +1,5 @@
 // Package worker implements mesh session-worker: a detached process that owns
-// exactly one PTY and outlives every client attached to it.
+// a process and its I/O across client and daemon restarts.
 package worker
 
 import (
@@ -36,6 +36,7 @@ const (
 type Meta struct {
 	Reservation    *session.Reservation `json:"reservation,omitempty"`
 	Build          *release.Build       `json:"build,omitempty"`
+	ExecutionKind  string               `json:"executionKind,omitempty"`
 	RecoveredFrom  string               `json:"recoveredFrom,omitempty"`
 	ID             string               `json:"id"`
 	PID            int                  `json:"pid"`
@@ -61,7 +62,7 @@ type Meta struct {
 
 // WriteMeta atomically replaces the metadata file in dir.
 func WriteMeta(dir string, m Meta) error {
-	if m.Reservation != nil && m.Reservation.Purpose == session.Execution {
+	if m.Reservation != nil && m.Reservation.Purpose.IsExecution() {
 		files, err := execution.OpenFiles(filepath.Dir(dir))
 		if err != nil {
 			return workerExecutionError("meta.go WriteMeta", err)

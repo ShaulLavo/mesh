@@ -37,8 +37,8 @@ func parseOffset(value string) (uint64, error) {
 	}
 	return n, nil
 }
-func makeCursor(b Binding, generation string, offset uint64) string {
-	raw, _ := json.Marshal(cursor{1, b.Host, b.Reservation.ID, b.Reservation.Instance, ptyStream, generation, offsetText(offset)})
+func makeCursor(b Binding, stream, generation string, offset uint64) string {
+	raw, _ := json.Marshal(cursor{1, b.Host, b.Reservation.ID, b.Reservation.Instance, stream, generation, offsetText(offset)})
 	return base64.RawURLEncoding.EncodeToString(raw)
 }
 func readCursor(value string) (cursor, uint64, error) {
@@ -85,21 +85,21 @@ type Page struct {
 }
 
 func (m manifest) page(b Binding, value string) (Page, uint64, error) {
-	p := Page{HostID: b.Host, SessionID: b.Reservation.ID, Instance: b.Reservation.Instance, Stream: ptyStream, Generation: m.Generation, Bytes: []byte{}, EarliestCursor: makeCursor(b, m.Generation, m.Earliest), EndCursor: makeCursor(b, m.Generation, m.End), ObservedEnd: offsetText(m.Observed), StreamClosed: m.Closed, CloseReason: m.CloseReason, Loss: m.Loss, Available: !m.Expired}
+	p := Page{HostID: b.Host, SessionID: b.Reservation.ID, Instance: b.Reservation.Instance, Stream: m.streamName(), Generation: m.Generation, Bytes: []byte{}, EarliestCursor: makeCursor(b, m.streamName(), m.Generation, m.Earliest), EndCursor: makeCursor(b, m.streamName(), m.Generation, m.End), ObservedEnd: offsetText(m.Observed), StreamClosed: m.Closed, CloseReason: m.CloseReason, Loss: m.Loss, Available: !m.Expired}
 	offset := m.Earliest
 	if value != "" {
 		c, n, err := readCursor(value)
 		if err != nil {
 			return Page{}, 0, err
 		}
-		if c.Host != b.Host || c.Session != b.Reservation.ID || c.Instance != b.Reservation.Instance || c.Stream != ptyStream || c.Generation != m.Generation {
+		if c.Host != b.Host || c.Session != b.Reservation.ID || c.Instance != b.Reservation.Instance || c.Stream != m.streamName() || c.Generation != m.Generation {
 			p.Gap = true
 			p.Reason = "binding_mismatch"
 			return p, 0, ErrCursorExpired
 		}
 		offset = n
 	}
-	p.StartCursor = makeCursor(b, m.Generation, offset)
+	p.StartCursor = makeCursor(b, m.streamName(), m.Generation, offset)
 	p.NextCursor = p.StartCursor
 	if m.Expired || offset < m.Earliest {
 		p.Gap = true

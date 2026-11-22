@@ -17,6 +17,24 @@ const captureQueue = 1 << 20
 const captureSegment = 64 << 10
 const captureSuffix = 16 << 20
 
+func segmentCapacity(b Binding) uint32 {
+	if b.Mode() != KindPTY {
+		return 256 << 10
+	}
+	return captureSegment
+}
+
+func retentionBytes(b Binding) uint64 {
+	switch b.Mode() {
+	case KindPipe:
+		return 8 << 20
+	case KindLine:
+		return 1 << 20
+	default:
+		return captureSuffix
+	}
+}
+
 type segment struct {
 	Name  string `json:"name"`
 	Start uint64 `json:"start,string"`
@@ -36,6 +54,7 @@ type StreamResult struct {
 type manifest struct {
 	Binding     Binding   `json:"binding"`
 	Generation  string    `json:"generation"`
+	Stream      string    `json:"stream,omitempty"`
 	Earliest    uint64    `json:"earliest,string"`
 	End         uint64    `json:"end,string"`
 	Observed    uint64    `json:"observed,string"`
@@ -48,18 +67,32 @@ type manifest struct {
 }
 
 func (m manifest) summary() StreamResult {
-	return StreamResult{ptyStream, m.Generation, offsetText(m.Earliest), offsetText(m.End), offsetText(m.Observed), m.EOF, m.CloseReason, m.Loss}
+	return StreamResult{m.streamName(), m.Generation, offsetText(m.Earliest), offsetText(m.End), offsetText(m.Observed), m.EOF, m.CloseReason, m.Loss}
 }
+func (m manifest) streamName() string {
+	if m.Stream == "" {
+		return KindPTY
+	}
+	return m.Stream
+}
+
 func (m manifest) validate(b Binding) error {
-	if m.Binding != b || !validToken(m.Generation) || m.Earliest > m.End || m.End > m.Observed || m.End-m.Earliest > captureSuffix || len(m.Segments) > captureSuffix/captureSegment+1 {
+	if m.Binding != b || !validToken(m.Generation) || m.Earliest > m.End || m.End > m.Observed || m.End-m.Earliest > retentionBytes(b) || uint64(len(m.Segments)) > retentionBytes(b)/uint64(segmentCapacity(b))+2 {
 		return fmt.Errorf("execution: invalid capture manifest")
 	}
 	if err := validStreamClosure(m.Closed, m.EOF, m.CloseReason, m.Loss); err != nil {
 		return executionBoundaryError("capture", err)
 	}
 	next := m.Earliest
+	if len(m.Segments) > 0 {
+		first := m.Segments[0]
+		if first.Start > m.Earliest || m.Earliest-first.Start >= uint64(first.Size) {
+			return fmt.Errorf("execution: invalid first capture segment")
+		}
+		next = first.Start
+	}
 	for _, s := range m.Segments {
-		if s.Start != next || s.Size < 1 || s.Size > captureSegment || !validDigest(s.Hash) || !validToken(s.Name) {
+		if s.Start != next || s.Size < 1 || s.Size > segmentCapacity(b) || !validDigest(s.Hash) || !validToken(s.Name) {
 			return fmt.Errorf("execution: invalid capture segment")
 		}
 		next += uint64(s.Size)
@@ -76,7 +109,7 @@ func validStreamClosure(closed, eof bool, reason, loss string) error {
 	if !closed && reason != "" {
 		return fmt.Errorf("execution: open capture has closure")
 	}
-	if closed && reason != captureEOF && reason != "drain_timeout" && reason != "read_error" && reason != "interrupted" {
+	if closed && reason != captureEOF && reason != "drain_timeout" && reason != "read_error" && reason != interrupted {
 		return fmt.Errorf("execution: invalid capture closure")
 	}
 	if loss != "" && loss != "queue_overflow" && loss != captureStorageLoss && loss != captureRetention {
@@ -95,7 +128,9 @@ func freshToken() (string, error) {
 	}
 	return hex.EncodeToString(raw[:]), nil
 }
-func streamPath(b Binding, name string) string { return attempt(b, filepath.Join(ptyStream, name)) }
+func streamPath(b Binding, stream, name string) string {
+	return attempt(b, filepath.Join(stream, name))
+}
 
 type fileIdentity struct{ info os.FileInfo }
 
@@ -106,18 +141,24 @@ func (i fileIdentity) matches(info os.FileInfo) bool {
 type streamStore struct {
 	files     *Files
 	binding   Binding
+	stream    string
 	gate      chan struct{}
 	confirmed map[string]fileIdentity
 }
 
-func newStreamStore(f *Files, b Binding) *streamStore {
-	return &streamStore{files: f, binding: b, gate: make(chan struct{}, 1), confirmed: make(map[string]fileIdentity)}
+func newStreamStore(f *Files, b Binding, stream string) *streamStore {
+	return &streamStore{files: f, binding: b, stream: stream, gate: make(chan struct{}, 1), confirmed: make(map[string]fileIdentity)}
 }
+func (s *streamStore) path(name string) string { return streamPath(s.binding, s.stream, name) }
+
 func (s *streamStore) load() (manifest, error) {
 	var m manifest
-	err := s.files.Read(streamPath(s.binding, "manifest.json"), &m)
+	err := s.files.Read(s.path("manifest.json"), &m)
 	if err != nil {
 		return m, err
+	}
+	if m.streamName() != s.stream {
+		return m, fmt.Errorf("execution: capture stream mismatch")
 	}
 	return m, m.validate(s.binding)
 }
@@ -137,25 +178,46 @@ func (s *streamStore) settle(ctx context.Context, m manifest) error {
 		if err := ctx.Err(); err != nil {
 			return executionBoundaryError("capture", err)
 		}
-		name := streamPath(s.binding, segment.Name)
+		name := s.path(segment.Name)
 		identity, err := s.confirmSegment(name, segment)
 		if err != nil {
 			return executionBoundaryError("capture", err)
 		}
 		keep[name] = identity
 	}
-	name := streamPath(s.binding, "manifest.json")
-	if err := s.files.Confirm(name); err != nil {
-		return executionBoundaryError("capture", err)
-	}
-	info, err := s.identity(name)
+	name := s.path("manifest.json")
+	identity, err := s.confirmManifest(name)
 	if err != nil {
-		return executionBoundaryError("capture", err)
+		return executionBoundaryError("confirm capture manifest", err)
 	}
-	keep[name] = fileIdentity{info}
+	keep[name] = identity
 	s.confirmed = keep
 	return nil
 }
+func (s *streamStore) confirmManifest(name string) (fileIdentity, error) {
+	info, err := s.identity(name)
+	if err != nil {
+		return fileIdentity{}, err
+	}
+	if s.binding.Mode() != KindPTY && s.confirmed[name].matches(info) {
+		return fileIdentity{info}, nil
+	}
+	if err := s.files.Confirm(name); err != nil {
+		return fileIdentity{}, err
+	}
+	return fileIdentity{info}, nil
+}
+
+// Successful publication already synchronized both the file and its directory.
+func (s *streamStore) rememberPublished(name string) {
+	if s.binding.Mode() == KindPTY {
+		return
+	}
+	if info, err := s.identity(name); err == nil {
+		s.confirmed[name] = fileIdentity{info}
+	}
+}
+
 func (s *streamStore) confirmSegment(name string, seg segment) (fileIdentity, error) {
 	info, err := s.identity(name)
 	if err != nil {
@@ -178,7 +240,7 @@ func (s *streamStore) segmentBytes(seg segment) ([]byte, error) {
 	return data, err
 }
 func (s *streamStore) readSegment(seg segment, consume func(uint64, []byte)) (err error) {
-	file, err := s.files.open(streamPath(s.binding, seg.Name), os.O_RDONLY)
+	file, err := s.files.open(s.path(seg.Name), os.O_RDONLY)
 	if err != nil {
 		return err
 	}
@@ -205,9 +267,9 @@ func (s *streamStore) readSegment(seg segment, consume func(uint64, []byte)) (er
 }
 func (s *streamStore) confirmedManifest(m manifest) bool {
 	names := make([]string, 0, len(m.Segments)+1)
-	names = append(names, streamPath(s.binding, "manifest.json"))
+	names = append(names, s.path("manifest.json"))
 	for _, seg := range m.Segments {
-		names = append(names, streamPath(s.binding, seg.Name))
+		names = append(names, s.path(seg.Name))
 	}
 	for _, name := range names {
 		info, err := s.identity(name)
@@ -221,7 +283,7 @@ func (s *streamStore) prune(ctx context.Context, m manifest) error {
 	if err := s.settle(ctx, m); err != nil {
 		return executionBoundaryError("capture", err)
 	}
-	entries, err := s.files.Names(streamPath(s.binding, "."))
+	entries, err := s.files.Names(s.path("."))
 	if err != nil {
 		return executionBoundaryError("capture", err)
 	}
@@ -229,18 +291,17 @@ func (s *streamStore) prune(ctx context.Context, m manifest) error {
 		if !validToken(entry.Name()) && !strings.HasPrefix(entry.Name(), ".tmp-") {
 			continue
 		}
-		name := streamPath(s.binding, entry.Name())
+		name := s.path(entry.Name())
 		if _, keep := s.confirmed[name]; keep {
 			continue
 		}
-		if err := s.files.Remove(name, streamPath(s.binding, "manifest.json")); err != nil {
+		if err := s.files.Remove(name, s.path("manifest.json")); err != nil {
 			return executionBoundaryError("capture", err)
 		}
 	}
 	return nil
 }
 
-const ptyStream = "pty"
 const captureEOF = "eof"
 const captureStorageLoss = "storage_failure"
 const captureRetention = "retention"

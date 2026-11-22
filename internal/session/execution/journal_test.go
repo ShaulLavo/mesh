@@ -38,7 +38,7 @@ func newTestBinding(t *testing.T, j *Journal, k Key, i Intent, env []string) (Bi
 	if err != nil {
 		return Binding{}, executionBoundaryError("journal_test.go newTestBinding", err)
 	}
-	ref, err := session.NewReservation(id, "boot", session.Execution)
+	ref, err := session.NewReservation(id, "boot", PurposeForKind(i.Kind))
 	if err != nil {
 		return Binding{}, executionBoundaryError("journal_test.go newTestBinding", err)
 	}

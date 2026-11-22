@@ -82,14 +82,10 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	if len(cfg.Command) == 0 || cfg.Command[0] == "" {
 		return Launched{}, fmt.Errorf("launch worker: no command")
 	}
-	if cfg.Cols <= 0 {
-		cfg.Cols = 80
-	}
-	if cfg.Rows <= 0 {
-		cfg.Rows = 24
-	}
-	if err := validateTerminalSize(cfg.Cols, cfg.Rows); err != nil {
-		return Launched{}, fmt.Errorf("launch worker: invalid terminal size: %w", err)
+	if cfg.Execution == nil || cfg.Execution.Mode() == execution.KindPTY {
+		if err := normalizeLaunchTerminal(&cfg); err != nil {
+			return Launched{}, err
+		}
 	}
 	if cfg.Executable == "" {
 		var err error
@@ -123,7 +119,7 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 		return Launched{}, err
 	}
 	cfg.Env = withSessionIdentity(cfg.Env, cfg.HostID, id)
-	cleanupReserved := cfg.Reservation.Purpose != session.Recovery && cfg.Reservation.Purpose != session.Execution
+	cleanupReserved := cfg.Reservation.Purpose != session.Recovery && !cfg.Reservation.Purpose.IsExecution()
 	defer func() {
 		if cleanupReserved {
 			launchErr = errors.Join(launchErr, cleanupLaunchReservation(dir, cfg.Owner != ""))
@@ -171,6 +167,19 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	return Launched{Meta: meta, Dir: dir}, nil
 }
 
+func normalizeLaunchTerminal(cfg *LaunchConfig) error {
+	if cfg.Cols <= 0 {
+		cfg.Cols = 80
+	}
+	if cfg.Rows <= 0 {
+		cfg.Rows = 24
+	}
+	if err := validateTerminalSize(cfg.Cols, cfg.Rows); err != nil {
+		return fmt.Errorf("launch worker: invalid terminal size: %w", err)
+	}
+	return nil
+}
+
 func launchSessionDir(cfg LaunchConfig) (string, string, error) {
 	if cfg.Reservation == nil {
 		return "", "", fmt.Errorf("launch worker: exact reservation required")
@@ -179,7 +188,7 @@ func launchSessionDir(cfg LaunchConfig) (string, string, error) {
 	if err := validateReservation(cfg.SessionsDir, ref); err != nil {
 		return "", "", err
 	}
-	if (ref.Purpose == session.Execution) != (cfg.Execution != nil) {
+	if (ref.Purpose.IsExecution()) != (cfg.Execution != nil) {
 		return "", "", fmt.Errorf("launch worker: reservation purpose mismatch")
 	}
 	if cfg.RecoveredFrom != "" && ref.Purpose != session.Recovery {
@@ -400,6 +409,9 @@ func launchArguments(cfg LaunchConfig, id, dir string) []string {
 	}
 	if cfg.Execution != nil {
 		args = append(args, "--request-hash", cfg.Execution.RequestHash, "--launch-digest", cfg.Execution.LaunchDigest, "--request-cwd", cfg.Cwd)
+		if cfg.Execution.Mode() != execution.KindPTY {
+			args = append(args, "--execution-kind", cfg.Execution.Kind, "--execution-stdin", cfg.Execution.Stdin)
+		}
 	}
 	if cfg.RecoveredFrom != "" {
 		args = append(args, "--recovered-from", cfg.RecoveredFrom)

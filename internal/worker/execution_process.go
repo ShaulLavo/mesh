@@ -18,6 +18,10 @@ func (w *Worker) waitChild() (*os.ProcessState, error) {
 func (w *Worker) reapChild() (*os.ProcessState, error) {
 	w.operationMu.Lock()
 	defer w.operationMu.Unlock()
+	if w.pipe != nil && w.pipe.cancelling.Load() {
+		// The exited but unreaped leader still fences its process-group ID.
+		_ = syscall.Kill(-w.cmd.Process.Pid, syscall.SIGKILL)
+	}
 	w.mu.Lock()
 	w.reaped = true
 	w.mu.Unlock()

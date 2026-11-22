@@ -33,6 +33,10 @@ func (w *Worker) serve(conn net.Conn) {
 		return
 	}
 	msg, err := protocol.DecodeControl(first.Payload)
+	if err == nil && w.pipe != nil {
+		w.servePipe(conn, r, msg)
+		return
+	}
 	if err == nil && (msg.Type == protocol.TypeExecutionSignal || msg.Type == protocol.TypeExecutionKill) {
 		w.executionControl(conn, msg)
 		return

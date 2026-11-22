@@ -231,6 +231,9 @@ func (r *accessReader) Output(ctx context.Context, binding access.Binding, outpu
 	if err := admit(ctx); err != nil {
 		return protocol.AccessOutputResult{}, err
 	}
+	if r.lifecycle.pipeSession(output.SessionID) {
+		return protocol.AccessOutputResult{}, errAccessNotFound
+	}
 	result := protocol.AccessOutputResult{Subject: accessSubject(binding), SessionID: output.SessionID, Format: output.Format, Preview: []string{}, StyledPreview: []protocol.PreviewLine{}}
 	request := protocol.Control{RequestID: "scoped-output", SessionID: output.SessionID}
 	switch output.Format {

@@ -27,11 +27,15 @@ func (w *Worker) finalCaptureReason() string {
 	}
 	return w.captureReason
 }
+
+const captureComplete = "complete"
+const captureIncomplete = "incomplete"
+
 func captureStatus(s execution.StreamResult) string {
 	if s.EOF && (s.Loss == "" || s.Loss == "retention") {
-		return "complete"
+		return captureComplete
 	}
-	return "incomplete"
+	return captureIncomplete
 }
 func finishUnstartedCapture(a *execution.Attempt, c *execution.Capture, b execution.Binding) error {
 	result := execution.Result{Binding: b, Termination: execution.Termination{Kind: "not_started", Reason: "child_start_failed"}, Capture: "not_recorded"}
@@ -40,7 +44,7 @@ func finishUnstartedCapture(a *execution.Attempt, c *execution.Capture, b execut
 		if err != nil {
 			return workerExecutionError("finish unstarted capture", err)
 		}
-		result.Capture = "incomplete"
+		result.Capture = captureIncomplete
 		result.Streams = []execution.StreamResult{summary}
 	}
 	return workerExecutionError("publish unstarted capture", a.Finish(result))

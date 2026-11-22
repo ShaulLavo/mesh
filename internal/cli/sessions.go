@@ -139,7 +139,7 @@ func readLocalSession(dir string) (Session, bool) {
 		return Session{}, false
 	}
 	meta, err := worker.ReadMeta(dir)
-	if err != nil {
+	if err != nil || meta.Reservation != nil && meta.Reservation.Purpose.IsPipe() {
 		return Session{}, false
 	}
 	liveness := probeLiveness(dir, &meta)
