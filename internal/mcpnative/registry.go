@@ -53,15 +53,20 @@ type Registry struct {
 	byName  map[string]ToolSpec
 }
 
-// DefaultRegistry builds the shipped native MCP tool registry sorted by tool name.
-func DefaultRegistry() *Registry {
-	specs := nativeToolSpecs()
-	sort.Slice(specs, func(i, j int) bool { return specs[i].Name < specs[j].Name })
-	byName := make(map[string]ToolSpec, len(specs))
-	for _, spec := range specs {
+// NewRegistry builds a deterministically sorted native MCP tool registry.
+func NewRegistry(specs []ToolSpec) *Registry {
+	ordered := append([]ToolSpec(nil), specs...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
+	byName := make(map[string]ToolSpec, len(ordered))
+	for _, spec := range ordered {
 		byName[spec.Name] = spec
 	}
-	return &Registry{ordered: specs, byName: byName}
+	return &Registry{ordered: ordered, byName: byName}
+}
+
+// DefaultRegistry builds the shipped native MCP tool registry sorted by tool name.
+func DefaultRegistry() *Registry {
+	return NewRegistry(nativeToolSpecs())
 }
 
 // Definitions returns the wire tool definitions for tools/list.

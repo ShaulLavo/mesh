@@ -67,3 +67,24 @@ Each JSON invocation writes one envelope with `schemaVersion`, `operation`, `sta
 Start `mesh mcp` from an MCP client that speaks the stateless `2026-07-28` protocol. `stdout` carries only newline-delimited JSON-RPC MCP messages; diagnostics and startup errors go to `stderr` (exiting with status 2 before any protocol output). Legacy `initialize` handshakes are refused with `-32601`.
 
 Tool results carry the same agent envelope in `structuredContent` and a bounded summary in `content`. Opaque job handles (`mj1.<hostId>.<sessionId>.<instance>`) let a fresh `mesh mcp` process inspect, wait on, read output from, send stdin to, signal, cancel, or remove durable jobs as its very first request without discovery. Cancelling a wait or closing stdin never cancels an accepted job.
+
+## Run the native MCP loopback HTTP server
+
+When a local MCP client speaks stateless `2026-07-28` over Streamable HTTP, bind the native frontend to one explicit loopback address and application identity:
+
+```sh
+mesh mcp identity create codex
+mesh mcp --http 127.0.0.1:8765 --identity codex
+```
+
+Mesh listens only on the given loopback IP and port at `/mcp`. It matches the exact configured `Host` and port, accepts an absent `Origin` or an explicitly configured exact loopback origin (`--allow-origin http://127.0.0.1:3000`), rejects `GET` and `DELETE` with `405`, and ignores incoming `Mcp-Session-Id` and `Last-Event-ID` headers.
+
+Every `POST /mcp` requires `Authorization: Bearer TOKEN` from the private `0600` token file tied to that listener and identity (path printed on stderr; the token value is never logged). Responses use `application/json` or request-scoped `text/event-stream` (`Accept` must include both). Closing the response stream cancels the in-flight HTTP request and never cancels an accepted Mesh job.
+
+To rotate the bearer token and immediately retire active streams using the old token:
+
+```sh
+mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
+```
+
+Read the updated private token file to configure the client with the new token. Standard HTTP endpoints stay local and private on loopback; do not expose `mesh mcp --http` through `mesh serve` or any public port.
