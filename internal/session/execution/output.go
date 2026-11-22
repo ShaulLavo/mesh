@@ -91,7 +91,7 @@ func (o *Output) Tail(ctx context.Context, b Binding, stream string, size int) (
 }
 
 func (s *streamStore) readTail(ctx context.Context, size int) ([]byte, error) {
-	gate, err := s.files.lockShared(ctx, s.path("stream.lock"))
+	gate, err := s.readerFence(ctx, unix.LOCK_SH)
 	if err != nil {
 		return nil, err
 	}
