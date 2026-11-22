@@ -24,7 +24,8 @@ func TestLineTailAttachReportsPositionAndAcksStayIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, server := net.Pipe()
-	_ = client.SetDeadline(time.Now().Add(20 * time.Second))
+	// A hang cap only; under -race on a busy host the run can be slow.
+	_ = client.SetDeadline(time.Now().Add(2 * time.Minute))
 	defer func() { _ = client.Close() }()
 	w := &Worker{cfg: Config{ID: b.Reservation.ID, Execution: &b}, sid: sid, pipe: &pipeExecution{input: p, lines: newLineOutput()}}
 	for range 3 {
@@ -79,7 +80,10 @@ func TestLineTailAttachReportsPositionAndAcksStayIndependent(t *testing.T) {
 		if err := writer.WriteInput(sid, payload); err != nil {
 			t.Fatal(err)
 		}
-		ack := <-controls
+		ack, open := <-controls
+		if !open {
+			t.Fatalf("the attachment ended before acknowledgment %d", i)
+		}
 		if ack.InputReceipt == nil || ack.InputReceipt.WriteKey != key {
 			t.Fatalf("acknowledgment %d: %+v", i, ack)
 		}
