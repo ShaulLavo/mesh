@@ -235,6 +235,8 @@ def run(world, binary, root):
     rejections(binary, env, env_c, env_a, env_b, host_a, host_b, repo_a, repo_b)
     subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b)
     native_hosted(binary, env, host_b)
+    two_callers(binary, env, host_b, repo_b)
+    host_revisions(binary, env, env_b, host_b)
     edits(binary, env, env_a, cfg, host_a, host_b, repo_a, notes)
     revocation(binary, env, env_b, host_a, host_b, search, repo_b, device)
 
@@ -490,14 +492,41 @@ def native_hosted(binary, env, host_b):
         require(any(s["name"] == "repo" for s in hosted), listed)
         inspect = gw.tool("mesh_service_inspect", {"host": host_b, "name": "repo"})
         require(inspect["result"]["structuredContent"]["data"]["hostedMcp"]["name"] == "repo", inspect)
-        lease = gw.tool("mesh_service_lease", {"host": host_b, "service": "repo", "ttl_seconds": 600})
+        lease = gw.tool("mesh_service_lease", {"host": host_b, "service": "repo", "lease_id": "gw-proof", "ttl_seconds": 600})
         data = lease["result"]["structuredContent"]["data"]
-        require(data["leaseId"] and data["instance"]["leases"] >= 1, lease)
-        release = gw.tool("mesh_service_lease", {"host": host_b, "service": "repo", "lease_id": data["leaseId"], "ttl_seconds": 0})
+        require(data["leaseId"] == "gw-proof" and data["instance"]["leases"] == 1, lease)
+        # A repeat after a lost reply names the same lease.
+        again = gw.tool("mesh_service_lease", {"host": host_b, "service": "repo", "lease_id": "gw-proof", "ttl_seconds": 600})
+        require(again["result"]["structuredContent"]["data"]["instance"]["leases"] == 1, again)
+        release = gw.tool("mesh_service_lease", {"host": host_b, "service": "repo", "lease_id": "gw-proof", "ttl_seconds": 0})
         require(release["result"]["structuredContent"]["data"]["released"], release)
     finally:
         gw.kill()
     print("PASS: mesh_services_list and mesh_service_inspect show hosted servers; mesh_service_lease holds and releases", flush=True)
+
+
+def host_revisions(binary, env, env_b, host_b):
+    """A listen whose upstream cannot report list changes still learns of one
+    from the owning host's listing revision on the mcp topic of state.watch."""
+    static = publish(binary, env_b, "static", "--shared", "--env", "GW_STATIC=1", *stdio_command("static"))
+    run_mesh(binary, env, "mcp", "profile", "add", "dev", f"{host_b}/static", "--alias", "static", "--identity", "agent", "--json", check_rc=0)
+    gw = gateway(binary, env)
+    direct = Client(binary, env, ["connect", f"{host_b}/static", "--identity", "agent"])
+    try:
+        before = hosted_names(gw, "static")
+        gw.start("subscriptions/listen", {"notifications": {"toolsListChanged": True}}, "revisions")
+        gw.wait_events("revisions", 1)
+        direct.tool("grow")
+        require("result" in direct.call("tools/list"), "direct list")
+        wait_for(gw, "revisions", lambda e: e["method"] == "notifications/tools/list_changed", "a host listing revision did not reach the listen")
+        after = hosted_names(gw, "static")
+        require(exposed_name(host_b, static, "t", "grown_0") in after and len(after) == len(before) + 1, f"relist after the revision: {after}")
+        gw.cancel("revisions")
+    finally:
+        gw.kill()
+        direct.kill()
+    run_mesh(binary, env, "mcp", "profile", "rm", "dev", "static", "--json", check_rc=0)
+    print("PASS: a host-published listing revision reaches a listen whose upstream cannot report changes", flush=True)
 
 
 def hosted_names(gw, alias):
@@ -509,7 +538,7 @@ def edits(binary, env, env_a, cfg, host_a, host_b, repo_a, notes):
     gw = gateway(binary, env)
     try:
         rb_before = hosted_names(gw, "rb")
-        require(len(rb_before) == 11, rb_before)
+        require(len(rb_before) == 14, rb_before)
     finally:
         gw.kill()
     run_mesh(binary, env, "mcp", "profile", "rm", "dev", "ra", "--json", check_rc=0)
@@ -522,6 +551,15 @@ def edits(binary, env, env_a, cfg, host_a, host_b, repo_a, notes):
     finally:
         gw.kill()
     run_mesh(binary, env_a, "mcp", "rm", "notes", "--json", check_rc=0)
+    # A new service named after the retired ID never receives the old route.
+    publish(binary, env_a, notes, "--shared", *stdio_command("impostor"))
+    gw = gateway(binary, env)
+    try:
+        stray = gw.tool(exposed_name(host_a, notes, "t", "echo"), {"text": "x"})
+        require(stray["result"]["isError"] and stray["result"]["structuredContent"]["errors"][0]["code"] == "service.not_found", f"a retired ID reached the service named after it: {stray}")
+    finally:
+        gw.kill()
+    run_mesh(binary, env_a, "mcp", "rm", notes, "--json", check_rc=0)
     replaced = publish(binary, env_a, "notes", "--shared", *stdio_command("notes2"))
     require(replaced != notes, "a re-published service kept its ID")
     shown = json.loads(run_mesh(binary, env, "mcp", "profile", "show", "dev", "--json", check_rc=0).stdout)
@@ -555,9 +593,15 @@ def revocation(binary, env, env_b, host_a, host_b, search, repo_b, device):
     try:
         gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [exposed_uri(host_b, repo_b, "file:///docs/readme.md")]}}, "held")
         gw.wait_events("held", 1)
+        # A write in flight when the grant is retired: its outcome is unknown
+        # to the caller, and the gateway never replays it.
+        gw.start("tools/call", {"name": exposed_name(host_b, repo_b, "t", "write"), "arguments": {"seconds": 3}}, "write")
+        time.sleep(0.5)
         run_mesh(binary, env_b, "device", "revoke", "--", device, check_rc=0)
         ended = gw.reply("held", timeout=30)
         require(mesh_code(ended) == "access.denied", f"revocation did not retire the listen: {ended}")
+        cut = gw.reply("write", timeout=30)
+        require(cut["result"]["isError"] and cut["result"]["structuredContent"]["errors"][0]["code"] in ("access.denied", "request.outcome_unknown", "host.unreachable"), f"a live call outlived revocation: {cut}")
         denied = gw.tool(exposed_name(host_b, repo_b, "t", "echo"))
         # A Mesh failure inside tools/call is a tool execution error (section 2.4).
         require(denied["result"]["isError"] and denied["result"]["structuredContent"]["errors"][0]["code"] in ("access.denied", "host.unreachable"), denied)
@@ -565,7 +609,38 @@ def revocation(binary, env, env_b, host_a, host_b, search, repo_b, device):
         require(text_of(survivor) == "http-a:echo:still", survivor)
     finally:
         gw.kill()
-    print("PASS: authorization retirement ends listens and calls on that host only", flush=True)
+    run_mesh(binary, env_b, "device", "approve", "--allow-root", "--", device, check_rc=0)
+    fresh = gateway(binary, env)
+    try:
+        count = text_of(fresh.tool(exposed_name(host_b, repo_b, "t", "count")))
+        require(count == "writes=1", f"the interrupted write ran again: {count}")
+    finally:
+        fresh.kill()
+    print("PASS: authorization retirement ends listens and live calls on that host only, and an ambiguous write is never replayed", flush=True)
+
+
+def two_callers(binary, env, host_b, repo_b):
+    """Progress reaches only its own caller, and cancelling one caller's call
+    leaves another caller's call on the same shared instance running."""
+    one, two = gateway(binary, env), gateway(binary, env, "other")
+    name = exposed_name(host_b, repo_b, "t", "progress")
+    try:
+        meta = lambda token: dict(META, progressToken=token)
+        one.start("tools/call", {"name": name, "arguments": {"steps": 8}, "_meta": meta("p1")}, "c1")
+        two.start("tools/call", {"name": name, "arguments": {"steps": 8}, "_meta": meta("p2")}, "c2")
+        wait_for(one, None, lambda e: e["params"]["progressToken"] == "p1", f"progress for the first caller: {one.replies}")
+        one.cancel("c1")
+        done = two.reply("c2", timeout=30)
+        require(text_of(done) == "progressed 8", done)
+        progress = two.events.get("null", [])
+        require(progress and all(e["params"]["progressToken"] == "p2" for e in progress), f"progress crossed callers: {progress}")
+        time.sleep(1)
+        require('"c1"' not in one.replies, "a cancelled call got a reply")
+        require(all(e["params"]["progressToken"] == "p1" for e in one.events.get("null", [])), "progress crossed callers")
+    finally:
+        one.kill()
+        two.kill()
+    print("PASS: progress and cancellation stay with their own caller on a shared instance", flush=True)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,13 @@ class Core:
         self.calls = 0
         # listen id (JSON text) -> (filter, send function)
         self.listens = {}
+        # In-progress calls by request ID, for stdio cancellation.
+        self.pending = {}
+        # A static server never reports list changes; only the host's
+        # listing revision can tell a gateway its tools changed.
+        self.static = os.environ.get("GW_STATIC") == "1"
+        self.grown = []
+        self.writes = 0
 
     def server_info(self):
         return {"io.modelcontextprotocol/serverInfo": {"name": "gw-" + self.label, "version": "1.0"}}
@@ -46,22 +53,24 @@ class Core:
         return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
     def tools(self):
-        names = ["echo", "whoami", "a_b", "a", "b", LONG_TOOL, "ask2", "rich", "touch", "end_listens", "slow"]
+        names = ["echo", "whoami", "a_b", "a", "b", LONG_TOOL, "ask2", "rich", "touch", "end_listens", "slow", "progress", "write", "count"]
         # The benchmark widens the listing with plain tools.
         names += [f"t{i:03d}" for i in range(int(os.environ.get("GW_EXTRA_TOOLS", "0")))]
+        names += self.grown
         return [{"name": n, "title": n.upper(), "inputSchema": {"type": "object"},
                  "annotations": {"readOnlyHint": n in ("echo", "whoami")},
                  "x-vendor": {"label": self.label, "big": 12345678901234567890},
                  "_meta": {"vendor.example/tag": n}} for n in names]
 
     def handle(self, req, send):
-        """Returns the terminal reply, or None for a listen that stays open."""
+        """Returns the terminal reply, or None for a listen that stays open.
+        send(message, terminal) also carries progress for a call."""
         method, req_id = req.get("method"), req.get("id")
         params = req.get("params") or {}
         if method == "server/discover":
             return self.complete(req_id, {
                 "supportedVersions": [PROTO],
-                "capabilities": {"tools": {"listChanged": True}, "prompts": {}, "resources": {"subscribe": True}, "completions": {}},
+                "capabilities": {"tools": {"listChanged": not self.static}, "prompts": {}, "resources": {"subscribe": True}, "completions": {}},
                 "_meta": self.server_info(),
             }, True)
         if method == "tools/list":
@@ -82,7 +91,7 @@ class Core:
         if method == "completion/complete":
             return self.complete(req_id, {"completion": {"values": ["main", "dev"], "hasMore": False}})
         if method == "tools/call":
-            return self.call(req_id, params)
+            return self.call(req_id, params, send)
         if method == "subscriptions/listen":
             return self.listen(req_id, params, send)
         return self.error(req_id, -32601, "method not found")
@@ -107,7 +116,7 @@ class Core:
             {"role": "user", "content": {"type": "resource", "resource": {"uri": "file:///docs/readme.md", "text": "embedded"}}},
         ]})
 
-    def call(self, req_id, params):
+    def call(self, req_id, params, send=None):
         name, args = params.get("name"), params.get("arguments") or {}
         with self.lock:
             self.calls += 1
@@ -131,6 +140,21 @@ class Core:
                 "x-result-vendor": {"nested": [1, {"k": "v"}]},
                 "_meta": dict(self.server_info(), **{"vendor.example/trace": "t-1"}),
             })
+        if name == "progress":
+            return self.progress(req_id, params, send)
+        if name == "write":
+            with self.lock:
+                self.writes += 1
+            threading.Event().wait(float(args.get("seconds", 3)))
+            return self.complete(req_id, {"content": [{"type": "text", "text": "written"}]})
+        if name == "count":
+            with self.lock:
+                writes = self.writes
+            return self.complete(req_id, {"content": [{"type": "text", "text": f"writes={writes}"}]})
+        if name == "grow":
+            with self.lock:
+                self.grown.append(f"grown_{len(self.grown)}")
+            return self.complete(req_id, {"content": [{"type": "text", "text": "grown"}]})
         if name == "touch":
             self.notify_all(args.get("uri"))
             return self.complete(req_id, {"content": [{"type": "text", "text": "touched"}]})
@@ -141,6 +165,23 @@ class Core:
             threading.Event().wait(30)
             return self.complete(req_id, {"content": [{"type": "text", "text": "slow"}]})
         return self.error(req_id, -32602, "unknown tool")
+
+    def progress(self, req_id, params, send):
+        token = (params.get("_meta") or {}).get("progressToken")
+        steps = int((params.get("arguments") or {}).get("steps", 5))
+        cancelled = threading.Event()
+        key = json.dumps(req_id, separators=(",", ":"))
+        with self.lock:
+            self.pending[key] = cancelled
+        for step in range(steps):
+            if cancelled.wait(0.3):
+                return None
+            if token is not None and send is not None:
+                send({"jsonrpc": "2.0", "method": "notifications/progress",
+                      "params": {"progressToken": token, "progress": step + 1, "total": steps}}, False)
+        with self.lock:
+            self.pending.pop(key, None)
+        return self.complete(req_id, {"content": [{"type": "text", "text": f"progressed {steps}"}]})
 
     def ask2(self, req_id, params):
         state = params.get("requestState")
@@ -190,6 +231,9 @@ class Core:
         key = json.dumps(req_id, separators=(",", ":"))
         with self.lock:
             self.listens.pop(key, None)
+            pending = self.pending.pop(key, None)
+        if pending is not None:
+            pending.set()
 
 
 def serve_stdio(label):
