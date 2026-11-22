@@ -172,13 +172,16 @@ def tail(client, fixture, context, run):
         pid = worker_pid(session_dir)
         if pid:
             worker_peak = proc_usage(pid) or worker_peak
-        if page.get("eof"):
+        # A stream that closed without EOF (an interrupted capture) has no more bytes either.
+        if page.get("eof") or (page.get("streamClosed") and not chunk):
+            close_reason = page.get("closeReason")
             break
         cursor = page.get("nextCursor") or cursor
         if not chunk:
             time.sleep(0.005)
     elapsed = time.monotonic() - started
     return job, {"timeToFirstByteMs": round(first_byte * 1000, 1), "firstOffset": first_offset,
+                 "closeReason": close_reason, "endOffset": expected,
                  "bytesRead": read, "pages": pages,
                  "gaps": gaps, "seconds": round(elapsed, 3), "throughputMiBps": round(read / MIB / elapsed, 1),
                  "worker": worker_peak}

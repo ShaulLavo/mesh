@@ -47,6 +47,16 @@ func (s *streamStore) readerFence(ctx context.Context, mode int) (*Fence, error)
 	return s.files.lockFile(ctx, s.path("stream.lock"), os.O_RDWR, mode)
 }
 
+// yieldUnlessFinal steps aside for readers before an ordinary commit. The
+// final commit runs under the worker's exit budget and closes the stream,
+// which is what waiting readers need next, so it goes first.
+func (c *Capture) yieldUnlessFinal(ctx context.Context, b captureBatch) error {
+	if b.final {
+		return nil
+	}
+	return c.store.yieldToReaders(ctx)
+}
+
 // yieldToReaders waits until no reader is announced, or readerYieldLimit.
 // An announced reader holds reader.lock shared, so an exclusive probe
 // succeeds only when none is waiting; the probe is released at once.
