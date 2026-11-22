@@ -251,8 +251,8 @@ def profiles(binary, env, env_c, host_a, host_b):
     stale = run_mesh(binary, env, "mcp", "profile", "add", "dev", "--native", "all", "--expected-revision", "0", "--json", check_rc=1)
     require(json.loads(stale.stdout)["errors"][0]["code"] == "fleet.revision_conflict", stale.stdout)
     for target, alias in ((f"{host_a}/repo", "ra"), (f"{host_a}/search", "search"), (f"{host_b}/repo", "rb")):
-        run_mesh(binary, env, "mcp", "profile", "add", "dev", target, "--alias", alias, "--identity", "agent", "--json", check_rc=0)
-    dup = run_mesh(binary, env, "mcp", "profile", "add", "dev", f"{host_b}/repo", "--alias", "again", "--json", check_rc=2)
+        run_mesh(binary, env, "mcp", "profile", "add", "--alias", alias, "--identity", "agent", "--json", "--", "dev", target, check_rc=0)
+    dup = run_mesh(binary, env, "mcp", "profile", "add", "--alias", "again", "--json", "--", "dev", f"{host_b}/repo", check_rc=2)
     require("already selected" in dup.stdout, dup.stdout)
     shown = json.loads(run_mesh(binary, env, "mcp", "profile", "show", "dev", "--identity", "agent", "--json", check_rc=0).stdout)
     entries = shown["data"]["profiles"][0]["services"]
@@ -260,7 +260,7 @@ def profiles(binary, env, env_c, host_a, host_b):
     require(all(e["state"] in ("stopped", "ready") for e in entries), entries)
     mode = (Path(json.loads(run_mesh(binary, env, "mcp", "profile", "show", "--cached", "--json", check_rc=0).stdout)["data"]["path"]).stat().st_mode) & 0o777
     require(mode == 0o600, f"profiles file mode {oct(mode)}")
-    run_mesh(binary, env_c, "mcp", "profile", "add", "dev", f"{host_a}/repo", "--alias", "ra", "--json", check_rc=0)
+    run_mesh(binary, env_c, "mcp", "profile", "add", "--alias", "ra", "--json", "--", "dev", f"{host_a}/repo", check_rc=0)
     print("PASS: profiles bind stable IDs with compare-and-swap, unique aliases and passive states", flush=True)
 
 
@@ -306,7 +306,7 @@ def fidelity(binary, env, host_a, host_b, repo_b, claim_b):
     """A fresh gateway calls a rich tool it never listed; the result matches
     the direct connection's apart from documented identifier rewrites."""
     gw = gateway(binary, env)
-    direct = Client(binary, env, ["connect", f"{host_b}/repo", "--identity", "agent"])
+    direct = Client(binary, env, ["connect", "--identity", "agent", "--", f"{host_b}/repo"])
     try:
         via_gw = gw.tool(exposed_name(host_b, repo_b, "t", "rich"))
         via_direct = direct.tool("rich")
@@ -447,10 +447,11 @@ def subscriptions(binary, env, host_a, host_b, repo_a, search, repo_b):
         gw.start("subscriptions/listen", {"notifications": {"resourceSubscriptions": [readme_http]}}, "quiet")
         require(gw.wait_events("quiet", 1)[0]["params"]["notifications"]["resourceSubscriptions"] == [readme_http], "quiet ack")
         gw.tool(exposed_name(host_a, repo_a, "t", "touch"), {"uri": "file:///docs/readme.md"})
-        events = gw.wait_events("active", 3)
-        updated = [e for e in events if e["method"] == "notifications/resources/updated"]
-        require(updated and updated[0]["params"]["uri"] == readme_a and updated[0]["params"]["x-rev"] == 2, events)
-        require(any(e["method"] == "notifications/tools/list_changed" for e in events), events)
+        # The upstream's own list change and the host's listing revision can
+        # each report the change, so wait for each event rather than a count.
+        wait_for(gw, "active", lambda e: e["method"] == "notifications/resources/updated" and e["params"]["uri"] == readme_a and e["params"]["x-rev"] == 2,
+                 "resource update with its own fields")
+        wait_for(gw, "active", lambda e: e["method"] == "notifications/tools/list_changed", "tools list change")
         time.sleep(0.5)
         require(len(gw.events.get('"quiet"', [])) == 1, "the quiet listen received another stream's events")
         gw.tool(exposed_name(host_a, search, "t", "touch"), {"uri": "file:///docs/readme.md"})
@@ -509,9 +510,9 @@ def host_revisions(binary, env, env_b, host_b):
     """A listen whose upstream cannot report list changes still learns of one
     from the owning host's listing revision on the mcp topic of state.watch."""
     static = publish(binary, env_b, "static", "--shared", "--env", "GW_STATIC=1", *stdio_command("static"))
-    run_mesh(binary, env, "mcp", "profile", "add", "dev", f"{host_b}/static", "--alias", "static", "--identity", "agent", "--json", check_rc=0)
+    run_mesh(binary, env, "mcp", "profile", "add", "--alias", "static", "--identity", "agent", "--json", "--", "dev", f"{host_b}/static", check_rc=0)
     gw = gateway(binary, env)
-    direct = Client(binary, env, ["connect", f"{host_b}/static", "--identity", "agent"])
+    direct = Client(binary, env, ["connect", "--identity", "agent", "--", f"{host_b}/static"])
     try:
         before = hosted_names(gw, "static")
         gw.start("subscriptions/listen", {"notifications": {"toolsListChanged": True}}, "revisions")
@@ -542,7 +543,7 @@ def edits(binary, env, env_a, cfg, host_a, host_b, repo_a, notes):
     finally:
         gw.kill()
     run_mesh(binary, env, "mcp", "profile", "rm", "dev", "ra", "--json", check_rc=0)
-    run_mesh(binary, env, "mcp", "profile", "add", "dev", f"{host_a}/notes", "--alias", "ra", "--json", check_rc=0)
+    run_mesh(binary, env, "mcp", "profile", "add", "--alias", "ra", "--json", "--", "dev", f"{host_a}/notes", check_rc=0)
     gw = gateway(binary, env)
     try:
         listed = [t["name"] for t in list_all(gw, "tools/list", "tools")[0]]
