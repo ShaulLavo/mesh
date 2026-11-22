@@ -58,14 +58,18 @@ Per create and wait the daemon and worker made 457 fsync calls before and 212 af
 ## What changed
 
 1. Workers no longer hash their executable. The daemon hands over the digest it already holds together
-   with a stamp (device, inode, size, mtime) of the file, and the worker trusts it only while its own
-   executable carries that stamp. This was the single largest cost, and it hit every session start, not
-   only keyed jobs.
-2. A record this process already proved durable is not fsynced again while its file is unchanged. Every
-   journal read used to fsync the file, then each parent directory, then the file again.
+   with a stamp (device, inode, size, mtime, change time) of the file, and the worker trusts it only while
+   its own executable carries that stamp and the digest is a well-formed SHA-256. Only Linux, which pins
+   the running image through `/proc/self/exe`, hands a digest over. This was the single largest cost, and
+   it hit every session start, not only keyed jobs.
+2. A JSON record this process already synced is not fsynced again while its file is unchanged. Directory
+   and device barriers still run on every confirmation, anchors and locks are never remembered, and the
+   memory is bounded and forgets removed paths. Every journal read used to fsync the file, then each parent
+   directory, then the file again.
 3. Admission counted active receipts by reading and confirming every retained receipt, and the output
-   retention check observed every retained receipt on each create. Both now cost nothing below the active
-   limit, so create no longer slows down as receipts accumulate.
+   retention check observed every retained receipt on each create. Admission no longer pays the
+   confirmation (it still decodes the retained receipts), and the retention check does nothing below the
+   active limit.
 4. On Linux the final device flush repeated what the data fsync and the directory fsyncs had just done, so
    it is skipped there. Darwin keeps its full flush.
 5. The worker opens its two stream captures together and writes the start record and the metadata

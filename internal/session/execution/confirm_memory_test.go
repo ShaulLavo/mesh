@@ -21,7 +21,7 @@ func TestPublishedRecordNeedsNoSecondConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = file.Close() }()
-	stamp, ok := j.files.stampOf(file)
+	stamp, ok := j.files.stampOf(name, file)
 	if !ok || !j.files.wasConfirmed(name, stamp) {
 		t.Fatal("a durable publication was not remembered as confirmed")
 	}
@@ -46,7 +46,7 @@ func TestChangedRecordIsConfirmedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp, ok := j.files.stampOf(file)
+	stamp, ok := j.files.stampOf(name, file)
 	_ = file.Close()
 	if !ok || j.files.wasConfirmed(name, stamp) {
 		t.Fatal("a record replaced by rename was treated as already confirmed")
@@ -77,7 +77,7 @@ func TestRewrittenRecordIsConfirmedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp, ok := j.files.stampOf(read)
+	stamp, ok := j.files.stampOf(name, read)
 	_ = read.Close()
 	if !ok || j.files.wasConfirmed(name, stamp) {
 		t.Fatal("an appended record was treated as already confirmed")

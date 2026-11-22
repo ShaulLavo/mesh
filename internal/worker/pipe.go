@@ -230,30 +230,14 @@ func (w *Worker) openPipeReaders(p *childPipes) ([]*pipeReader, error) {
 	b := *w.cfg.Execution
 	state := filepath.Dir(filepath.Dir(w.cfg.Dir))
 	streams := b.Streams()
-	captures := make([]*execution.Capture, len(streams))
-	errs := make([]error, len(streams))
-	// Each stream initializes its own durable files; running them together
-	// pays one flush round instead of one per stream.
-	var group sync.WaitGroup
-	for i, stream := range streams {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			captures[i], errs[i] = execution.OpenCapture(state, b, stream)
-		}()
+	captures, err := openAll(streams, func(stream string) (*execution.Capture, error) {
+		return execution.OpenCapture(state, b, stream)
+	})
+	if err != nil {
+		return nil, workerExecutionError("initialize pipe capture", err)
 	}
-	group.Wait()
 	readers := make([]*pipeReader, 0, len(streams))
 	for i, stream := range streams {
-		if errs[i] != nil {
-			abortPipeCaptures(readers)
-			for _, capture := range captures[i+1:] {
-				if capture != nil {
-					capture.Abort()
-				}
-			}
-			return nil, workerExecutionError("initialize pipe capture", errs[i])
-		}
 		file := p.stderr
 		if stream == execution.StreamStdout {
 			file = p.stdout
@@ -261,6 +245,36 @@ func (w *Worker) openPipeReaders(p *childPipes) ([]*pipeReader, error) {
 		readers = append(readers, &pipeReader{file: file, capture: captures[i], done: make(chan string, 1)})
 	}
 	return readers, nil
+}
+
+// openAll opens one capture per stream together, because each initializes its
+// own durable files and running them side by side pays one flush round instead
+// of one per stream. If any fails, the ones that opened are aborted.
+func openAll[C interface{ Abort() }](streams []string, open func(string) (C, error)) ([]C, error) {
+	opened := make([]C, len(streams))
+	errs := make([]error, len(streams))
+	var group sync.WaitGroup
+	for i, stream := range streams {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			opened[i], errs[i] = open(stream)
+		}()
+	}
+	group.Wait()
+	if err := errors.Join(errs...); err != nil {
+		abortOpened(opened, errs)
+		return nil, err
+	}
+	return opened, nil
+}
+
+func abortOpened[C interface{ Abort() }](opened []C, errs []error) {
+	for i, capture := range opened {
+		if errs[i] == nil {
+			capture.Abort()
+		}
+	}
 }
 
 func abortPipeCaptures(readers []*pipeReader) {

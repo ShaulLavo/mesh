@@ -46,7 +46,7 @@ func DigestHintFor(path string) string {
 // image has been read it has no effect.
 func AdoptDigestHint(hint string) {
 	stamp, digest, ok := strings.Cut(hint, hintSeparator)
-	if !ok || stamp == "" || digest == "" {
+	if !ok || stamp == "" || !validDigest(digest) {
 		return
 	}
 	imageMu.Lock()

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,15 +70,77 @@ func TestAdoptedDigestIsUsedOnlyForTheSameImage(t *testing.T) {
 	resetImageHints(t)
 	path, digest := imageFile(t, "mesh", "adopted image")
 	stamp := imageStamp(mustStat(t, path))
-	AdoptDigestHint(stamp + hintSeparator + "parent-digest")
-	if got := readImage(t, path).Digest; got != "parent-digest" {
+	AdoptDigestHint(stamp + hintSeparator + sampleDigest)
+	if got := readImage(t, path).Digest; got != sampleDigest {
 		t.Fatalf("matching image digest %q was hashed again", got)
 	}
 	resetImageHints(t)
 	replaced, replacedDigest := imageFile(t, "mesh", "a different image")
-	AdoptDigestHint(stamp + hintSeparator + "parent-digest")
+	AdoptDigestHint(stamp + hintSeparator + sampleDigest)
 	if got := readImage(t, replaced).Digest; got != replacedDigest || got == digest {
 		t.Fatalf("a hint for another image was trusted: %q", got)
+	}
+}
+
+// A same-length rewrite that restores the modification time still changes the
+// inode's change time, which no process can set.
+func TestRewrittenImageWithRestoredMtimeIsNotTrusted(t *testing.T) {
+	if imageStamp(mustStat(t, t.TempDir())) == "" {
+		t.Skip("no stable file identity on this platform")
+	}
+	resetImageHints(t)
+	path, _ := imageFile(t, "mesh", "original bytes")
+	original := mustStat(t, path)
+	stamp := imageStamp(original)
+	readImage(t, path)
+	if err := os.WriteFile(path, []byte("replaced bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if hint := DigestHintFor(path); hint != "" {
+		t.Fatalf("a hint was offered for a rewritten image: %q", hint)
+	}
+	AdoptDigestHint(stamp + hintSeparator + sampleDigest)
+	sum := sha256.Sum256([]byte("replaced bytes"))
+	if got := readImage(t, path).Digest; got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("a stale digest was adopted for a rewritten image: %q", got)
+	}
+}
+
+func TestImageReplacedByRenameIsNotTrusted(t *testing.T) {
+	if imageStamp(mustStat(t, t.TempDir())) == "" {
+		t.Skip("no stable file identity on this platform")
+	}
+	resetImageHints(t)
+	path, _ := imageFile(t, "mesh", "installed image")
+	readImage(t, path)
+	next := path + ".next"
+	if err := os.WriteFile(next, []byte("installed image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+	if hint := DigestHintFor(path); hint != "" {
+		t.Fatalf("a hint was offered for a replaced image: %q", hint)
+	}
+}
+
+const sampleDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestHintDigestMustBeASHA256(t *testing.T) {
+	resetImageHints(t)
+	for _, digest := range []string{"digest", sampleDigest[:63], sampleDigest + "0", strings.ToUpper(sampleDigest), "g" + sampleDigest[1:]} {
+		AdoptDigestHint("stamp" + hintSeparator + digest)
+		if _, ok := adoptedDigest("stamp"); ok {
+			t.Fatalf("digest %q was adopted", digest)
+		}
+	}
+	AdoptDigestHint("stamp" + hintSeparator + sampleDigest)
+	if _, ok := adoptedDigest("stamp"); !ok {
+		t.Fatal("a well-formed digest was refused")
 	}
 }
 

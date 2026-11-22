@@ -1,9 +1,9 @@
-//go:build !unix
+//go:build !linux
 
 package release
 
 import "os"
 
-// Without a stable file identity no digest is handed over, so every process
-// hashes its own image.
+// Only Linux pins the executing image, so elsewhere no digest is handed over
+// and every process hashes its own image.
 func imageStamp(os.FileInfo) string { return "" }

@@ -20,7 +20,6 @@ import (
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/inhibit"
 	"github.com/shaul/mesh/internal/machinename"
-	"github.com/shaul/mesh/internal/release"
 	meshserve "github.com/shaul/mesh/internal/serve"
 	"github.com/shaul/mesh/internal/sshd"
 	"github.com/shaul/mesh/internal/storage"
@@ -448,9 +447,6 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	if err != nil {
 		return err
 	}
-	// Workers adopt this digest instead of hashing the executable themselves,
-	// so compute it now rather than inside the first launch.
-	go func() { _ = release.Current() }()
 	if err := lifecycle.restoreExecution(daemonCtx); err != nil {
 		reporter.report(err)
 	}
