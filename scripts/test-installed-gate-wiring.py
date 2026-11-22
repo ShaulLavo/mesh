@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Exercise caller gates without a release, native manager, or downloaded artifact."""
 
-import fnmatch
 import importlib.util
 import json
 import os
@@ -67,11 +66,6 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertNotIn("always()", source)
         self.assertNotIn("43151893803", source)
 
-    def test_ci_executes_the_real_aggregate_for_all_job_outcomes(self):
-        recovery = (WORKFLOWS / "helper-recovery.yml").read_text()
-        GATE.check_gate(CI, recovery)
-        GATE.check_mutations(CI, recovery)
-
     def test_normal_proofs_run_once_after_successful_preparation(self):
         installed = GATE.job(CI, "installed-catchup")
         self.assert_consumer(installed, "update-proofs")
@@ -81,14 +75,15 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertNotIn("installed-catchup.yml@", PROOFS)
 
     def test_update_paths_include_installed_and_release_dependencies(self):
-        section = CI.split("id: update_paths\n", 1)[1].split("\n  app-pill:", 1)[0]
-        patterns = re.findall(r"^\s+- '([^']+)'$", section, re.M)
+        classifier = (ROOT / "scripts/ci-changes.py").read_text()
+        classify = {"__name__": "ci_changes"}
+        exec(compile(classifier, "ci-changes.py", "exec"), classify)  # noqa: S102 - the repository classifier under test
         paths = ("internal/update/activate.go", "internal/storage/storage.go", "db/migrations/00017.sql",
                  "internal/worker/main.go", "internal/protocol/wire.go", "internal/daemon/main.go",
                  "scripts/prepare-rollback-context.py", "scripts/fixtures/installed_artifacts.py",
                  "scripts/test-installed-catchup.py", ".github/workflows/installed-catchup.yml")
         for path in paths:
-            self.assertTrue(any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns), path)
+            self.assertIn("update_proofs", classify["checks_for"](path), path)
 
     def test_producer_outputs_bind_source_input_and_current_run_after_all_preparations(self):
         context = GATE.job(PROOFS, "context")

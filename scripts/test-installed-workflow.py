@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -107,7 +108,8 @@ class WorkflowControls(unittest.TestCase):
         self.assertEqual(job(PREPARED, "prepare").count("uses: ./.github/actions/installed-go"), 1)
         self.assertNotIn("installed-go", job(PREPARED, "consume"))
         self.assertIn("'.github/actions/installed-go/**'", CATCHUP)
-        self.assertIn("'.github/actions/installed-go/**'", (WORKFLOWS / "ci.yml").read_text())
+        changes = runpy.run_path(str(ROOT / "scripts/ci-changes.py"))
+        self.assertIn("update_proofs", changes["checks_for"](".github/actions/installed-go/action.yml"))
 
     def test_actual_seed_command_matches_pinned_setup_go_identity_on_three_hosts(self):
         body = CACHE.split("      run: |\n", 1)[1].split("    - name:", 1)[0]

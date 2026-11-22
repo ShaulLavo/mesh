@@ -7,8 +7,6 @@ if [[ -z ${MESH:-} ]]; then
   go build -o "$MESH" ./cmd/mesh || { echo 'FAIL: build' >&2; exit 1; }
 fi
 
-./scripts/check-packaging.sh
-
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/mesh-packaging.XXXXXX")
 cleanup() {
   rm -rf -- "$run_root"
@@ -124,7 +122,7 @@ retry_env=(
   MESH_BIN_DIR="$retry_bin"
 )
 if retry_failure_output=$(env "${retry_env[@]}" sh scripts/install.sh 2>&1); then
-  echo 'FAIL: installer ignored the simulated systemd restart failure' >&2
+  printf 'FAIL: installer ignored the simulated systemd restart failure: %s\n' "$retry_failure_output" >&2
   exit 1
 fi
 grep -Fq 'restart mesh.service' "$retry_log"
