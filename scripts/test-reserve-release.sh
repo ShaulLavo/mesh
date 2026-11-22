@@ -23,7 +23,7 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALLS"
 case " $* " in
   *'/releases/latest '*) printf '%s\n' "${GH_LATEST_TAG:-v0.1.38}" ;;
-  *'/check-runs '*)
+  *'/check-runs?'*|*'/check-runs '*)
     if [[ -n ${GH_CHECK_RUNS_FAIL:-} ]]; then
       echo 'simulated check-runs API outage' >&2
       exit 1
@@ -41,14 +41,20 @@ case " $* " in
     fi
     if [[ -n ${GH_GREEN_SHAS:-} ]]; then
       commit=$(sed -n 's|.*head_sha=\([0-9a-f]\{40\}\).*|\1|p' <<<"$*")
-      if grep -Fq "$commit" <<<"$GH_GREEN_SHAS"; then printf '1\n'; else printf '0\n'; fi
+      if grep -Fq "$commit" <<<"$GH_GREEN_SHAS"; then printf '777001\n'; else printf ''; fi
+    elif [[ ${GH_CI_RUN_COUNT:-${GH_GATE_COUNT:-1}} -gt 0 ]]; then
+      printf '777001\n'
     else
-      printf '%s\n' "${GH_CI_RUN_COUNT:-${GH_GATE_COUNT:-1}}"
+      printf ''
     fi ;;
   *'/releases?per_page=100 '*)
     [[ -f $GH_LOG ]] || exit 0
     awk '$1 == "release" && $2 == "create" {for(i=4;i<=NF;i++) if($i == "--target") print $3 "\t" $(i+1)}' "$GH_LOG" ;;
   *' release download '*' --pattern mesh.rb '*)
+    if [[ -n ${GH_CASK_DOWNLOAD_FAIL:-} ]]; then
+      echo 'simulated HTTP 503 downloading mesh.rb' >&2
+      exit 1
+    fi
     [[ -n ${GH_PUBLISHED_CASK:-} ]] || exit 1
     dir=$(awk '{for(i=1;i<=NF;i++) if($i=="--dir") print $(i+1)}' <<<"$*")
     cp "$GH_PUBLISHED_CASK" "$dir/mesh.rb" ;;
@@ -303,6 +309,11 @@ if GH_LATEST_TAG=v0.1.44 GH_CHECK_RUNS_FAIL=1 WORKFLOW_SHA="$batched_head" run_r
 fi
 if GH_LATEST_TAG=v0.1.44 GH_CI_RUNS_FAIL=1 WORKFLOW_SHA="$batched_head" run_reserve "" "" >/dev/null 2>&1; then
   echo 'FAIL: ci.yml workflow runs API failure was swallowed as a skip' >&2
+  exit 1
+fi
+# Failed Cask download during auto-skip check MUST fail loudly (never silently mask a stale Cask).
+if GH_LATEST_TAG=v0.1.44 GH_CASK_DOWNLOAD_FAIL=1 GH_GATE_COUNT=0 WORKFLOW_SHA="$batched_head" run_reserve "" "" >/dev/null 2>&1; then
+  echo 'FAIL: failed mesh.rb download was swallowed as a clean skip' >&2
   exit 1
 fi
 # Check-run green without a green main ci.yml push run is rejected!

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Exact tested commit on main (defaults to latest green commit on main)
+        description: Exact tested commit on main (defaults to the workflow main commit; skips if its main CI is not green)
         required: false
         type: string
       version:

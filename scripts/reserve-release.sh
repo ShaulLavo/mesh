@@ -26,7 +26,8 @@ trap 'rm -rf -- "$temporary"' EXIT
 
 is_main_first_parent() {
   local commit=$1
-  git rev-list --first-parent origin/main | grep -Fxq "$commit"
+  git rev-list --first-parent origin/main >"$temporary/first-parent.txt"
+  grep -Fxq "$commit" "$temporary/first-parent.txt"
 }
 
 classify_non_cask_changes() {
@@ -49,24 +50,26 @@ classify_non_cask_changes() {
 # Sets GATE_STATUS to "green" or "missing"; exits non-zero on API errors.
 check_green_gate() {
   local source_sha=$1
-  local gate_count ci_run_count
-  gate_count=$(gh api \
+  local suite_ids suite_json gate_count
+  suite_ids=$(gh api --paginate \
     -H 'Accept: application/vnd.github+json' \
-    "repos/$GITHUB_REPOSITORY/commits/$source_sha/check-runs" \
-    --jq '[.check_runs[] | select(.name == "Complete CI gate" and .status == "completed" and .conclusion == "success" and .app.slug == "github-actions")] | length')
+    "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$source_sha&branch=main&event=push&per_page=100" \
+    --jq ".workflow_runs[] | select(.head_sha == \"$source_sha\" and .head_branch == \"main\" and .event == \"push\" and .status == \"completed\" and .conclusion == \"success\") | .check_suite_id")
+  if [[ -z $suite_ids ]]; then
+    GATE_STATUS=missing
+    return 0
+  fi
+  suite_json=$(python3 -c 'import json,sys; ids=[int(line) for line in sys.stdin.read().splitlines() if line.strip()]; print(json.dumps(ids))' <<<"$suite_ids")
+  gate_count=$(gh api --paginate \
+    -H 'Accept: application/vnd.github+json' \
+    "repos/$GITHUB_REPOSITORY/commits/$source_sha/check-runs?check_name=Complete%20CI%20gate&per_page=100" \
+    --jq '[.check_runs[] | select(.name == "Complete CI gate" and .status == "completed" and .conclusion == "success" and .app.slug == "github-actions" and (([.check_suite.id // -1] - '"$suite_json"') | length == 0))] | length' |
+    awk '{sum += $1} END {print sum + 0}')
   [[ $gate_count =~ ^[0-9]+$ ]] || {
     echo "release reservation: invalid check-runs count for $source_sha: $gate_count" >&2
     exit 1
   }
-  ci_run_count=$(gh api \
-    -H 'Accept: application/vnd.github+json' \
-    "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$source_sha&branch=main&event=push&per_page=20" \
-    --jq "[.workflow_runs[] | select(.head_sha == \"$source_sha\" and .head_branch == \"main\" and .event == \"push\" and .status == \"completed\" and .conclusion == \"success\")] | length")
-  [[ $ci_run_count =~ ^[0-9]+$ ]] || {
-    echo "release reservation: invalid ci.yml run count for $source_sha: $ci_run_count" >&2
-    exit 1
-  }
-  if (( gate_count > 0 && ci_run_count > 0 )); then
+  if (( gate_count > 0 )); then
     GATE_STATUS=green
   else
     GATE_STATUS=missing
@@ -78,12 +81,15 @@ maybe_reconcile_cask() {
   if [[ -n $explicit_version && $explicit_version != "$latest_tag" ]]; then
     return 1
   fi
-  if gh release download "$latest_tag" --pattern mesh.rb --dir "$temporary" >/dev/null 2>&1; then
-    if ! git show "origin/main:Casks/mesh.rb" 2>/dev/null | cmp -s - "$temporary/mesh.rb"; then
-      printf 'action=reconcile\nsource=%s\nversion=%s\nprevious_tag=%s\nprevious_source=%s\n' \
-        "$published_source" "$latest_tag" "$latest_tag" "$published_source"
-      return 0
-    fi
+  rm -f -- "$temporary/mesh.rb"
+  gh release download "$latest_tag" --pattern mesh.rb --dir "$temporary" >/dev/null || {
+    echo "release reservation: failed to download mesh.rb for $latest_tag while checking Cask state" >&2
+    exit 1
+  }
+  if ! git show "origin/main:Casks/mesh.rb" 2>/dev/null | cmp -s - "$temporary/mesh.rb"; then
+    printf 'action=reconcile\nsource=%s\nversion=%s\nprevious_tag=%s\nprevious_source=%s\n' \
+      "$published_source" "$latest_tag" "$latest_tag" "$published_source"
+    return 0
   fi
   return 1
 }
