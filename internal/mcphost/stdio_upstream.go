@@ -144,8 +144,13 @@ func (u *StdioUpstream) fault(err error) {
 func (u *StdioUpstream) readLoop() {
 	for {
 		line, err := u.conn.ReadLine()
-		if err != nil {
+		if errors.Is(err, ErrLineFault) {
 			u.fault(fmt.Errorf("%w: %w", ErrProtocolFault, err))
+			return
+		}
+		if err != nil {
+			// The server exited or the attachment closed; framing was intact.
+			u.fault(fmt.Errorf("mcp upstream: %w", err))
 			return
 		}
 		if err := u.route(line); err != nil {

@@ -254,7 +254,7 @@ func (a *fakeAttachment) ReadLine() ([]byte, error) {
 	case <-a.done:
 		return nil, io.EOF
 	case <-a.w.ended:
-		return nil, ErrLineFault
+		return nil, ErrStdoutClosed
 	}
 }
 

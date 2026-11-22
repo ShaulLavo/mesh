@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/shaul/mesh/internal/mcphost"
 	"github.com/shaul/mesh/internal/protocol"
@@ -171,7 +172,25 @@ func (m mcpLauncher) Stop(ctx context.Context, ref mcphost.WorkerRef) error {
 	if _, err := m.l.executionDeliver(ctx, req, b); err != nil {
 		return fmt.Errorf("stop MCP worker %s: %w", ref.SessionID, err)
 	}
-	return nil
+	return m.awaitTerminal(ctx, journal, b)
+}
+
+// awaitTerminal returns once the worker recorded its end, so a stop that
+// reports success means the process is gone.
+func (m mcpLauncher) awaitTerminal(ctx context.Context, journal *execution.Journal, b execution.Binding) error {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		r, err := journal.Exact(ctx, b)
+		if err == nil && r.Phase == executionTerminalPhase {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return fmt.Errorf("stop MCP worker %s: %w", b.Reservation.ID, ctx.Err())
+		}
+	}
 }
 
 // Stderr reads the private 1 MiB diagnostics ring the worker retains.

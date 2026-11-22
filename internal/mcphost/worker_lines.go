@@ -40,9 +40,13 @@ type WorkerRef struct {
 
 const lineAckTimeout = 30 * time.Second
 
-// ErrLineFault reports a worker that ended its stdout stream, with the
-// worker's classified reason.
-var ErrLineFault = errors.New("mcp host: worker line stream ended")
+// ErrLineFault reports a worker that lost stdout framing, with the worker's
+// classified reason such as a partial or oversized line.
+var ErrLineFault = errors.New("mcp host: worker line framing lost")
+
+// ErrStdoutClosed reports a server that closed stdout cleanly, usually by
+// exiting.
+var ErrStdoutClosed = errors.New("mcp host: server closed stdout")
 
 type workerLines struct {
 	conn   net.Conn
@@ -137,6 +141,10 @@ func (l *workerLines) handleFrame(frame protocol.Frame) bool {
 		l.fail(fmt.Errorf("worker %s: %w", l.ref.SessionID, err))
 		return false
 	}
+	if reply.Type == protocol.TypeExit && reply.ErrorCode == "" {
+		l.fail(fmt.Errorf("worker %s: %w", l.ref.SessionID, ErrStdoutClosed))
+		return false
+	}
 	if reply.Type == protocol.TypeExit || (reply.Type == protocol.TypeError && reply.RequestID == "") {
 		l.fail(fmt.Errorf("worker %s: %s: %w", l.ref.SessionID, lineReason(reply), ErrLineFault))
 		return false
@@ -151,7 +159,7 @@ func (l *workerLines) handleFrame(frame protocol.Frame) bool {
 
 func lineReason(reply protocol.Control) string {
 	if reply.ErrorCode == "" {
-		return "stdout closed"
+		return "unclassified"
 	}
 	return reply.ErrorCode
 }
