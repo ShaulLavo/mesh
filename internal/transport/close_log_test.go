@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -29,7 +30,21 @@ func captureCloseLogs(t *testing.T) *bytes.Buffer {
 func TestTransportCloseLogsClientHandshakeEOF(t *testing.T) {
 	logs := captureCloseLogs(t)
 	checkClientHandshakeEOF(t)
-	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
+	assertCloseLog(t, logs.String(), "server=false", "stage=tls-handshake", "classification=link-failed", "TLS handshake:")
+	assertPeerCloseLogged(t, logs.String())
+}
+
+// A peer that closes a connection mid-handshake is seen as end of stream or,
+// when unread data is pending, as a reset. Both are the same link failure.
+func isPeerClose(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+func assertPeerCloseLogged(t *testing.T, output string) {
+	t.Helper()
+	if !strings.Contains(output, "EOF") && !strings.Contains(output, "connection reset by peer") {
+		t.Errorf("log %q names neither EOF nor a connection reset", output)
+	}
 }
 
 func checkClientHandshakeEOF(t *testing.T) {
@@ -46,7 +61,7 @@ func checkClientHandshakeEOF(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
 	conn, err := DialOnce(ctx, server.URL, DialOptions{Auth: &Authentication{Key: key, ExpectedIdentity: serverID}})
-	if conn != nil || !errors.Is(err, ErrAuthentication) || !errors.Is(err, io.EOF) {
+	if conn != nil || !errors.Is(err, ErrAuthentication) || !isPeerClose(err) {
 		t.Fatalf("handshake outcome = %v, %v", conn, err)
 	}
 }
@@ -69,10 +84,11 @@ func TestTransportCloseLogsDaemonHandshakeEOF(t *testing.T) {
 	}
 	_ = ws.CloseNow()
 	err = waitCloseLogResult(ctx, t, result)
-	if !errors.Is(err, ErrAuthentication) || !errors.Is(err, io.EOF) {
+	if !errors.Is(err, ErrAuthentication) || !isPeerClose(err) {
 		t.Fatalf("daemon handshake outcome = %v", err)
 	}
-	assertCloseLog(t, logs.String(), "server=true", "stage=tls-handshake", "classification=link-failed", "TLS handshake:", "EOF")
+	assertCloseLog(t, logs.String(), "server=true", "stage=tls-handshake", "classification=link-failed", "TLS handshake:")
+	assertPeerCloseLogged(t, logs.String())
 }
 
 func TestTransportCloseLogsEstablishedEOFWithoutTerminalPayload(t *testing.T) {

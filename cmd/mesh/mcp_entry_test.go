@@ -36,8 +36,13 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 		{"mcp", "unexpected-arg"},
 		{"mcp", "--privacy"},
 		{"--privacy", "mcp"},
+		{"mcp", "--http", "127.0.0.1:0"},
+		{"mcp", "--http", "0.0.0.0:8765", "--identity", "agent"},
+		{"mcp", "--allow-origin", "http://127.0.0.1:3000"},
+		{"mcp", "--identity", "missing-id"},
+		{"mcp", "--identity", ""},
 	} {
-		stdout, stderr, exit := runMCPEntry(t, root, config, state, args, "")
+		stdout, stderr, exit := runMCPEntry(t, root, config, state, args)
 		if exit != 2 || len(stdout) != 0 || len(stderr) == 0 {
 			t.Fatalf("%v: exit=%d stdout=%q stderr=%q (want exit=2, empty stdout, non-empty stderr)", args, exit, stdout, stderr)
 		}
@@ -45,7 +50,7 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 
 	// `mesh mcp --help` and `-h` must write help to stderr with zero stdout bytes.
 	for _, args := range [][]string{{"mcp", "--help"}, {"mcp", "-h"}} {
-		stdout, stderr, exit := runMCPEntry(t, root, config, state, args, "")
+		stdout, stderr, exit := runMCPEntry(t, root, config, state, args)
 		if exit != 0 || len(stdout) != 0 || !bytes.Contains(stderr, []byte("Usage:")) {
 			t.Fatalf("%v: exit=%d stdout=%q stderr=%q (want exit=0, empty stdout, help on stderr)", args, exit, stdout, stderr)
 		}
@@ -57,19 +62,33 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 	// Broken stdout pipe must cause prompt exit even while stdin stays open.
 	testMCPBrokenStdoutExit(t, root, config, state)
 
-	// Clean stdio session in an uninitialized offline directory: mesh_skill and
-	// mesh_hosts_list emit only valid JSON-RPC lines on stdout and exit 0 on EOF.
+	// mesh mcp identity create/ls live under the same mesh mcp group.
+	createOut, createErr, createExit := runMCPEntry(t, root, config, state, []string{"mcp", "identity", "create", "codex", "--json"})
+	if createExit != 0 || !bytes.Contains(createOut, []byte(`"codex"`)) {
+		t.Fatalf("mesh mcp identity create: exit=%d stdout=%q stderr=%q", createExit, createOut, createErr)
+	}
+	listOut, listErr, listExit := runMCPEntry(t, root, config, state, []string{"mcp", "identity", "ls", "--json"})
+	if listExit != 0 || !bytes.Contains(listOut, []byte(`"codex"`)) {
+		t.Fatalf("mesh mcp identity ls: exit=%d stdout=%q stderr=%q", listExit, listOut, listErr)
+	}
+
+	// Clean stdio session without --identity: passive discovery works, while
+	// mesh_context_open returns a tool-level usage.invalid error.
 	requests := []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_skill","arguments":{}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_hosts_list","arguments":{"cached":true}}}`,
-		`{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"legacy","version":"1"}}}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"mesh_context_open","arguments":{"host":"local","request_key":"k1","cwd":"/tmp"}}}`,
+		`{"jsonrpc":"2.0","id":4,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"legacy","version":"1"}}}`,
 	}
-	lines, stderr, exit := runMCPInteractive(t, root, config, state, requests)
+	lines, stderr, exit := runMCPInteractive(t, root, config, state, []string{"mcp"}, requests)
 	if exit != 0 {
 		t.Fatalf("mesh mcp exit=%d stderr=%q lines=%q", exit, stderr, lines)
 	}
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 JSON-RPC lines on stdout, got %d: %q", len(lines), lines)
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 JSON-RPC lines on stdout, got %d: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[2], `"isError":true`) || !strings.Contains(lines[2], `"usage.invalid"`) {
+		t.Fatalf("expected usage.invalid without --identity, got %s", lines[2])
 	}
 	for i, line := range lines {
 		var obj map[string]any
@@ -77,15 +96,21 @@ func TestMCPEntryStdoutCleanliness(t *testing.T) {
 			t.Fatalf("line %d is not JSON-RPC 2.0: %q", i, line)
 		}
 	}
+
+	// With --identity codex, startup succeeds cleanly with protocol-only stdout.
+	idLines, idStderr, idExit := runMCPInteractive(t, root, config, state, []string{"mcp", "--identity", "codex"}, requests[:1])
+	if idExit != 0 || len(idLines) != 1 || !strings.Contains(idLines[0], `"jsonrpc":"2.0"`) {
+		t.Fatalf("mesh mcp --identity codex: exit=%d lines=%q stderr=%q", idExit, idLines, idStderr)
+	}
 }
 
-func runMCPInteractive(t *testing.T, root, config, state string, requests []string) ([]string, []byte, int) {
+func runMCPInteractive(t *testing.T, root, config, state string, mcpArgs, requests []string) ([]string, []byte, int) {
 	t.Helper()
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal([]string{"mcp"})
+	encoded, err := json.Marshal(mcpArgs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +158,7 @@ func runMCPInteractive(t *testing.T, root, config, state string, requests []stri
 	return lines, stderr.Bytes(), exited.ExitCode()
 }
 
-func runMCPEntry(t *testing.T, root, config, state string, args []string, stdin string) ([]byte, []byte, int) {
+func runMCPEntry(t *testing.T, root, config, state string, args []string) ([]byte, []byte, int) {
 	t.Helper()
 	binary, err := os.Executable()
 	if err != nil {
@@ -150,7 +175,7 @@ func runMCPEntry(t *testing.T, root, config, state string, args []string, stdin 
 		}
 	})
 	command.Env = append(testenv.ForProcess(root), "MESH_TEST_MCP_ARGS="+string(encoded), "MESH_CONFIG_DIR="+config, "MESH_STATE_DIR="+state)
-	command.Stdin = strings.NewReader(stdin)
+	command.Stdin = strings.NewReader("")
 	var stderr bytes.Buffer
 	command.Stderr = &stderr
 	output, err := command.Output()

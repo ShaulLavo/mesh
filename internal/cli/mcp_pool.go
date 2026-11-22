@@ -156,24 +156,39 @@ func (p *mcpHostPool) ExchangeShort(ctx context.Context, host HostRecord, req pr
 	return p.exchangeShort(ctx, host, req, retryRead)
 }
 
-// ExchangeStreamBudgeted acquires a stream slot and pooled connection first,
-// then computes the remaining host wait timeout against deadline so slot queuing
-// or a cold dial does not exhaust the client context before the host replies.
+var errWaitBudgetExpired = errors.New("wait budget expired before dispatch")
+
+// ExchangeStreamBudgeted acquires a stream slot and pooled connection within
+// deadline, then computes the remaining host wait timeout against deadline so
+// slot queuing or a cold dial counts against wait_ms and never sends a wait
+// RPC after the caller's budget has already expired.
 func (p *mcpHostPool) ExchangeStreamBudgeted(ctx context.Context, host HostRecord, deadline time.Time, build func(timeoutMS int) protocol.Control) (protocol.Control, protocol.HostInfo, error) {
 	bucket, err := p.bucket(host)
 	if err != nil {
 		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 	}
-	if err := acquireSlot(ctx, bucket.streamSlots); err != nil {
+	admitCtx, cancelAdmit := context.WithDeadline(ctx, deadline)
+	defer cancelAdmit()
+	if err := acquireSlot(admitCtx, bucket.streamSlots); err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return protocol.Control{}, protocol.HostInfo{}, errWaitBudgetExpired
+		}
 		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 	}
 	defer func() { <-bucket.streamSlots }()
 
-	entry, _, err := p.checkout(ctx, bucket, host)
+	entry, _, err := p.checkout(admitCtx, bucket, host)
 	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return protocol.Control{}, protocol.HostInfo{}, errWaitBudgetExpired
+		}
 		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 	}
 	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		p.checkin(bucket, entry)
+		return protocol.Control{}, entry.info, errWaitBudgetExpired
+	}
 	timeoutMS := max(1, int(remaining/time.Millisecond))
 	req := build(timeoutMS)
 	if req.RequestID == "" {

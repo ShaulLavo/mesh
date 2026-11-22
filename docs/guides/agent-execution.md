@@ -95,7 +95,20 @@ confirmed. It returns `timed_out` with the current receipt when its finite wait
 ends. Waiting, reading, and cancelling either operation leave the child alive.
 The CLI reserves a small part of its deadline to receive the timeout response.
 A crashed worker can leave a durable output prefix and an unknown result.
-Descriptor-holding descendants have the existing 250 ms post-leader drain bound.
+After the leader exits, the worker drains each output descriptor on its own
+clock. A descriptor that stays silent for 250 ms is cut off, even while the other
+stream is still writing. Time the worker spends handing bytes it already read to
+the capture does not count as silence, so a slow disk does not cost output the
+command wrote before it exited. The whole drain ends after 2 seconds.
+
+Two separate budgets bound what a slow results disk can cost. If the capture is
+still blocked when the 2 second drain ends, the bytes the worker holds are
+dropped. The worker then allows 5 seconds for the final flush, and a flush that
+does not finish records `capture: not_recorded` for the job. These bounds cover
+the capture only: the worker still writes and syncs the final result on the
+state volume, so a stalled results disk can delay worker exit and durable
+completion. Mesh expects the state volume to respond.
+
 A drain cutoff reports `eof: false` and `closeReason: drain_timeout`.
 
 Signal and kill require the exact instance and a worker acknowledgement. A lost

@@ -521,6 +521,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	go func() { defer close(fleetProfileDone); fleetProfile.Run(daemonCtx) }()
 	defer func() { cancelDaemon(); <-fleetProfileDone }()
 	server.updates = updates
+	server.files = newFileController(string(meshHost.ID))
 	server.context = &agentContextController{configDir: cfg.ConfigDir, stateDir: stateDir, hostID: meshHost.ID, trusted: updates.authority.IsAdministrator}
 	if mcpHost, err := startMCPHost(daemonCtx, lifecycle, store, stateDir); err != nil {
 		reporter.report(err)

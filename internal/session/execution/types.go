@@ -266,6 +266,7 @@ type Receipt struct {
 	// LaunchIntentDigest the intent resolved against the reserved revision.
 	Context            *ContextUse `json:"context,omitempty"`
 	LaunchIntentDigest string      `json:"launchIntentDigest,omitempty"`
+	Cwd                string      `json:"cwd,omitempty"`
 }
 
 // ContextUse names the context revision a job was reserved against.
