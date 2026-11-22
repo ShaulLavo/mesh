@@ -163,14 +163,15 @@ check_source_contract() {
   contains .github/workflows/ci.yml "go test -count=1 -run '^TestDarwinMappedExecutableSurvivesAtomicReplacement$' -v ./internal/updatebootstrap"
   contains .github/workflows/ci.yml "grep -Fq -- '--- PASS: TestDarwinMappedExecutableSurvivesAtomicReplacement'"
   contains .github/workflows/update-proofs.yml 'scripts/prepare-release-baselines.sh'
-  contains .github/workflows/release.yml 'scripts/generate-release-manifest.sh'
+  contains .github/workflows/update-proofs.yml 'scripts/generate-release-manifest.sh'
   contains .github/workflows/release.yml 'actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4'
   contains .github/workflows/release.yml 'id-token: write'
   contains .github/workflows/release.yml 'attestations: write'
   contains .github/workflows/release.yml 'artifact-metadata: write'
   contains .github/workflows/release.yml 'gh attestation verify'
   contains .github/workflows/release.yml '--source-ref refs/heads/main --deny-self-hosted-runners'
-  contains .github/workflows/release.yml "go build -trimpath -o \"\$directory/mesh-release-sign\" ./cmd/mesh-release-sign"
+  contains .github/workflows/update-proofs.yml 'scripts/build-source-release-tools.sh'
+  contains scripts/build-source-release-tools.sh "go build -trimpath -o \"\$directory/mesh-release-sign\" ./cmd/mesh-release-sign"
   contains .github/workflows/release.yml 'scripts/prepare-release-documents.py'
   contains .github/workflows/release.yml 'scripts/upload-signed-draft.py'
   contains .github/workflows/release.yml "\"\$signer\" refresh \"\$MESH_RELEASE_TRUST_CACHE\""

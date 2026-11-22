@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one native proof shard over the required, digest-verified baseline list."""
+"""Run one native proof batch over the required, digest-verified baseline list."""
 import argparse
 import hashlib
 import json
@@ -51,6 +51,18 @@ def read_baselines(path):
     return sources
 
 
+def assigned_sources(sources, partition, count):
+    # Interleave each profile independently. Full migrations exercise rollback
+    # and startup faults, so balancing the number of sources alone skews the work.
+    positions = {True: 0, False: 0}
+    for binary, evidence in sources:
+        profile = evidence["rollback"]
+        position = positions[profile]
+        positions[profile] += 1
+        if position % count == partition:
+            yield binary, evidence
+
+
 def main():
     signal.signal(signal.SIGTERM, terminate_run)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -60,12 +72,13 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--shards", type=int, default=1)
+    parser.add_argument("--batch", action="store_true")
     parser.add_argument("--manifest", type=Path, required=True)
     args = parser.parse_args()
     if not 0 <= args.shard < args.shards:
         parser.error("invalid shard position")
     sources = read_baselines(args.baselines)
-    if sum(int(evidence["rollback"]) for _, evidence in sources) > args.shards:
+    if not args.batch and sum(int(evidence["rollback"]) for _, evidence in sources) > args.shards:
         raise ValueError("too few shards for the required full sources")
     root = Path(__file__).resolve().parent.parent
     args.output.mkdir(parents=True, exist_ok=True)
@@ -82,14 +95,9 @@ def main():
     shutil.copyfile(environment["MESH_WORKER_REGISTRY"], args.output / "worker-registry.json")
     shutil.copyfile(args.tools / "preparation.json", args.output / "preparation.json")
     results = []
-    full_index, forward_index = 0, 0
-    for binary, evidence in sources:
-        assignment = full_index if evidence["rollback"] else forward_index
-        full_index += int(evidence["rollback"])
-        forward_index += int(not evidence["rollback"])
-        if assignment % args.shards != args.shard:
-            continue
-        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    for binary, evidence in assigned_sources(sources, args.shard, args.shards):
+        with binary.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
         expected = evidence.get("artifact", {}).get("binarySha256")
         if not expected:
             match = re.fullmatch(r"baseline_[a-z0-9_]+_([0-9a-f]{64})\.bin", binary.name)
@@ -111,6 +119,10 @@ def main():
         results.append({"source": label, "sourceDigest": digest, "seconds": elapsed, "rollback": evidence["rollback"]})
         print(f"{label} {args.platform}: {elapsed:.2f} seconds; rollback={evidence['rollback']}", flush=True)
     (args.output / "timings.json").write_text(json.dumps(results, indent=2) + "\n")
+    if args.batch:
+        provenance = {"platform": args.platform, "shard": args.shard, "run": os.environ["GITHUB_RUN_ID"],
+                      "attempt": os.environ["GITHUB_RUN_ATTEMPT"]}
+        (args.output / "proof-batch.json").write_text(json.dumps(provenance, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

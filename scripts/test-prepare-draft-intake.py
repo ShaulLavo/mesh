@@ -225,7 +225,7 @@ else:
         self.assertIn('capture "$RUNNER_TEMP/release-signed-draft"', publish)
         self.assertIn('--signed --candidate "$RUNNER_TEMP/release-candidate"', publish)
         self.assertIn("needs: [reserve, publish, verify-readers, publication-native]", GATE.job(RELEASE, "finalize"))
-        self.assertIn("name: release-signed-draft", GATE.job(RELEASE, "verify-readers"))
+        self.assertIn("artifact-ids: ${{ needs.publish.outputs.signed-draft-artifact || '0' }}", GATE.job(RELEASE, "verify-readers"))
         self.assertNotIn("gh release download", GATE.job(RELEASE, "verify-readers"))
 
     def test_new_code_keeps_at_most_three_nesting_levels(self):

@@ -1,0 +1,167 @@
+name: Qualify signed draft replay
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/qualify-publication.yml'
+      - '.internal/evidence/mesh-ci-slim-publication.json'
+      - 'scripts/qualify-publication.*'
+
+permissions:
+  actions: read
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  MESH_HARNESS_SOURCE: ${{ github.event.pull_request.head.sha }}
+  MESH_PUBLICATION_QUALIFICATION: 'true'
+  PYTHONDONTWRITEBYTECODE: '1'
+  SPEC: .internal/evidence/mesh-ci-slim-publication.json
+
+jobs:
+  prepare:
+    name: Check replay controls and authenticate writer inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      plan: ${{ steps.upload.outputs.artifact-id }}
+      sha: ${{ steps.plan.outputs.plan_sha }}
+      coverage: ${{ steps.plan.outputs.coverage }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.MESH_HARNESS_SOURCE }}
+          persist-credentials: false
+      - name: Run deterministic qualification and release wiring controls
+        run: |
+          for test in publication-jobs publication-workflow qualification release-signing installed-gate-wiring ci-scheduling native-eperm-policy prepare-release-baselines; do
+            python3 "scripts/test-${test}.py" || exit
+          done
+      - name: Authenticate the unpublished snapshot and derive the replay plan
+        if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.draft
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -f $SPEC ]]; then
+            bash scripts/qualify-publication.sh prepare "$SPEC" "$RUNNER_TEMP/qualification.noindex"
+          else
+            echo 'No pinned signed draft inputs supplied. Native replay has not been qualified.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - id: upload
+        if: steps.plan.outputs.plan_sha != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: publication-qualification-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification.noindex/plan.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove authenticated snapshot, reader packets and staging
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/qualification.noindex"
+          test ! -e "$RUNNER_TEMP/qualification.noindex"
+
+  native:
+    name: Replay ${{ needs.prepare.outputs.coverage }} (${{ matrix.platform }})
+    needs: prepare
+    if: needs.prepare.outputs.plan != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    outputs:
+      linux-amd64: ${{ matrix.platform == 'linux/amd64' && steps.handoff.outputs.pin || '' }}
+      linux-arm64: ${{ matrix.platform == 'linux/arm64' && steps.handoff.outputs.pin || '' }}
+      darwin-arm64: ${{ matrix.platform == 'darwin/arm64' && steps.handoff.outputs.pin || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            key: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            key: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: darwin/arm64
+            key: darwin-arm64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.MESH_HARNESS_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/installed-go
+        if: needs.prepare.outputs.coverage == 'native'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan }}
+          path: ${{ runner.temp }}/qualification-plan
+      - name: Run native cases and every original permitted reader
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLED_CATCHUP_PLATFORM: ${{ matrix.platform }}
+          PUBLICATION_PLAN: ${{ runner.temp }}/qualification-plan/plan.json
+          PLAN_SHA: ${{ needs.prepare.outputs.sha }}
+          COVERAGE: ${{ needs.prepare.outputs.coverage }}
+        run: bash scripts/qualify-publication.sh "$COVERAGE" "$SPEC" "$RUNNER_TEMP/qualification.noindex"
+      - name: Remove acquired source and draft bytes and confirm their removal
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/qualification.noindex" "$RUNNER_TEMP/qualification-plan"
+          test ! -e "$RUNNER_TEMP/qualification.noindex"
+          test ! -e "$RUNNER_TEMP/qualification-plan"
+      - id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ${{ needs.prepare.outputs.coverage == 'native' && 'publication-platform' || 'qualification-readers' }}-${{ matrix.key }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/qualification-evidence
+          retention-days: 7
+      - name: Hand off only successful native evidence
+        if: needs.prepare.outputs.coverage == 'native'
+        id: handoff
+        env:
+          ARTIFACT: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          test -s "$RUNNER_TEMP/qualification-evidence/publication-platform.json"
+          test -n "$ARTIFACT"
+          printf 'pin=%s:%s\n' "$ARTIFACT" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Remove uploaded native evidence
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/qualification-evidence"
+          test ! -e "$RUNNER_TEMP/qualification-evidence"
+
+  verify:
+    name: Verify exact three-platform qualification evidence
+    needs: [prepare, native]
+    if: needs.prepare.outputs.coverage == 'native'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.MESH_HARNESS_SOURCE }}
+          persist-credentials: false
+      - uses: ./.github/actions/installed-go
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.plan }}
+          path: ${{ runner.temp }}/qualification-plan
+      - name: Reverify the signed snapshot and consume the exact producer attempts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_PLAN: ${{ runner.temp }}/qualification-plan/plan.json
+          PLAN_SHA: ${{ needs.prepare.outputs.sha }}
+          EVIDENCE_HANDOFF: ${{ format('{{"linux/amd64":"{0}","linux/arm64":"{1}","darwin/arm64":"{2}"}}', needs.native.outputs.linux-amd64, needs.native.outputs.linux-arm64, needs.native.outputs.darwin-arm64) }}
+        run: bash scripts/qualify-publication.sh verify "$SPEC" "$RUNNER_TEMP/qualification.noindex"
+      - name: Remove verification inputs
+        if: always()
+        run: |
+          rm -rf -- "$RUNNER_TEMP/qualification.noindex" "$RUNNER_TEMP/qualification-plan"
+          test ! -e "$RUNNER_TEMP/qualification.noindex"
+          test ! -e "$RUNNER_TEMP/qualification-plan"

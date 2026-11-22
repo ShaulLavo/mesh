@@ -1,0 +1,53 @@
+{
+  "mode": "readers",
+  "run": 44697623433,
+  "release": {
+    "id": 452687504,
+    "version": "v0.1.347",
+    "source": "99b063babe2d2182d389a08a45668ed63efbd067"
+  },
+  "artifacts": {
+    "release-signed-draft": {
+      "id": 14635554604,
+      "size": 48032080,
+      "digest": "sha256:777ceab677aa7b9dd037f59ca2a272f4758ecd87fa3bceefe4f0fa69e6d607e7",
+      "attempt": 1
+    },
+    "update-publication-trust": {
+      "id": 14635339867,
+      "size": 8815,
+      "digest": "sha256:d53812766de0076abe090675ef90c3fadf281a37da0e36ae0c818e811dca7b19",
+      "attempt": 1
+    },
+    "update-publication-input": {
+      "id": 14635639462,
+      "size": 966168,
+      "digest": "sha256:7e6f688a934d74857fdd7d1db1a56be182253074307d5182fd35a49741e9b77e",
+      "attempt": 1
+    },
+    "update-policy": {
+      "id": 14630545727,
+      "size": 17790165,
+      "digest": "sha256:6d6d8a32998debe43fdbd05d3f81a23011a9608b0d01d8e72abc2bb273cccabc",
+      "attempt": 1
+    },
+    "release-tool-source-linux-amd64": {
+      "id": 14636416900,
+      "size": 32545761,
+      "digest": "sha256:8d24632db8ed94a842be5102c7ac3aec1a449abf57ec1aced2116fda8dff8b76",
+      "attempt": 1
+    },
+    "release-tool-source-linux-arm64": {
+      "id": 14637120307,
+      "size": 30153946,
+      "digest": "sha256:70f9693c483116eb3b0a32907fe4404fe94edab60ecc594cf55f8320792e81e2",
+      "attempt": 1
+    },
+    "release-tool-source-darwin-arm64": {
+      "id": 14636551548,
+      "size": 31907723,
+      "digest": "sha256:4a3cb5221a8ad75530fdbbfba46a4473e0f1cc3382b5a44bdf599755951e9a63",
+      "attempt": 1
+    }
+  }
+}

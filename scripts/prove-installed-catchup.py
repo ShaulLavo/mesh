@@ -39,18 +39,18 @@ def main():
     parser.add_argument("--publication-version", help="actual main-only signed draft version; never a supplemental source label")
     parser.add_argument("--publication-source", help="exact main release source bound by the real manifest and native image")
     parser.add_argument("--publication-task", help="one complete task ID from publication-jobs.py inventory")
+    parser.add_argument("--publication-platform-plan", type=Path, help="the signer's reduced platform plan")
+    parser.add_argument("--publication-plan-sha256", help="digest reported by the signer job for its platform plan")
     parser.add_argument("--launch-record", type=Path, help="job-owned command dispatch and fixture launch lifecycle record")
     arguments = parser.parse_args()
     if arguments.pull_request and any((arguments.acquire_baselines, arguments.native_helper, arguments.installed_adoption,
             arguments.prepare_only, arguments.worker_registry, arguments.worker_probe, arguments.source_host, arguments.signed_chain,
             arguments.format_waypoint, arguments.ordered_hosts, arguments.fresh_managed, arguments.export_prepared,
             arguments.prepared_releases, arguments.installed_slice, arguments.scenario, arguments.publication_version,
-            arguments.publication_source, arguments.publication_task)):
+            arguments.publication_source, arguments.publication_task, arguments.publication_platform_plan,
+            arguments.publication_plan_sha256)):
         parser.error("pull request cases own their build and cannot be combined with another proof mode")
-    if arguments.publication_task is not None and (not arguments.publication_version or not arguments.publication_source
-            or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only
-            or arguments.signed_chain or arguments.format_waypoint or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
-        parser.error("publication task requires real draft mode without supplemental execution")
+    validate_publication_arguments(parser, arguments)
     output = arguments.output.resolve()
     launch = installed_launch.Launch(arguments.launch_record, output)
     try:
@@ -66,9 +66,26 @@ def main():
     run_owned(arguments, output, native, None)
 
 
+def validate_publication_arguments(parser, arguments):
+    if arguments.publication_task is not None and (not arguments.publication_version or not arguments.publication_source
+            or arguments.installed_adoption or arguments.fresh_managed or arguments.prepare_only
+            or arguments.signed_chain or arguments.format_waypoint or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
+        parser.error("publication task requires real draft mode without supplemental execution")
+    if bool(arguments.publication_platform_plan) != bool(arguments.publication_plan_sha256):
+        parser.error("publication platform qualification needs a plan and its signer digest")
+    if not arguments.publication_platform_plan:
+        return
+    if (not arguments.publication_version or not arguments.publication_source or not arguments.native_helper
+            or arguments.publication_task or arguments.acquire_baselines or arguments.installed_adoption
+            or arguments.fresh_managed or arguments.prepare_only or arguments.signed_chain or arguments.format_waypoint
+            or arguments.ordered_hosts or arguments.scenario or arguments.source_host):
+        parser.error("publication platform qualification requires real draft mode without supplemental execution")
+
+
 def validate_invocation(parser, arguments, output):
     validate_prepared_arguments(parser, arguments)
-    output.mkdir(parents=True, exist_ok=True)
+    platform_plan = getattr(arguments, "publication_platform_plan", None)
+    output.mkdir(parents=True, exist_ok=platform_plan is None)
     if os.environ.get("MESH_HARNESS_SOURCE"):
         from fixtures import installed_artifacts
         installed_artifacts.verify_harness(os.environ["MESH_HARNESS_SOURCE"], output / "harness-source.json")
@@ -78,6 +95,8 @@ def validate_invocation(parser, arguments, output):
         raise RuntimeError(f"native platform is {native}; required {required}")
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
+    if platform_plan is not None:
+        return native, installed_clock.Clock({"platform": native, "mode": "publication", "grouped": False})
     if getattr(arguments, "pull_request", False):
         if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
             raise RuntimeError("pull request cases require a disposable GitHub-hosted runner")
@@ -160,12 +179,7 @@ def run_requested(arguments, root, output, native):
         run_prepared_requested(arguments, root, output, native)
         return
     if arguments.publication_version is not None or arguments.publication_source is not None:
-        if not arguments.publication_version or not arguments.publication_source or not arguments.native_helper:
-            raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
-        from fixtures import installed_publication
-        selection = {"task_id": arguments.publication_task} if getattr(arguments, "publication_task", None) is not None else {}
-        installed_publication.prove(root, output, native, arguments.publication_version, arguments.publication_source,
-            arguments.native_helper.resolve(strict=True), arguments.worker_registry, arguments.worker_probe, **selection)
+        run_publication_requested(arguments, root, output, native)
         return
     if arguments.fresh_managed:
         from fixtures import installed_fresh
@@ -182,6 +196,19 @@ def run_requested(arguments, root, output, native):
         return
     if arguments.acquire_baselines:
         acquire_baselines(root, output, native, arguments.native_helper)
+
+
+def run_publication_requested(args, root, output, native):
+    if not args.publication_version or not args.publication_source or not args.native_helper:
+        raise RuntimeError("real draft mode needs its exact release version, source and production helper preparer")
+    from fixtures import installed_publication
+    inputs = (root, output, native, args.publication_version, args.publication_source,
+              args.native_helper.resolve(strict=True), args.worker_registry, args.worker_probe)
+    if getattr(args, "publication_platform_plan", None) is not None:
+        installed_publication.prove_platform(*inputs, args.publication_platform_plan, args.publication_plan_sha256)
+        return
+    selection = {"task_id": args.publication_task} if getattr(args, "publication_task", None) is not None else {}
+    installed_publication.prove(*inputs, **selection)
 
 
 def run_prepared_requested(args, root, output, native):
