@@ -836,3 +836,18 @@ func TestGatewayIdentityChangeMapsToRouteCode(t *testing.T) {
 		t.Fatalf("status %+v", h.gw.Statuses())
 	}
 }
+
+// Statuses returns the gateway's view of each entry of the current profile.
+func (g *Gateway) Statuses() []Status {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	out := make([]Status, 0, len(g.profile.Services))
+	for _, sel := range g.profile.Services {
+		st, ok := g.statuses[routeKey{sel.HostID, sel.ServiceID}]
+		if !ok {
+			st = Status{Alias: sel.Alias, HostID: sel.HostID, ServiceID: sel.ServiceID, Name: sel.ServiceName, State: agentapi.GatewayStopped}
+		}
+		out = append(out, st)
+	}
+	return out
+}

@@ -220,9 +220,3 @@ func syncDir(root *os.Root) error {
 	}
 	return nil
 }
-
-// Revision reads only the current revision, for change watching.
-func (s *Store) Revision() (uint64, error) {
-	f, err := s.Load()
-	return f.Revision, err
-}
