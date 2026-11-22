@@ -81,7 +81,7 @@ mesh mcp identity create codex
 
 ### Claude Code
 
-Add the server to a project. This writes the entry to the project's `.mcp.json`:
+Add the server to a project. Claude Code 2.1.322 wrote this entry to the project's `.mcp.json`:
 
 ```sh
 claude mcp add --scope project mesh -- mesh mcp --identity claude
@@ -93,17 +93,18 @@ claude mcp add --scope project mesh -- mesh mcp --identity claude
     "mesh": {
       "type": "stdio",
       "command": "mesh",
-      "args": ["mcp", "--identity", "claude"]
+      "args": ["mcp", "--identity", "claude"],
+      "env": {}
     }
   }
 }
 ```
 
-Claude Code speaks the stateless protocol by default. It sends `server/discover` first and never falls back to `initialize` against Mesh. For `claude -p`, allow the tools with `--allowedTools mcp__mesh`.
+With this stdio entry, Claude Code 2.1.322 sent `server/discover` first and never sent `initialize`. Claude Code's runtime and feature settings choose which protocol it uses ([MCP client runtimes](https://code.claude.com/docs/en/mcp#mcp-client-runtimes)), so another version or setting can try the legacy handshake, which Mesh refuses. For `claude -p`, allow the tools with `--allowedTools mcp__mesh`. A non-interactive run does not prompt to approve project servers: the verified `.mcp.json` run passed `--settings '{"enableAllProjectMcpServers":true}'`.
 
 ### Codex CLI
 
-Codex needs two opt-ins for this protocol: its `mcp_2026_07_28` feature, and `CODEX_MCP_PROTOCOL_VERSION` in the server's `env`. In `~/.codex/config.toml`:
+With a stdio server entry, Codex CLI 0.167.1 used the stateless protocol only with two opt-ins: its `mcp_2026_07_28` feature, and `CODEX_MCP_PROTOCOL_VERSION` in that server's `env`. In `~/.codex/config.toml`:
 
 ```toml
 [features]
@@ -115,11 +116,11 @@ args = ["mcp", "--identity", "codex"]
 env = { CODEX_MCP_PROTOCOL_VERSION = "2026-07-28" }
 ```
 
-If either opt-in is missing, Codex sends a legacy `initialize`. Mesh refuses it, and Codex starts without the mesh tools and shows no error. Codex prints an "under-development features" warning while the feature is on. `codex exec` cannot ask for approval, so it refuses calls to tools that change state, such as `mesh_exec`, unless the server entry also sets `default_tools_approval_mode = "approve"`. Interactive Codex asks for approval instead.
+With either opt-in missing, Codex 0.167.1 sent a legacy `initialize`. Mesh refused it, and `codex exec` went on without the mesh tools and printed no error. Codex prints an "under-development features" warning while the feature is on. In `codex exec`, Codex refused to send `mesh_exec` ("MCP tool call requires approval, but approval policy is never") unless the server entry also set `default_tools_approval_mode = "approve"`.
 
 ### What was verified
 
-Verified on Linux on 2026-11-22 with Mesh at `02700c75`, Claude Code 2.1.322 and Codex CLI 0.167.1, over stdio. Both clients were run non-interactively against an isolated second daemon. Each one listed hosts, opened a context and ran a command with `mesh_exec`. A second client process, with a fresh `mesh mcp`, then found the job by its request key and read its output. Codex was also run with each opt-in missing, which produced the legacy `initialize` described above. The redacted traces and the script that produced them are in `.internal/bench-results/mcp-clients/`. Codex was configured with `-c` overrides that use the same keys as the file above. Claude Code was configured with both `--mcp-config` and a project `.mcp.json`. The loopback HTTP endpoint was not tested with these clients.
+Verified on Linux on 2026-11-22 with Mesh at `02700c75`, Claude Code 2.1.322 and Codex CLI 0.167.1, over stdio only, run non-interactively (`claude -p` and `codex exec`) against an isolated second daemon. With the configurations above, each client listed hosts, opened a context and ran a command with `mesh_exec`. A second client process, with a fresh `mesh mcp`, then found the same job by its request key and read its output. Claude Code was configured with `--mcp-config` and, separately, with the project `.mcp.json`. Codex was configured with `-c` overrides that use the same keys as the file above. Codex was also run with neither opt-in and with each one alone, and without the approval setting. Interactive sessions, other client versions and the loopback HTTP endpoint were not tested. The redacted traces, and the script that produced and checks them, are in `.internal/bench-results/mcp-clients/`.
 
 ## Run the native MCP loopback HTTP server
 

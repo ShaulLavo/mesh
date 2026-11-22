@@ -1,78 +1,83 @@
 {
-  "mesh": "mesh v0.1.354-0.20261122130656-02700c7566b3 02700c7566b3b61bec1877607c5b242dbba8f6a5 linux/amd64",
+  "mesh": [
+    "v0.1.354-0.20261122140903-c6d68ea54d09+dirty",
+    "c6d68ea54d09fdf396249357426184c1ae06c7c5"
+  ],
   "claudeCode": "2.1.322 (Claude Code)",
   "codex": "codex-cli 0.167.1",
   "transport": "stdio",
-  "startedAt": "2026-11-22T13:20:18Z",
-  "runs": {
+  "models": {
+    "claude-code": "claude-sonnet-5-5",
+    "codex": "gpt-6.1-terra"
+  },
+  "runAt": "2026-11-22T14:34:20Z",
+  "clientEvents": {
+    "claude-code/run3": {
+      "name": "mesh",
+      "status": "connected",
+      "source": "project"
+    },
+    "codex/noapprove": [
+      "MCP tool call requires approval, but approval policy is never"
+    ]
+  },
+  "checks": {
     "claude-code/run1": {
-      "answer": "mc1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.8115fd9048ae806af0bf751014f882cd\nhello from Linux; $ROOT/fleet",
-      "context": "mc1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.8115fd9048ae806af0bf751014f882cd",
-      "job": "mj1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.5GRX.3d04e087915557f189025070faa2710e",
+      "context": "mc1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.0cee5a3a7e1f91ea62d8ca09dac431e9",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.JABN.d7e1c47aebb637b472c6c933a3c05ea9",
+      "stdout": "hello from Linux\n$PRIVATE/fleet\n",
       "callSeconds": {
-        "mesh_hosts_list": 1.773,
-        "mesh_context_open": 2.562,
-        "mesh_exec": 10.87
+        "mesh_hosts_list": 2.031,
+        "mesh_context_open": 2.306,
+        "mesh_exec": 8.892
       }
     },
     "claude-code/run2": {
-      "answer": "mj1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.5GRX.3d04e087915557f189025070faa2710e\nexit, code 0\nhello from Linux $ROOT/fleet",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.JABN.d7e1c47aebb637b472c6c933a3c05ea9",
       "callSeconds": {
-        "mesh_job_receipt": 0.154,
-        "mesh_job_output": 0.73
+        "mesh_job_receipt": 0.539,
+        "mesh_job_output": 0.12
       }
     },
-    "claude-code/run3-project-mcp-json": {
-      "answer": "There are 2 hosts: the local machine and `pc`."
-    },
     "codex/run1": {
-      "answer": "mc1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.0920b39f5b23cadb86d02c9ed8e16786\nhello from Linux\\n$ROOT/fleet",
-      "context": "mc1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.0920b39f5b23cadb86d02c9ed8e16786",
-      "job": "mj1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.3F40.762d7589be64a1dd47a0b89dd8f4e583",
+      "context": "mc1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.6f7e9c2f76a39382f175bb954257d4dc",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.MM1Q.d89fc31c2f377951310fda73bb5ee623",
+      "stdout": "hello from Linux\n$PRIVATE/fleet\n",
       "callSeconds": {
-        "mesh_hosts_list": 3.139,
-        "mesh_skill": 0.001,
-        "mesh_context_open": 0.761,
-        "mesh_exec": 10.134
+        "mesh_hosts_list": 1.271,
+        "mesh_context_open": 1.925,
+        "mesh_exec": 8.067
       }
     },
     "codex/run2": {
-      "answer": "mj1._NrFij89shZYGBo87MNZ_l53LuNmYzEJ82eA7Fxc1NU.3F40.762d7589be64a1dd47a0b89dd8f4e583\nexit code=0\nhello from Linux\\n$ROOT/fleet\\n",
+      "job": "mj1.VcMnmwLJcRxsS4w_q_Mtn5STm5XlwbLplh0A_UWGc7A.MM1Q.d89fc31c2f377951310fda73bb5ee623",
       "callSeconds": {
-        "mesh_skill": 0.0,
-        "mesh_job_receipt": 1.229,
-        "mesh_job_output": 0.701
+        "mesh_job_receipt": 0.159,
+        "mesh_job_output": 0.218
       }
     },
+    "claude-code/run3": {
+      "server": "connected from .mcp.json"
+    },
     "codex/legacy-none": {
-      "answer": "UNAVAILABLE",
-      "requests": [
-        "initialize",
-        "initialize"
-      ],
+      "initializeRequests": 2,
       "refusedWith": -32601
     },
     "codex/legacy-feature-only": {
-      "answer": "UNAVAILABLE",
-      "requests": [
-        "initialize",
-        "initialize"
-      ],
+      "initializeRequests": 2,
       "refusedWith": -32601
     },
     "codex/legacy-env-only": {
-      "answer": "UNAVAILABLE",
-      "requests": [
-        "initialize",
-        "initialize"
-      ],
+      "initializeRequests": 2,
       "refusedWith": -32601
     },
     "codex/noapprove": {
-      "answer": "MCP tool call requires approval, but approval policy is never",
-      "toolErrors": [
-        "MCP tool call requires approval, but approval policy is never"
-      ]
+      "mesh_execOnWire": false,
+      "codexError": "MCP tool call requires approval, but approval policy is never"
+    },
+    "retriedAttempts": {
+      "claude-code/trace-run1.jsonl:mesh_context_open": 1,
+      "codex/trace-run1.jsonl:mesh_exec": 1
     }
   }
 }

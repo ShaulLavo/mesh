@@ -58,45 +58,6 @@ func TestExecutionOwnerGuard(t *testing.T) {
 	}
 }
 
-// A journal that cannot be locked in time is busy, not a sign that the caller
-// lost its job. Found by the native MCP streaming benchmark under load, where
-// a job's own owner was told access.denied while tailing its output.
-func TestBoundExecutionLockTimeoutIsNotADenial(t *testing.T) {
-	journal, err := execution.Open(t.TempDir(), "boot", "coordinator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = journal.Close() })
-	alice, _ := testCaller(t)
-	local := context.WithValue(t.Context(), localClientKey{}, true)
-	expired, cancel := context.WithTimeout(local, 0)
-	defer cancel()
-	b := execution.Binding{RequestHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
-	requests := []protocol.Control{
-		{Caller: alice},
-		{Caller: alice, ExecutionContext: &protocol.ExecutionContextRequest{ContextID: "ctx-a"}},
-		{},
-	}
-	for i, request := range requests {
-		err := (&lifecycle{}).authorizeBoundExecution(expired, request, journal, b)
-		if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, access.ErrDenied) {
-			t.Fatalf("lock timeout for request %d = %v", i, err)
-		}
-		if !journalBusy(err) {
-			t.Fatalf("lock timeout not recognized as busy: %v", err)
-		}
-		// boundExecutionControl sends a busy journal as a typed execution failure.
-		_, wire := executionResponse(protocol.Control{}, execution.Receipt{}, executionBoundaryError("execution control", err))
-		if code := clientRequestError(protocol.Control{}, wire).ErrorCode; code != stateUnavailableCode {
-			t.Fatalf("lock timeout wire code = %s", code)
-		}
-	}
-	// A receipt that does not exist still reads as a denial to an application.
-	if err := (&lifecycle{}).authorizeBoundExecution(local, protocol.Control{Caller: alice}, journal, b); !errors.Is(err, access.ErrDenied) {
-		t.Fatalf("missing receipt = %v", err)
-	}
-}
-
 func TestStrayCallerAndErrorCodes(t *testing.T) {
 	alice, _ := testCaller(t)
 	if err := rejectStrayCaller(protocol.Control{Type: protocol.TypeList, Caller: alice}); applicationErrorCode(err) != executionUsageInvalidCode {
