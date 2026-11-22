@@ -49,18 +49,23 @@ type ApplicationIdentities struct {
 // options, so early JSON routing skips their operands.
 func applicationValueFlag(arg string) bool {
 	switch arg {
-	case contextFlag, "--shell-command", "--env", labelFlag, "--shell", "--set-env", "--unset-env":
+	case contextFlag, "--shell-command", envFlag, labelFlag, "--shell", "--set-env", "--unset-env":
 		return true
 	}
 	return false
 }
 
-const contextFlag = "--context"
+const (
+	contextFlag          = "--context"
+	envFlag              = "--env"
+	nameEqualsValue      = "NAME=VALUE"
+	actAsIdentitySummary = "act as this local application identity"
+)
 
 // applicationExecutionFlags are the session job flags that act as one
 // application caller.
 func applicationExecutionFlags() []Flag {
-	return []Flag{{Name: identityFlag, Value: nameValue, Summary: "act as this local application identity"}, {Name: contextFlag, Value: contextValue, Summary: "with --identity, the job's context"}}
+	return []Flag{{Name: identityFlag, Value: nameValue, Summary: actAsIdentitySummary}, {Name: contextFlag, Value: contextValue, Summary: "with --identity, the job's context"}}
 }
 
 const (
@@ -82,10 +87,10 @@ func contextFlags(extra ...Flag) []Flag {
 var applicationOperations = []Operation{
 	{Name: "mcp.identity.create", Command: "mesh mcp identity create", Args: nameValue, Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "Create a private application credential for one agent frontend.", Example: "mesh mcp identity create codex --json"},
 	{Name: "mcp.identity.list", Command: "mesh mcp identity ls", Implemented: true, Flags: []Flag{{Name: jsonFlag, Summary: jsonFlagSummary}}, Summary: "List local application identities without their secrets.", Example: "mesh mcp identity ls --json"},
-	{Name: "contexts.open", Command: "mesh context open", Implemented: true, Network: true, Mutates: true, Flags: contextFlags(Flag{Name: requestKeyFlag, Value: keyValue, Required: true, Summary: "saved logical request key"}, Flag{Name: cwdFlag, Value: pathFlagValue, Required: true, Summary: "absolute directory on the target"}, Flag{Name: "--shell", Value: "SHELL", Summary: "login, sh or none"}, Flag{Name: "--env", Value: "NAME=VALUE", Summary: "overlay variable, repeatable"}, Flag{Name: labelFlag, Value: textValue, Summary: "display label"}), Summary: "Open a durable working context on a host for one application.", Example: "mesh context open --host HOST_ID --identity codex --request-key ctx-1 --cwd /work --json"},
+	{Name: "contexts.open", Command: "mesh context open", Implemented: true, Network: true, Mutates: true, Flags: contextFlags(Flag{Name: requestKeyFlag, Value: keyValue, Required: true, Summary: "saved logical request key"}, Flag{Name: cwdFlag, Value: pathFlagValue, Required: true, Summary: "absolute directory on the target"}, Flag{Name: "--shell", Value: "SHELL", Summary: "login, sh or none"}, Flag{Name: envFlag, Value: nameEqualsValue, Summary: "overlay variable, repeatable"}, Flag{Name: labelFlag, Value: textValue, Summary: "display label"}), Summary: "Open a durable working context on a host for one application.", Example: "mesh context open --host HOST_ID --identity codex --request-key ctx-1 --cwd /work --json"},
 	{Name: "contexts.get", Command: "mesh context get", Args: contextValue, Implemented: true, Network: true, Flags: contextFlags(), Summary: "Read one context owned by the application.", Example: "mesh context get --identity codex mc1.HOST_ID.CONTEXT_ID --json"},
 	{Name: "contexts.list", Command: "mesh context ls", Implemented: true, Network: true, Flags: contextFlags(), Summary: "List the application's contexts on a host.", Example: "mesh context ls --host HOST_ID --identity codex --json"},
-	{Name: "contexts.update", Command: "mesh context update", Args: contextValue, Implemented: true, Network: true, Mutates: true, Flags: contextFlags(Flag{Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this change"}, Flag{Name: cwdFlag, Value: pathFlagValue, Summary: "new absolute directory"}, Flag{Name: "--set-env", Value: "NAME=VALUE", Summary: "set an overlay variable, repeatable"}, Flag{Name: "--unset-env", Value: nameValue, Summary: "remove an overlay variable, repeatable"}, Flag{Name: labelFlag, Value: textValue, Summary: "new display label"}), Summary: "Change a context's directory, environment or label at an expected revision.", Example: "mesh context update --identity codex mc1.HOST_ID.CONTEXT_ID --expected-revision 1 --cwd /work/app --json"},
+	{Name: "contexts.update", Command: "mesh context update", Args: contextValue, Implemented: true, Network: true, Mutates: true, Flags: contextFlags(Flag{Name: expectedRevisionFlag, Value: "N", Required: true, Summary: "revision before this change"}, Flag{Name: cwdFlag, Value: pathFlagValue, Summary: "new absolute directory"}, Flag{Name: "--set-env", Value: nameEqualsValue, Summary: "set an overlay variable, repeatable"}, Flag{Name: "--unset-env", Value: nameValue, Summary: "remove an overlay variable, repeatable"}, Flag{Name: labelFlag, Value: textValue, Summary: "new display label"}), Summary: "Change a context's directory, environment or label at an expected revision.", Example: "mesh context update --identity codex mc1.HOST_ID.CONTEXT_ID --expected-revision 1 --cwd /work/app --json"},
 	{Name: "contexts.close", Command: "mesh context close", Args: contextValue, Implemented: true, Network: true, Mutates: true, Flags: contextFlags(Flag{Name: expectedRevisionFlag, Value: "N", Summary: "fail if the context changed"}), Summary: "Stop new jobs in a context; running jobs keep going.", Example: "mesh context close --identity codex mc1.HOST_ID.CONTEXT_ID --json"},
 	{Name: "contexts.receipt", Command: "mesh context receipt", Implemented: true, Network: true, Flags: contextFlags(Flag{Name: requestKeyFlag, Value: keyValue, Required: true, Summary: "request key used to open"}), Summary: "Look up a context by the key that opened it, after a lost reply.", Example: "mesh context receipt --host HOST_ID --identity codex --request-key ctx-1 --json"},
 }

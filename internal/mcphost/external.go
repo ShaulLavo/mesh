@@ -41,6 +41,7 @@ func (s *Supervisor) connectExternal(ctx context.Context, inst *instance, d Defi
 		return nil, s.failExternal(ctx, inst, err)
 	}
 	gen.serverInfo = serverInfoOf(discovered)
+	gen.capabilities = capabilitiesOf(discovered)
 	// Only a server that advertises tools has schemas to mirror headers from.
 	if err := s.refreshToolsIfAdvertised(ctx, gen, discovered); err != nil {
 		_ = upstream.Close()
@@ -77,6 +78,10 @@ func secretHeaders(d Definition) (http.Header, error) {
 
 func serverInfoOf(discovered json.RawMessage) json.RawMessage {
 	return member(discovered, metaKey, mcpwire.ServerInfoKey)
+}
+
+func capabilitiesOf(discovered json.RawMessage) json.RawMessage {
+	return member(discovered, "capabilities")
 }
 
 func (s *Supervisor) refreshToolsIfAdvertised(ctx context.Context, gen *generation, discovered json.RawMessage) error {

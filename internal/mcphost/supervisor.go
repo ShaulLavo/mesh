@@ -89,6 +89,9 @@ type Config struct {
 	Store    Store
 	Launcher Launcher
 	Now      func() time.Time
+	// HostID is the owning host's canonical Mesh ID, used to validate mi1
+	// instance handles on dispatch and management controls.
+	HostID string
 	// GrantCurrent reports whether grant is still the account's current
 	// grant incarnation. Leases, continuations and isolated instances of a
 	// retired grant are retired, even if the device was approved again.
@@ -140,12 +143,13 @@ type generation struct {
 	upstream Upstream
 	// tools holds the compiled x-mcp-header rules of an HTTP upstream's
 	// current tools/list, read by the H5 client for every tools/call.
-	tools      atomic.Pointer[ToolHeaders]
-	serverInfo json.RawMessage
-	active     int
-	requests   int
-	listens    int
-	draining   bool
+	tools        atomic.Pointer[ToolHeaders]
+	serverInfo   json.RawMessage
+	capabilities json.RawMessage
+	active       int
+	requests     int
+	listens      int
+	draining     bool
 }
 
 func NewSupervisor(cfg Config) (*Supervisor, error) {

@@ -32,7 +32,9 @@ def mesh(fixture, *arguments, ok=True):
 
 
 def show(fixture, name):
-    return json.loads(mesh(fixture, "show", name, "--json").stdout)
+    env = json.loads(mesh(fixture, "show", name, "--json").stdout)
+    require(env.get("schemaVersion") == 1 and env.get("operation") == "mcp.show" and env.get("status") == "ok", env)
+    return env["data"]
 
 
 def launches(server):

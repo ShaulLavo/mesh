@@ -33,7 +33,7 @@ func TestEmptyListenDoesNotHoldInstance(t *testing.T) {
 	if ack := waitEvent(t, events); string(member([]byte(ack), "params", "notifications")) != `{}` {
 		t.Fatalf("fixture acknowledgment: %s", ack)
 	}
-	eventually(t, func() bool { return f.sup.Services(caller("a"))[0].Instances[0].State == StateStopped })
+	eventually(t, func() bool { return f.sup.Catalog(caller("a"))[0].Instances[0].State == StateStopped })
 }
 
 func (f *fakeLauncher) live() int {
@@ -77,7 +77,7 @@ func TestStopDuringStartStaysStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-calls
-	view := f.sup.Services(Caller{Account: "local", Admin: true})[0].Instances[0]
+	view := f.sup.Catalog(Caller{Account: "local", Admin: true})[0].Instances[0]
 	if view.State != StateStopped || f.launcher.live() != 0 {
 		t.Fatalf("stop lost to the start: state %s, %d live workers", view.State, f.launcher.live())
 	}
@@ -99,7 +99,7 @@ func TestRemoveDuringStartLeavesNoWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return f.launcher.live() == 0 })
-	if len(f.sup.Services(Caller{Account: "local", Admin: true})) != 0 {
+	if len(f.sup.Catalog(Caller{Account: "local", Admin: true})) != 0 {
 		t.Fatal("removed service is still listed")
 	}
 }
@@ -125,7 +125,7 @@ func TestStopDuringRecoveryStaysStopped(t *testing.T) {
 	if err := <-stopped; err != nil {
 		t.Fatal(err)
 	}
-	view := next.Services(Caller{Account: "local", Admin: true})[0].Instances[0]
+	view := next.Catalog(Caller{Account: "local", Admin: true})[0].Instances[0]
 	if view.State != StateStopped || f.launcher.live() != 0 {
 		t.Fatalf("stop lost to recovery: state %s, %d live workers", view.State, f.launcher.live())
 	}
@@ -157,7 +157,7 @@ func TestReapprovedDeviceLosesOldGrantState(t *testing.T) {
 	f.mu.Unlock()
 	f.sup.Sweep(t.Context())
 	admin := Caller{Account: "local", Admin: true}
-	for _, v := range f.sup.Services(admin) {
+	for _, v := range f.sup.Catalog(admin) {
 		want := StateReady
 		if v.Name == "repo" {
 			want = StateStopped
@@ -195,7 +195,7 @@ func TestSweepKeepsLeaseAddedConcurrently(t *testing.T) {
 	}
 	close(resume)
 	<-swept
-	if leases := f.sup.Services(caller("b"))[0].Instances[0].Leases; leases != 1 {
+	if leases := f.sup.Catalog(caller("b"))[0].Instances[0].Leases; leases != 1 {
 		t.Fatalf("leases after the sweep: %d, want only the new one", leases)
 	}
 }
