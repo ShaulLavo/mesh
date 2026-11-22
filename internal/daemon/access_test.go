@@ -257,7 +257,7 @@ func TestScopedRealTLSProjectsOnlyAllowedMetadata(t *testing.T) {
 
 var deniedScopedTypes = []string{
 	"update.evidence", "update.evidence.result",
-	"execution.create", "execution.request", "execution.receipt", "execution.wait", "execution.logs", "execution.signal", "execution.kill", "execution.remove", "execution.input", "execution.inspect", "execution.list", "execution.listed",
+	"execution.create", "execution.request", "execution.receipt", "execution.wait", "execution.logs", "execution.signal", "execution.kill", "execution.remove", "execution.input", "execution.inspect", "execution.resize", "execution.screen", "execution.list", "execution.listed",
 	"context.open", "context.get", "context.update", "context.list", "context.close", "context.receipt", "context.result",
 	"host.metrics.result", "session.created", "session.listed", "host.info.result", "host.renamed", "session.recovered", "session.recovery-record", "copy.result", "app.result", "host.context.result", "service.previewed", "service.upserted", "service.listed", "service.deleted", "service.labeled", "certificate.installed", "wake.remembered", "wake.probed", "wake.sent", "wake.configured",
 	"host.info", "host.metrics", "host.context", "host.rename", "session.list", "session.inspect", "session.logs", "session.recovery", "session.create", "session.attach", "session.attach-detached", "terminal.resize", "session.detach", "session.signal", "session.kill", "session.hibernate", "session.recover", "session.recovery-command", "session.remove", "service.preview", "service.upsert", "service.label", "service.list", "service.delete", "service.start", "service.stop", "fleet.hosts", "certificate.install", "wake.configure", "wake.remember", "wake.probe", "wake.send", "state.watch", "catalog.continue", "session.agent-begin", "session.agent-event", "session.agent-finish", "session.shell-update", "session.containment", "session.nest", "session.attached", "session.nesting", "session.exit", "session.logged", "session.inspected", "state.snapshot", "state.event", "state.current", "state.resync", "error", "ok", "access.output.result", "future.control",
@@ -666,6 +666,8 @@ func denyScopedExecutionRequests(t *testing.T, loose bool) {
 	requests = append(requests,
 		protocol.Control{Type: protocol.TypeExecutionInput, RequestID: "input-denied", SessionID: "7K3D", Instance: instance, WriteKey: "lookup"},
 		protocol.Control{Type: protocol.TypeExecutionInspect, RequestID: "inspect-denied", SessionID: "7K3D", Instance: instance},
+		protocol.Control{Type: protocol.TypeExecutionResize, RequestID: "resize-denied", SessionID: "7K3D", Instance: instance, Cols: 100, Rows: 30},
+		protocol.Control{Type: protocol.TypeExecutionScreen, RequestID: "screen-denied", SessionID: "7K3D", Instance: instance},
 		protocol.Control{Type: protocol.TypeExecutionList, RequestID: "list-denied"},
 		protocol.Control{Type: protocol.TypeWorkerLineAttach, RequestID: "line-denied", SessionID: "7K3D", Instance: instance},
 	)

@@ -19,6 +19,7 @@ import (
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
+	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/update"
 )
 
@@ -703,6 +704,9 @@ func buildExecutionJobListPage(hostID string, receipts []protocol.ExecutionRecei
 }
 
 func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputRequest) (mcpnative.CallOutcome, error) {
+	if c.caller == "" && req.Kind == execution.KindPTY {
+		return c.identityRequiredOutcome(agentSessionInput, req.Job.HostID), nil
+	}
 	callCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	host, err := c.resolveExactHostID(req.Job.HostID)
@@ -710,13 +714,14 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 		return mcpnative.CallOutcome{}, err
 	}
 	control := protocol.Control{
-		Type:        protocol.TypeExecutionInput,
-		SessionID:   req.Job.SessionID,
-		Instance:    req.Job.Instance,
-		WriteKey:    req.WriteKey,
-		InputOffset: req.Offset,
-		InputBytes:  req.Data,
-		InputEOF:    req.EOF,
+		Type:          protocol.TypeExecutionInput,
+		SessionID:     req.Job.SessionID,
+		Instance:      req.Job.Instance,
+		WriteKey:      req.WriteKey,
+		InputOffset:   req.Offset,
+		InputBytes:    req.Data,
+		InputEOF:      req.EOF,
+		ExecutionKind: req.Kind,
 	}
 	c.attachCaller(&control, req.Context)
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
@@ -948,13 +953,13 @@ func (c *mcpControls) loadSessions(ctx context.Context, host HostRecord, operati
 		if err != nil {
 			return agentSessionSnapshot{}, err
 		}
-		return agentSessionSnapshot{rows: liveAgentSessionRows(rows), freshness: agentapi.FreshnessLive}, nil
+		return agentSessionSnapshot{rows: liveAgentSessionRows(localPersonSessions(rows)), freshness: agentapi.FreshnessLive}, nil
 	}
 	return c.app.loadAgentRemoteSessionsBy(ctx, host, operation, c.listRemoteSessions)
 }
 
 func (c *mcpControls) listRemoteSessions(ctx context.Context, host HostRecord) ([]protocol.SessionInfo, error) {
-	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{Type: protocol.TypeList, Lean: true}, true)
+	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{Type: protocol.TypeList, Lean: true, HumanSessionOnly: true}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -972,10 +977,13 @@ func (c *mcpControls) listRemoteSessions(ctx context.Context, host HostRecord) (
 
 func (c *mcpControls) inspectSession(ctx context.Context, host HostRecord, id string, cols, rows int) (SessionInspection, error) {
 	if host.local {
+		if !localPersonSession(id) {
+			return SessionInspection{}, agentapi.Fail(agentapi.SessionNotFound, agentSessionsInspect, id, "No such session on this host.")
+		}
 		return inspectAgentLocalSession(ctx, host, id, cols, rows)
 	}
 	response, _, err := c.pool.ExchangeShort(ctx, host, protocol.Control{
-		Type: protocol.TypeInspect, SessionID: id, PreviewCols: cols, PreviewRows: rows,
+		Type: protocol.TypeInspect, SessionID: id, PreviewCols: cols, PreviewRows: rows, HumanSessionOnly: true,
 	}, true)
 	if err != nil {
 		return SessionInspection{}, err

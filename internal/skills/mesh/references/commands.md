@@ -509,6 +509,40 @@ mesh mcp token rotate --http 127.0.0.1:8765 --identity codex --json
 - `--identity NAME`: local application identity bound to the listener.
 - `--json`: write one agent result.
 
+## mesh session resize
+
+Resize a keyed terminal job while no person is attached.
+
+```sh
+mesh session resize --host HOST_ID 7K3D --instance INSTANCE --cols 120 --rows 40 --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
+- `--cols N`: terminal width.
+- `--rows N`: terminal height.
+
+## mesh session screen
+
+Read a keyed terminal job's rendered screen without resizing it.
+
+```sh
+mesh session screen --host HOST_ID 7K3D --instance INSTANCE --json
+```
+
+- `--host HOST`: online target.
+- `--json`: write one agent result.
+- `--instance INSTANCE`: exact creation receipt instance.
+- `--timeout D`: finite deadline.
+- `--identity NAME`: act as this local application identity.
+- `--context CONTEXT`: with --identity, the job's context.
+- `--cols N`: preview width up to 160.
+- `--rows N`: preview height up to 24.
+
 ## mesh mcp publish
 
 Publish or update a hosted MCP server definition on a host.

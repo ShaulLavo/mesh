@@ -250,3 +250,36 @@ func (r *transactionRuntime) Renew(_ context.Context, ref session.Reservation) (
 	ref.BootID = r.boot
 	return ref, nil
 }
+
+// A caller that requires an interrupted source never takes a live one,
+// whatever action it asks for, and nothing is launched.
+func TestRecoveryRequireInterruptedRefusesLiveSource(t *testing.T) {
+	for _, action := range []Action{ActionDefault, ActionShell, ActionCommand, ActionAgent} {
+		t.Run(string(action), func(t *testing.T) {
+			cfg, runtime := transactionFixture(t)
+			source := runtime.sources["7K3D"]
+			source.State = "detached"
+			runtime.sources[source.ID] = source
+			result, err := Recover(context.Background(), cfg, Request{SessionID: "7K3D", Action: action, RequireInterrupted: true})
+			if !errors.Is(err, ErrSourceLive) || result.SessionID != "" || len(runtime.launches) != 0 {
+				t.Fatalf("live source = %+v, %v, launches=%d", result, err, len(runtime.launches))
+			}
+		})
+	}
+}
+
+// After a lost reply, the retry of a recovery that requires an interrupted
+// source returns the replacement it already recorded.
+func TestRecoveryRequireInterruptedRetryReturnsReplacement(t *testing.T) {
+	cfg, runtime := transactionFixture(t)
+	runtime.launchError = errors.New("reply lost")
+	runtime.publishBeforeError = true
+	request := Request{SessionID: "7K3D", Action: ActionShell, RequireInterrupted: true}
+	if _, err := Recover(context.Background(), cfg, request); !errors.Is(err, ErrUncertain) {
+		t.Fatalf("first result = %v", err)
+	}
+	result, err := Recover(context.Background(), cfg, request)
+	if err != nil || result.SessionID == "7K3D" || result.RecoveredFrom != "7K3D" || len(runtime.launches) != 1 {
+		t.Fatalf("retry = %+v, %v, launches=%d", result, err, len(runtime.launches))
+	}
+}

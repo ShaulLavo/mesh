@@ -59,6 +59,11 @@ type Request struct {
 	Cols, Rows int
 	Term       string
 	Depth      int
+	// RequireInterrupted refuses a source that is still running or
+	// detached, for any action, under the source's recovery lock. A caller
+	// that never attaches (mesh mcp) uses it so it never takes a live
+	// session; a retry that finds its recorded replacement still succeeds.
+	RequireInterrupted bool
 }
 
 type Launch struct {
@@ -71,6 +76,10 @@ type Launch struct {
 	Term         string
 	Depth        int
 }
+
+// ErrSourceLive reports a recovery that requires an interrupted source and
+// found it still running.
+var ErrSourceLive = errors.New("recovery: the session is still running; only an interrupted session can be recovered")
 
 type Result struct {
 	AgentStatus   string  `json:"agentStatus,omitempty"`
@@ -123,7 +132,11 @@ func Recover(ctx context.Context, cfg Config, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, recoveryBoundaryError("transaction.go Recover", err)
 	}
-	if (source.State == "running" || source.State == "detached") && request.Action != ActionAgent {
+	live := source.State == "running" || source.State == "detached"
+	if live && request.RequireInterrupted {
+		return Result{}, fmt.Errorf("session %s is %s: %w", source.ID, source.State, ErrSourceLive)
+	}
+	if live && request.Action != ActionAgent {
 		return Result{SessionID: source.ID, Cwd: source.Cwd, Existing: true, State: source.State}, nil
 	}
 	record, err := recoveryRecord(cfg, dir, source, request.Action)

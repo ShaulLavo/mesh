@@ -25,6 +25,11 @@ type contextJobIntent struct {
 	Cwd          string            `json:"cwd,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Stdin        string            `json:"stdin"`
+	// Terminal jobs carry their initial size and terminal type. A pipe job
+	// leaves them empty, so its digest is unchanged by their presence.
+	Cols int    `json:"cols,omitempty"`
+	Rows int    `json:"rows,omitempty"`
+	Term string `json:"term,omitempty"`
 }
 
 // executionKeyFor scopes a creation or lookup key. An application caller's
@@ -105,16 +110,26 @@ func (l *lifecycle) environment() []string {
 }
 
 // contextJobRequest validates the caller-supplied part of a context job.
-// Pipe jobs only: the scoped session-output route still reads PTY execution
-// tails, and application-owned output must stay private to its caller.
+// Terminal jobs are allowed because the scoped session-output route serves
+// only account-owned sessions (privateSession), so application-owned
+// terminal output stays private to its caller.
 func contextJobRequest(request protocol.Control) (contextJobIntent, error) {
 	params := request.ExecutionContext
-	job := contextJobIntent{Kind: request.ExecutionKind, Command: request.Command, ShellCommand: params.ShellCommand, Cwd: request.Cwd, Env: params.Env, Stdin: request.Stdin}
-	if job.Kind != execution.KindPipe {
-		return job, contextUsage("context jobs use kind pipe")
-	}
-	if job.Stdin == "" {
-		job.Stdin = execution.StdinClosed
+	job := contextJobIntent{Kind: request.ExecutionKind, Command: request.Command, ShellCommand: params.ShellCommand, Cwd: request.Cwd, Env: params.Env, Stdin: request.Stdin, Cols: request.Cols, Rows: request.Rows, Term: request.Term}
+	switch job.Kind {
+	case execution.KindPipe:
+		if job.Cols != 0 || job.Rows != 0 || job.Term != "" {
+			return job, contextUsage("terminal size and type need kind pty")
+		}
+		if job.Stdin == "" {
+			job.Stdin = execution.StdinClosed
+		}
+	case execution.KindPTY:
+		if job.Stdin != "" {
+			return job, contextUsage("terminal jobs take input through their terminal; omit stdin")
+		}
+	default:
+		return job, contextUsage("context jobs use kind pipe or pty")
 	}
 	if (len(job.Command) == 0) == (job.ShellCommand == "") {
 		return job, contextUsage("pass exactly one of command (argv) or executionContext.shellCommand")
@@ -159,7 +174,7 @@ func resolveContextJob(c execution.Context, job contextJobIntent) (execution.Int
 	for name, value := range job.Env {
 		env[name] = value
 	}
-	intent := execution.Intent{Kind: job.Kind, Command: command, Cwd: cwd, Stdin: job.Stdin}
+	intent := execution.Intent{Kind: job.Kind, Command: command, Cwd: cwd, Stdin: job.Stdin, Cols: job.Cols, Rows: job.Rows, Term: job.Term}
 	return intent, env, nil
 }
 
