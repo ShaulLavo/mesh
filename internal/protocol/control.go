@@ -193,6 +193,7 @@ type HostInfo struct {
 	UpdateSupported         bool               `json:"updateSupported,omitempty"`
 	RecoverySupported       bool               `json:"recoverySupported,omitempty"`
 	ServiceHealthSupported  bool               `json:"serviceHealthSupported,omitempty"`
+	FilesSupported          bool               `json:"filesSupported,omitempty"`
 	ID                      string             `json:"id"`
 	MeshIdentity            string             `json:"meshIdentity"`
 	TailscaleName           string             `json:"tailscaleName,omitempty"`
@@ -291,6 +292,7 @@ type Control struct {
 	Context              json.RawMessage       `json:"context,omitempty"`
 	App                  json.RawMessage       `json:"app,omitempty"`
 	Copy                 json.RawMessage       `json:"copy,omitempty"`
+	Files                json.RawMessage       `json:"files,omitempty"`
 	Update               json.RawMessage       `json:"update,omitempty"`
 	AgentLaunch          *agentresume.Launch   `json:"agentLaunch,omitempty"`
 	AgentEvent           *agentresume.Event    `json:"agentEvent,omitempty"`

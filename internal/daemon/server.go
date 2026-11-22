@@ -35,6 +35,7 @@ type clientServer struct {
 	apps         controlHandler
 	fleet        controlHandler
 	context      controlHandler
+	files        controlHandler
 	fleetProfile controlHandler
 }
 
@@ -157,6 +158,9 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 		}
 		if !lifecycleHandled && s.context != nil {
 			response, lifecycleHandled, requestErr = s.context.HandleControl(ctx, request)
+		}
+		if !lifecycleHandled && s.files != nil {
+			response, lifecycleHandled, requestErr = s.files.HandleControl(ctx, request)
 		}
 		if !lifecycleHandled {
 			response, lifecycleHandled, requestErr = s.services.HandleControl(ctx, request)

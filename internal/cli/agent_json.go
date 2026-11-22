@@ -88,7 +88,8 @@ func controlAgentCode(code string) agentapi.Code {
 	switch code {
 	case "control.unknown":
 		return agentapi.ProtocolUnsupported
-	case "request.key_conflict", "request.in_progress", "request.outcome_unknown", "request.not_found", "resource.limit", "state.unavailable", "logs.cursor_expired", "logs.cursor_invalid", "result.expired", "session.instance_mismatch", "usage.invalid", "input.outcome_unknown", "input.key_conflict", "input.offset_mismatch", "input.closed", "input.backpressure", "access.denied":
+	case "request.key_conflict", "request.in_progress", "request.outcome_unknown", "request.not_found", "resource.limit", "state.unavailable", "logs.cursor_expired", "logs.cursor_invalid", "result.expired", "session.instance_mismatch", "usage.invalid", "input.outcome_unknown", "input.key_conflict", "input.offset_mismatch", "input.closed", "input.backpressure", "access.denied",
+		"host.identity_mismatch", "file.not_found", "file.not_regular", "file.changed", "file.cursor_invalid", "file.conflict", "file.patch_mismatch", "file.permission_denied", "file.target_mismatch":
 		return agentapi.Code(code)
 	case "session.not_found":
 		return agentapi.SessionNotFound

@@ -657,7 +657,7 @@ func (l *lifecycle) declaredHostInfo() protocol.HostInfo {
 		tailscaleName = *l.host.TailscaleName
 	}
 	host := protocol.HostInfo{
-		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true,
+		Build: executingBuild(), UpdateEvidenceSupported: true, UpdateSupported: true, RecoverySupported: true, ServiceHealthSupported: true, FilesSupported: true,
 		ID: string(l.host.ID), MeshIdentity: l.host.MeshIdentity, TailscaleName: tailscaleName, PrivateName: l.privateName(),
 	}
 	if l.updateSummary != nil {
