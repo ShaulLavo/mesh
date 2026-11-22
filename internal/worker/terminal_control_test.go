@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	terminalstate "github.com/shaul/mesh/internal/terminal"
+	"github.com/shaul/mesh/internal/testenv"
 )
 
 type terminalJobFixture struct {
@@ -107,7 +108,7 @@ func (f terminalJobFixture) raw(t *testing.T, req protocol.Control) protocol.Con
 		defer func() { _ = server.Close() }()
 		f.w.serveTerminalControl(server, req)
 	}()
-	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := client.SetDeadline(time.Now().Add(testenv.HangTimeout)); err != nil {
 		t.Fatal(err)
 	}
 	frame, err := protocol.NewReader(client).ReadFrame()
@@ -205,46 +206,178 @@ func TestTerminalInputAndResizeRefusedWhileAttached(t *testing.T) {
 	waitFor(t, func() bool { return bytes.Equal(f.pty.inputs(), []byte("ac")) })
 }
 
-// A person attaching races agent writes. Every acknowledged write reaches the
-// PTY once, and every refused write leaves no bytes.
-func TestTerminalInputRacesHumanAttach(t *testing.T) {
+// personAttachment is one mesh attach client in a test. Every wait is
+// bounded only by the hang cap.
+type personAttachment struct {
+	client net.Conn
+	served chan struct{}
+}
+
+// attachPerson attaches like mesh attach and returns once the worker has
+// confirmed the attachment, so the person holds the terminal.
+func attachPerson(w *Worker) (*personAttachment, error) {
+	client, server := net.Pipe()
+	a := &personAttachment{client: client, served: make(chan struct{})}
+	go func() {
+		defer close(a.served)
+		w.serve(server)
+		w.writers.Wait()
+	}()
+	if err := client.SetDeadline(time.Now().Add(testenv.HangTimeout)); err != nil {
+		return a, errors.Join(err, a.detach())
+	}
+	if err := protocol.NewWriter(client).WriteControlMsg(protocol.Control{Type: protocol.TypeAttach, SessionID: w.sid.String()}); err != nil {
+		return a, errors.Join(err, a.detach())
+	}
+	frame, err := protocol.NewReader(client).ReadFrame()
+	if err == nil && frame.Kind != protocol.KindControl {
+		err = fmt.Errorf("first attach frame is %v", frame.Kind)
+	}
+	if err != nil {
+		return a, errors.Join(err, a.detach())
+	}
+	go drainAttachment(client)
+	return a, nil
+}
+
+// drainAttachment keeps reading so the worker's writer never blocks on a
+// person who stopped looking.
+func drainAttachment(client net.Conn) {
+	reader := protocol.NewReader(client)
+	for {
+		if _, err := reader.ReadFrame(); err != nil {
+			return
+		}
+	}
+}
+
+// detach closes the client and waits until the worker has let it go.
+func (a *personAttachment) detach() error {
+	_ = a.client.Close()
+	select {
+	case <-a.served:
+		return nil
+	case <-time.After(testenv.HangTimeout):
+		return errors.New("worker did not release the attachment")
+	}
+}
+
+func (f terminalJobFixture) detached() bool {
+	f.w.mu.Lock()
+	defer f.w.mu.Unlock()
+	return f.w.client == nil
+}
+
+// Both sides of the attach decision, proved in order: while a person holds
+// the terminal, input and resize are refused; once they have left, both are
+// admitted.
+func TestTerminalInputAndResizeFollowAttachment(t *testing.T) {
+	f := newTerminalJobWorker(t)
+	var want bytes.Buffer
+	var offset uint64
+	for round := range 5 {
+		person, err := attachPerson(f.w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := fmt.Sprintf("held-%d", round)
+		if reply := f.input(t, key, offset, "x"); reply.ErrorCode != execution.CodeTerminalAttached {
+			t.Fatalf("round %d: input while attached = %+v", round, reply)
+		}
+		if reply := f.control(t, protocol.Control{Type: protocol.TypeExecutionResize, Cols: 90 + round, Rows: 30}); reply.ErrorCode != execution.CodeTerminalAttached {
+			t.Fatalf("round %d: resize while attached = %+v", round, reply)
+		}
+		if err := person.detach(); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, f.detached)
+		payload := fmt.Sprintf("<%d>", round)
+		if reply := f.input(t, fmt.Sprintf("free-%d", round), offset, payload); reply.Type != protocol.TypeOK {
+			t.Fatalf("round %d: input after detach = %+v", round, reply)
+		}
+		want.WriteString(payload)
+		offset += uint64(len(payload))
+		if reply := f.control(t, protocol.Control{Type: protocol.TypeExecutionResize, Cols: 100 + round, Rows: 30}); reply.Type != protocol.TypeOK {
+			t.Fatalf("round %d: resize after detach = %+v", round, reply)
+		}
+	}
+	waitFor(t, func() bool { return bytes.Equal(f.pty.inputs(), want.Bytes()) })
+}
+
+// A person attaching and detaching races agent writes and resizes. Every
+// acknowledged write reaches the PTY once, every refused write leaves no
+// bytes, and a resize is either applied or refused as attached.
+func TestTerminalInputAndResizeRaceHumanAttach(t *testing.T) {
 	f := newTerminalJobWorker(t)
 	stop := make(chan struct{})
+	attachErr := make(chan error, 1)
 	var attaching sync.WaitGroup
+	t.Cleanup(func() {
+		select {
+		case <-stop:
+		default:
+			close(stop)
+		}
+		attaching.Wait()
+	})
 	attaching.Add(1)
 	go func() {
 		defer attaching.Done()
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			_, reader, detach := queryAttach(t, f.w, nil)
-			_, _ = reader.ReadFrame()
-			detach()
-		}
+		attachErr <- attachUntilStopped(f.w, stop)
 	}()
 	var want bytes.Buffer
 	var offset uint64
-	refused := 0
-	for i := range 200 {
+	outcomes := map[string]int{}
+	for i := range 100 {
 		payload := fmt.Sprintf("<%03d>", i)
 		reply := f.input(t, fmt.Sprintf("w%03d", i), offset, payload)
-		switch {
-		case reply.Type == protocol.TypeOK:
+		outcomes["input "+raceOutcome(t, reply)]++
+		if reply.Type == protocol.TypeOK {
 			want.WriteString(payload)
 			offset += uint64(len(payload))
-		case reply.ErrorCode == execution.CodeTerminalAttached:
-			refused++
-		default:
-			t.Fatalf("write %d = %+v", i, reply)
 		}
+		resize := f.control(t, protocol.Control{Type: protocol.TypeExecutionResize, Cols: 80 + i%40, Rows: 24})
+		outcomes["resize "+raceOutcome(t, resize)]++
 	}
 	close(stop)
 	attaching.Wait()
+	if err := <-attachErr; err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, func() bool { return bytes.Equal(f.pty.inputs(), want.Bytes()) })
-	t.Logf("%d of 200 writes refused while attached", refused)
+	t.Logf("outcomes: %v", outcomes)
+}
+
+func raceOutcome(t *testing.T, reply protocol.Control) string {
+	t.Helper()
+	switch {
+	case reply.Type == protocol.TypeOK:
+		return "admitted"
+	case reply.ErrorCode == execution.CodeTerminalAttached:
+		return "refused"
+	default:
+		t.Fatalf("unexpected terminal reply %+v", reply)
+		return ""
+	}
+}
+
+// attachUntilStopped attaches and detaches until stop closes, and returns
+// the first failure so the loop never outlives its test.
+func attachUntilStopped(w *Worker, stop <-chan struct{}) error {
+	for {
+		select {
+		case <-stop:
+			return nil
+		default:
+		}
+		person, err := attachPerson(w)
+		if err != nil {
+			return err
+		}
+		if err := person.detach(); err != nil {
+			return err
+		}
+	}
 }
 
 // The worker answers a screen read only for its own instance; a read meant
