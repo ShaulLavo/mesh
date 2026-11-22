@@ -608,6 +608,7 @@ class NativeOwnership:
         self.reaped_startups = set()
         self.unresolved, self.scans, self.observation_ns, self.verification_ns = [], 0, 0, 0
         self.vanished_record_reads = 0
+        self.incomplete_record_reads = 0
         self.observed_records = set()
         self.launch_birth = None
         self.verified = False
@@ -642,16 +643,14 @@ class NativeOwnership:
         for pid in known:
             self.owned[(pid, rows[pid]["birth"])] = rows[pid]
 
-    def read_native_records(self, rows):
+    def read_native_records(self, rows, final=False):
         paths = recursive_suffix_paths(self.output, ".cohort.json")
         for directory in self.root.glob("mesh-transition.*"):
             paths.extend(directory.glob("cohort.json"))
             paths.extend(directory.glob("state/s/*/meta.json"))
         for path in paths:
-            try:
-                value = json.loads(path.read_text())
-            except FileNotFoundError:
-                self.record_vanished(path)
+            value = self.read_record(path, final)
+            if value is None:
                 continue
             if path.name == "meta.json":
                 self.note_shell(value.get("pid"), rows)
@@ -659,6 +658,23 @@ class NativeOwnership:
                 continue
             self.note_cohort(value, rows)
             self.observed_records.add(path)
+
+    def read_record(self, path, final):
+        try:
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                raise ValueError("expected a JSON object")
+        except FileNotFoundError:
+            self.record_vanished(path)
+            return None
+        except ValueError as error:
+            # The writer may still be filling the file: read it again at the next
+            # observation. The final read runs after the writers have stopped.
+            self.incomplete_record_reads += 1
+            if final:
+                self.unresolved.append(f"native record stayed malformed: {path}: {error}")
+            return None
+        return value
 
     def record_vanished(self, path):
         self.vanished_record_reads += 1
@@ -727,7 +743,7 @@ class NativeOwnership:
 
     def verify_absence(self, deadline_ns):
         rows = process_snapshot(deadline_ns)
-        self.read_native_records(rows)
+        self.read_native_records(rows, final=True)
         missing = sorted(self.expected.difference(self.correlated, self.reaped_startups))
         changed = [pid for pid in self.expected if pid in rows and (pid, rows[pid]["birth"]) not in self.owned]
         live = [row for (pid, birth), row in self.owned.items() if pid in rows and rows[pid]["birth"] == birth]
@@ -747,6 +763,7 @@ class NativeOwnership:
                  "reapedStartupPids": sorted(self.reaped_startups),
                  "scans": self.scans, "observation_ns": self.observation_ns, "verification_ns": self.verification_ns,
                   "vanished_record_reads": self.vanished_record_reads,
+                  "incomplete_record_reads": self.incomplete_record_reads,
                  "absenceVerified": self.verified,
                  "coverage": "launch ancestry reconciled with native worker/shell records"}
         (self.output / "fixture-native-ownership.json").write_text(json.dumps(value, indent=2) + "\n")

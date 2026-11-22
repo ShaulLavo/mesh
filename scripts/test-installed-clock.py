@@ -1320,6 +1320,54 @@ class NativeOwnershipTest(unittest.TestCase):
         self.assertTrue(ownership.verified)
         self.assertEqual(ownership.vanished_record_reads, 1)
 
+    def test_partially_written_native_records_are_read_again(self):
+        cases = [(name, partial) for name in ("cohort.json", "state/s/W000/meta.json") for partial in ("", '{"workers": [{"pid": 2')]
+        for name, partial in cases:
+            with self.subTest(name=name, partial=partial):
+                self.check_partial_record(name, partial)
+
+    def check_partial_record(self, name, partial):
+        state = self.root / ("mesh-transition.partial-" + str(len(partial)) + "-" + name.replace("/", "-").replace(".", "-"))
+        path = state / name
+        path.parent.mkdir(parents=True)
+        path.write_text(partial)
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+            self.assertEqual(ownership.expected, set())
+            self.assertEqual(ownership.incomplete_record_reads, 1)
+            value = {"pid": 30} if path.name == "meta.json" else {"workers": [{"pid": 20, "shellPid": 30}]}
+            path.write_text(json.dumps(value))
+            ownership.observe(deadline)
+        self.assertEqual(ownership.expected, {20, 30})
+        with patch.object(clocks, "process_snapshot", return_value={}):
+            ownership.verify(deadline)
+        self.assertTrue(ownership.verified)
+        self.assertEqual(ownership.incomplete_record_reads, 1)
+        shutil.rmtree(state)
+
+    def test_native_record_that_stays_malformed_fails_verification(self):
+        self.check_malformed_native_record('{"pid": ')
+
+    def test_persisted_null_native_record_fails_despite_other_coverage(self):
+        self.check_malformed_native_record("null")
+
+    def check_malformed_native_record(self, contents):
+        state = self.root / "mesh-transition.malformed"
+        state.mkdir()
+        (state / "cohort.json").write_text(json.dumps({"workers": [{"pid": 20, "shellPid": 30}]}))
+        broken = state / "state/s/W000/meta.json"
+        broken.parent.mkdir(parents=True)
+        broken.write_text(contents)
+        deadline = clocks.time.monotonic_ns() + clocks.SECOND
+        with patch.object(clocks, "process_snapshot", return_value=self.rows()):
+            ownership = clocks.NativeOwnership(Mock(pid=10), self.root, self.root, deadline)
+            ownership.observe(deadline)
+        with patch.object(clocks, "process_snapshot", return_value={}), \
+                self.assertRaisesRegex(RuntimeError, "native record stayed malformed: .*meta.json"):
+            ownership.verify(deadline)
+        self.assertFalse(ownership.verified)
+
     def test_unobserved_vanished_record_cannot_establish_coverage(self):
         state = self.root / "mesh-transition.unobserved"
         state.mkdir()
