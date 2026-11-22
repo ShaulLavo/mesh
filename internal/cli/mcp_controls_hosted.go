@@ -26,7 +26,7 @@ func (c *mcpControls) hostedCatalog(ctx context.Context, hosts []HostRecord, tim
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	scope := mcpCallerScope(local.ID, mcpCallerTag(c.caller))
+	scope := mcpCallerScopeFor(c.caller, local.ID)
 	results := collectMCPCatalogHosts(ctx, hosts, c.pool, openMCPCatalogCache(state), c.caller, scope, false, c.app.dependencies.Now().UTC())
 	services := []agentapi.MCPCatalogService{}
 	for _, r := range results {
@@ -75,7 +75,7 @@ func (c *mcpControls) LeaseService(ctx context.Context, req mcpnative.LeaseServi
 		return mcpnative.CallOutcome{}, err
 	}
 	target := c.targetMeta(host, protocol.HostInfo{})
-	instance, err := resolveMCPInstanceArg(operation, req.Instance, host.ID, req.Service)
+	instance, err := resolveMCPInstanceArg(operation, req.Instance, host.ID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}

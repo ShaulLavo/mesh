@@ -12,6 +12,7 @@ import (
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpconnect"
 	"github.com/shaul/mesh/internal/mcpwire"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 // MetaRoute is the Mesh-owned route metadata on every hosted entry.
@@ -135,12 +136,22 @@ func New(opts Options) (*Gateway, error) {
 	}, nil
 }
 
+type budgetKey struct{}
+
+// budgetOf returns the downstream request's byte budget, which every
+// upstream exchange made on its behalf is charged against.
+func budgetOf(ctx context.Context) transport.InboundByteBudget {
+	budget, _ := ctx.Value(budgetKey{}).(transport.InboundByteBudget)
+	return budget
+}
+
 // Methods are the requests the gateway serves.
 var Methods = mcpconnect.ForwardMethods
 
 // Forward serves one validated downstream request. It emits a terminal
 // response or returns a *mcpconnect.RouteFailure for the frontend to report.
-func (g *Gateway) Forward(ctx context.Context, req mcpwire.Message, emit Emit) error {
+func (g *Gateway) Forward(ctx context.Context, req mcpwire.Message, budget transport.InboundByteBudget, emit Emit) error {
+	ctx = context.WithValue(ctx, budgetKey{}, budget)
 	file, profile, err := g.current()
 	if err != nil {
 		return g.failure(agentapi.StateUnavailable, true, "", "", err)
@@ -300,10 +311,10 @@ func rewriteRequest(req mcpwire.Message, path []string, value json.RawMessage) (
 // identities and server identity in what comes back.
 func (g *Gateway) forward(ctx context.Context, sel Selection, req mcpwire.Message, emit Emit) error {
 	rewriter := uriRewriter{hostID: sel.HostID, serviceID: sel.ServiceID}
-	err := g.upstream(sel).Forward(ctx, req, func(raw []byte, terminal bool) error {
+	err := g.upstream(sel).Forward(ctx, req, budgetOf(ctx), func(raw []byte, terminal bool) error {
 		var err error
 		if terminal {
-			raw, err = g.terminal(req.Method(), raw, rewriter)
+			raw, err = g.terminal(req, sel, raw, rewriter)
 		} else {
 			raw, err = rewriter.notification(raw)
 		}
@@ -315,14 +326,22 @@ func (g *Gateway) forward(ctx context.Context, sel Selection, req mcpwire.Messag
 	return g.routeError(sel, err)
 }
 
-func (g *Gateway) terminal(method string, raw []byte, rewriter uriRewriter) ([]byte, error) {
-	raw, err := rewriter.response(method, raw)
+func (g *Gateway) terminal(req mcpwire.Message, sel Selection, raw []byte, rewriter uriRewriter) ([]byte, error) {
+	// A host's Mesh failure inside tools/call is a tool execution error the
+	// model can act on (section 2.4).
+	if converted, matched, err := mcpconnect.TranslateHostToolError(req, raw, sel.HostID, sel.Alias, g.opts.ServerInfo); matched || err != nil {
+		if err != nil {
+			return nil, fmt.Errorf("convert host tool error: %w", err)
+		}
+		return converted, nil
+	}
+	raw, err := rewriter.response(req.Method(), raw)
 	if err != nil {
 		return nil, err
 	}
 	// No fallback identity: one route's server must never be reported for
 	// another's result.
-	raw, _, err = mcpconnect.RewriteResultServerInfo(raw, g.opts.ServerInfo, nil)
+	raw, err = mcpconnect.RewriteForwardedResult(req.Method(), raw, g.opts.ServerInfo)
 	if err != nil {
 		return nil, fmt.Errorf("rewrite server identity: %w", err)
 	}

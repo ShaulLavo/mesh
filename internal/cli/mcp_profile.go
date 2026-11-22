@@ -14,6 +14,7 @@ import (
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpgateway"
 	"github.com/shaul/mesh/internal/mcphost"
+	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/spf13/cobra"
 )
@@ -121,6 +122,21 @@ func profilesData(store *mcpgateway.Store, file mcpgateway.File, names []string,
 	return data
 }
 
+// profileCatalogCaller is the credential profile commands read catalogs
+// with: the named identity's, or whole-account administration.
+func profileCatalogCaller(identityName string) (protocol.CallerCredential, error) {
+	state, err := paths.StateDirPath()
+	if err != nil {
+		return "", fmt.Errorf("locate Mesh state directory: %w", err)
+	}
+	local, err := agentLocalHost(state)
+	if err != nil {
+		return "", err
+	}
+	caller, _, err := resolveMCPListCaller(identityName, local.ID)
+	return caller, err
+}
+
 func nonNil(values []string) []string {
 	if values == nil {
 		return []string{}
@@ -131,7 +147,7 @@ func nonNil(values []string) []string {
 // annotateProfileStates reads each selected host's passive catalog once,
 // concurrently, within the fleet budget. It never starts a service.
 func (a *application) annotateProfileStates(ctx context.Context, data *agentapi.MCPProfilesData, identityName string) error {
-	caller, _, err := resolveMCPListCaller(identityName)
+	caller, err := profileCatalogCaller(identityName)
 	if err != nil {
 		return err
 	}
@@ -165,7 +181,7 @@ func (a *application) annotateProfileStates(ctx context.Context, data *agentapi.
 type profileHostResult struct {
 	hostID  string
 	machine string
-	views   []mcphost.ServiceView
+	views   []mcphost.CatalogService
 	state   string
 	code    agentapi.Code
 	message string
@@ -371,7 +387,7 @@ func (a *application) resolveProfileSelection(ctx context.Context, operation, re
 	if err != nil {
 		return mcpgateway.Selection{}, err
 	}
-	view, host, err := a.findCatalogService(ctx, operation, hostArg, o.identityName, func(v mcphost.ServiceView) bool {
+	view, host, err := a.findCatalogService(ctx, operation, hostArg, o.identityName, func(v mcphost.CatalogService) bool {
 		return v.Name == serviceRef || v.ID == serviceRef
 	})
 	if err != nil {
@@ -383,7 +399,7 @@ func (a *application) resolveProfileSelection(ctx context.Context, operation, re
 	}
 	instance := ""
 	if o.instance != "" {
-		if instance, err = resolveMCPInstanceArg(operation, o.instance, host.ID, view.ID); err != nil {
+		if instance, err = resolveMCPInstanceArg(operation, o.instance, host.ID); err != nil {
 			return mcpgateway.Selection{}, err
 		}
 	}
@@ -391,29 +407,29 @@ func (a *application) resolveProfileSelection(ctx context.Context, operation, re
 		Include: nonNil(o.include), Exclude: nonNil(o.exclude)}, nil
 }
 
-func (a *application) findCatalogService(ctx context.Context, operation, hostArg, identityName string, match func(mcphost.ServiceView) bool) (mcphost.ServiceView, HostRecord, error) {
-	caller, _, err := resolveMCPListCaller(identityName)
+func (a *application) findCatalogService(ctx context.Context, operation, hostArg, identityName string, match func(mcphost.CatalogService) bool) (mcphost.CatalogService, HostRecord, error) {
+	caller, err := profileCatalogCaller(identityName)
 	if err != nil {
-		return mcphost.ServiceView{}, HostRecord{}, err
+		return mcphost.CatalogService{}, HostRecord{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*mcpProfileTimeout)
 	defer cancel()
 	host, err := resolveMCPTargetHost(ctx, hostArg, a.dependencies.DialPassive)
 	if err != nil {
-		return mcphost.ServiceView{}, HostRecord{}, err
+		return mcphost.CatalogService{}, HostRecord{}, err
 	}
 	pool := newMCPHostPool(a.dependencies.DialPassive, a.dependencies.Now)
 	defer pool.Close()
 	views, err := fetchMCPCatalogViews(ctx, pool, host, caller)
 	if err != nil {
-		return mcphost.ServiceView{}, host, agentapi.Fail(agentError(err, operation, hostArg, agentapi.HostUnreachable).Code, operation, hostArg, err.Error())
+		return mcphost.CatalogService{}, host, agentapi.Fail(agentError(err, operation, hostArg, agentapi.HostUnreachable).Code, operation, hostArg, err.Error())
 	}
 	for _, v := range views {
 		if match(v) {
 			return v, host, nil
 		}
 	}
-	return mcphost.ServiceView{}, host, agentapi.Fail(agentapi.ServiceNotFound, operation, hostArg, "No matching hosted MCP server on "+hostArg+".")
+	return mcphost.CatalogService{}, host, agentapi.Fail(agentapi.ServiceNotFound, operation, hostArg, "No matching hosted MCP server on "+hostArg+".")
 }
 
 func (a *application) mcpProfileRemoveCommand() *cobra.Command {
@@ -522,7 +538,7 @@ func (a *application) runMCPProfileRepair(cmd *cobra.Command, flags mcpProfileFl
 	if entry.ServiceName == "" {
 		return agentapi.Usage(operation, "The entry has no recorded service name; remove it and add the service again.")
 	}
-	view, _, err := a.findCatalogService(cmd.Context(), operation, entry.HostID, flags.identityName, func(v mcphost.ServiceView) bool { return v.Name == entry.ServiceName })
+	view, _, err := a.findCatalogService(cmd.Context(), operation, entry.HostID, flags.identityName, func(v mcphost.CatalogService) bool { return v.Name == entry.ServiceName })
 	if err != nil {
 		return err
 	}

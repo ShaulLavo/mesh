@@ -69,7 +69,7 @@ func NewRegistry(specs []ToolSpec) *Registry {
 
 // DefaultRegistry builds the shipped native MCP tool registry sorted by tool name.
 func DefaultRegistry() *Registry {
-	return NewRegistry(slices.Concat(nativeToolSpecs(), fileToolSpecs(), hostedToolSpecs()))
+	return NewRegistry(slices.Concat(nativeToolSpecs(), fileToolSpecs(), terminalToolSpecs(), serviceToolSpecs(), hostedToolSpecs()))
 }
 
 // Definitions returns the wire tool definitions for tools/list.

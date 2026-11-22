@@ -90,14 +90,7 @@ func (a *application) runMCPGateway(cmd *cobra.Command, profileName string, hasI
 	if err != nil {
 		return err
 	}
-	server, err := mcpconnect.NewServer(mcpconnect.ServerOptions{
-		Version:     release.Metadata().Version,
-		Service:     profileName,
-		Forwarder:   gateway,
-		Stderr:      cmd.ErrOrStderr(),
-		OnShutdown:  pool.Close,
-		PassResults: true,
-	})
+	server, err := mcpgateway.NewFrontend(gateway, mcpgateway.FrontendOptions{Stderr: cmd.ErrOrStderr(), OnShutdown: pool.Close})
 	if err != nil {
 		return fmt.Errorf("initialize MCP gateway server: %w", err)
 	}
@@ -117,11 +110,15 @@ func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, p
 	if err != nil {
 		return nil, fmt.Errorf("locate Mesh state directory: %w", err)
 	}
-	tag := mcpCallerTag(caller)
+	local, err := agentLocalHost(state)
+	if err != nil {
+		return nil, err
+	}
+	tag := mcpCallerScopeFor(caller, local.ID)
 	hosts := gatewayHosts{}
 	scope := func(hostID string) string {
 		host, err := hosts.lookup(hostID)
-		if err != nil || host.MeshIdentity == "" {
+		if err != nil || host.MeshIdentity == "" || tag == "" {
 			return ""
 		}
 		return host.MeshIdentity + "\x00" + tag
@@ -155,20 +152,31 @@ func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, p
 	return gw, nil
 }
 
-func mcpCallerTag(caller protocol.CallerCredential) string {
+// mcpCallerScopeFor names the private cache scope of a caller credential the
+// same way mesh mcp ls does: the full derived application ID on this device,
+// or whole-account administration.
+func mcpCallerScopeFor(caller protocol.CallerCredential, localHostID string) string {
+	principal := localHostID
+	if principal == "" {
+		principal = mcpUninitializedPrincipal
+	}
 	if caller == "" {
-		return "admin"
+		return "device:" + principal + ":admin"
 	}
 	credential, err := appcaller.ParseCredential(string(caller))
 	if err != nil {
-		return "unreadable-credential"
+		return ""
 	}
-	return "app:" + credential.Fingerprint()
+	derived, err := appcaller.Derive(appcaller.Scope{Class: appcaller.ScopeDevice, Principal: principal}, credential)
+	if err != nil {
+		return ""
+	}
+	return "app:" + string(derived)
 }
 
 func gatewayUpstream(pool *mcpHostPool, hosts gatewayHosts, caller protocol.CallerCredential) func(mcpgateway.Selection) mcpgateway.Upstream {
 	return func(sel mcpgateway.Selection) mcpgateway.Upstream {
-		instance, err := resolveMCPInstanceArg("mcp.serve", sel.Instance, sel.HostID, sel.ServiceID)
+		instance, err := resolveMCPInstanceArg("mcp.serve", sel.Instance, sel.HostID)
 		if err != nil {
 			instance = sel.Instance
 		}
@@ -221,7 +229,7 @@ func (c *gatewayCatalog) Services(ctx context.Context, hostID string) ([]mcpgate
 
 // fetchMCPCatalogViews reads mcp.catalog from one host, retrying once after
 // a transport failure as a passive read may.
-func fetchMCPCatalogViews(ctx context.Context, pool *mcpHostPool, host HostRecord, caller protocol.CallerCredential) ([]mcphost.ServiceView, error) {
+func fetchMCPCatalogViews(ctx context.Context, pool *mcpHostPool, host HostRecord, caller protocol.CallerCredential) ([]mcphost.CatalogService, error) {
 	resp, _, err := pool.ExchangeMCP(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, Caller: caller}, true)
 	if err != nil {
 		return nil, err
@@ -230,7 +238,7 @@ func fetchMCPCatalogViews(ctx context.Context, pool *mcpHostPool, host HostRecor
 		return nil, typedControlError(resp.ErrorCode, protocol.TypeMCPCatalog, resp.Message, resp.Message)
 	}
 	var payload struct {
-		Services []mcphost.ServiceView `json:"services"`
+		Services []mcphost.CatalogService `json:"services"`
 	}
 	if err := json.Unmarshal(resp.Result, &payload); err != nil {
 		return nil, fmt.Errorf("decode mcp.catalog reply from %s: %w", host.ID, err)

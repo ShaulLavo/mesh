@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/agentapi"
+	"github.com/shaul/mesh/internal/appcaller"
 	"github.com/shaul/mesh/internal/mcpconnect"
 	"github.com/shaul/mesh/internal/mcphost"
 	"github.com/shaul/mesh/internal/paths"
@@ -22,11 +23,13 @@ import (
 )
 
 const (
-	defaultMCPListTimeout = 2 * time.Second
-	minMCPListTimeout     = 100 * time.Millisecond
-	maxMCPListTimeout     = 30 * time.Second
-	mcpFreshnessNone      = "none"
-	mcpServiceDisabled    = "disabled"
+	defaultMCPListTimeout     = 2 * time.Second
+	minMCPListTimeout         = 100 * time.Millisecond
+	maxMCPListTimeout         = 30 * time.Second
+	mcpFreshnessNone          = "none"
+	mcpServiceDisabled        = "disabled"
+	mcpInvalidateTimeout      = 1500 * time.Millisecond
+	mcpUninitializedPrincipal = "uninitialized"
 )
 
 type mcpListOptions struct {
@@ -68,15 +71,15 @@ func (a *application) mcpListCommand() *cobra.Command {
 type mcpCatalogHostResult struct {
 	host     agentapi.MCPCatalogHost
 	services []agentapi.MCPCatalogService
-	diag     *agentapi.Error
+	diags    []agentapi.Error
 	usable   bool
 }
 
 func (a *application) runMCPList(cmd *cobra.Command, o mcpListOptions) error {
-	caller, callerTag, err := resolveMCPListCaller(o.identityName)
-	if err != nil {
-		return err
-	}
+	// Honor one single deadline across host resolution, pin pruning, and fleet queries.
+	queryCtx, cancel := context.WithTimeout(cmd.Context(), o.timeout)
+	defer cancel()
+
 	stateDir, err := paths.StateDirPath()
 	if err != nil {
 		return fmt.Errorf("locate Mesh state directory: %w", err)
@@ -85,48 +88,72 @@ func (a *application) runMCPList(cmd *cobra.Command, o mcpListOptions) error {
 	if err != nil {
 		return err
 	}
-	hosts, err := a.selectMCPCatalogHosts(cmd.Context(), o, local)
+	caller, callerScope, err := resolveMCPListCaller(o.identityName, local.ID)
 	if err != nil {
 		return err
 	}
-	callerScope := mcpCallerScope(local.ID, callerTag)
-	cache := openMCPCatalogCache(stateDir)
-	if o.host == "" && !o.cached && local.ID != "" {
-		pruneMCPCatalogPins(cache, hosts)
+	savedHosts, err := LoadHosts()
+	if err != nil {
+		return err
 	}
-	queryCtx, cancel := context.WithTimeout(cmd.Context(), o.timeout)
-	defer cancel()
+	hosts, err := selectMCPCatalogHosts(queryCtx, o, savedHosts, local, a.dependencies.DialPassive)
+	if err != nil {
+		return err
+	}
+
+	cache := openMCPCatalogCache(stateDir)
+	var extraDiags []agentapi.Error
+	if pruneErr := pruneMCPCatalogPins(queryCtx, cache, savedHosts, local); pruneErr != nil {
+		extraDiags = append(extraDiags, agentapi.Fail(agentapi.StateUnavailable, "mcp.list", "", fmt.Sprintf("prune MCP catalog cache pins: %v", pruneErr)).Err)
+	}
+
 	pool := newMCPHostPool(a.dependencies.DialPassive, a.dependencies.Now)
 	defer pool.Close()
 
 	now := a.dependencies.Now().UTC()
 	results := collectMCPCatalogHosts(queryCtx, hosts, pool, cache, caller, callerScope, o.cached, now)
-	data, diags, usableCount := buildMCPCatalogData(now, results)
+	data, diags, usableCount := buildMCPCatalogData(now, results, extraDiags)
 	if o.asJSON {
 		return a.writeMCPCatalogEnvelope(cmd.OutOrStdout(), data, diags, usableCount, len(hosts))
 	}
-	return writeMCPFleetTable(cmd.OutOrStdout(), data)
+	if err := writeMCPFleetTable(cmd.OutOrStdout(), data); err != nil {
+		return err
+	}
+	return mcpCatalogExitError(diags, usableCount, len(hosts))
 }
 
-func resolveMCPListCaller(identityName string) (protocol.CallerCredential, string, error) {
+func resolveMCPListCaller(identityName, localHostID string) (protocol.CallerCredential, string, error) {
+	principal := localHostID
+	if principal == "" {
+		principal = mcpUninitializedPrincipal
+	}
 	if strings.TrimSpace(identityName) == "" {
-		return "", "admin", nil
+		return "", "device:" + principal + ":admin", nil
 	}
 	id, err := loadApplicationIdentity("mcp.list", identityName)
 	if err != nil {
 		return "", "", err
 	}
-	return protocol.CallerCredential(id.Credential.Encode()), "app:" + id.Credential.Fingerprint(), nil
+	derived, err := appcaller.Derive(appcaller.Scope{Class: appcaller.ScopeDevice, Principal: principal}, id.Credential)
+	if err != nil {
+		return "", "", fmt.Errorf("derive MCP catalog cache caller scope: %w", err)
+	}
+	return protocol.CallerCredential(id.Credential.Encode()), "app:" + string(derived), nil
 }
 
-func pruneMCPCatalogPins(cache *mcpCatalogCache, hosts []HostRecord) {
-	pins := make(map[string]string, len(hosts))
-	for _, h := range hosts {
+func pruneMCPCatalogPins(ctx context.Context, cache *mcpCatalogCache, saved []HostRecord, local HostRecord) error {
+	pins := make(map[string]string, len(saved)+1)
+	for _, h := range saved {
 		if h.ID != "" {
 			pins[h.ID] = h.MeshIdentity
 		}
 	}
-	_ = cache.PruneMismatchedPins(pins)
+	if local.ID != "" {
+		pins[local.ID] = local.MeshIdentity
+	}
+	pruneCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpInvalidateTimeout)
+	defer cancel()
+	return cache.PruneMismatchedPins(pruneCtx, pins)
 }
 
 func (a *application) writeMCPCatalogEnvelope(out io.Writer, data agentapi.MCPCatalogData, diags []agentapi.Error, usableCount, hostCount int) error {
@@ -140,19 +167,23 @@ func (a *application) writeMCPCatalogEnvelope(out io.Writer, data agentapi.MCPCa
 	return a.agent.write(out, envelope)
 }
 
-func (a *application) selectMCPCatalogHosts(ctx context.Context, o mcpListOptions, local HostRecord) ([]HostRecord, error) {
+func mcpCatalogExitError(diags []agentapi.Error, usableCount, hostCount int) error {
+	if len(diags) == 0 {
+		return nil
+	}
+	if usableCount == 0 && hostCount > 0 {
+		return statusError{code: 1}
+	}
+	return statusError{code: 3}
+}
+
+func selectMCPCatalogHosts(ctx context.Context, o mcpListOptions, saved []HostRecord, local HostRecord, dial HostDialer) ([]HostRecord, error) {
 	if strings.TrimSpace(o.host) != "" {
-		resolveCtx, cancel := context.WithTimeout(ctx, o.timeout)
-		defer cancel()
-		host, err := resolveMCPTargetHost(resolveCtx, o.host, a.dependencies.DialPassive)
+		host, err := resolveMCPTargetHostWithSaved(ctx, o.host, o.cached, saved, local, dial)
 		if err != nil {
 			return nil, err
 		}
 		return []HostRecord{host}, nil
-	}
-	saved, err := LoadHosts()
-	if err != nil {
-		return nil, err
 	}
 	hosts := append([]HostRecord(nil), saved...)
 	if local.ID != "" {
@@ -160,13 +191,6 @@ func (a *application) selectMCPCatalogHosts(ctx context.Context, o mcpListOption
 	}
 	sort.Slice(hosts, func(i, j int) bool { return hosts[i].ID < hosts[j].ID })
 	return hosts, nil
-}
-
-func mcpCallerScope(localHostID, callerTag string) string {
-	if localHostID == "" {
-		return "uninitialized:" + callerTag
-	}
-	return localHostID + ":" + callerTag
 }
 
 func collectMCPCatalogHosts(
@@ -190,9 +214,24 @@ func collectMCPCatalogHosts(
 		}(i, host)
 	}
 	out := make([]mcpCatalogHostResult, len(hosts))
-	for range hosts {
-		item := <-ch
-		out[item.index] = item.result
+	done := make([]bool, len(hosts))
+	received := 0
+	for received < len(hosts) {
+		select {
+		case item := <-ch:
+			out[item.index] = item.result
+			done[item.index] = true
+			received++
+		case <-ctx.Done():
+			// Deadline expired: preserve every completed host and fall back immediately
+			// to cached/offline status for any still-in-flight host without waiting.
+			for i, host := range hosts {
+				if !done[i] {
+					out[i] = catalogFromCache(host, cache, callerScope, now, ctx.Err())
+				}
+			}
+			return out
+		}
 	}
 	return out
 }
@@ -210,34 +249,40 @@ func queryMCPCatalogHost(
 	if cachedOnly {
 		return catalogFromCache(host, cache, callerScope, now, nil)
 	}
+	obsGen, obsErr := cache.BeginObservation(ctx, host.ID)
 	resp, info, err := pool.ExchangeMCP(ctx, host, protocol.MCPServiceRequest{
 		Type:   protocol.TypeMCPCatalog,
 		Caller: caller,
 	}, true)
 	if err != nil {
-		return handleMCPCatalogError(host, cache, callerScope, now, err)
+		return handleMCPCatalogError(ctx, host, cache, caller, callerScope, now, err)
 	}
 	if resp.Type == protocol.TypeError {
-		return handleMCPCatalogControlError(host, cache, callerScope, now, resp)
+		return handleMCPCatalogControlError(ctx, host, cache, caller, callerScope, resp)
 	}
 	var payload struct {
-		HostID   string                `json:"hostId"`
-		Services []mcphost.ServiceView `json:"services"`
+		HostID   string                   `json:"hostId"`
+		Services []mcphost.CatalogService `json:"services"`
 	}
 	if err := json.Unmarshal(resp.Result, &payload); err != nil {
 		return failedCatalogHost(host, agentapi.ServiceFailed, fmt.Errorf("decode mcp.catalog reply: %w", err))
 	}
 	name := hostDisplayName(host, info)
-	services := convertMCPServices(host, name, payload.Services, "live", &now, false)
-	if host.ID != "" && host.MeshIdentity != "" {
-		_ = cache.Save(mcpCatalogCacheEntry{
+	services := convertMCPServices(host, name, payload.Services, string(agentapi.FreshnessLive), &now, false)
+	var diags []agentapi.Error
+	if obsErr != nil {
+		diags = append(diags, agentapi.Fail(agentapi.StateUnavailable, "mcp.list", host.ID, obsErr.Error()).Err)
+	} else if host.ID != "" && host.MeshIdentity != "" && ctx.Err() == nil {
+		if _, saveErr := cache.SaveIfCurrent(ctx, mcpCatalogCacheEntry{
 			HostID:       host.ID,
 			MeshIdentity: host.MeshIdentity,
 			MachineName:  name,
 			CallerScope:  callerScope,
 			ReceivedAt:   now,
 			Services:     payload.Services,
-		})
+		}, obsGen); saveErr != nil {
+			diags = append(diags, agentapi.Fail(agentapi.StateUnavailable, "mcp.list", host.ID, saveErr.Error()).Err)
+		}
 	}
 	return mcpCatalogHostResult{
 		host: agentapi.MCPCatalogHost{
@@ -250,77 +295,121 @@ func queryMCPCatalogHost(
 			ServiceCount: len(services),
 		},
 		services: services,
+		diags:    diags,
 		usable:   true,
 	}
 }
 
-func handleMCPCatalogError(host HostRecord, cache *mcpCatalogCache, callerScope string, now time.Time, err error) mcpCatalogHostResult {
+func invalidateHostCache(ctx context.Context, cache *mcpCatalogCache, hostID string) *agentapi.Error {
+	invalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpInvalidateTimeout)
+	defer cancel()
+	if err := cache.InvalidateHost(invalCtx, hostID); err != nil {
+		d := agentapi.Fail(agentapi.StateUnavailable, "mcp.list", hostID, fmt.Sprintf("invalidate host catalog cache: %v", err)).Err
+		return &d
+	}
+	return nil
+}
+
+func invalidateCallerCache(ctx context.Context, cache *mcpCatalogCache, hostID, callerScope string) *agentapi.Error {
+	invalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mcpInvalidateTimeout)
+	defer cancel()
+	if err := cache.InvalidateHostCaller(invalCtx, hostID, callerScope); err != nil {
+		d := agentapi.Fail(agentapi.StateUnavailable, "mcp.list", hostID, fmt.Sprintf("invalidate caller catalog cache: %v", err)).Err
+		return &d
+	}
+	return nil
+}
+
+func handleMCPCatalogError(ctx context.Context, host HostRecord, cache *mcpCatalogCache, caller protocol.CallerCredential, callerScope string, now time.Time, err error) mcpCatalogHostResult {
 	var failure *agentapi.Failure
 	var mismatch *hostIdentityError
 	var rejected *ControlError
 	switch {
 	case errors.As(err, &mismatch), errors.Is(err, transport.ErrDestinationIdentityMismatch):
-		_ = cache.InvalidateHost(host.ID)
-		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, err.Error())
-	case errors.Is(err, transport.ErrAuthentication):
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
-		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, err.Error())
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, err.Error(), invalErr)
+	case transport.IsAuthenticationInterrupted(err):
+		// Interrupted handshake is a link/network failure, not an explicit grant denial.
+		return catalogFromCache(host, cache, callerScope, now, err)
+	case transport.IsAuthenticationRefused(err):
+		// Explicit device-grant refusal invalidates EVERY caller scope on this device for this host.
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, err.Error(), invalErr)
 	case errors.As(err, &failure):
-		return classifyAgentFailureCatalogHost(host, cache, callerScope, now, failure)
+		return classifyAgentFailureCatalogHost(ctx, host, cache, caller, callerScope, now, failure)
 	case errors.As(err, &rejected):
-		return classifyControlCodeCatalogHost(host, cache, callerScope, rejected.Code, rejected.Error())
+		return classifyControlCodeCatalogHost(ctx, host, cache, caller, callerScope, rejected.Code, rejected.Error())
 	default:
 		return catalogFromCache(host, cache, callerScope, now, err)
 	}
 }
 
-func classifyAgentFailureCatalogHost(host HostRecord, cache *mcpCatalogCache, callerScope string, now time.Time, failure *agentapi.Failure) mcpCatalogHostResult {
+func classifyAgentFailureCatalogHost(ctx context.Context, host HostRecord, cache *mcpCatalogCache, caller protocol.CallerCredential, callerScope string, now time.Time, failure *agentapi.Failure) mcpCatalogHostResult {
 	code := failure.Err.Code
 	if code == agentapi.ProtocolUnsupported {
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
-		return failedCatalogHostWithState(host, agentapi.MCPHostUnsupported, agentapi.ProtocolUnsupported, failure.Err.Message)
+		invalErr := invalidateCallerCache(ctx, cache, host.ID, callerScope)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnsupported, agentapi.ProtocolUnsupported, failure.Err.Message, invalErr)
 	}
-	if code == agentapi.AccessDenied || code == agentapi.HostAuthenticationFailed {
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
-		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, failure.Err.Message)
+	if code == agentapi.HostAuthenticationFailed {
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, failure.Err.Message, invalErr)
+	}
+	if code == agentapi.AccessDenied {
+		invalErr := invalidateAccessDenied(ctx, cache, host.ID, caller, callerScope)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, failure.Err.Message, invalErr)
 	}
 	if code == agentapi.HostIdentityMismatch {
-		_ = cache.InvalidateHost(host.ID)
-		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, failure.Err.Message)
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, failure.Err.Message, invalErr)
 	}
 	if code == agentapi.HostUninitialized {
-		return failedCatalogHostWithState(host, agentapi.MCPHostOffline, agentapi.HostUninitialized, failure.Err.Message)
+		return failedCatalogHostWithState(host, agentapi.MCPHostOffline, agentapi.HostUninitialized, failure.Err.Message, nil)
 	}
 	return catalogFromCache(host, cache, callerScope, now, failure)
 }
 
-func handleMCPCatalogControlError(host HostRecord, cache *mcpCatalogCache, callerScope string, _ time.Time, resp protocol.MCPServiceResponse) mcpCatalogHostResult {
-	return classifyControlCodeCatalogHost(host, cache, callerScope, resp.ErrorCode, resp.Message)
+func handleMCPCatalogControlError(ctx context.Context, host HostRecord, cache *mcpCatalogCache, caller protocol.CallerCredential, callerScope string, resp protocol.MCPServiceResponse) mcpCatalogHostResult {
+	return classifyControlCodeCatalogHost(ctx, host, cache, caller, callerScope, resp.ErrorCode, resp.Message)
 }
 
-func classifyControlCodeCatalogHost(host HostRecord, cache *mcpCatalogCache, callerScope, rawCode, message string) mcpCatalogHostResult {
+func classifyControlCodeCatalogHost(ctx context.Context, host HostRecord, cache *mcpCatalogCache, caller protocol.CallerCredential, callerScope, rawCode, message string) mcpCatalogHostResult {
 	code := controlAgentCode(rawCode)
 	if code == agentapi.ProtocolUnsupported {
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
-		return failedCatalogHostWithState(host, agentapi.MCPHostUnsupported, agentapi.ProtocolUnsupported, message)
+		invalErr := invalidateCallerCache(ctx, cache, host.ID, callerScope)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnsupported, agentapi.ProtocolUnsupported, message, invalErr)
 	}
-	if code == agentapi.AccessDenied || code == agentapi.HostAuthenticationFailed {
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
-		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, message)
+	if code == agentapi.HostAuthenticationFailed {
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, message, invalErr)
+	}
+	if code == agentapi.AccessDenied {
+		invalErr := invalidateAccessDenied(ctx, cache, host.ID, caller, callerScope)
+		return failedCatalogHostWithState(host, agentapi.MCPHostUnauthorized, agentapi.AccessDenied, message, invalErr)
 	}
 	if code == agentapi.HostIdentityMismatch {
-		_ = cache.InvalidateHost(host.ID)
-		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, message)
+		invalErr := invalidateHostCache(ctx, cache, host.ID)
+		return failedCatalogHostWithState(host, agentapi.MCPHostIdentityChanged, agentapi.HostIdentityMismatch, message, invalErr)
 	}
-	return failedCatalogHostWithState(host, agentapi.MCPHostFailed, code, message)
+	return failedCatalogHostWithState(host, agentapi.MCPHostFailed, code, message, nil)
+}
+
+func invalidateAccessDenied(ctx context.Context, cache *mcpCatalogCache, hostID string, caller protocol.CallerCredential, callerScope string) *agentapi.Error {
+	if caller == "" {
+		return invalidateHostCache(ctx, cache, hostID)
+	}
+	return invalidateCallerCache(ctx, cache, hostID, callerScope)
 }
 
 func failedCatalogHost(host HostRecord, code agentapi.Code, err error) mcpCatalogHostResult {
-	return failedCatalogHostWithState(host, agentapi.MCPHostFailed, code, err.Error())
+	return failedCatalogHostWithState(host, agentapi.MCPHostFailed, code, err.Error(), nil)
 }
 
-func failedCatalogHostWithState(host HostRecord, state string, code agentapi.Code, message string) mcpCatalogHostResult {
+func failedCatalogHostWithState(host HostRecord, state string, code agentapi.Code, message string, extra *agentapi.Error) mcpCatalogHostResult {
 	diag := agentapi.Fail(code, "mcp.list", host.ID, message).Err
+	diags := []agentapi.Error{diag}
+	if extra != nil {
+		diags = append(diags, *extra)
+	}
 	return mcpCatalogHostResult{
 		host: agentapi.MCPCatalogHost{
 			HostID:      host.ID,
@@ -331,14 +420,16 @@ func failedCatalogHostWithState(host HostRecord, state string, code agentapi.Cod
 			Code:        diag.Code,
 			Message:     diag.Message,
 		},
-		diag: &diag,
+		diags: diags,
 	}
 }
 
 func catalogFromCache(host HostRecord, cache *mcpCatalogCache, callerScope string, now time.Time, cause error) mcpCatalogHostResult {
 	entry, cacheErr := cache.Read(host.ID, host.MeshIdentity, callerScope)
+	var extraDiag *agentapi.Error
 	if cacheErr != nil {
-		_ = cache.InvalidateHostCaller(host.ID, callerScope)
+		d := agentapi.Fail(agentapi.StateUnavailable, "mcp.list", host.ID, cacheErr.Error()).Err
+		extraDiag = &d
 		entry = nil
 	}
 	causeMsg := "host is unreachable"
@@ -349,6 +440,10 @@ func catalogFromCache(host HostRecord, cache *mcpCatalogCache, callerScope strin
 	}
 	if entry == nil {
 		diag := agentapi.Fail(agentapi.HostUnreachable, "mcp.list", host.ID, causeMsg).Err
+		diags := []agentapi.Error{diag}
+		if extraDiag != nil {
+			diags = append(diags, *extraDiag)
+		}
 		return mcpCatalogHostResult{
 			host: agentapi.MCPCatalogHost{
 				HostID:      host.ID,
@@ -359,7 +454,7 @@ func catalogFromCache(host HostRecord, cache *mcpCatalogCache, callerScope strin
 				Code:        diag.Code,
 				Message:     diag.Message,
 			},
-			diag: &diag,
+			diags: diags,
 		}
 	}
 	observed := entry.ReceivedAt.UTC()
@@ -382,7 +477,7 @@ func catalogFromCache(host HostRecord, cache *mcpCatalogCache, callerScope strin
 				Code:               diag.Code,
 				Message:            diag.Message,
 			},
-			diag: &diag,
+			diags: []agentapi.Error{diag},
 		}
 	}
 	services := convertMCPServices(host, name, entry.Services, agentapi.MCPHostStale, &observed, true)
@@ -401,12 +496,12 @@ func catalogFromCache(host HostRecord, cache *mcpCatalogCache, callerScope strin
 			Message:            diag.Message,
 		},
 		services: services,
-		diag:     &diag,
+		diags:    []agentapi.Error{diag},
 		usable:   true,
 	}
 }
 
-func convertMCPServices(host HostRecord, machineName string, views []mcphost.ServiceView, freshness string, observed *time.Time, stale bool) []agentapi.MCPCatalogService {
+func convertMCPServices(host HostRecord, machineName string, views []mcphost.CatalogService, freshness string, observed *time.Time, stale bool) []agentapi.MCPCatalogService {
 	out := make([]agentapi.MCPCatalogService, 0, len(views))
 	for _, v := range views {
 		state := classifyMCPServiceState(v)
@@ -418,58 +513,81 @@ func convertMCPServices(host HostRecord, machineName string, views []mcphost.Ser
 	return out
 }
 
-func convertOneMCPService(host HostRecord, machineName string, v mcphost.ServiceView, state, freshness string, observed *time.Time) agentapi.MCPCatalogService {
+func convertOneMCPService(host HostRecord, machineName string, v mcphost.CatalogService, state, freshness string, observed *time.Time) agentapi.MCPCatalogService {
 	instances := make([]agentapi.MCPCatalogInstance, 0, len(v.Instances))
 	for _, inst := range v.Instances {
 		handle, _ := mcpconnect.FormatInstanceHandle(host.ID, v.ID, inst.ID)
-		instances = append(instances, agentapi.MCPCatalogInstance{
-			ID:           inst.ID,
-			Handle:       handle,
-			Shared:       inst.Shared,
-			Mine:         inst.Mine,
-			Default:      inst.Default,
-			State:        inst.State,
-			Reason:       inst.Reason,
-			ExitCode:     inst.ExitCode,
-			Revision:     inst.Revision,
-			Generation:   inst.Generation,
-			Active:       inst.Active,
-			Leases:       inst.Leases,
-			ServerInfo:   inst.ServerInfo,
-			Capabilities: inst.Capabilities,
-			LateReplies:  inst.LateReplies,
-			UpdatedAt:    inst.UpdatedAt,
-		})
+		instances = append(instances, convertCatalogInstance(inst, handle))
 	}
 	return agentapi.MCPCatalogService{
-		HostID:         host.ID,
-		MachineName:    machineName,
-		Local:          host.local,
-		ID:             v.ID,
-		Name:           v.Name,
-		Revision:       v.Revision,
-		State:          state,
-		Freshness:      freshness,
-		ObservedAt:     observed,
-		Transport:      v.Transport,
-		Command:        v.Command,
-		Cwd:            v.Cwd,
-		URL:            v.URL,
-		Lifecycle:      v.Lifecycle,
-		IdleSeconds:    v.IdleSeconds,
-		ReadySeconds:   v.ReadySeconds,
-		InstancePolicy: v.InstancePolicy,
-		AccountMode:    v.AccountMode,
-		AccountLabel:   v.AccountLabel,
-		Disabled:       v.Disabled,
-		EnvNames:       v.EnvNames,
-		SecretNames:    v.SecretNames,
-		HeaderNames:    v.HeaderNames,
-		Instances:      instances,
+		HostID:          host.ID,
+		MachineName:     machineName,
+		Local:           host.local,
+		ID:              v.ID,
+		Name:            v.Name,
+		Revision:        v.Revision,
+		State:           state,
+		Freshness:       freshness,
+		ObservedAt:      observed,
+		Transport:       v.Transport,
+		Lifecycle:       v.Lifecycle,
+		IdleSeconds:     v.IdleSeconds,
+		ReadySeconds:    v.ReadySeconds,
+		InstancePolicy:  v.InstancePolicy,
+		AccountMode:     v.AccountMode,
+		AccountLabel:    v.AccountLabel,
+		Disabled:        v.Disabled,
+		ProtocolVersion: v.ProtocolVersion,
+		Instances:       instances,
 	}
 }
 
-func classifyMCPServiceState(v mcphost.ServiceView) string {
+func convertCatalogInstance(inst mcphost.CatalogInstance, handle string) agentapi.MCPCatalogInstance {
+	return agentapi.MCPCatalogInstance{
+		ID:           inst.ID,
+		Handle:       handle,
+		Shared:       inst.Shared,
+		Mine:         inst.Mine,
+		Default:      inst.Default,
+		State:        inst.State,
+		Reason:       inst.Reason,
+		ExitCode:     inst.ExitCode,
+		Revision:     inst.Revision,
+		Generation:   inst.Generation,
+		Active:       inst.Active,
+		Leases:       inst.Leases,
+		ServerInfo:   toAgentServerInfo(inst.ServerInfo),
+		Capabilities: toAgentCapabilities(inst.Capabilities),
+		LateReplies:  inst.LateReplies,
+		UpdatedAt:    inst.UpdatedAt,
+	}
+}
+
+func toAgentServerInfo(in *mcphost.CatalogServerInfo) *agentapi.MCPServerInfo {
+	if in == nil {
+		return nil
+	}
+	return &agentapi.MCPServerInfo{Name: in.Name, Version: in.Version, Title: in.Title}
+}
+
+func toAgentCapabilities(in *mcphost.CatalogCapabilities) *agentapi.MCPCapabilities {
+	if in == nil {
+		return nil
+	}
+	out := &agentapi.MCPCapabilities{Completions: in.Completions, Logging: in.Logging}
+	if in.Tools != nil {
+		out.Tools = &agentapi.MCPListCapability{ListChanged: in.Tools.ListChanged}
+	}
+	if in.Prompts != nil {
+		out.Prompts = &agentapi.MCPListCapability{ListChanged: in.Prompts.ListChanged}
+	}
+	if in.Resources != nil {
+		out.Resources = &agentapi.MCPResourceCapability{Subscribe: in.Resources.Subscribe, ListChanged: in.Resources.ListChanged}
+	}
+	return out
+}
+
+func classifyMCPServiceState(v mcphost.CatalogService) string {
 	if v.Disabled {
 		return mcpServiceDisabled
 	}
@@ -497,20 +615,18 @@ func classifyMCPServiceState(v mcphost.ServiceView) string {
 	return v.Instances[0].State
 }
 
-func buildMCPCatalogData(now time.Time, results []mcpCatalogHostResult) (agentapi.MCPCatalogData, []agentapi.Error, int) {
+func buildMCPCatalogData(now time.Time, results []mcpCatalogHostResult, extra []agentapi.Error) (agentapi.MCPCatalogData, []agentapi.Error, int) {
 	data := agentapi.MCPCatalogData{
 		ObservedAt: now,
 		Hosts:      make([]agentapi.MCPCatalogHost, 0, len(results)),
 		Services:   []agentapi.MCPCatalogService{},
 	}
-	diags := []agentapi.Error{}
+	diags := append([]agentapi.Error{}, extra...)
 	usable := 0
 	for _, r := range results {
 		data.Hosts = append(data.Hosts, r.host)
 		data.Services = append(data.Services, r.services...)
-		if r.diag != nil {
-			diags = append(diags, *r.diag)
-		}
+		diags = append(diags, r.diags...)
 		if r.usable {
 			usable++
 		}

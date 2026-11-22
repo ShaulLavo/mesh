@@ -65,8 +65,8 @@ func TestRewriteResultServerInfoPreservesUpstreamAndVendorFields(t *testing.T) {
 
 	// Discover reply carries upstream serverInfo in standard key -> moved to
 	// upstreamServerInfo while Mesh sets standard serverInfo and keeps vendor fields.
-	discover := []byte(`{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}},"ttlMs":60000,"cacheScope":"private","x-vendor-num":900719925474099312345,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"repo-mcp","version":"4.5.6"},"com.example/trace":"abc"}}}`)
-	rewritten, observed, err := rewriteResultServerInfo(discover, meshInfo, nil)
+	discover := []byte(`{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2025-11-25","2026-07-28"],"capabilities":{"tools":{}},"ttlMs":60000,"cacheScope":"public","x-vendor-num":900719925474099312345,"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"repo-mcp","version":"4.5.6"},"com.example/trace":"abc"}}}`)
+	rewritten, observed, err := rewriteForwardedResult(mcpwire.MethodDiscover, discover, meshInfo, nil)
 	if err != nil {
 		t.Fatalf("rewrite discover: %v", err)
 	}
@@ -85,10 +85,36 @@ func TestRewriteResultServerInfoPreservesUpstreamAndVendorFields(t *testing.T) {
 	if !strings.Contains(string(rewritten), `"io.modelcontextprotocol/serverInfo":{"name":"mesh","version":"1.2.3"}`) {
 		t.Fatalf("mesh serverInfo missing: %s", rewritten)
 	}
+	if !strings.Contains(string(rewritten), `"cacheScope":"private"`) || strings.Contains(string(rewritten), `"public"`) {
+		t.Fatalf("discover cacheScope not forced to private: %s", rewritten)
+	}
+	if !strings.Contains(string(rewritten), `"supportedVersions":["2026-07-28"]`) || strings.Contains(string(rewritten), "2025-11-25") {
+		t.Fatalf("discover supportedVersions not pinned to 2026-07-28: %s", rewritten)
+	}
+
+	// List reply with cacheScope=public is forced to private.
+	listReply := []byte(`{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","tools":[],"ttlMs":60000,"cacheScope":"public"}}`)
+	rewrittenList, _, err := rewriteForwardedResult(mcpwire.MethodListTools, listReply, meshInfo, upstreamInfo)
+	if err != nil {
+		t.Fatalf("rewrite list: %v", err)
+	}
+	if !strings.Contains(string(rewrittenList), `"cacheScope":"private"`) || strings.Contains(string(rewrittenList), `"public"`) {
+		t.Fatalf("list cacheScope not forced to private: %s", rewrittenList)
+	}
+
+	// Continuation (input_required) strips ttlMs and cacheScope.
+	contReply := []byte(`{"jsonrpc":"2.0","id":3,"result":{"resultType":"input_required","requestState":"opaque","ttlMs":60000,"cacheScope":"public","inputRequests":{}}}`)
+	rewrittenCont, _, err := rewriteForwardedResult(mcpwire.MethodCallTool, contReply, meshInfo, upstreamInfo)
+	if err != nil {
+		t.Fatalf("rewrite continuation: %v", err)
+	}
+	if strings.Contains(string(rewrittenCont), `"ttlMs"`) || strings.Contains(string(rewrittenCont), `"cacheScope"`) {
+		t.Fatalf("continuation retained cache hints: %s", rewrittenCont)
+	}
 
 	// Subsequent tool reply without upstream serverInfo falls back to observed.
-	toolReply := []byte(`{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"ok"}]}}`)
-	rewritten2, _, err := rewriteResultServerInfo(toolReply, meshInfo, upstreamInfo)
+	toolReply := []byte(`{"jsonrpc":"2.0","id":4,"result":{"resultType":"complete","content":[{"type":"text","text":"ok"}]}}`)
+	rewritten2, _, err := rewriteForwardedResult(mcpwire.MethodCallTool, toolReply, meshInfo, upstreamInfo)
 	if err != nil {
 		t.Fatalf("rewrite tool reply: %v", err)
 	}
@@ -305,18 +331,27 @@ func TestH3ForwardRoundTripProgressCancellationAndRetryRules(t *testing.T) {
 			t.Fatalf("fallback upstreamServerInfo missing on tool call: %+v", toolMeta)
 		}
 
-		// 3. Dropped tool call returns request.outcome_unknown and is NEVER retried.
+		// 3. Dropped tool call returns PLAN §2.4 isError tool result with request.outcome_unknown and is NEVER retried.
 		_, _ = io.WriteString(in, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"drop","arguments":{},"_meta":{`+testMeta+`}}}`+"\n")
 		dropReply := readJSONLine(t, rd)
 		if toolAttempts.Load() != 1 {
 			t.Fatalf("tool call was retried: attempts=%d", toolAttempts.Load())
 		}
-		errObj := dropReply["error"].(map[string]any)
-		if int(errObj["code"].(float64)) != -31000 {
-			t.Fatalf("expected -31000, got %+v", errObj)
+		if dropReply["error"] != nil {
+			t.Fatalf("expected PLAN §2.4 tool-error result, got JSON-RPC error: %+v", dropReply)
 		}
-		if errObj["data"].(map[string]any)["meshCode"] != string(agentapi.RequestOutcomeUnknown) {
-			t.Fatalf("expected request.outcome_unknown, got %+v", errObj)
+		dropRes := dropReply["result"].(map[string]any)
+		if dropRes["isError"] != true {
+			t.Fatalf("expected isError=true, got %+v", dropRes)
+		}
+		sc := dropRes["structuredContent"].(map[string]any)
+		if sc["status"] != string(agentapi.StatusError) {
+			t.Fatalf("expected agent envelope status=error, got %+v", sc)
+		}
+		errs := sc["errors"].([]any)
+		firstErr := errs[0].(map[string]any)
+		if firstErr["code"] != string(agentapi.RequestOutcomeUnknown) || firstErr["retryable"] != false {
+			t.Fatalf("expected request.outcome_unknown retryable=false, got %+v", firstErr)
 		}
 
 		// 4. Slow call cancelled by notifications/cancelled closes the H3 stream.

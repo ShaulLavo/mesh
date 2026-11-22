@@ -43,7 +43,7 @@ var mcpGatewayOperations = []Operation{
 			{Name: "--alias", Value: profileNameArg, Summary: "display alias for the selected service"},
 			{Name: "--include", Value: "PATTERN", Summary: "expose only matching upstream names (repeatable)"},
 			{Name: "--exclude", Value: "PATTERN", Summary: "hide matching upstream names (repeatable)"},
-			{Name: instanceFlag, Value: handleFlagValue, Summary: instanceHandleSummary},
+			{Name: mcpInstanceFlagName, Value: "HANDLE", Summary: mcpInstanceFlagDesc},
 			{Name: identityFlag, Value: nameValue, Summary: catalogIdentitySummary},
 			{Name: expectedRevisionFlag, Value: "N", Summary: casRevisionSummary},
 			{Name: jsonFlag, Summary: jsonFlagSummary},

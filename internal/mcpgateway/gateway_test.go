@@ -14,6 +14,7 @@ import (
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpconnect"
 	"github.com/shaul/mesh/internal/mcpwire"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 const testMeta = `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{"elicitation":{}}}`
@@ -42,7 +43,7 @@ type fakeListen struct {
 	ctx    context.Context
 }
 
-func (s *fakeService) Forward(ctx context.Context, req mcpwire.Message, emit func([]byte, bool) error) error {
+func (s *fakeService) Forward(ctx context.Context, req mcpwire.Message, _ transport.InboundByteBudget, emit func([]byte, bool) error) error {
 	s.mu.Lock()
 	fail := s.fail
 	s.calls = append(s.calls, append(json.RawMessage(nil), req.Raw()...))
@@ -322,7 +323,7 @@ func (r *recorded) wait(t *testing.T, n int) []json.RawMessage {
 func (h *harness) do(id, method, params string) json.RawMessage {
 	h.t.Helper()
 	rec := newRecorded()
-	if err := h.gw.Forward(context.Background(), request(h.t, id, method, params), rec.emit); err != nil {
+	if err := h.gw.Forward(context.Background(), request(h.t, id, method, params), nil, rec.emit); err != nil {
 		h.t.Fatalf("%s: %v", method, err)
 	}
 	if rec.terminal == nil {
@@ -646,7 +647,7 @@ func listenFor(t *testing.T, h *harness, params string) (*recorded, context.Canc
 	ctx, cancel := context.WithCancel(context.Background())
 	rec := newRecorded()
 	done := make(chan error, 1)
-	go func() { done <- h.gw.Forward(ctx, request(t, `"sub-1"`, mcpwire.MethodListen, params), rec.emit) }()
+	go func() { done <- h.gw.Forward(ctx, request(t, `"sub-1"`, mcpwire.MethodListen, params), nil, rec.emit) }()
 	return rec, cancel, done
 }
 
@@ -826,7 +827,7 @@ func TestGatewayIdentityChangeMapsToRouteCode(t *testing.T) {
 	sel := h.profile().Services[0]
 	name, _, _ := EncodedName(Identity{sel.HostID, sel.ServiceID, KindTool, "echo"})
 	svc.fail = &mcpconnect.RouteFailure{Code: agentapi.HostIdentityMismatch, Host: sel.HostID, Message: "pin changed"}
-	err := h.gw.Forward(context.Background(), request(t, "1", mcpwire.MethodCallTool, `"name":"`+name+`","arguments":{}`), newRecorded().emit)
+	err := h.gw.Forward(context.Background(), request(t, "1", mcpwire.MethodCallTool, `"name":"`+name+`","arguments":{}`), nil, newRecorded().emit)
 	var rf *mcpconnect.RouteFailure
 	if !errors.As(err, &rf) || rf.Code != agentapi.RouteIdentityChanged || rf.Service != "repo" {
 		t.Fatalf("identity change: %v", err)

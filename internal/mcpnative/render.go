@@ -172,6 +172,7 @@ func renderSuccessData(b *strings.Builder, data any) {
 		fmt.Fprintf(b, "job %s stdin write %s offset=%s length=%d closed=%t", v.Job, v.WriteKey, v.Offset, v.Length, v.Closed)
 	default:
 		renderFileData(b, data)
+		renderTerminalAndServiceData(b, data)
 	}
 }
 

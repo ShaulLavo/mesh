@@ -466,7 +466,7 @@ func listRequest(downstream mcpwire.Message, method, cursor string) (mcpwire.Mes
 // result object. Notifications for it are dropped.
 func (g *Gateway) exchange(ctx context.Context, sel Selection, req mcpwire.Message) (json.RawMessage, error) {
 	var terminal []byte
-	err := g.upstream(sel).Forward(ctx, req, func(raw []byte, last bool) error {
+	err := g.upstream(sel).Forward(ctx, req, budgetOf(ctx), func(raw []byte, last bool) error {
 		if last {
 			terminal = append([]byte(nil), raw...)
 		}

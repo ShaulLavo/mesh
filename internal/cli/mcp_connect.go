@@ -75,7 +75,7 @@ func (a *application) runMCPConnect(cmd *cobra.Command, ref, identityName, insta
 	if err != nil {
 		return err
 	}
-	instanceID, err := resolveMCPInstanceArg("mcp.connect", instanceArg, host.ID, serviceName)
+	instanceSelector, err := resolveMCPInstanceArg("mcp.connect", instanceArg, host.ID)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (a *application) runMCPConnect(cmd *cobra.Command, ref, identityName, insta
 		},
 		Route: mcpframe.Route{
 			Service:  serviceName,
-			Instance: instanceID,
+			Instance: instanceSelector,
 			Caller:   protocol.CallerCredential(id.Credential.Encode()),
 		},
 		HostID:   host.ID,
@@ -122,12 +122,12 @@ func parseQualifiedMCPServiceRef(ref, operation string) (host, service string, e
 	return strings.TrimSpace(host), strings.TrimSpace(service), nil
 }
 
-func resolveMCPInstanceArg(operation, raw, expectedHostID, serviceRef string) (string, error) {
+// resolveMCPInstanceArg validates mi1 handle syntax and host match locally and
+// preserves the full handle verbatim so the owning host can validate the
+// resolved service ID and caller ownership (PLAN §5.2).
+func resolveMCPInstanceArg(operation, raw, expectedHostID string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-	if !strings.HasPrefix(raw, "mi1.") {
+	if raw == "" || !strings.HasPrefix(raw, "mi1.") {
 		return raw, nil
 	}
 	parsed, err := mcpconnect.ParseInstanceHandle(raw)
@@ -137,35 +137,36 @@ func resolveMCPInstanceArg(operation, raw, expectedHostID, serviceRef string) (s
 	if expectedHostID != "" && parsed.HostID != expectedHostID {
 		return "", agentapi.Usage(operation, fmt.Sprintf("Instance handle belongs to host %s, not %s.", parsed.HostID, expectedHostID))
 	}
-	if len(serviceRef) == 32 && parsed.ServiceID != serviceRef {
-		return "", agentapi.Usage(operation, fmt.Sprintf("Instance handle belongs to service %s, not %s.", parsed.ServiceID, serviceRef))
-	}
-	return parsed.InstanceID, nil
+	return raw, nil
 }
 
 // resolveMCPTargetHost resolves "local", an exact host ID, or a saved machine
 // name without waking any host.
 func resolveMCPTargetHost(ctx context.Context, hostArg string, dial HostDialer) (HostRecord, error) {
-	hostArg = strings.TrimSpace(hostArg)
 	state, err := paths.StateDirPath()
 	if err != nil {
 		return HostRecord{}, fmt.Errorf("locate Mesh state directory: %w", err)
 	}
+	local, err := agentLocalHost(state)
+	if err != nil {
+		return HostRecord{}, err
+	}
+	saved, err := LoadHosts()
+	if err != nil {
+		return HostRecord{}, err
+	}
+	return resolveMCPTargetHostWithSaved(ctx, hostArg, false, saved, local, dial)
+}
+
+func resolveMCPTargetHostWithSaved(ctx context.Context, hostArg string, cached bool, saved []HostRecord, local HostRecord, dial HostDialer) (HostRecord, error) {
+	hostArg = strings.TrimSpace(hostArg)
 	if hostArg == "" || hostArg == mcpLocalHost {
-		local, err := agentLocalHost(state)
-		if err != nil {
-			return HostRecord{}, err
-		}
 		if local.ID == "" {
 			return HostRecord{}, agentapi.Fail(agentapi.HostUninitialized, "", "", "Set up Mesh here first with mesh install.")
 		}
 		return local, nil
 	}
-	hosts, err := LoadHosts()
-	if err != nil {
-		return HostRecord{}, err
-	}
-	return resolveAgentHost(ctx, hostArg, hosts, false, dial)
+	return resolveAgentHost(ctx, hostArg, saved, cached, dial)
 }
 
 func classifyMCPTransportError(err error) (agentapi.Code, bool) {
@@ -178,7 +179,9 @@ func classifyMCPTransportError(err error) (agentapi.Code, bool) {
 	switch {
 	case errors.As(err, &mismatch), errors.Is(err, transport.ErrDestinationIdentityMismatch):
 		return agentapi.HostIdentityMismatch, false
-	case errors.Is(err, transport.ErrAuthentication):
+	case transport.IsAuthenticationInterrupted(err):
+		return agentapi.HostUnreachable, true
+	case transport.IsAuthenticationRefused(err):
 		return agentapi.AccessDenied, false
 	case errors.As(err, &rejected):
 		code := controlAgentCode(rejected.Code)

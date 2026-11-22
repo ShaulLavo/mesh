@@ -559,7 +559,8 @@ def revocation(binary, env, env_b, host_a, host_b, search, repo_b, device):
         ended = gw.reply("held", timeout=30)
         require(mesh_code(ended) == "access.denied", f"revocation did not retire the listen: {ended}")
         denied = gw.tool(exposed_name(host_b, repo_b, "t", "echo"))
-        require(mesh_code(denied) in ("access.denied", "host.unreachable"), denied)
+        # A Mesh failure inside tools/call is a tool execution error (section 2.4).
+        require(denied["result"]["isError"] and denied["result"]["structuredContent"]["errors"][0]["code"] in ("access.denied", "host.unreachable"), denied)
         survivor = gw.tool(exposed_name(host_a, search, "t", "echo"), {"text": "still"})
         require(text_of(survivor) == "http-a:echo:still", survivor)
     finally:

@@ -1,11 +1,13 @@
 """End-to-end M8 proof: two distinct Mesh client devices connecting to one
-hosted installation (both stdio and external HTTP upstreams) plus fleet-wide
-mesh mcp ls states, private scoped cache, invalidation, and agent envelopes."""
+hosted installation (both stdio and external HTTP upstreams), exact stdio/HTTP
+cancellation, daemon-loss outcome_unknown, safe catalog projection, mi1 handle
+validation (including 32-char service names), private scoped cache, and invalidation."""
 import http.server
 import json
 import os
 from pathlib import Path
 import select
+import socket
 import socketserver
 import subprocess
 import sys
@@ -27,9 +29,9 @@ import json
 import os
 import sys
 import threading
-import time
 
 SECRET = os.environ.get("HOST_API_KEY", "")
+TRACE_FILE = os.environ.get("STDIO_TRACE_FILE", "")
 if SECRET:
     sys.stderr.write(f"startup secret={SECRET}\n")
     sys.stderr.flush()
@@ -37,7 +39,17 @@ if SECRET:
 PID = os.getpid()
 LOCK = threading.Lock()
 CALLS = 0
-PENDING = {}
+PENDING = {}   # canonical_id_json -> {"ev": Event, "tag": str, "cancelled": bool}
+BY_TAG = {}    # tag -> canonical_id_json
+
+
+def trace(line):
+    if not TRACE_FILE:
+        return
+    with LOCK:
+        with open(TRACE_FILE, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+            fh.flush()
 
 
 def send(obj):
@@ -54,11 +66,16 @@ def handle(req):
     if req_id is None:
         if method == "notifications/cancelled":
             target = json.dumps(params.get("requestId"), separators=(",", ":"))
-            ev = PENDING.pop(target, None)
-            if ev is not None:
-                ev.set()
-                sys.stderr.write(f"cancelled {target}\n")
-                sys.stderr.flush()
+            with LOCK:
+                rec = PENDING.pop(target, None)
+                if rec is not None:
+                    BY_TAG.pop(rec["tag"], None)
+                    rec["cancelled"] = True
+                    rec["ev"].set()
+            tag = rec["tag"] if rec is not None else "unknown"
+            trace(f"cancelled {target} {tag}")
+            sys.stderr.write(f"cancelled {target}\n")
+            sys.stderr.flush()
         return
 
     if method == "server/discover":
@@ -75,6 +92,7 @@ def handle(req):
                     "io.modelcontextprotocol/serverInfo": {
                         "name": "host-stdio-srv",
                         "version": "2.1.0",
+                        "x-hidden": "SYNTHETIC_SERVERINFO_SENTINEL",
                     }
                 },
             },
@@ -90,7 +108,8 @@ def handle(req):
                 "tools": [
                     {"name": "whoami", "inputSchema": {"type": "object"}},
                     {"name": "echo", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}}},
-                    {"name": "slow", "inputSchema": {"type": "object"}},
+                    {"name": "slow", "inputSchema": {"type": "object", "properties": {"tag": {"type": "string"}}}},
+                    {"name": "release", "inputSchema": {"type": "object", "properties": {"tag": {"type": "string"}}}},
                 ],
                 "ttlMs": 60000,
                 "cacheScope": "private",
@@ -124,16 +143,42 @@ def handle(req):
                 },
             })
             return
+        if name == "release":
+            tag = str(args.get("tag", ""))
+            with LOCK:
+                key = BY_TAG.pop(tag, None)
+                rec = PENDING.pop(key, None) if key else None
+                if rec is not None:
+                    rec["ev"].set()
+            send({
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": {
+                    "resultType": "complete",
+                    "content": [{"type": "text", "text": f"released:{tag}"}],
+                },
+            })
+            return
         if name == "slow":
+            tag = str(args.get("tag", "default"))
             key = json.dumps(req_id, separators=(",", ":"))
             ev = threading.Event()
-            PENDING[key] = ev
-            if not ev.wait(timeout=30):
+            rec = {"ev": ev, "tag": tag, "cancelled": False}
+            with LOCK:
+                PENDING[key] = rec
+                BY_TAG[tag] = key
+            trace(f"entered {tag} {key}")
+            ev.wait(timeout=30)
+            with LOCK:
                 PENDING.pop(key, None)
+                if BY_TAG.get(tag) == key:
+                    BY_TAG.pop(tag, None)
+                was_cancelled = rec["cancelled"]
+            if not was_cancelled:
                 send({
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {"resultType": "complete", "content": [{"type": "text", "text": "slow-done"}]},
+                    "result": {"resultType": "complete", "content": [{"type": "text", "text": f"slow-done:{tag}"}]},
                 })
             return
 
@@ -160,8 +205,13 @@ done
 """
 
 
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
 class ExternalHTTPMCPServer:
-    """Stateless 2026-07-28 loopback HTTP MCP server with x-mcp-header mirroring."""
+    """Stateless 2026-07-28 loopback HTTP MCP server with x-mcp-header mirroring and cancellation tracking."""
 
     def __init__(self, expected_auth):
         self.expected_auth = expected_auth
@@ -169,19 +219,25 @@ class ExternalHTTPMCPServer:
         self.discover_calls = 0
         self.list_calls = 0
         self.tool_calls = 0
+        self.http_slow_entered = threading.Event()
+        self.http_slow_cancelled = threading.Event()
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def log_message(self, _fmt, *_args):
                 pass
 
             def do_POST(self):
                 if self.path != "/mcp":
                     self.send_response(404)
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
                 if self.headers.get("Authorization") != outer.expected_auth:
                     self.send_response(401)
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
                 length = int(self.headers.get("Content-Length", "0"))
@@ -216,21 +272,51 @@ class ExternalHTTPMCPServer:
                         "id": req_id,
                         "result": {
                             "resultType": "complete",
-                            "tools": [{
-                                "name": "scoped_lookup",
-                                "inputSchema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "scope": {"type": "string", "x-mcp-header": "Scope"},
+                            "tools": [
+                                {
+                                    "name": "scoped_lookup",
+                                    "inputSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "scope": {"type": "string", "x-mcp-header": "Scope"},
+                                        },
+                                        "required": ["scope"],
                                     },
-                                    "required": ["scope"],
                                 },
-                            }],
+                                {
+                                    "name": "slow_http",
+                                    "inputSchema": {"type": "object"},
+                                },
+                            ],
                             "ttlMs": 60000,
                             "cacheScope": "private",
                         },
                     }
                 elif method == "tools/call":
+                    tool_name = params.get("name")
+                    if tool_name == "slow_http":
+                        outer.http_slow_entered.set()
+                        # Wait until the Mesh host closes this outbound HTTP request on cancellation.
+                        deadline = time.monotonic() + 20.0
+                        sock = self.connection
+                        while time.monotonic() < deadline:
+                            ready, _, _ = select.select([sock], [], [], 0.05)
+                            if ready:
+                                try:
+                                    peek = sock.recv(1, socket.MSG_PEEK)
+                                except OSError:
+                                    peek = b""
+                                if not peek:
+                                    outer.http_slow_cancelled.set()
+                                    return
+                        reply = {
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "result": {"resultType": "complete", "content": [{"type": "text", "text": "http-slow-done"}]},
+                        }
+                        self._send_json(200, reply)
+                        return
+
                     outer.tool_calls += 1
                     mirrored = self.headers.get("Mcp-Param-Scope", "")
                     outer.seen_headers.append(mirrored)
@@ -263,7 +349,7 @@ class ExternalHTTPMCPServer:
                 self.end_headers()
                 self.wfile.write(raw)
 
-        self.httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self.httpd.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/mcp"
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -328,6 +414,19 @@ class ConnectClient:
             self.proc.wait(timeout=5)
 
 
+def wait_trace(trace_path, predicate, description, timeout=15.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if trace_path.exists():
+            lines = trace_path.read_text(encoding="utf-8").splitlines()
+            res = predicate(lines)
+            if res is not None:
+                return res
+        time.sleep(0.05)
+    existing = trace_path.read_text(encoding="utf-8") if trace_path.exists() else "<missing>"
+    require(False, f"timed out waiting for {description}; trace=\n{existing}")
+
+
 def run_mesh(binary, env, *args, check_rc=None):
     res = subprocess.run(
         [binary, *args],
@@ -358,7 +457,6 @@ def setup_client_device(binary, root, name, hosts_list, machine_names=None):
     state.mkdir(mode=0o700)
     state.chmod(0o700)
     env = dict(os.environ, HOME=str(dev_root), MESH_CONFIG_DIR=str(cfg), MESH_STATE_DIR=str(state))
-    # Generate this device's own unique Ed25519 key via mesh device identity.
     id_res = run_mesh(binary, env, "device", "identity", "--json", check_rc=0)
     device_id = json.loads(id_res.stdout)["id"]
     hosts_path = cfg / "hosts.json"
@@ -381,12 +479,13 @@ def main():
     binary = sys.argv[1]
     fixture = PipeFixture(binary, root)
 
-    # Host-side server scripts live strictly under host_only/ (never in client dirs).
     host_only = root / "host-only"
     host_only.mkdir()
     stdio_script = host_only / "stdio_srv.py"
     stdio_script.write_text(STDIO_SERVER)
     stdio_script.chmod(0o700)
+
+    trace_file = host_only / "stdio.trace"
 
     legacy_script = host_only / "legacy_srv.sh"
     legacy_script.write_text(LEGACY_SERVER)
@@ -402,9 +501,11 @@ def main():
     http_secret_file.write_text(http_secret_val)
     http_secret_file.chmod(0o600)
 
+    argv_sentinel = "SYNTHETIC_ARGV_SENTINEL_901"
+    env_sentinel = "SYNTHETIC_ENV_SENTINEL_902"
+
     http_server = ExternalHTTPMCPServer(http_secret_val)
     try:
-        # Start hosting daemon on a loopback tailnet control port via Fixture.start_remote().
         fixture.start_remote()
         remote_hosts = json.loads((fixture.config / "hosts.json").read_text())["hosts"]
         host_entry = remote_hosts[0]
@@ -417,17 +518,29 @@ def main():
             MESH_STATE_DIR=str(fixture.remote),
         )
 
-        # Publish stdio (isolated), stdio (shared), external HTTP, incompatible, and failing services on the host.
+        # Publish stdio (isolated), stdio (shared), 32-char named stdio (isolated), external HTTP, incompatible, and failing services.
         pub_iso = json.loads(run_mesh(
             binary, host_env, "mcp", "publish", "repo-iso",
             "--cwd", str(host_only),
+            "--env", f"STDIO_TRACE_FILE={trace_file}",
+            "--env", f"PLAIN_SENTINEL={env_sentinel}",
             "--account-mode", "host-account", "--account-label", "host-bot",
             "--secret-env", f"HOST_API_KEY={secret_file}",
-            "--json", "--", sys.executable, str(stdio_script),
+            "--json", "--", sys.executable, str(stdio_script), f"--marker={argv_sentinel}",
             check_rc=0,
         ).stdout)
         require(pub_iso["operation"] == "mcp.publish" and pub_iso["status"] == "ok", pub_iso)
-        require(secret_val not in json.dumps(pub_iso) and str(secret_file) not in json.dumps(pub_iso), "secret leaked in publish")
+        for forbidden in (secret_val, str(secret_file), argv_sentinel, env_sentinel, str(stdio_script)):
+            require(forbidden not in json.dumps(pub_iso), f"publish leaked {forbidden}")
+
+        name32 = "service-name-exact-32-characters"
+        require(len(name32) == 32, f"expected 32-char service name, got {len(name32)}")
+        run_mesh(
+            binary, host_env, "mcp", "publish", name32,
+            "--cwd", str(host_only),
+            "--json", "--", sys.executable, str(stdio_script),
+            check_rc=0,
+        )
 
         run_mesh(
             binary, host_env, "mcp", "publish", "repo-shared",
@@ -454,11 +567,9 @@ def main():
             check_rc=0,
         )
 
-        # Trigger incompatible and failed states once so ls observes them without starting anything itself.
         run_mesh(binary, host_env, "mcp", "start", "legacy-srv", "--json", check_rc=1)
         run_mesh(binary, host_env, "mcp", "start", "missing-rt", "--json", check_rc=1)
 
-        # Configure TWO distinct client devices (Device A and Device B) with separate device keys.
         offline_entry = {
             "id": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "meshIdentity": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -476,27 +587,32 @@ def main():
         )
         require(dev_a_id != dev_b_id, "client devices must have distinct Mesh device keys")
 
-        # Approve both client devices on the hosting daemon.
         run_mesh(binary, host_env, "device", "approve", "--allow-root", "--", dev_a_id, check_rc=0)
         run_mesh(binary, host_env, "device", "approve", "--allow-root", "--", dev_b_id, check_rc=0)
 
-        # Create per-agent application identities on each client device.
         run_mesh(binary, env_a, "mcp", "identity", "create", "codex-a", "--json", check_rc=0)
         run_mesh(binary, env_b, "mcp", "identity", "create", "codex-b", "--json", check_rc=0)
 
-        # 1. Passive fleet-wide `mesh mcp ls` from Device A before any calls:
-        #    - hostpc online, offlinebox offline -> partial exit 3
-        #    - repo-iso, repo-shared, search-http are STILL stopped (ls never starts services!)
-        #    - legacy-srv is incompatible, missing-rt is failed
-        #    - no secrets in output
+        # 1. Passive fleet-wide `mesh mcp ls` from Device A before any calls + safe catalog projection check.
         t0 = time.monotonic()
         ls_a = run_mesh(binary, env_a, "mcp", "ls", "--identity", "codex-a", "--json", check_rc=3)
         elapsed = time.monotonic() - t0
         require(elapsed < 2.5, f"fleet mcp ls exceeded 2s budget: {elapsed:.2f}s")
         ls_env = json.loads(ls_a.stdout)
         require(ls_env["operation"] == "mcp.list" and ls_env["status"] == "partial", ls_env)
-        require(secret_val not in ls_a.stdout and http_secret_val not in ls_a.stdout, "secret leaked in mcp ls")
-        require(str(secret_file) not in ls_a.stdout and str(http_secret_file) not in ls_a.stdout, "secret path leaked in mcp ls")
+        forbidden_catalog = (
+            secret_val, http_secret_val, str(secret_file), str(http_secret_file),
+            argv_sentinel, env_sentinel, str(stdio_script), str(host_only), http_server.url,
+        )
+        for token in forbidden_catalog:
+            require(token not in ls_a.stdout, f"mcp ls leaked {token}")
+        cache_dir = state_a / "mcp-catalog-cache"
+        for cache_file in cache_dir.glob("*.json"):
+            if cache_file.name.startswith("."):
+                continue
+            cached_text = cache_file.read_text(encoding="utf-8")
+            for token in forbidden_catalog:
+                require(token not in cached_text, f"catalog cache {cache_file.name} persisted {token}")
 
         host_states = {h["hostId"]: h["state"] for h in ls_env["data"]["hosts"]}
         require(host_states[fixture.remote_id] == "online", host_states)
@@ -508,9 +624,9 @@ def main():
         require(svc_states["legacy-srv"] == "incompatible", svc_states)
         require(svc_states["missing-rt"] == "failed", svc_states)
         require(http_server.discover_calls == 0 and http_server.list_calls == 0, "ls contacted HTTP upstream")
-        print("PASS: fleet-wide mesh mcp ls shows online/offline/stopped/incompatible/failed passively", flush=True)
+        print("PASS: fleet-wide mesh mcp ls shows safe allowlisted catalog and passive states", flush=True)
 
-        # 2. Fresh direct tool call from Device A AND Device B on isolated stdio service (NO prior discover/list).
+        # 2. Fresh direct tool calls from Device A & Device B + EXACT upstream request ID cancellation on stdio.
         client_a = ConnectClient(binary, env_a, f"{remote_name}/repo-iso", "codex-a")
         client_b = ConnectClient(binary, env_b, f"{remote_name}/repo-iso", "codex-b")
         try:
@@ -523,18 +639,49 @@ def main():
             pid_b = text_b.split()[0]
             require(pid_a != pid_b, f"two distinct devices shared an isolated process: {text_a} vs {text_b}")
 
-            # Verify upstreamServerInfo is preserved even on a cold first tools/call!
             meta_a = rep_a["result"]["_meta"]
             require(meta_a["io.modelcontextprotocol/serverInfo"]["name"] == "mesh", meta_a)
             require(meta_a["com.github.shaullavo.mesh/upstreamServerInfo"]["name"] == "host-stdio-srv", meta_a)
 
-            # Verify cancellation over H3 cancels the slow call cleanly.
-            slow_id = client_a.request("tools/call", {"name": "slow", "arguments": {}})
-            time.sleep(0.1)
-            client_a.send_raw({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": slow_id}})
-            # Follow-up echo on the same connection still works.
-            echo_rep = client_a.call_tool("echo", {"text": "still-alive"})
-            require(echo_rep["result"]["content"][0]["text"] == "still-alive", echo_rep)
+            # Prove exact upstream request ID cancellation: start TWO concurrent blocking calls,
+            # wait until both enter upstream, cancel ONLY cancel-me, verify upstream received
+            # notifications/cancelled with cancel-me's EXACT host-assigned ID while keep-me completes.
+            cancel_req_id = client_a.request("tools/call", {"name": "slow", "arguments": {"tag": "cancel-me"}})
+            keep_req_id = client_a.request("tools/call", {"name": "slow", "arguments": {"tag": "keep-me"}})
+
+            def both_entered(lines):
+                found = {}
+                for ln in lines:
+                    parts = ln.split(" ", 2)
+                    if len(parts) == 3 and parts[0] == "entered":
+                        found[parts[1]] = parts[2]
+                if "cancel-me" in found and "keep-me" in found:
+                    return found["cancel-me"], found["keep-me"]
+                return None
+
+            host_id_cancel, host_id_keep = wait_trace(trace_file, both_entered, "both concurrent slow calls to enter upstream")
+            require(host_id_cancel != host_id_keep, (host_id_cancel, host_id_keep))
+
+            client_a.send_raw({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": cancel_req_id}})
+
+            wait_trace(
+                trace_file,
+                lambda lines: True if f"cancelled {host_id_cancel} cancel-me" in lines else None,
+                f"exact upstream cancellation for {host_id_cancel}",
+            )
+
+            # Release keep-me and collect both keep-me and release replies.
+            rel_req_id = client_a.request("tools/call", {"name": "release", "arguments": {"tag": "keep-me"}})
+            replies = {}
+            while len(replies) < 2:
+                msg = client_a.read_message(timeout=15.0)
+                if "method" in msg:
+                    continue
+                replies[msg["id"]] = msg
+            require(replies[keep_req_id]["result"]["content"][0]["text"] == "slow-done:keep-me", replies)
+            require(replies[rel_req_id]["result"]["content"][0]["text"] == "released:keep-me", replies)
+            trace_lines = trace_file.read_text(encoding="utf-8").splitlines()
+            require(not any(ln.startswith(f"cancelled {host_id_keep}") for ln in trace_lines), trace_lines)
 
             # Legacy initialize is rejected with -32601.
             client_a.send_raw({"jsonrpc": "2.0", "id": 999, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}}})
@@ -547,9 +694,56 @@ def main():
         finally:
             client_a.terminate()
             client_b.terminate()
-        print("PASS: two distinct devices reached isolated hosted stdio server with fresh direct tool calls & cancellation", flush=True)
+        print("PASS: exact upstream stdio cancellation isolated to target request ID + unknown serverInfo stripped", flush=True)
 
-        # 3. Shared stdio service: Device A and Device B share ONE process on the host.
+        # Verify unknown upstream serverInfo key was NOT leaked into ls or cache after ready probe.
+        ls_after = run_mesh(binary, env_a, "mcp", "ls", "--host", remote_name, "--identity", "codex-a", "--json", check_rc=0)
+        require("SYNTHETIC_SERVERINFO_SENTINEL" not in ls_after.stdout, ls_after.stdout)
+
+        # 3. 32-char service name mi1 handle reconnect + wrong-service & other-caller handle refusal.
+        c32 = ConnectClient(binary, env_a, f"{remote_name}/{name32}", "codex-a")
+        try:
+            pid32 = c32.call_tool("whoami")["result"]["content"][0]["text"].split()[0]
+            require(c32.close()[0] == 0, "c32 close failed")
+        finally:
+            c32.terminate()
+
+        ls32 = json.loads(run_mesh(binary, env_a, "mcp", "ls", "--host", remote_name, "--identity", "codex-a", "--json", check_rc=0).stdout)
+        svc32 = next(s for s in ls32["data"]["services"] if s["name"] == name32)
+        handle32 = svc32["instances"][0]["handle"]
+        require(handle32.startswith(f"mi1.{fixture.remote_id}."), handle32)
+
+        # Authorized caller reconnects using full mi1 handle to the exact same process.
+        c32_re = ConnectClient(binary, env_a, f"{remote_name}/{name32}", "codex-a", extra=("--instance", handle32))
+        try:
+            pid32_re = c32_re.call_tool("whoami")["result"]["content"][0]["text"].split()[0]
+            require(pid32_re == pid32, f"handle reconnect hit wrong process: {pid32_re} != {pid32}")
+            require(c32_re.close()[0] == 0, "c32_re close failed")
+        finally:
+            c32_re.terminate()
+
+        # Wrong service with valid mi1 handle for name32 -> refused as tool error with service.not_found.
+        c32_wrong_svc = ConnectClient(binary, env_a, f"{remote_name}/repo-iso", "codex-a", extra=("--instance", handle32))
+        try:
+            wrong_rep = c32_wrong_svc.call_tool("whoami")
+            require(wrong_rep["result"].get("isError") is True, wrong_rep)
+            require(wrong_rep["result"]["structuredContent"]["errors"][0]["code"] == "service.not_found", wrong_rep)
+            require(c32_wrong_svc.close()[0] == 0, "c32_wrong_svc close failed")
+        finally:
+            c32_wrong_svc.terminate()
+
+        # Other caller (Device B / codex-b) with Device A's mi1 handle -> refused as tool error with access.denied.
+        c32_other_caller = ConnectClient(binary, env_b, f"{remote_name}/{name32}", "codex-b", extra=("--instance", handle32))
+        try:
+            denied_rep = c32_other_caller.call_tool("whoami")
+            require(denied_rep["result"].get("isError") is True, denied_rep)
+            require(denied_rep["result"]["structuredContent"]["errors"][0]["code"] == "access.denied", denied_rep)
+            require(c32_other_caller.close()[0] == 0, "c32_other_caller close failed")
+        finally:
+            c32_other_caller.terminate()
+        print("PASS: mi1 handle validated end-to-end for 32-char service name, wrong service, and other caller", flush=True)
+
+        # 4. Shared stdio service: Device A and Device B share ONE process on the host.
         shared_a = ConnectClient(binary, env_a, f"{remote_name}/repo-shared", "codex-a")
         shared_b = ConnectClient(binary, env_b, f"{remote_name}/repo-shared", "codex-b")
         try:
@@ -562,8 +756,7 @@ def main():
             shared_b.terminate()
         print("PASS: two distinct devices shared one --shared hosted stdio process", flush=True)
 
-        # 4. External HTTP upstream: cold fresh direct tool call triggers private cold schema discovery
-        #    and mirrors x-mcp-header (X-Repo-Scope) + sends secret Authorization header.
+        # 5. External HTTP upstream: cold discovery, header mirroring, AND HTTP cancellation through H1!
         http_a = ConnectClient(binary, env_a, f"{remote_name}/search-http", "codex-a")
         http_b = ConnectClient(binary, env_b, f"{remote_name}/search-http", "codex-b")
         try:
@@ -574,40 +767,69 @@ def main():
             require(hr_a["result"]["_meta"]["com.github.shaullavo.mesh/upstreamServerInfo"]["name"] == "host-http-srv", hr_a)
             require(http_server.discover_calls >= 1 and http_server.list_calls >= 1 and http_server.tool_calls == 2,
                     (http_server.discover_calls, http_server.list_calls, http_server.tool_calls))
+
+            # HTTP cancellation through H1: start slow_http, wait for upstream entry, cancel on H1,
+            # assert upstream HTTP handler observed cancellation, then run another tool call cleanly.
+            slow_http_id = http_a.request("tools/call", {"name": "slow_http", "arguments": {}})
+            require(http_server.http_slow_entered.wait(timeout=15.0), "slow_http did not reach external HTTP upstream")
+            http_a.send_raw({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": slow_http_id}})
+            require(http_server.http_slow_cancelled.wait(timeout=15.0), "HTTP upstream did not observe H1 cancellation")
+
+            hr_after = http_a.call_tool("scoped_lookup", {"scope": "gamma"})
+            require(hr_after["result"]["content"][0]["text"] == "http-ok scope=gamma header=gamma", hr_after)
             require(http_a.close()[0] == 0 and http_b.close()[0] == 0, "http connect exit non-zero")
         finally:
             http_a.terminate()
             http_b.terminate()
-        print("PASS: external HTTP upstream performed private cold schema discovery and header mirroring for both devices", flush=True)
+        print("PASS: external HTTP upstream discovery, header mirroring, and H1 cancellation verified", flush=True)
 
-        # 5. Refresh Device A and Device B caches while remote is online, then test DENIED (revoked) -> immediate invalidation!
+        # 6. Revoked device -> unauthorized AND immediate cache invalidation across caller scopes!
         run_mesh(binary, env_a, "mcp", "ls", "--host", remote_name, "--identity", "codex-a", "--json", check_rc=0)
         run_mesh(binary, env_b, "mcp", "ls", "--host", remote_name, "--identity", "codex-b", "--json", check_rc=0)
 
-        # Revoke Device B -> Device B gets unauthorized AND its private cache is immediately invalidated!
         run_mesh(binary, host_env, "device", "revoke", "--", dev_b_id, check_rc=0)
         denied_ls = run_mesh(binary, env_b, "mcp", "ls", "--host", remote_name, "--identity", "codex-b", "--json", check_rc=1)
         denied_env = json.loads(denied_ls.stdout)
         require(denied_env["data"]["hosts"][0]["state"] == "unauthorized", denied_env)
         require(denied_env["data"]["services"] == [], denied_env)
-        # Verify cached read on Device B also sees nothing (cache was discarded on denial!).
         cached_after_deny = run_mesh(binary, env_b, "mcp", "ls", "--host", remote_name, "--identity", "codex-b", "--cached", "--json", check_rc=1)
         cached_deny_env = json.loads(cached_after_deny.stdout)
         require(cached_deny_env["data"]["hosts"][0]["state"] == "offline" and cached_deny_env["data"]["services"] == [], cached_deny_env)
         print("PASS: revoked device gets unauthorized and its private cache is immediately invalidated", flush=True)
 
-        # 6. Stop hosting daemon -> Device A sees STALE (<24h) first, then EXPIRED (>24h)!
-        fixture.daemon.terminate()
-        fixture.daemon.wait(timeout=10)
+        # 7. Daemon loss mid-call through H1 -> tools/call returns isError:true with request.outcome_unknown (retryable:false)!
+        loss_client = ConnectClient(binary, env_a, f"{remote_name}/repo-iso", "codex-a")
+        try:
+            loss_id = loss_client.request("tools/call", {"name": "slow", "arguments": {"tag": "daemon-loss"}})
+            wait_trace(
+                trace_file,
+                lambda lines: True if any(ln.startswith("entered daemon-loss ") for ln in lines) else None,
+                "daemon-loss call to enter upstream",
+            )
+            fixture.daemon.terminate()
+            fixture.daemon.wait(timeout=10)
+            loss_rep = loss_client.read_message(timeout=15.0)
+            require(loss_rep.get("id") == loss_id, loss_rep)
+            res = loss_rep.get("result") or {}
+            require(res.get("isError") is True, loss_rep)
+            sc = res.get("structuredContent") or {}
+            errs = sc.get("errors") or []
+            require(len(errs) == 1 and errs[0]["code"] == "request.outcome_unknown" and errs[0]["retryable"] is False, loss_rep)
+            loss_client.close()
+        finally:
+            loss_client.terminate()
+        print("PASS: daemon loss during in-flight tools/call reports request.outcome_unknown (retryable:false) on H1", flush=True)
+
+        # 8. Unreachable host -> STALE (<24h) first, then EXPIRED (>24h)!
         stale_ls = run_mesh(binary, env_a, "mcp", "ls", "--host", remote_name, "--identity", "codex-a", "--json", check_rc=3)
         stale_env = json.loads(stale_ls.stdout)
         require(stale_env["status"] == "partial", stale_env)
         require(stale_env["data"]["hosts"][0]["state"] == "stale", stale_env)
         require(any(s["name"] == "repo-iso" and s["state"] == "stale" for s in stale_env["data"]["services"]), stale_env)
 
-        # Backdate Device A's cache file by >24 hours -> must become EXPIRED and not advertise active services!
-        cache_dir = state_a / "mcp-catalog-cache"
         for p in cache_dir.glob("*.json"):
+            if p.name.startswith("."):
+                continue
             data = json.loads(p.read_text())
             data["receivedAt"] = "2020-01-01T00:00:00Z"
             p.write_text(json.dumps(data))

@@ -235,7 +235,7 @@ func (f *fanIn) runUpstream(ctx context.Context, part *upstreamListen) {
 			close(part.acked)
 		}
 	}()
-	err = f.g.upstream(part.sel).Forward(ctx, msg, func(raw []byte, terminal bool) error {
+	err = f.g.upstream(part.sel).Forward(ctx, msg, budgetOf(ctx), func(raw []byte, terminal bool) error {
 		if terminal {
 			return f.upstreamEnded(part, raw)
 		}

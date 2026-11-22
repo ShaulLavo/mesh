@@ -1,6 +1,9 @@
 package agentapi
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 const maxBytesFlag = "--max-bytes"
 const sessionFlag = "--session"
@@ -36,7 +39,7 @@ type Operation struct {
 	Summary, Example                       string
 }
 
-var Operations = append(append(append(coreOperations, applicationOperations...), mcpHTTPOperations...), mcpServiceOperations...)
+var Operations = slices.Concat(coreOperations, applicationOperations, mcpHTTPOperations, terminalOperations, mcpServiceOperations)
 
 var coreOperations = []Operation{
 	{Name: "scope.keygen", Command: "mesh device scope keygen", Implemented: true, Mutates: true, Flags: []Flag{{Name: jsonFlag, Required: true, Summary: jsonFlagSummary}, {Name: keyDirFlag, Value: pathFlagValue, Required: true, Summary: "explicit dedicated credential directory"}}, Summary: "Create a separate metadata credential without enrolling it.", Example: "mesh device scope keygen --key-dir KEY_DIRECTORY --json"},
