@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -753,5 +754,426 @@ func TestSDKStreamableHTTPPositivePeerInterop(t *testing.T) {
 				t.Fatalf("SDK HTTP tool error (%s): res=%+v err=%v", mode, errRes, err)
 			}
 		})
+	}
+}
+
+type trackingBody struct {
+	data  []byte
+	off   int
+	reads atomic.Int64
+}
+
+func (b *trackingBody) Read(p []byte) (int, error) {
+	b.reads.Add(1)
+	if b.off >= len(b.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data[b.off:])
+	b.off += n
+	return n, nil
+}
+
+func (b *trackingBody) Close() error { return nil }
+
+type blockingResponseWriter struct {
+	header       http.Header
+	status       int
+	mu           sync.Mutex
+	buf          bytes.Buffer
+	flushEntered chan struct{}
+	flushRelease chan struct{}
+	blockFirst   bool
+	flushes      int
+	aborted      atomic.Bool
+}
+
+func newBlockingResponseWriter(blockFirst bool) *blockingResponseWriter {
+	return &blockingResponseWriter{
+		header:       make(http.Header),
+		flushEntered: make(chan struct{}, 1),
+		flushRelease: make(chan struct{}),
+		blockFirst:   blockFirst,
+	}
+}
+
+func (w *blockingResponseWriter) Header() http.Header { return w.header }
+
+func (w *blockingResponseWriter) WriteHeader(code int) {
+	w.mu.Lock()
+	if w.status == 0 {
+		w.status = code
+	}
+	w.mu.Unlock()
+}
+
+func (w *blockingResponseWriter) Write(p []byte) (int, error) {
+	if w.aborted.Load() {
+		return 0, context.DeadlineExceeded
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("write blocking test buffer: %w", err)
+	}
+	return n, nil
+}
+
+func (w *blockingResponseWriter) Flush() {
+	w.mu.Lock()
+	w.flushes++
+	n := w.flushes
+	w.mu.Unlock()
+	if w.blockFirst && n == 1 {
+		select {
+		case w.flushEntered <- struct{}{}:
+		default:
+		}
+		<-w.flushRelease
+	}
+}
+
+func (w *blockingResponseWriter) SetWriteDeadline(t time.Time) error {
+	if !t.IsZero() && time.Now().After(t) {
+		w.aborted.Store(true)
+	}
+	return nil
+}
+
+func (w *blockingResponseWriter) bodyString() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestHTTPByteBudgetsIngressAndOutput(t *testing.T) {
+	// 1. Connection output budget (8192 bytes) caps a ~14 KiB tools/list reply.
+	_, ts, endpoint := startTestHTTPServer(t, HTTPServerOptions{
+		ServerOptions: ServerOptions{
+			Version:          "0.1.0-budget",
+			Controls:         &stubControls{},
+			MaxConnBytes:     8192,
+			MaxFrontendBytes: 16384,
+		},
+	})
+	listBody := standardMCPReqBody("1", mcpwire.MethodListTools, "")
+	req := makeMCPHTTPRequest(t, endpoint, testHTTPToken, listBody, func(r *http.Request) {
+		r.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+		r.Header.Set(mcpwire.MethodHeader, mcpwire.MethodListTools)
+	})
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if len(raw) > 8192 || !bytes.Contains(raw, []byte(string(agentapi.ResourceLimit))) {
+		t.Fatalf("tools/list exceeded 8192 conn budget: len=%d body=%q", len(raw), raw[:min(len(raw), 200)])
+	}
+
+	// 2. When all request slots are full, admission fails BEFORE reading body.
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	srv, err := NewHTTPServer(HTTPServerOptions{
+		ServerOptions: ServerOptions{
+			Version: "0.1.0-budget",
+			Controls: &stubControls{
+				hostsFn: func(_ context.Context, _ ListHostsRequest) (CallOutcome, error) {
+					entered <- struct{}{}
+					<-release
+					return CallOutcome{Envelope: okEnvelope("hosts.list", agentapi.HostsData{})}, nil
+				},
+			},
+			MaxRequests:      1,
+			MaxConnBytes:     32768,
+			MaxFrontendBytes: 32768,
+		},
+		Authority: "127.0.0.1:9000",
+		Token:     testHTTPToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	hostsBody := standardMCPReqBody("1", mcpwire.MethodCallTool, `,"name":"mesh_hosts_list","arguments":{}`)
+	firstReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(hostsBody))
+	firstReq.URL.Host = ""
+	firstReq.Host = "127.0.0.1:9000"
+	firstReq.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	firstReq.Header.Set("Content-Type", "application/json")
+	firstReq.Header.Set("Accept", "application/json, text/event-stream")
+	firstReq.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+	firstReq.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+	firstReq.Header.Set(mcpwire.NameHeader, "mesh_hosts_list")
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		srv.ServeHTTP(httptest.NewRecorder(), firstReq)
+	}()
+	<-entered
+
+	secondBody := &trackingBody{data: []byte(standardMCPReqBody("2", mcpwire.MethodDiscover, ""))}
+	secondReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", secondBody)
+	secondReq.URL.Host = ""
+	secondReq.Host = "127.0.0.1:9000"
+	secondReq.ContentLength = -1
+	secondReq.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	secondReq.Header.Set("Content-Type", "application/json")
+	secondReq.Header.Set("Accept", "application/json, text/event-stream")
+	secondReq.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+	secondReq.Header.Set(mcpwire.MethodHeader, mcpwire.MethodDiscover)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, secondReq)
+	if secondBody.reads.Load() != 0 {
+		t.Fatalf("body was read %d times while request slots were full, want 0", secondBody.reads.Load())
+	}
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(string(agentapi.ResourceLimit))) {
+		t.Fatalf("over-capacity reply = status %d body=%s", rec.Code, rec.Body.String())
+	}
+	close(release)
+	<-firstDone
+
+	// 3. Frontend byte budget enforces concurrent body reads and blocked response writes.
+	srvBytes, err := NewHTTPServer(HTTPServerOptions{
+		ServerOptions: ServerOptions{
+			Version:          "0.1.0-budget",
+			Controls:         &stubControls{},
+			MaxRequests:      4,
+			MaxConnBytes:     16384,
+			MaxFrontendBytes: 12000,
+		},
+		Authority: "127.0.0.1:9000",
+		Token:     testHTTPToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srvBytes.Shutdown(context.Background()) }()
+
+	// Streamed chunked body larger than frontend budget is refused mid-read without buffering beyond budget.
+	oversizedChunked := &trackingBody{data: bytes.Repeat([]byte(" "), 20000)}
+	chunkReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", oversizedChunked)
+	chunkReq.URL.Host = ""
+	chunkReq.Host = "127.0.0.1:9000"
+	chunkReq.ContentLength = -1
+	chunkReq.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	chunkReq.Header.Set("Content-Type", "application/json")
+	chunkReq.Header.Set("Accept", "application/json, text/event-stream")
+	chunkRec := httptest.NewRecorder()
+	srvBytes.ServeHTTP(chunkRec, chunkReq)
+	if !bytes.Contains(chunkRec.Body.Bytes(), []byte(string(agentapi.ResourceLimit))) {
+		t.Fatalf("oversized chunked body did not fail with resource.limit: status=%d body=%s", chunkRec.Code, chunkRec.Body.String())
+	}
+
+	// 4. Blocked response write holds terminal output bytes against MaxFrontendBytes
+	// until delivery finishes, so a concurrent request sees resource.limit.
+	srvBlocked, err := NewHTTPServer(HTTPServerOptions{
+		ServerOptions: ServerOptions{
+			Version: "0.1.0-budget",
+			Controls: &stubControls{
+				outputFn: func(_ context.Context, req JobOutputRequest) (CallOutcome, error) {
+					return CallOutcome{Envelope: okEnvelope("sessions.logs", JobOutputData{
+						Job: req.Job.String(), Stream: req.Stream, Encoding: "utf-8", Data: strings.Repeat("Z", 5000), EOF: true,
+					})}, nil
+				},
+			},
+			MaxRequests:      4,
+			MaxConnBytes:     12000,
+			MaxFrontendBytes: 12000,
+		},
+		Authority: "127.0.0.1:9000",
+		Token:     testHTTPToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srvBlocked.Shutdown(context.Background()) }()
+
+	outBody := standardMCPReqBody("3", mcpwire.MethodCallTool, fmt.Sprintf(`,"name":"mesh_job_output","arguments":{"job":%q}`, testJob))
+	outReq1 := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(outBody))
+	outReq1.URL.Host = ""
+	outReq1.Host = "127.0.0.1:9000"
+	outReq1.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	outReq1.Header.Set("Content-Type", "application/json")
+	outReq1.Header.Set("Accept", "application/json, text/event-stream")
+	outReq1.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+	outReq1.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+	outReq1.Header.Set(mcpwire.NameHeader, "mesh_job_output")
+
+	bwOut := newBlockingResponseWriter(true)
+	outDone1 := make(chan struct{})
+	go func() {
+		defer close(outDone1)
+		srvBlocked.ServeHTTP(bwOut, outReq1)
+	}()
+	<-bwOut.flushEntered
+
+	// While outReq1 is blocked flushing ~5.5 KiB terminal output, a second
+	// ~5.5 KiB reply would exceed the 12,000-byte frontend budget (and 4 KiB
+	// reserve), so it must fall back to resource.limit.
+	outReq2 := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(outBody))
+	outReq2.URL.Host = ""
+	outReq2.Host = "127.0.0.1:9000"
+	outReq2.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	outReq2.Header.Set("Content-Type", "application/json")
+	outReq2.Header.Set("Accept", "application/json, text/event-stream")
+	outReq2.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+	outReq2.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+	outReq2.Header.Set(mcpwire.NameHeader, "mesh_job_output")
+	rec2 := httptest.NewRecorder()
+	srvBlocked.ServeHTTP(rec2, outReq2)
+	if !bytes.Contains(rec2.Body.Bytes(), []byte(string(agentapi.ResourceLimit))) {
+		close(bwOut.flushRelease)
+		<-outDone1
+		t.Fatalf("second reply while first write blocked did not hit resource.limit: len=%d body=%q", rec2.Body.Len(), rec2.Body.String()[:min(rec2.Body.Len(), 200)])
+	}
+	close(bwOut.flushRelease)
+	<-outDone1
+
+	// 5. Stdio server construction does not fail on HTTP-only x-mcp-header annotations.
+	badHTTPRouteSpec := ToolSpec{
+		Name:        "mesh_http_bad_annotation",
+		Operation:   "hosts.list",
+		Group:       groupHosts,
+		Description: "Invalid HTTP routing annotation must not block stdio startup.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{"type":"object","x-mcp-header":"Bad"}}}`),
+		Annotations: readOnlyAnnotations(),
+		Handler:     handleHostsList,
+	}
+	reg := NewRegistry([]ToolSpec{badHTTPRouteSpec})
+	if _, err := NewStdioServer(ServerOptions{Registry: reg, Controls: &stubControls{}}); err != nil {
+		t.Fatalf("NewStdioServer failed on HTTP-only annotation: %v", err)
+	}
+	if _, err := NewHTTPServer(HTTPServerOptions{ServerOptions: ServerOptions{Registry: reg, Controls: &stubControls{}}, Authority: "127.0.0.1:9000", Token: testHTTPToken}); err == nil {
+		t.Fatal("NewHTTPServer accepted invalid x-mcp-header annotation")
+	}
+}
+
+func TestHTTPRotationRetiresStreamDuringBlockedFlushAfterWorkerDone(t *testing.T) {
+	workerDone := make(chan struct{})
+	controls := &stubControls{
+		waitFn: func(_ context.Context, req JobWaitRequest, notify func(ProgressUpdate)) (CallOutcome, error) {
+			total := float64(req.WaitMS)
+			notify(ProgressUpdate{Progress: 1, Total: &total, Message: "waiting"})
+			defer close(workerDone)
+			return CallOutcome{
+				Envelope: okEnvelope("sessions.wait", JobStateData{Job: req.Job.String(), State: "exited", Wait: "completed"}),
+			}, nil
+		},
+	}
+	srv, err := NewHTTPServer(HTTPServerOptions{
+		ServerOptions: ServerOptions{Version: "0.1.0-rot", Controls: controls},
+		Authority:     "127.0.0.1:9000",
+		Token:         testHTTPToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = srv.Shutdown(context.Background()) }()
+
+	waitBody := fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"_meta":{"%s":"%s","%s":{},"progressToken":"p7"},"name":"mesh_job_wait","arguments":{"job":%q,"wait_ms":5000}}}`,
+		mcpwire.VersionKey, mcpwire.Version, mcpwire.ClientCapsKey, testJob,
+	)
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:9000/mcp", strings.NewReader(waitBody))
+	req.URL.Host = ""
+	req.Host = "127.0.0.1:9000"
+	req.Header.Set("Authorization", "Bearer "+testHTTPToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set(mcpwire.ProtocolHeader, mcpwire.Version)
+	req.Header.Set(mcpwire.MethodHeader, mcpwire.MethodCallTool)
+	req.Header.Set(mcpwire.NameHeader, "mesh_job_wait")
+
+	bw := newBlockingResponseWriter(true)
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		srv.ServeHTTP(bw, req)
+	}()
+
+	// Pause on the first progress flush and wait until the worker has ALREADY returned.
+	<-bw.flushEntered
+	<-workerDone
+
+	// Rotate the token while the SSE exchange is still open on the paused flush.
+	gen, retired, err := srv.RotateToken(testHTTPTokenRotated)
+	if err != nil || gen != 2 || retired != 1 {
+		close(bw.flushRelease)
+		<-serveDone
+		t.Fatalf("RotateToken = gen=%d retired=%d err=%v, want gen=2 retired=1", gen, retired, err)
+	}
+
+	// Unblock the paused flush; the retired stream MUST NOT deliver the terminal result.
+	close(bw.flushRelease)
+	<-serveDone
+
+	body := bw.bodyString()
+	if strings.Contains(body, `"resultType":"complete"`) || strings.Contains(body, `"id":7`) {
+		t.Fatalf("retired SSE stream delivered terminal result after rotation: %s", body)
+	}
+}
+
+func TestHTTPBoundarySizeInvalidEnvelopeWithLongID(t *testing.T) {
+	_, ts, endpoint := startTestHTTPServer(t, HTTPServerOptions{
+		ServerOptions: ServerOptions{Version: "0.1.0-bound", Controls: &stubControls{}},
+	})
+
+	// Construct an invalid JSON-RPC envelope (missing jsonrpc / invalid method) at
+	// exact MaxMessage size with a long string ID that cannot fit back inside an
+	// error reply within MaxMessage.
+	prefix := `{"jsonrpc":"2.0","id":"`
+	suffix := `","method":"server/discover","params":{}}`
+	longID := strings.Repeat("x", mcpwire.MaxMessage-len(prefix)-len(suffix))
+	body := prefix + longID + suffix
+	if len(body) != mcpwire.MaxMessage {
+		t.Fatalf("test setup len = %d, want %d", len(body), mcpwire.MaxMessage)
+	}
+
+	// Missing routing headers -> section 2.2 requires HTTP 400 with a JSON-RPC -32020 body (id:null fallback).
+	req := makeMCPHTTPRequest(t, endpoint, testHTTPToken, body, nil)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("boundary invalid envelope status = %d, want 400 (body=%q)", resp.StatusCode, raw)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("boundary Content-Type = %q, want application/json", resp.Header.Get("Content-Type"))
+	}
+	var decoded struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   *struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.JSONRPC != "2.0" || string(decoded.ID) != "null" || decoded.Error == nil || decoded.Error.Code != mcpwire.HeaderMismatch {
+		t.Fatalf("boundary error body = %s, err=%v", raw, err)
+	}
+
+	// Also verify invalid envelope (non-2.0 jsonrpc) at exact MaxMessage with long ID -> 400 / -32600.
+	prefix2 := `{"jsonrpc":"1.0","id":"`
+	suffix2 := `","method":"server/discover"}`
+	body2 := prefix2 + strings.Repeat("y", mcpwire.MaxMessage-len(prefix2)-len(suffix2)) + suffix2
+	req2 := makeMCPHTTPRequest(t, endpoint, testHTTPToken, body2, nil)
+	resp2, err := ts.Client().Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw2, _ := io.ReadAll(resp2.Body)
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest || !bytes.Contains(raw2, []byte(`"id":null`)) || !bytes.Contains(raw2, []byte("-32600")) {
+		t.Fatalf("boundary jsonrpc 1.0 status=%d body=%s", resp2.StatusCode, raw2)
 	}
 }

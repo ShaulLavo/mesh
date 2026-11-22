@@ -14,10 +14,9 @@ import (
 // dispatcher owns the transport-independent native MCP method and tool
 // dispatch shared by the stdio (H1) and loopback HTTP (H6) frontends.
 type dispatcher struct {
-	registry    *Registry
-	controls    Controls
-	serverInfo  json.RawMessage
-	toolHeaders map[string]mcpwire.ParameterHeaders
+	registry   *Registry
+	controls   Controls
+	serverInfo json.RawMessage
 }
 
 func newDispatcher(opts ServerOptions) (*dispatcher, error) {
@@ -33,25 +32,11 @@ func newDispatcher(opts ServerOptions) (*dispatcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode MCP server info: %w", err)
 	}
-	defs := registry.Definitions()
-	toolHeaders := make(map[string]mcpwire.ParameterHeaders, len(defs))
-	for _, def := range defs {
-		compiled, err := mcpwire.CompileParameterHeaders(def.InputSchema)
-		if err != nil {
-			return nil, fmt.Errorf("compile MCP parameter headers for %s: %w", def.Name, err)
-		}
-		toolHeaders[def.Name] = compiled
-	}
 	return &dispatcher{
-		registry:    registry,
-		controls:    opts.Controls,
-		serverInfo:  serverInfo,
-		toolHeaders: toolHeaders,
+		registry:   registry,
+		controls:   opts.Controls,
+		serverInfo: serverInfo,
 	}, nil
-}
-
-func (d *dispatcher) toolHeader(name string) mcpwire.ParameterHeaders {
-	return d.toolHeaders[name]
 }
 
 func (d *dispatcher) handleMessage(ctx context.Context, msg mcpwire.Message, notify func(ProgressUpdate)) ([]byte, *mcpwire.Fault) {
@@ -171,14 +156,44 @@ func meshFault(id mcpwire.ID, code agentapi.Code, retryable bool, message string
 	}
 }
 
+// encodeBoundedFault encodes a JSON-RPC error within maxBytes (and
+// mcpwire.MaxMessage), falling back to a null ID if the original request ID
+// pushes the error reply over the byte limit.
+func encodeBoundedFault(fault *mcpwire.Fault, maxBytes int) []byte {
+	if fault == nil {
+		return nil
+	}
+	limit := mcpwire.MaxMessage
+	if maxBytes > 0 && maxBytes < limit {
+		limit = maxBytes
+	}
+	if raw, err := fault.Reply(); err == nil && len(raw) <= limit {
+		return raw
+	}
+	nullID := &mcpwire.Fault{
+		Code:    fault.Code,
+		Message: fault.Message,
+		Data:    fault.Data,
+	}
+	if raw, err := nullID.Reply(); err == nil && len(raw) <= limit {
+		return raw
+	}
+	minimal := &mcpwire.Fault{
+		Code:    fault.Code,
+		Message: agentapi.CleanMessage(fault.Message),
+	}
+	raw, _ := minimal.Reply()
+	return raw
+}
+
 func prepareTerminalFrames(id mcpwire.ID, reply []byte, fault *mcpwire.Fault) (primary, fallback []byte, status int) {
-	fallback, _ = meshFault(id, agentapi.ResourceLimit, true, "Frontend output buffer limit exceeded.").Reply()
+	fallback = encodeBoundedFault(meshFault(id, agentapi.ResourceLimit, true, "Frontend output buffer limit exceeded."), reservedErrorBytes)
 	if fault != nil {
-		primary, _ = fault.Reply()
+		primary = encodeBoundedFault(fault, mcpwire.MaxMessage)
 		return primary, fallback, faultHTTPStatus(fault.Code)
 	}
 	if len(reply) > mcpwire.MaxMessage {
-		primary, _ = meshFault(id, agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit.").Reply()
+		primary = encodeBoundedFault(meshFault(id, agentapi.MCPMessageTooLarge, false, "MCP reply exceeds the 3.5 MiB message limit."), mcpwire.MaxMessage)
 		return primary, fallback, http.StatusOK
 	}
 	return reply, fallback, http.StatusOK

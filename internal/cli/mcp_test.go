@@ -276,7 +276,7 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	app := &application{dependencies: Dependencies{Now: time.Now}}
 
 	// 1. resolveExactHostID rejects machine name "pc" even though "pc" exists in hosts.json.
-	controls := newMCPControls(app, newMCPHostPool(nil, time.Now))
+	controls := newMCPControls(app, newMCPHostPool(nil, time.Now), "")
 	defer controls.pool.Close()
 	if _, err := controls.resolveExactHostID("pc"); err == nil {
 		t.Fatal("resolveExactHostID accepted machine name 'pc'")
@@ -290,7 +290,7 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 		return nil, errors.Join(transport.ErrAuthentication, transport.ErrDestinationIdentityMismatch)
 	}, time.Now)
 	defer mismatchPool.Close()
-	mismatchControls := newMCPControls(app, mismatchPool)
+	mismatchControls := newMCPControls(app, mismatchPool, "")
 	offset := uint64(0)
 	out, err := mismatchControls.JobInput(t.Context(), mcpnative.JobInputRequest{
 		Job:      mcpnative.JobRef{HostID: hostID, SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"},
@@ -326,7 +326,7 @@ func TestMCPExactHostIDPreDispatchInputErrorRemoteAccountAndQueuedWait(t *testin
 	}
 	slowPool := newMCPHostPool(slowDial, time.Now)
 	defer slowPool.Close()
-	slowControls := newMCPControls(app, slowPool)
+	slowControls := newMCPControls(app, slowPool, "")
 	waitOut, err := slowControls.JobWait(t.Context(), mcpnative.JobWaitRequest{
 		Job:    mcpnative.JobRef{HostID: hostID, SessionID: "7K3D", Instance: "0123456789abcdef0123456789abcdef"},
 		WaitMS: 300,

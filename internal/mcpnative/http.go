@@ -3,8 +3,10 @@ package mcpnative
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/netip"
@@ -31,7 +33,14 @@ const (
 	httpHeaderContent   = "Content-Type"
 	httpHeaderWWWAuth   = "WWW-Authenticate"
 	httpBearerPrefix    = "Bearer "
+	sseFrameOverhead    = len("event: message\ndata: \n\n")
+	defaultReadTimeout  = 15 * time.Second
 	defaultWriteTimeout = 15 * time.Second
+)
+
+var (
+	errIngressBudget = errors.New("MCP HTTP ingress byte budget exceeded")
+	errStreamRetired = errors.New("MCP HTTP stream retired by token rotation")
 )
 
 // HTTPServerOptions configures the native loopback Streamable HTTP frontend (H6).
@@ -42,6 +51,7 @@ type HTTPServerOptions struct {
 	AllowedOrigins []string
 	Token          string
 	PreferSSE      bool
+	ReadTimeout    time.Duration
 	WriteTimeout   time.Duration
 }
 
@@ -49,10 +59,12 @@ type HTTPServerOptions struct {
 // It shares the native dispatch core with StdioServer.
 type HTTPServer struct {
 	core           *dispatcher
+	toolHeaders    map[string]mcpwire.ParameterHeaders
 	authority      string
 	path           string
 	allowedOrigins map[string]struct{}
 	preferSSE      bool
+	readTimeout    time.Duration
 	writeTimeout   time.Duration
 	maxReqs        int
 	maxBytes       int
@@ -67,15 +79,55 @@ type HTTPServer struct {
 	inflightBytes int
 	closed        bool
 
-	workers sync.WaitGroup
+	workers   sync.WaitGroup
+	exchanges sync.WaitGroup
 }
 
 type httpActiveRequest struct {
 	generation    uint64
 	cancel        context.CancelFunc
 	retired       atomic.Bool
-	requestBytes  int
+	ingressBytes  int
 	reservedBytes int
+	progressBytes int
+	terminalBytes int
+
+	deadlineMu sync.Mutex
+	rc         *http.ResponseController
+}
+
+func (e *httpActiveRequest) totalBytesLocked() int {
+	return e.ingressBytes + e.reservedBytes + e.progressBytes + e.terminalBytes
+}
+
+func (e *httpActiveRequest) abortIO() {
+	e.deadlineMu.Lock()
+	if e.rc != nil {
+		past := time.Now().Add(-time.Second)
+		_ = e.rc.SetWriteDeadline(past)
+		_ = e.rc.SetReadDeadline(past)
+	}
+	e.deadlineMu.Unlock()
+}
+
+func (e *httpActiveRequest) armWriteDeadline(timeout time.Duration) error {
+	e.deadlineMu.Lock()
+	defer e.deadlineMu.Unlock()
+	if e.retired.Load() {
+		return errStreamRetired
+	}
+	if e.rc != nil {
+		_ = e.rc.SetWriteDeadline(time.Now().Add(timeout))
+	}
+	return nil
+}
+
+func (e *httpActiveRequest) clearWriteDeadline() {
+	e.deadlineMu.Lock()
+	if e.rc != nil && !e.retired.Load() {
+		_ = e.rc.SetWriteDeadline(time.Time{})
+	}
+	e.deadlineMu.Unlock()
 }
 
 type httpReplyResult struct {
@@ -109,6 +161,41 @@ func (p *httpProgressSlot) take() []byte {
 	p.pending = nil
 	p.mu.Unlock()
 	return frame
+}
+
+type httpBudgetedBody struct {
+	inner       io.ReadCloser
+	server      *HTTPServer
+	entry       *httpActiveRequest
+	precharged  int
+	readSoFar   int
+	budgetError bool
+}
+
+func (b *httpBudgetedBody) Read(p []byte) (int, error) {
+	n, err := b.inner.Read(p)
+	if n > 0 {
+		b.readSoFar += n
+		extra := b.readSoFar - b.precharged
+		if extra > 0 {
+			if !b.server.chargeIngress(b.entry, extra) {
+				b.budgetError = true
+				return 0, errIngressBudget
+			}
+			b.precharged = b.readSoFar
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, fmt.Errorf("read MCP HTTP body: %w", err)
+	}
+	return n, err //nolint:wrapcheck // Preserve io.EOF for io.ReadAll.
+}
+
+func (b *httpBudgetedBody) Close() error {
+	if err := b.inner.Close(); err != nil {
+		return fmt.Errorf("close MCP HTTP body: %w", err)
+	}
+	return nil
 }
 
 // ValidateLoopbackOrigin checks that raw is an exact http/https loopback origin
@@ -146,28 +233,35 @@ func NewHTTPServer(opts HTTPServerOptions) (*HTTPServer, error) {
 	if path == "" {
 		path = DefaultHTTPPath
 	}
-	allowed := make(map[string]struct{}, len(opts.AllowedOrigins))
-	for _, origin := range opts.AllowedOrigins {
-		if err := ValidateLoopbackOrigin(origin); err != nil {
-			return nil, err
-		}
-		allowed[origin] = struct{}{}
+	allowed, err := parseAllowedOrigins(opts.AllowedOrigins)
+	if err != nil {
+		return nil, err
 	}
 	core, err := newDispatcher(opts.ServerOptions)
 	if err != nil {
 		return nil, err
 	}
+	toolHeaders, err := compileToolHeaders(core.registry)
+	if err != nil {
+		return nil, err
+	}
 	maxReqs, maxBytes, connBytes, drainWait := serverLimits(opts.ServerOptions)
+	readTimeout := opts.ReadTimeout
+	if readTimeout <= 0 {
+		readTimeout = defaultReadTimeout
+	}
 	writeTimeout := opts.WriteTimeout
 	if writeTimeout <= 0 {
 		writeTimeout = defaultWriteTimeout
 	}
 	return &HTTPServer{
 		core:           core,
+		toolHeaders:    toolHeaders,
 		authority:      opts.Authority,
 		path:           path,
 		allowedOrigins: allowed,
 		preferSSE:      opts.PreferSSE,
+		readTimeout:    readTimeout,
 		writeTimeout:   writeTimeout,
 		maxReqs:        maxReqs,
 		maxBytes:       maxBytes,
@@ -178,6 +272,30 @@ func NewHTTPServer(opts HTTPServerOptions) (*HTTPServer, error) {
 		generation:     1,
 		active:         make(map[*httpActiveRequest]struct{}),
 	}, nil
+}
+
+func parseAllowedOrigins(origins []string) (map[string]struct{}, error) {
+	allowed := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		if err := ValidateLoopbackOrigin(origin); err != nil {
+			return nil, err
+		}
+		allowed[origin] = struct{}{}
+	}
+	return allowed, nil
+}
+
+func compileToolHeaders(registry *Registry) (map[string]mcpwire.ParameterHeaders, error) {
+	defs := registry.Definitions()
+	compiled := make(map[string]mcpwire.ParameterHeaders, len(defs))
+	for _, def := range defs {
+		headers, err := mcpwire.CompileParameterHeaders(def.InputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("compile MCP parameter headers for %s: %w", def.Name, err)
+		}
+		compiled[def.Name] = headers
+	}
+	return compiled, nil
 }
 
 func serverLimits(opts ServerOptions) (maxReqs, maxBytes, connBytes int, drainWait time.Duration) {
@@ -208,12 +326,13 @@ func (s *HTTPServer) originAllowed(origin string) bool {
 func (s *HTTPServer) httpPolicy() mcpwire.HTTPPolicy {
 	return mcpwire.HTTPPolicy{
 		Methods:     nativeMethods,
-		ToolHeaders: s.core.toolHeader,
+		ToolHeaders: func(name string) mcpwire.ParameterHeaders { return s.toolHeaders[name] },
 	}
 }
 
 // RotateToken replaces the active bearer token and cancels every in-flight
-// request stream authenticated under an earlier token generation.
+// request exchange authenticated under an earlier token generation, interrupting
+// any blocked writes and suppressing queued frames.
 func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired int, err error) {
 	if newToken == "" {
 		return 0, 0, errors.New("HTTP MCP bearer token must not be empty")
@@ -222,18 +341,19 @@ func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired in
 	s.token = newToken
 	s.generation++
 	generation = s.generation
-	cancels := make([]context.CancelFunc, 0, len(s.active))
+	targets := make([]*httpActiveRequest, 0, len(s.active))
 	for entry := range s.active {
 		if entry.generation < generation {
 			entry.retired.Store(true)
-			cancels = append(cancels, entry.cancel)
+			targets = append(targets, entry)
 		}
 	}
 	s.mu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
+	for _, entry := range targets {
+		entry.cancel()
+		entry.abortIO()
 	}
-	return generation, len(cancels), nil
+	return generation, len(targets), nil
 }
 
 // Shutdown stops admitting new requests, cancels in-flight HTTP waits (never
@@ -241,13 +361,14 @@ func (s *HTTPServer) RotateToken(newToken string) (generation uint64, retired in
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
-	cancels := make([]context.CancelFunc, 0, len(s.active))
+	targets := make([]*httpActiveRequest, 0, len(s.active))
 	for entry := range s.active {
-		cancels = append(cancels, entry.cancel)
+		targets = append(targets, entry)
 	}
 	s.mu.Unlock()
-	for _, cancel := range cancels {
-		cancel()
+	for _, entry := range targets {
+		entry.cancel()
+		entry.abortIO()
 	}
 
 	deadline := time.Now().Add(s.drainWait)
@@ -255,7 +376,10 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 		deadline = ctxDeadline
 	}
 	shutdownDone := startHook(s.onShutdown)
-	waitBounded(deadline, func() { s.workers.Wait() })
+	waitBounded(deadline, func() {
+		s.workers.Wait()
+		s.exchanges.Wait()
+	})
 	waitChannelBounded(deadline, shutdownDone)
 	return nil
 }
@@ -274,7 +398,8 @@ func startHook(fn func()) <-chan struct{} {
 }
 
 // ServeHTTP enforces H6 authority, Origin, method, bearer authentication,
-// section 2.2 header/body validation, bounded admission, and JSON/SSE output.
+// ingress admission before reading, section 2.2 validation, output budgets,
+// and JSON/SSE delivery.
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status := mcpwire.EndpointStatus(r, s.authority, s.path, s.originAllowed); status != http.StatusOK {
 		if status == http.StatusMethodNotAllowed {
@@ -288,24 +413,24 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeUnauthorized(w)
 		return
 	}
-	input, err := mcpwire.ReadHTTP(r, s.httpPolicy())
-	if err != nil {
-		if r.Context().Err() == nil {
-			w.WriteHeader(http.StatusBadRequest)
-		}
+	if r.ContentLength > mcpwire.MaxMessage {
+		s.writeBoundedFaultJSON(w, &mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: mcpwire.ErrTooLarge.Error()})
 		return
 	}
-	if input.Status != http.StatusOK {
-		writeHTTPInputResponse(w, input)
-		return
-	}
-	reqCtx, entry, status := s.admitRequest(r.Context(), authGen, input.Message)
-	if status == http.StatusUnauthorized {
+	rc := http.NewResponseController(w)
+	reqCtx, entry, precharged, admitStatus := s.admitExchange(r.Context(), authGen, r.ContentLength, rc)
+	if admitStatus == http.StatusUnauthorized {
 		writeUnauthorized(w)
 		return
 	}
 	if entry == nil {
-		writeHTTPFault(w, meshFault(input.Message.ID(), agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish."))
+		s.writeBoundedFaultJSON(w, meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request capacity reached; retry after active requests finish."))
+		return
+	}
+	defer s.finishExchange(entry)
+
+	input, ok := s.readBudgetedHTTP(w, r, rc, entry, precharged)
+	if !ok {
 		return
 	}
 	s.executeHTTPRequest(reqCtx, w, r, entry, input.Message)
@@ -344,63 +469,176 @@ func bearerToken(headers http.Header) (string, bool) {
 	return token, true
 }
 
-func (s *HTTPServer) admitRequest(parent context.Context, authGen uint64, msg mcpwire.Message) (context.Context, *httpActiveRequest, int) {
-	rawBytes := len(msg.Raw())
-	reserve := faultReservation(msg.ID())
-	needed := rawBytes + reserve
+func (s *HTTPServer) fitsExchangeLocked(entry *httpActiveRequest, delta int) bool {
+	if delta <= 0 {
+		return true
+	}
+	return entry.totalBytesLocked()+delta <= s.connBytes && s.inflightBytes+delta <= s.maxBytes
+}
+
+func (s *HTTPServer) admitExchange(parent context.Context, authGen uint64, contentLength int64, rc *http.ResponseController) (context.Context, *httpActiveRequest, int, int) {
+	precharged := 0
+	if contentLength > 0 {
+		precharged = int(contentLength)
+	}
+	reserve := min(reservedErrorBytes, s.connBytes)
+	needed := precharged + reserve
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.generation != authGen {
-		return nil, nil, http.StatusUnauthorized
+		return nil, nil, 0, http.StatusUnauthorized
 	}
 	if len(s.active) >= s.maxReqs || needed > s.connBytes || s.inflightBytes+needed > s.maxBytes {
-		return nil, nil, http.StatusOK
+		return nil, nil, 0, http.StatusOK
 	}
 	reqCtx, cancel := context.WithCancel(parent)
 	entry := &httpActiveRequest{
 		generation:    authGen,
 		cancel:        cancel,
-		requestBytes:  rawBytes,
+		ingressBytes:  precharged,
 		reservedBytes: reserve,
+		rc:            rc,
 	}
 	s.active[entry] = struct{}{}
 	s.inflightBytes += needed
-	s.workers.Add(1)
-	return reqCtx, entry, http.StatusOK
+	s.exchanges.Add(1)
+	return reqCtx, entry, precharged, http.StatusOK
 }
 
-func (s *HTTPServer) releaseRequest(entry *httpActiveRequest) {
+func (s *HTTPServer) chargeIngress(entry *httpActiveRequest, delta int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry.retired.Load() || !s.fitsExchangeLocked(entry, delta) {
+		return false
+	}
+	entry.ingressBytes += delta
+	s.inflightBytes += delta
+	return true
+}
+
+func (s *HTTPServer) setIngressBytes(entry *httpActiveRequest, exact int) {
+	s.mu.Lock()
+	delta := exact - entry.ingressBytes
+	entry.ingressBytes = exact
+	s.inflightBytes += delta
+	s.mu.Unlock()
+}
+
+func (s *HTTPServer) chargeProgress(entry *httpActiveRequest, size int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if entry.retired.Load() {
+		return false
+	}
+	delta := size - entry.progressBytes
+	if delta > 0 && !s.fitsExchangeLocked(entry, delta) {
+		return false
+	}
+	entry.progressBytes = size
+	s.inflightBytes += delta
+	return true
+}
+
+func (s *HTTPServer) releaseProgress(entry *httpActiveRequest) {
+	s.mu.Lock()
+	if entry.progressBytes > 0 {
+		s.inflightBytes -= entry.progressBytes
+		entry.progressBytes = 0
+	}
+	s.mu.Unlock()
+}
+
+func (s *HTTPServer) finishExchange(entry *httpActiveRequest) {
+	entry.cancel()
 	s.mu.Lock()
 	if _, ok := s.active[entry]; ok {
 		delete(s.active, entry)
-		s.inflightBytes -= entry.requestBytes + entry.reservedBytes
+		s.inflightBytes -= entry.totalBytesLocked()
+		entry.ingressBytes = 0
+		entry.reservedBytes = 0
+		entry.progressBytes = 0
+		entry.terminalBytes = 0
 	}
 	s.mu.Unlock()
-	s.workers.Done()
+	s.exchanges.Done()
+}
+
+func (s *HTTPServer) readBudgetedHTTP(w http.ResponseWriter, r *http.Request, rc *http.ResponseController, entry *httpActiveRequest, precharged int) (mcpwire.HTTPInput, bool) {
+	budgetBody := &httpBudgetedBody{
+		inner:      r.Body,
+		server:     s,
+		entry:      entry,
+		precharged: precharged,
+	}
+	r.Body = budgetBody
+
+	_ = rc.SetReadDeadline(time.Now().Add(s.readTimeout))
+	input, err := mcpwire.ReadHTTP(r, s.httpPolicy())
+	_ = rc.SetReadDeadline(time.Time{})
+
+	if err != nil {
+		s.handleReadHTTPError(w, r, entry, budgetBody, err)
+		return mcpwire.HTTPInput{}, false
+	}
+	if entry.retired.Load() {
+		writeUnauthorized(w)
+		return mcpwire.HTTPInput{}, false
+	}
+	if input.Status != http.StatusOK {
+		s.setIngressBytes(entry, 0)
+		s.writeHTTPInputResponse(w, entry, input)
+		return mcpwire.HTTPInput{}, false
+	}
+	s.setIngressBytes(entry, len(input.Message.Raw()))
+	return input, true
+}
+
+func (s *HTTPServer) handleReadHTTPError(w http.ResponseWriter, r *http.Request, entry *httpActiveRequest, body *httpBudgetedBody, err error) {
+	s.setIngressBytes(entry, 0)
+	if entry.retired.Load() {
+		writeUnauthorized(w)
+		return
+	}
+	if body.budgetError || errors.Is(err, errIngressBudget) {
+		s.writeBoundedFaultJSON(w, meshFault(mcpwire.ID{}, agentapi.ResourceLimit, true, "Frontend request byte budget exceeded; retry after active requests finish."))
+		return
+	}
+	if r.Context().Err() == nil {
+		w.WriteHeader(http.StatusBadRequest)
+	}
 }
 
 func (s *HTTPServer) executeHTTPRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, entry *httpActiveRequest, msg mcpwire.Message) {
-	defer entry.cancel()
 	token := extractProgressToken(msg)
 	progress := newHTTPProgressSlot()
 	done := make(chan httpReplyResult, 1)
+	notify := s.newProgressNotifier(ctx, entry, token, progress)
 
+	s.workers.Add(1)
 	go func() {
-		defer s.releaseRequest(entry)
-		notify := func(update ProgressUpdate) {
-			if len(token) == 0 || ctx.Err() != nil {
-				return
-			}
-			if raw, ok := marshalProgressNotification(token, update); ok {
-				progress.set(raw)
-			}
-		}
+		defer s.workers.Done()
 		reply, fault := s.core.handleMessage(ctx, msg, notify)
 		done <- httpReplyResult{reply: reply, fault: fault}
 	}()
 
 	s.streamHTTPResponse(ctx, w, entry, msg.ID(), wantsSSE(r.Header, s.preferSSE), progress, done)
+}
+
+func (s *HTTPServer) newProgressNotifier(ctx context.Context, entry *httpActiveRequest, token json.RawMessage, progress *httpProgressSlot) func(ProgressUpdate) {
+	return func(update ProgressUpdate) {
+		if len(token) == 0 || ctx.Err() != nil || entry.retired.Load() {
+			return
+		}
+		raw, ok := marshalProgressNotification(token, update)
+		if !ok {
+			return
+		}
+		if !s.chargeProgress(entry, len(raw)+sseFrameOverhead) {
+			return
+		}
+		progress.set(raw)
+	}
 }
 
 func (s *HTTPServer) streamHTTPResponse(
@@ -412,39 +650,51 @@ func (s *HTTPServer) streamHTTPResponse(
 	progress *httpProgressSlot,
 	done <-chan httpReplyResult,
 ) {
-	rc := http.NewResponseController(w)
 	sseStarted := false
 	for {
 		select {
 		case <-progress.signal:
-			if !s.flushProgressFrame(ctx, w, rc, entry, &sseStarted, progress) {
+			if !s.flushProgressFrame(ctx, w, entry, &sseStarted, progress) {
 				return
 			}
 		case res := <-done:
-			s.finishHTTPStream(ctx, w, rc, entry, sseStarted, preferSSE, id, res)
+			s.finishHTTPStream(ctx, w, entry, sseStarted, preferSSE, id, res)
 			return
 		case <-ctx.Done():
-			if entry.retired.Load() && !sseStarted {
-				writeUnauthorized(w)
-			}
+			s.handleStreamCancel(w, entry, sseStarted)
 			return
 		}
 	}
 }
 
-func (s *HTTPServer) flushProgressFrame(ctx context.Context, w http.ResponseWriter, rc *http.ResponseController, entry *httpActiveRequest, sseStarted *bool, progress *httpProgressSlot) bool {
+func (s *HTTPServer) handleStreamCancel(w http.ResponseWriter, entry *httpActiveRequest, sseStarted bool) {
+	s.releaseProgress(entry)
+	if entry.retired.Load() && !sseStarted {
+		writeUnauthorized(w)
+	}
+}
+
+func (s *HTTPServer) flushProgressFrame(ctx context.Context, w http.ResponseWriter, entry *httpActiveRequest, sseStarted *bool, progress *httpProgressSlot) bool {
 	frame := progress.take()
-	if len(frame) == 0 || ctx.Err() != nil {
+	if len(frame) == 0 {
+		s.releaseProgress(entry)
 		return true
 	}
-	if err := s.writeSSEEvent(w, rc, sseStarted, frame); err != nil {
+	if ctx.Err() != nil || entry.retired.Load() {
+		s.releaseProgress(entry)
+		return false
+	}
+	err := s.writeSSEEvent(w, entry, sseStarted, frame)
+	s.releaseProgress(entry)
+	if err != nil {
 		entry.cancel()
 		return false
 	}
-	return true
+	return !entry.retired.Load()
 }
 
-func (s *HTTPServer) finishHTTPStream(ctx context.Context, w http.ResponseWriter, rc *http.ResponseController, entry *httpActiveRequest, sseStarted, preferSSE bool, id mcpwire.ID, res httpReplyResult) {
+func (s *HTTPServer) finishHTTPStream(ctx context.Context, w http.ResponseWriter, entry *httpActiveRequest, sseStarted, preferSSE bool, id mcpwire.ID, res httpReplyResult) {
+	s.releaseProgress(entry)
 	if entry.retired.Load() {
 		if !sseStarted {
 			writeUnauthorized(w)
@@ -454,49 +704,91 @@ func (s *HTTPServer) finishHTTPStream(ctx context.Context, w http.ResponseWriter
 	if ctx.Err() != nil {
 		return
 	}
-	s.writeTerminalHTTP(w, rc, sseStarted, preferSSE, id, res)
+	s.writeTerminalHTTP(w, entry, sseStarted, preferSSE, id, res)
 }
 
-func (s *HTTPServer) writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, started *bool, frame []byte) error {
+func (s *HTTPServer) writeSSEEvent(w http.ResponseWriter, entry *httpActiveRequest, started *bool, frame []byte) error {
+	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
+		return err
+	}
+	defer entry.clearWriteDeadline()
+
 	if !*started {
 		w.Header().Set(httpHeaderContent, httpSSEMedia)
 		w.Header().Set(httpHeaderCache, "no-store")
 		w.WriteHeader(http.StatusOK)
 		*started = true
 	}
-	_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout))
-	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
 	if err := mcpwire.WriteSSE(w, frame); err != nil {
 		return fmt.Errorf("write MCP SSE event: %w", err)
 	}
-	if err := rc.Flush(); err != nil {
-		return fmt.Errorf("flush MCP SSE event: %w", err)
+	if entry.rc != nil {
+		if err := entry.rc.Flush(); err != nil {
+			return fmt.Errorf("flush MCP SSE event: %w", err)
+		}
 	}
 	return nil
 }
 
-func (s *HTTPServer) writeTerminalHTTP(w http.ResponseWriter, rc *http.ResponseController, sseStarted, preferSSE bool, id mcpwire.ID, res httpReplyResult) {
+func (s *HTTPServer) writeTerminalHTTP(w http.ResponseWriter, entry *httpActiveRequest, sseStarted, preferSSE bool, id mcpwire.ID, res httpReplyResult) {
 	frame, fallback, status := prepareTerminalFrames(id, res.reply, res.fault)
 	if len(frame) == 0 {
 		frame = fallback
 		status = http.StatusOK
 	}
+	useSSE := sseStarted || (preferSSE && status == http.StatusOK)
+	frame, status = s.reserveTerminalBytes(entry, frame, fallback, status, useSSE)
+	if entry.retired.Load() {
+		if !sseStarted {
+			writeUnauthorized(w)
+		}
+		return
+	}
 	if sseStarted {
 		if status == http.StatusOK {
-			_ = s.writeSSEEvent(w, rc, &sseStarted, frame)
+			_ = s.writeSSEEvent(w, entry, &sseStarted, frame)
 		}
 		return
 	}
 	if preferSSE && status == http.StatusOK {
-		_ = s.writeSSEEvent(w, rc, &sseStarted, frame)
+		_ = s.writeSSEEvent(w, entry, &sseStarted, frame)
 		return
 	}
-	_ = rc.SetWriteDeadline(time.Now().Add(s.writeTimeout))
-	defer func() { _ = rc.SetWriteDeadline(time.Time{}) }()
+	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
+		return
+	}
+	defer entry.clearWriteDeadline()
 	w.Header().Set(httpHeaderContent, httpJSONMedia)
 	w.Header().Set(httpHeaderCache, "no-store")
 	w.WriteHeader(status)
 	_, _ = w.Write(frame)
+	if entry.rc != nil {
+		_ = entry.rc.Flush()
+	}
+}
+
+func (s *HTTPServer) reserveTerminalBytes(entry *httpActiveRequest, frame, fallback []byte, status int, useSSE bool) ([]byte, int) {
+	overhead := 0
+	if useSSE {
+		overhead = sseFrameOverhead
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Worker has finished with the decoded request bytes; switch the exchange's
+	// reservation from ingress + fallback reserve to the exact outgoing frame.
+	s.inflightBytes -= entry.ingressBytes + entry.reservedBytes
+	entry.ingressBytes = 0
+	entry.reservedBytes = 0
+
+	wireSize := len(frame) + overhead
+	if !s.fitsExchangeLocked(entry, wireSize) {
+		frame = fallback
+		status = http.StatusOK
+		wireSize = len(frame) + overhead
+	}
+	entry.terminalBytes = wireSize
+	s.inflightBytes += wireSize
+	return frame, status
 }
 
 func writeUnauthorized(w http.ResponseWriter) {
@@ -504,28 +796,24 @@ func writeUnauthorized(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
-func writeHTTPInputResponse(w http.ResponseWriter, input mcpwire.HTTPInput) {
+func (s *HTTPServer) writeHTTPInputResponse(w http.ResponseWriter, entry *httpActiveRequest, input mcpwire.HTTPInput) {
 	if input.Fault == nil {
 		w.WriteHeader(input.Status)
 		return
 	}
-	raw, err := input.Fault.Reply()
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+	if err := entry.armWriteDeadline(s.writeTimeout); err != nil {
 		return
 	}
+	defer entry.clearWriteDeadline()
+	raw := encodeBoundedFault(input.Fault, min(mcpwire.MaxMessage, s.connBytes))
 	w.Header().Set(httpHeaderContent, httpJSONMedia)
 	w.Header().Set(httpHeaderCache, "no-store")
 	w.WriteHeader(input.Status)
 	_, _ = w.Write(raw)
 }
 
-func writeHTTPFault(w http.ResponseWriter, fault *mcpwire.Fault) {
-	raw, err := fault.Reply()
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+func (s *HTTPServer) writeBoundedFaultJSON(w http.ResponseWriter, fault *mcpwire.Fault) {
+	raw := encodeBoundedFault(fault, min(mcpwire.MaxMessage, s.connBytes))
 	w.Header().Set(httpHeaderContent, httpJSONMedia)
 	w.Header().Set(httpHeaderCache, "no-store")
 	w.WriteHeader(faultHTTPStatus(fault.Code))

@@ -25,13 +25,15 @@ import (
 type mcpControls struct {
 	app     *application
 	pool    *mcpHostPool
+	caller  protocol.CallerCredential
 	account string
 }
 
-func newMCPControls(app *application, pool *mcpHostPool) *mcpControls {
+func newMCPControls(app *application, pool *mcpHostPool, caller protocol.CallerCredential) *mcpControls {
 	return &mcpControls{
 		app:     app,
 		pool:    pool,
+		caller:  caller,
 		account: currentAccountName(),
 	}
 }
@@ -479,6 +481,7 @@ func (c *mcpControls) JobWait(ctx context.Context, req mcpnative.JobWaitRequest,
 	response, info, err := c.pool.ExchangeStreamBudgeted(ctx, host, deadline, func(timeoutMS int) protocol.Control {
 		sentControl = protocol.Control{
 			Type:          protocol.TypeExecutionWait,
+			Caller:        c.caller,
 			SessionID:     req.Job.SessionID,
 			Instance:      req.Job.Instance,
 			TimeoutMillis: timeoutMS,
@@ -529,6 +532,7 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 	}
 	control := protocol.Control{
 		Type:      protocol.TypeExecutionLogs,
+		Caller:    c.caller,
 		SessionID: req.Job.SessionID,
 		Instance:  req.Job.Instance,
 		Stream:    req.Stream,
@@ -576,6 +580,7 @@ func (c *mcpControls) JobReceipt(ctx context.Context, req mcpnative.JobReceiptRe
 	}
 	control := protocol.Control{
 		Type:       protocol.TypeExecutionRequest,
+		Caller:     c.caller,
 		RequestKey: req.RequestKey,
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
@@ -595,6 +600,7 @@ func (c *mcpControls) ListJobs(ctx context.Context, req mcpnative.ListJobsReques
 	}
 	control := protocol.Control{
 		Type:               protocol.TypeExecutionList,
+		Caller:             c.caller,
 		ExecutionListAll:   req.All,
 		ExecutionListLimit: req.Limit,
 		Cursor:             req.Page,
@@ -657,6 +663,7 @@ func (c *mcpControls) JobInput(ctx context.Context, req mcpnative.JobInputReques
 	}
 	control := protocol.Control{
 		Type:        protocol.TypeExecutionInput,
+		Caller:      c.caller,
 		SessionID:   req.Job.SessionID,
 		Instance:    req.Job.Instance,
 		WriteKey:    req.WriteKey,
@@ -722,6 +729,9 @@ func (c *mcpControls) runJobStateControl(ctx context.Context, operation, hostID 
 	host, err := c.resolveExactHostID(hostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
+	}
+	if control.Caller == "" {
+		control.Caller = c.caller
 	}
 	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
 	target := c.targetMeta(host, info)

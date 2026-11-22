@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 
-from mcp_native import MCPFixture, create_pipe_job_cli, run_cli
+from mcp_native import MCPFixture, run_cli
 from terminal_window import eventually, require
 
 PROTO = "2026-07-28"
@@ -19,6 +19,68 @@ META = {
     "io.modelcontextprotocol/clientCapabilities": {},
 }
 ALLOWED_ORIGIN = "http://127.0.0.1:3456"
+
+
+def redact_record(rec):
+    if not isinstance(rec, dict):
+        return "<redacted>"
+    out = dict(rec)
+    if "token" in out:
+        out["token"] = "[REDACTED]"
+    return out
+
+
+def redact_text(text, *secrets):
+    out = text
+    for secret in secrets:
+        if secret:
+            out = out.replace(secret, "[REDACTED]")
+    return out
+
+
+def create_app_job_cli(fixture, host_id, identity, ctx_key, job_key, command, stdin_mode="closed"):
+    ctx_res = run_cli(
+        fixture.binary,
+        fixture.environment,
+        "context",
+        "open",
+        "--host",
+        host_id,
+        "--identity",
+        identity,
+        "--request-key",
+        ctx_key,
+        "--cwd",
+        str(fixture.root),
+        "--json",
+    )
+    require(ctx_res.returncode == 0 and not ctx_res.stderr, f"CLI context open failed: rc={ctx_res.returncode} out={ctx_res.stdout!r} err={ctx_res.stderr!r}")
+    ctx_handle = json.loads(ctx_res.stdout)["data"]["handle"]
+    job_res = run_cli(
+        fixture.binary,
+        fixture.environment,
+        "session",
+        "create",
+        "--host",
+        host_id,
+        "--identity",
+        identity,
+        "--context",
+        ctx_handle,
+        "--kind",
+        "pipe",
+        "--stdin",
+        stdin_mode,
+        "--cwd",
+        str(fixture.root),
+        "--request-key",
+        job_key,
+        "--json",
+        "--",
+        *command,
+    )
+    require(job_res.returncode == 0 and not job_res.stderr, f"CLI app session create failed: rc={job_res.returncode} out={job_res.stdout!r} err={job_res.stderr!r}")
+    return json.loads(job_res.stdout)["data"]
 
 
 def make_body(req_id, method, params=None, progress_token=None, version=PROTO, caps=None):
@@ -246,9 +308,11 @@ def call_tool_json(authority, token, req_id, name, arguments):
 
 def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, token1):
     host_id = fixture.remote_id
-    long_receipt = create_pipe_job_cli(
+    long_receipt = create_app_job_cli(
         fixture,
         host_id,
+        "http-agent",
+        "ctx-http-long-1",
         "mcp-http-long-1",
         ["/bin/sh", "-c", "read line; printf 'http-got:%s\\n' \"$line\"; exec /bin/sleep 60"],
         stdin_mode="open",
@@ -313,7 +377,7 @@ def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, tok
 
     rec2 = json.loads(token_path.read_text(encoding="utf-8"))
     token2 = rec2["token"]
-    require(rec2["generation"] == 2 and token2 and token2 != token1, f"rotated token file: {rec2}")
+    require(rec2["generation"] == 2 and token2 and token2 != token1, f"rotated token file: {redact_record(rec2)}")
     require(stat.S_IMODE(token_path.stat().st_mode) == 0o600, f"rotated token file mode: {oct(token_path.stat().st_mode)}")
     require(token1 not in rot.stdout and token2 not in rot.stdout and token1 not in rot.stderr and token2 not in rot.stderr, "token leaked in rotate CLI output")
 
@@ -331,6 +395,95 @@ def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, tok
     ended = call_tool_json(authority, token2, 18, "mesh_job_wait", {"job": job_handle, "wait_ms": 10000})
     require(ended["result"]["structuredContent"]["data"]["state"] == "killed", f"HTTP job not killed: {ended}")
     return token2
+
+
+def exercise_application_identity_isolation(fixture, root):
+    host_id = fixture.remote_id
+    for name in ("review-a", "review-b"):
+        created = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
+        require(created.returncode == 0, f"identity create {name} failed: {created.stderr}")
+
+    app_receipt = create_app_job_cli(
+        fixture,
+        host_id,
+        "review-a",
+        "ctx-http-a",
+        "job-http-a",
+        ["/bin/sh", "-c", "printf 'owned-by-a\\n'; exec /bin/sleep 60"],
+        stdin_mode="open",
+    )
+    job_handle = f"mj1.{host_id}.{app_receipt['sessionId']}.{app_receipt['instance']}"
+
+    tok_a = root / "review-a-token.json"
+    tok_b = root / "review-b-token.json"
+    proc_a = subprocess.Popen(
+        [fixture.binary, "mcp", "--http", "127.0.0.1:0", "--identity", "review-a", "--token-file", str(tok_a)],
+        env=fixture.environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    proc_b = subprocess.Popen(
+        [fixture.binary, "mcp", "--http", "127.0.0.1:0", "--identity", "review-b", "--token-file", str(tok_b)],
+        env=fixture.environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        rec_a = wait_token_file(tok_a, proc_a)
+        rec_b = wait_token_file(tok_b, proc_b)
+        auth_a, token_a = rec_a["listener"], rec_a["token"]
+        auth_b, token_b = rec_b["listener"], rec_b["token"]
+
+        # Owning listener review-a can read status, output, list, and cancel its own job.
+        st_a = call_tool_json(auth_a, token_a, 101, "mesh_job_status", {"job": job_handle})
+        require(not st_a["result"]["isError"] and st_a["result"]["structuredContent"]["data"]["state"] == "running", f"review-a status failed: {st_a}")
+
+        def saw_a_output():
+            out_a = call_tool_json(auth_a, token_a, 102, "mesh_job_output", {"job": job_handle, "stream": "stdout"})
+            return not out_a["result"]["isError"] and out_a["result"]["structuredContent"]["data"]["data"] == "owned-by-a\n"
+
+        eventually(saw_a_output, "review-a did not read its own job output over HTTP")
+
+        list_a = call_tool_json(auth_a, token_a, 103, "mesh_jobs_list", {"host": host_id, "all": True})
+        jobs_a = [item["job"] for item in list_a["result"]["structuredContent"]["data"]["jobs"]]
+        require(job_handle in jobs_a, f"review-a job missing from review-a list: {jobs_a}")
+
+        # Other listener review-b MUST be denied on review-a's job and MUST NOT list it.
+        st_b = call_tool_json(auth_b, token_b, 201, "mesh_job_status", {"job": job_handle})
+        require(
+            st_b["result"]["isError"] and st_b["result"]["structuredContent"]["errors"][0]["code"] == "access.denied",
+            f"review-b status was not access.denied: {st_b}",
+        )
+        out_b = call_tool_json(auth_b, token_b, 202, "mesh_job_output", {"job": job_handle, "stream": "stdout"})
+        require(
+            out_b["result"]["isError"] and out_b["result"]["structuredContent"]["errors"][0]["code"] == "access.denied",
+            f"review-b output was not access.denied: {out_b}",
+        )
+        cancel_b = call_tool_json(auth_b, token_b, 203, "mesh_job_cancel", {"job": job_handle})
+        require(
+            cancel_b["result"]["isError"] and cancel_b["result"]["structuredContent"]["errors"][0]["code"] == "access.denied",
+            f"review-b cancel was not access.denied: {cancel_b}",
+        )
+        list_b = call_tool_json(auth_b, token_b, 204, "mesh_jobs_list", {"host": host_id, "all": True})
+        jobs_b = [item["job"] for item in list_b["result"]["structuredContent"]["data"]["jobs"]]
+        require(job_handle not in jobs_b, f"review-b listed review-a job: {jobs_b}")
+
+        # Clean up review-a's job through review-a's HTTP listener.
+        cancel_a = call_tool_json(auth_a, token_a, 104, "mesh_job_cancel", {"job": job_handle})
+        require(not cancel_a["result"]["isError"] and cancel_a["result"]["structuredContent"]["data"]["delivery"] == "delivered", f"review-a cancel failed: {cancel_a}")
+        wait_a = call_tool_json(auth_a, token_a, 105, "mesh_job_wait", {"job": job_handle, "wait_ms": 10000})
+        require(wait_a["result"]["structuredContent"]["data"]["state"] == "killed", f"review-a job not killed: {wait_a}")
+    finally:
+        for p in (proc_a, proc_b):
+            if p.poll() is None:
+                p.send_signal(signal.SIGTERM)
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=5)
 
 
 def main():
@@ -368,20 +521,21 @@ def main():
             )
             rec = wait_token_file(token_path, proc)
             require(stat.S_IMODE(token_path.stat().st_mode) == 0o600, f"token file mode: {oct(token_path.stat().st_mode)}")
-            require(rec["identity"] == "http-agent" and rec["generation"] == 1, f"initial token record: {rec}")
+            require(rec["identity"] == "http-agent" and rec["generation"] == 1, f"initial token record: {redact_record(rec)}")
             authority = rec["listener"]
             token1 = rec["token"]
 
             check_endpoint_and_protocol_matrix(authority, token1)
             token2 = exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, token1)
+            exercise_application_identity_isolation(fixture, root)
 
             # Clean SIGTERM shutdown removes token file and emits zero stdout and zero token leakage.
             proc.send_signal(signal.SIGTERM)
             stdout_b, stderr_b = proc.communicate(timeout=5.0)
             stderr_s = stderr_b.decode("utf-8", errors="replace")
-            require(proc.returncode == 0, f"SIGTERM exit={proc.returncode} stderr={stderr_s!r}")
-            require(stdout_b == b"", f"expected empty stdout, got {stdout_b!r}")
-            require(token1 not in stderr_s and token2 not in stderr_s, f"bearer token leaked to stderr: {stderr_s!r}")
+            require(proc.returncode == 0, f"SIGTERM exit={proc.returncode} stderr={redact_text(stderr_s, token1, token2)!r}")
+            require(stdout_b == b"", f"expected empty stdout, got {redact_text(stdout_b.decode('utf-8', errors='replace'), token1, token2)!r}")
+            require(token1 not in stderr_s and token2 not in stderr_s, "bearer token leaked to stderr")
             require(not token_path.exists(), "token file was not removed on clean shutdown")
             proc = None
         finally:

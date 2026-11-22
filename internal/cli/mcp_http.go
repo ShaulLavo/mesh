@@ -28,13 +28,17 @@ import (
 	"github.com/shaul/mesh/internal/appcaller"
 	"github.com/shaul/mesh/internal/mcpnative"
 	"github.com/shaul/mesh/internal/paths"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 )
 
 const (
 	mcpHTTPTokenBytes      = 32
 	mcpHTTPTokenPrefix     = "mht1_" //nolint:gosec // Non-secret token format version prefix, not a credential.
+	mcpHTTPOwnerNonceBytes = 16
+	mcpHTTPTokenMaxBytes   = 8192
 	mcpHTTPControlMaxBytes = 4096
 	mcpHTTPControlTimeout  = 5 * time.Second
 	mcpHTTPReadHeaderLimit = 10 * time.Second
@@ -59,10 +63,22 @@ type mcpHTTPTokenFile struct {
 	Endpoint            string    `json:"endpoint"`
 	Identity            string    `json:"identity"`
 	IdentityFingerprint string    `json:"identityFingerprint"`
+	OwnerNonce          string    `json:"ownerNonce"`
 	PID                 int       `json:"pid"`
 	Generation          uint64    `json:"generation"`
 	Token               string    `json:"token"`
 	RotatedAt           time.Time `json:"rotatedAt"`
+}
+
+type mcpHTTPTokenHandle struct {
+	dir        *os.File
+	baseName   string
+	path       string
+	authority  string
+	identity   string
+	ownerNonce string
+	dev        uint64
+	ino        uint64
 }
 
 type mcpHTTPControlRequest struct {
@@ -78,14 +94,14 @@ type mcpHTTPControlResponse struct {
 }
 
 type mcpHTTPLiveState struct {
-	authority  string
-	endpoint   string
-	identity   appcaller.Identity
-	tokenPath  string
-	now        func() time.Time
-	mcpSrv     *mcpnative.HTTPServer
-	rotateMu   sync.Mutex
-	generation uint64
+	authority   string
+	endpoint    string
+	identity    appcaller.Identity
+	tokenHandle *mcpHTTPTokenHandle
+	now         func() time.Time
+	mcpSrv      *mcpnative.HTTPServer
+	rotateMu    sync.Mutex
+	generation  uint64
 }
 
 func (a *application) mcpTokenCommand() *cobra.Command {
@@ -187,6 +203,14 @@ func generateMCPHTTPToken() (string, error) {
 	return mcpHTTPTokenPrefix + base64.RawURLEncoding.EncodeToString(raw[:]), nil
 }
 
+func generateOwnerNonce() (string, error) {
+	var raw [mcpHTTPOwnerNonceBytes]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("generate MCP HTTP listener nonce: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
 func mcpHTTPControlSocketPath(stateDir, authority, identityName string) (string, error) {
 	sum := sha256.Sum256([]byte("mesh-mcp-http-v1\x00" + authority + "\x00" + identityName))
 	path := filepath.Join(stateDir, "h-"+hex.EncodeToString(sum[:6])+".s")
@@ -209,79 +233,197 @@ func resolveTokenFilePath(stateDir, authority, identityName, override string) (s
 	if err != nil {
 		return "", fmt.Errorf("resolve --token-file %q: %w", override, err)
 	}
-	if err := checkTokenFileTarget(abs); err != nil {
-		return "", err
+	base := filepath.Base(abs)
+	if base == "" || base == "." || base == ".." || base == string(os.PathSeparator) {
+		return "", fmt.Errorf("invalid --token-file %q: must name a file", override)
 	}
 	return abs, nil
 }
 
-func checkTokenFileTarget(path string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// openTokenParentNoFollow walks every directory component without following
+// symlinks (allowing only macOS's system /var and /tmp root prefixes) and
+// returns a held directory descriptor verified to be a directory.
+func openTokenParentNoFollow(dir string) (*os.File, error) {
+	clean := filepath.Clean(dir)
+	if !filepath.IsAbs(clean) {
+		return nil, fmt.Errorf("token directory %q must be absolute", dir)
 	}
+	anchor, parts := splitNoFollowAnchor(clean)
+	fd, err := unix.Open(anchor, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("inspect token file %s: %w", path, err)
+		return nil, fmt.Errorf("open token root %s: %w", anchor, err)
 	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("token file %s must be a regular file, not a symlink or special file", path)
+	for _, part := range parts {
+		next, stepErr := openOrCreateDirComponent(fd, part)
+		_ = unix.Close(fd)
+		if stepErr != nil {
+			return nil, fmt.Errorf("open token directory %s: %w", clean, stepErr)
+		}
+		fd = next
 	}
-	return nil
+	file := os.NewFile(uintptr(fd), clean)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("inspect token directory %s: %w", clean, err)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+		_ = file.Close()
+		return nil, fmt.Errorf("token parent %s is not a directory", clean)
+	}
+	return file, nil
 }
 
-func writePrivateTokenFile(path string, record mcpHTTPTokenFile) error {
-	if err := checkTokenFileTarget(path); err != nil {
-		return err
+func splitNoFollowAnchor(clean string) (string, []string) {
+	anchor, rest := noFollowAnchor(clean)
+	if rest == "" {
+		return anchor, nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create token directory %s: %w", dir, err)
+	return anchor, strings.Split(rest, string(os.PathSeparator))
+}
+
+func openOrCreateDirComponent(parentFD int, name string) (int, error) {
+	flags := unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	fd, err := unix.Openat(parentFD, name, flags, 0)
+	if err == nil {
+		return fd, nil
 	}
+	if !errors.Is(err, unix.ENOENT) {
+		return -1, fmt.Errorf("open directory component %q without following symlinks: %w", name, err)
+	}
+	if err := unix.Mkdirat(parentFD, name, 0o700); err != nil && !errors.Is(err, unix.EEXIST) {
+		return -1, fmt.Errorf("create directory component %q: %w", name, err)
+	}
+	fd, err = unix.Openat(parentFD, name, flags, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open created directory component %q: %w", name, err)
+	}
+	return fd, nil
+}
+
+func claimPrivateTokenFile(path string, record mcpHTTPTokenFile) (*mcpHTTPTokenHandle, error) {
+	dirFile, err := openTokenParentNoFollow(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	baseName := filepath.Base(path)
+	dirFD := int(dirFile.Fd())
+
+	tempName, dev, ino, err := writeTempTokenInDir(dirFD, record)
+	if err != nil {
+		_ = dirFile.Close()
+		return nil, err
+	}
+	if err := unix.Linkat(dirFD, tempName, dirFD, baseName, 0); err != nil {
+		_ = unix.Unlinkat(dirFD, tempName, 0)
+		_ = dirFile.Close()
+		if errors.Is(err, unix.EEXIST) {
+			return nil, fmt.Errorf("token file %s already exists; choose a fresh path or stop the existing listener", path)
+		}
+		return nil, fmt.Errorf("claim token file %s: %w", path, err)
+	}
+	_ = unix.Unlinkat(dirFD, tempName, 0)
+	_ = unix.Fsync(dirFD)
+
+	return &mcpHTTPTokenHandle{
+		dir:        dirFile,
+		baseName:   baseName,
+		path:       path,
+		authority:  record.Listener,
+		identity:   record.Identity,
+		ownerNonce: record.OwnerNonce,
+		dev:        dev,
+		ino:        ino,
+	}, nil
+}
+
+func writeTempTokenInDir(dirFD int, record mcpHTTPTokenFile) (tempName string, dev, ino uint64, err error) {
 	data, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode MCP HTTP token file: %w", err)
+		return "", 0, 0, fmt.Errorf("encode MCP HTTP token file: %w", err)
 	}
 	data = append(data, '\n')
-	temp, err := os.CreateTemp(dir, ".mcp-token-*")
+	suffix, err := generateOwnerNonce()
 	if err != nil {
-		return fmt.Errorf("create temporary token file in %s: %w", dir, err)
+		return "", 0, 0, err
 	}
-	tempPath := temp.Name()
-	defer func() { _ = os.Remove(tempPath) }()
-	if err := temp.Chmod(0o600); err != nil {
-		_ = temp.Close()
-		return fmt.Errorf("chmod token file: %w", err)
+	tempName = ".mcp-token-" + suffix
+	fd, err := unix.Openat(dirFD, tempName, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("create private token file: %w", err)
 	}
-	_, writeErr := temp.Write(data)
-	if err := errors.Join(writeErr, temp.Sync(), temp.Close()); err != nil {
-		return fmt.Errorf("write MCP HTTP token file: %w", err)
+	file := os.NewFile(uintptr(fd), tempName)
+	var st unix.Stat_t
+	_, writeErr := file.Write(data)
+	statErr := unix.Fstat(fd, &st)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, statErr, syncErr, closeErr); err != nil {
+		_ = unix.Unlinkat(dirFD, tempName, 0)
+		return "", 0, 0, fmt.Errorf("write private token file: %w", err)
 	}
-	if err := checkTokenFileTarget(path); err != nil {
-		return err
+	return tempName, uint64(st.Dev), st.Ino, nil //nolint:unconvert // Dev width differs across Linux and Darwin.
+}
+
+func (h *mcpHTTPTokenHandle) verifyOwned() error {
+	dirFD := int(h.dir.Fd())
+	fd, err := unix.Openat(dirFD, h.baseName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open owned token file %s: %w", h.path, err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("publish MCP HTTP token file %s: %w", path, err)
+	file := os.NewFile(uintptr(fd), h.baseName)
+	defer func() { _ = file.Close() }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return fmt.Errorf("stat owned token file %s: %w", h.path, err)
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG || st.Mode&0o077 != 0 || uint64(st.Dev) != h.dev || st.Ino != h.ino { //nolint:unconvert // Dev width differs across Linux and Darwin.
+		return fmt.Errorf("token file %s is no longer owned by this listener", h.path)
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, mcpHTTPTokenMaxBytes+1))
+	if err != nil || len(raw) > mcpHTTPTokenMaxBytes {
+		return fmt.Errorf("read owned token file %s: %w", h.path, err)
+	}
+	var rec mcpHTTPTokenFile
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return fmt.Errorf("decode owned token file %s: %w", h.path, err)
+	}
+	if rec.PID != os.Getpid() || rec.Listener != h.authority || rec.Identity != h.identity || rec.OwnerNonce != h.ownerNonce {
+		return fmt.Errorf("token file %s does not match this listener's ownership record", h.path)
 	}
 	return nil
 }
 
-func removeOwnedTokenFile(path, authority, identityName string) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return
+func (h *mcpHTTPTokenHandle) rotate(record mcpHTTPTokenFile) error {
+	if err := h.verifyOwned(); err != nil {
+		return err
 	}
-	// #nosec G304 -- path is the listener's validated private token file.
-	raw, err := os.ReadFile(path)
+	dirFD := int(h.dir.Fd())
+	record.OwnerNonce = h.ownerNonce
+	tempName, dev, ino, err := writeTempTokenInDir(dirFD, record)
 	if err != nil {
+		return err
+	}
+	if err := unix.Renameat(dirFD, tempName, dirFD, h.baseName); err != nil {
+		_ = unix.Unlinkat(dirFD, tempName, 0)
+		return fmt.Errorf("replace owned token file %s: %w", h.path, err)
+	}
+	_ = unix.Fsync(dirFD)
+	h.dev = dev
+	h.ino = ino
+	return nil
+}
+
+func (h *mcpHTTPTokenHandle) closeAndRemove() {
+	if h == nil || h.dir == nil {
 		return
 	}
-	var record mcpHTTPTokenFile
-	if json.Unmarshal(raw, &record) != nil {
-		return
+	if h.verifyOwned() == nil {
+		_ = unix.Unlinkat(int(h.dir.Fd()), h.baseName, 0)
+		_ = unix.Fsync(int(h.dir.Fd()))
 	}
-	if record.PID == os.Getpid() && record.Listener == authority && record.Identity == identityName {
-		_ = os.Remove(path)
-	}
+	_ = h.dir.Close()
+	h.dir = nil
 }
 
 func (a *application) runMCPHTTP(cmd *cobra.Command, opts mcpHTTPOptions) error {
@@ -355,25 +497,32 @@ func (a *application) runBoundMCPHTTP(
 	if err != nil {
 		return err
 	}
+	ownerNonce, err := generateOwnerNonce()
+	if err != nil {
+		return err
+	}
 	initialRecord := mcpHTTPTokenFile{
 		SchemaVersion:       1,
 		Listener:            authority,
 		Endpoint:            endpoint,
 		Identity:            identity.Name,
 		IdentityFingerprint: identity.Credential.Fingerprint(),
+		OwnerNonce:          ownerNonce,
 		PID:                 os.Getpid(),
 		Generation:          1,
 		Token:               initialToken,
 		RotatedAt:           nowFn().UTC().Truncate(time.Second),
 	}
-	if err := writePrivateTokenFile(tokenPath, initialRecord); err != nil {
-		return err
+	tokenHandle, err := claimPrivateTokenFile(tokenPath, initialRecord)
+	if err != nil {
+		return agentapi.Usage(mcpHTTPModeOperation, err.Error())
 	}
-	defer removeOwnedTokenFile(tokenPath, authority, identity.Name)
+	defer tokenHandle.closeAndRemove()
 
 	pool := newMCPHostPool(a.dependencies.DialPassive, nowFn)
 	defer pool.Close()
-	controls := newMCPControls(a, pool)
+	caller := protocol.CallerCredential(identity.Credential.Encode())
+	controls := newMCPControls(a, pool, caller)
 	mcpSrv, err := mcpnative.NewHTTPServer(mcpnative.HTTPServerOptions{
 		ServerOptions: mcpnative.ServerOptions{
 			Version:    release.Metadata().Version,
@@ -391,13 +540,13 @@ func (a *application) runBoundMCPHTTP(
 	}
 
 	live := &mcpHTTPLiveState{
-		authority:  authority,
-		endpoint:   endpoint,
-		identity:   identity,
-		tokenPath:  tokenPath,
-		now:        nowFn,
-		mcpSrv:     mcpSrv,
-		generation: 1,
+		authority:   authority,
+		endpoint:    endpoint,
+		identity:    identity,
+		tokenHandle: tokenHandle,
+		now:         nowFn,
+		mcpSrv:      mcpSrv,
+		generation:  1,
 	}
 	return serveHTTPUntilSignal(cmd.Context(), cmd.ErrOrStderr(), tcpLn, controlLn, live)
 }
@@ -425,7 +574,7 @@ func serveHTTPUntilSignal(ctx context.Context, stderr io.Writer, tcpLn, controlL
 		serveErrCh <- httpSrv.Serve(tcpLn)
 	}()
 
-	_, _ = fmt.Fprintf(stderr, "mesh mcp: listening on %s (identity: %s, token file: %s)\n", live.endpoint, live.identity.Name, live.tokenPath)
+	_, _ = fmt.Fprintf(stderr, "mesh mcp: listening on %s (identity: %s, token file: %s)\n", live.endpoint, live.identity.Name, live.tokenHandle.path)
 
 	var serveErr error
 	select {
@@ -524,7 +673,7 @@ func (l *mcpHTTPLiveState) rotate() (agentapi.MCPTokenRotateData, error) {
 		Token:               newToken,
 		RotatedAt:           rotatedAt,
 	}
-	if err := writePrivateTokenFile(l.tokenPath, record); err != nil {
+	if err := l.tokenHandle.rotate(record); err != nil {
 		return agentapi.MCPTokenRotateData{}, err
 	}
 	gen, retired, err := l.mcpSrv.RotateToken(newToken)
@@ -538,7 +687,7 @@ func (l *mcpHTTPLiveState) rotate() (agentapi.MCPTokenRotateData, error) {
 		Identity:       l.identity.Name,
 		Generation:     gen,
 		RetiredStreams: retired,
-		TokenFile:      l.tokenPath,
+		TokenFile:      l.tokenHandle.path,
 		RotatedAt:      rotatedAt,
 	}, nil
 }

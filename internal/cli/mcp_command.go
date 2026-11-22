@@ -7,6 +7,7 @@ import (
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/mcpnative"
+	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/release"
 	"github.com/spf13/cobra"
 )
@@ -67,19 +68,22 @@ func (a *application) mcpCommand() *cobra.Command {
 }
 
 func (a *application) runMCPStdio(cmd *cobra.Command, hasIdentity bool, identityName string) error {
+	var caller protocol.CallerCredential
 	if hasIdentity {
 		if strings.TrimSpace(identityName) == "" {
 			return agentapi.Usage("mcp.serve", "--identity requires a non-empty identity name.")
 		}
-		if _, err := loadApplicationIdentity("mcp.serve", identityName); err != nil {
+		id, err := loadApplicationIdentity("mcp.serve", identityName)
+		if err != nil {
 			return err
 		}
+		caller = protocol.CallerCredential(id.Credential.Encode())
 	}
 	// Keep all standard library log output off protocol stdout.
 	log.SetOutput(cmd.ErrOrStderr())
 	pool := newMCPHostPool(a.dependencies.DialPassive, a.dependencies.Now)
 	defer pool.Close()
-	controls := newMCPControls(a, pool)
+	controls := newMCPControls(a, pool, caller)
 	server, err := mcpnative.NewStdioServer(mcpnative.ServerOptions{
 		Version:    release.Metadata().Version,
 		Controls:   controls,
