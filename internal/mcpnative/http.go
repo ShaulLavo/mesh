@@ -195,6 +195,9 @@ type httpBudgetedBody struct {
 	precharged  int
 	readSoFar   int
 	budgetError bool
+	// sawEOF reports that the whole body was read; replies sent before then
+	// must not leave net/http draining the rest.
+	sawEOF bool
 }
 
 func (b *httpBudgetedBody) Read(p []byte) (int, error) {
@@ -209,6 +212,9 @@ func (b *httpBudgetedBody) Read(p []byte) (int, error) {
 			}
 			b.precharged = b.readSoFar
 		}
+	}
+	if errors.Is(err, io.EOF) {
+		b.sawEOF = true
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return n, fmt.Errorf("read MCP HTTP body: %w", err)
@@ -788,6 +794,11 @@ func (s *HTTPServer) readBudgetedHTTP(w http.ResponseWriter, r *http.Request, rc
 	}
 	if input.Status != http.StatusOK {
 		s.setIngressBytes(entry, 0)
+		if !budgetBody.sawEOF {
+			// An over-cap or unsupported body was not read to its end; a
+			// chunked sender that stalls would hold the drain forever.
+			skipRequestBody(w)
+		}
 		s.writeHTTPInputResponse(w, entry, input)
 		return mcpwire.HTTPInput{}, false
 	}

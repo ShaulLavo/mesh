@@ -824,3 +824,26 @@ func TestHTTPCapacityRejectionDoesNotWaitForBody(t *testing.T) {
 	}
 	waitPhase(t, gate.conn(1).closed, "the rejected connection to close")
 }
+
+// A chunked body has no declared length, so only reading it shows that it is
+// over the size cap. The reply must not wait for the rest of a body whose
+// sender has stalled.
+func TestHTTPOverCapChunkedBodyDoesNotWaitForRest(t *testing.T) {
+	gate := newRotationGate("")
+	h := startRotationHarness(t, gate, ServerOptions{Controls: &stubControls{}})
+	head := strings.Replace(rawRequestHead(testHTTPToken, mcpwire.MethodCallTool, "mesh_job_wait", 0),
+		"Content-Length: 0\r\n", "Transfer-Encoding: chunked\r\n", 1)
+	size := mcpwire.MaxMessage + 16
+	// One chunk past the cap, then the sender stalls: no chunk terminator.
+	request := fmt.Sprintf("%s%x\r\n%s\r\n", head, size, strings.Repeat("a", size))
+	client := h.dial(t, []byte(request))
+
+	resp, err := readRawResponse(bufio.NewReader(client))
+	if err != nil {
+		t.Fatalf("over-cap chunked body never answered while its sender stalled: %v", err)
+	}
+	if resp.status < http.StatusBadRequest {
+		t.Fatalf("over-cap chunked body = %d %q, want a client error", resp.status, resp.body)
+	}
+	waitPhase(t, gate.conn(0).closed, "the over-cap connection to close")
+}
