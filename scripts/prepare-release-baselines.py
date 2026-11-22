@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 from fixtures import draft_intake
@@ -21,7 +22,7 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def acquire(tag, name, expected, directory, cache):
+def acquire(tag, name, expected, cache):
     if not DIGEST.fullmatch(expected) or "/" in name or "\\" in name:
         raise ValueError("invalid baseline asset identity")
     cached = cache / expected
@@ -30,7 +31,16 @@ def acquire(tag, name, expected, directory, cache):
             raise ValueError(f"immutable baseline cache changed: {expected}")
         print(f"verified baseline cache hit: {tag}/{name}", file=sys.stderr)
         return cached
-    destination = directory / name
+    with tempfile.TemporaryDirectory(prefix=".baseline-", dir=cache) as staging:
+        archive = Path(staging) / name
+        download(tag, name, archive.parent)
+        if sha256(archive) != expected:
+            raise ValueError(f"published baseline digest changed: {tag}/{name}")
+        archive.replace(cached)
+    return cached
+
+
+def download(tag, name, directory):
     for attempt in range(3):
         try:
             result = subprocess.run(["gh", "release", "download", tag, "--pattern", name,
@@ -38,14 +48,10 @@ def acquire(tag, name, expected, directory, cache):
         except subprocess.TimeoutExpired:
             result = None
         if result is not None and result.returncode == 0:
-            break
+            return
         if attempt == 2:
             raise RuntimeError(f"required baseline acquisition failed: {tag}/{name}")
         time.sleep(attempt + 1)
-    if sha256(destination) != expected:
-        raise ValueError(f"published baseline digest changed: {tag}/{name}")
-    destination.replace(cached)
-    return cached
 
 
 def unpack(archive, expected, output):
@@ -71,7 +77,7 @@ def prepare_item(item, output, cache):
     release.mkdir(exist_ok=True)
     binary = release / "mesh"
     if not binary.is_file() or sha256(binary) != artifact["binarySha256"]:
-        archive = acquire(item["version"], artifact["archive"], artifact["sha256"], release, cache)
+        archive = acquire(item["version"], artifact["archive"], artifact["sha256"], cache)
         unpack(archive, artifact["binarySha256"], binary)
     binary.chmod(0o755)
     return binary
@@ -128,16 +134,13 @@ PROOF_PLATFORMS = (("linux/amd64", "linux-amd64", "ubuntu-24.04"), ("linux/arm64
 
 
 def prove_matrix(shards, release):
-    """The proof job matrix: every shard on every platform for a release.
-
-    A pull request runs every Linux shard but only the first Darwin shard, a
-    smoke run of the Darwin transition path; the release path proves every
-    Darwin source before anything is published."""
+    """Limit releases to two batches per platform, retaining the PR smoke matrix."""
     if not isinstance(shards, list) or not shards or shards != list(range(len(shards))):
         raise ValueError("proof shards must be 0 through N-1")
+    partitions = shards[:2] if release else shards
     include = []
     for platform, key, runner in PROOF_PLATFORMS:
-        selected = shards if release or not platform.startswith("darwin/") else shards[:1]
+        selected = partitions if release or not platform.startswith("darwin/") else shards[:1]
         include.extend({"platform": platform, "key": key, "runner": runner, "shard": shard} for shard in selected)
     return {"include": include}
 

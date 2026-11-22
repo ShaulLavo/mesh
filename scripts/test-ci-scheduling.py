@@ -26,14 +26,13 @@ esac
 """
 CONTRACT = runpy.run_path(str(ROOT / "scripts/test-helper-recovery-gate.py"))
 JOB = CONTRACT["job"]
+STEP = CONTRACT["step"]
 STATUS = CONTRACT["status"]
 CODE = "needs.changes.outputs.code == 'true'"
 MAIN_PUSH = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
-MAIN_DRAFT = "inputs.draft && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'"
 MAC_ROUTE = "${{ matrix.runner == 'macos-15' && " + MAIN_PUSH + " && fromJSON('[\"self-hosted\",\"macOS\",\"ARM64\",\"mesh-mac\"]') || matrix.runner }}"
-MAC_SHARED_ROUTE = MAC_ROUTE.replace(MAIN_PUSH, MAIN_DRAFT).replace('"mesh-mac"', '"mesh-mac-shared"')
 MAC_FIFO_MINUTES = 45
-MAC_JOBS = {"ci.yml": ("native",), "update-proofs.yml": ("prepare", "prove")}
+MAC_JOBS = {"ci.yml": ("native",)}
 MAC_GO_CACHE = "${{ runner.environment == 'github-hosted' }}"
 INSTALLED_TIMEOUT = "needs.changes.outputs.installed == 'true' && 80 || "
 
@@ -237,12 +236,15 @@ def check_mac_job(source, name, route, guard):
 
 def check_mac_routing(workflows):
     for name, jobs in MAC_JOBS.items():
-        route, guard = (MAC_ROUTE, MAIN_PUSH) if name == "ci.yml" else (MAC_SHARED_ROUTE, MAIN_DRAFT)
         for job in jobs:
-            check_mac_job(workflows[name], job, route, guard)
+            check_mac_job(workflows[name], job, MAC_ROUTE, MAIN_PUSH)
+    for job in ("prepare", "prove"):
+        section = JOB(workflows["update-proofs.yml"], job)
+        assert re.findall(r"^    runs-on: (.+)$", section, re.M) == ["${{ matrix.runner }}"], \
+            f"update-proofs {job} must use GitHub-hosted capacity"
     for name, source in workflows.items():
         routes = [line for line in source.splitlines() if "runs-on:" in line and "self-hosted" in line]
-        assert all(line in ("    runs-on: " + MAC_ROUTE, "    runs-on: " + MAC_SHARED_ROUTE) for line in routes), \
+        assert all(line == "    runs-on: " + MAC_ROUTE for line in routes), \
             f"{name} has an unguarded self-hosted route"
         expected = len(MAC_JOBS.get(name, ()))
         assert len(routes) == expected, f"{name} must route exactly its reviewed Darwin legs to the Mac"
@@ -255,10 +257,8 @@ def reject_mac_routing(workflows):
         ("ci.yml", lambda text: text.replace("&& 85 ||", "&& 40 ||", 1)),
         ("ci.yml", lambda text: text.replace(INSTALLED_TIMEOUT, "", 1)),
         ("ci.yml", lambda text: text.replace("cache: " + MAC_GO_CACHE, "cache: true", 1)),
-        ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, MAC_SHARED_ROUTE.replace("inputs.draft && ", ""), 1)),
-        ("update-proofs.yml", lambda text: text.replace(MAC_SHARED_ROUTE, "${{ matrix.runner }}", 1)),
+        ("update-proofs.yml", lambda text: text.replace("    runs-on: ${{ matrix.runner }}", "    runs-on: " + MAC_ROUTE, 1)),
         ("release.yml", lambda text: text.replace("    runs-on: ${{ matrix.runner }}", "    runs-on: " + MAC_ROUTE, 1)),
-        ("ci.yml", lambda text: text.replace(MAC_ROUTE, MAC_SHARED_ROUTE, 1)),
     )
     for name, mutate in mutations:
         mutated = dict(workflows, **{name: mutate(workflows[name])})
@@ -323,8 +323,7 @@ def reject_concurrency(ci):
         raise AssertionError("an unsafe CI concurrency was accepted")
 
 
-PROVE_MATRIX_STEP = ("          printf 'prove=%s\\n' \"$(python3 scripts/prepare-release-baselines.py "
-                     "--prove-matrix \"$shards\" \"$DRAFT\")\" >> \"$GITHUB_OUTPUT\"\n")
+PROVE_MATRIX_STEP = '          matrix=$(python3 scripts/prepare-release-baselines.py --prove-matrix "$shards" "$DRAFT")\n'
 
 
 def check_release_proof_matrix(workflows):
@@ -336,18 +335,18 @@ def check_release_proof_matrix(workflows):
     prove = JOB(proofs, "prove")
     assert "      matrix: ${{ fromJSON(needs.policy.outputs.prove) }}\n" in prove
     assert re.findall(r"^    name: (.+)$", prove, re.M) == ["prove (${{ matrix.platform }}, ${{ matrix.shard }})"]
-    # The reader requires the complete proof matrix, so it runs on the release path only.
-    assert re.findall(r"^    if: (.+)$", JOB(proofs, "reader"), re.M) == ["inputs.draft"], "the reader must run only for a release"
+    reader = STEP(JOB(proofs, "reader"), "Decode generated assets with the unchanged published executable").split("\n      - ", 1)[0]
+    assert "if: steps.proof-uploads.outcome == 'success' && inputs.draft\n" in reader, "require the release batches before the reader"
     caller = JOB(release, "prove-transition")
     assert "    uses: ./.github/workflows/update-proofs.yml\n" in caller and "      draft: true\n" in caller, \
-        "the release path must prove every Darwin shard"
+        "the release path must require its complete proof batches"
     assert "uses: ./.github/workflows/update-proofs.yml" not in workflows["ci.yml"], "PRs must not run the release proof matrix"
 
 
 def reject_release_proof_mutations(workflows):
     mutations = (
         ("release.yml", lambda text: text.replace("      draft: true\n", "      draft: false\n", 1)),
-        ("update-proofs.yml", lambda text: text.replace("one Darwin shard.\n    if: inputs.draft\n", "one Darwin shard.\n", 1)),
+        ("update-proofs.yml", lambda text: text.replace("name: Decode generated assets with the unchanged published executable\n        if: steps.proof-uploads.outcome == 'success' && inputs.draft", "name: Decode generated assets with the unchanged published executable", 1)),
         ("update-proofs.yml", lambda text: text.replace('"$shards" "$DRAFT"', '"$shards" false', 1)),
         ("update-proofs.yml", lambda text: text.replace("fromJSON(needs.policy.outputs.prove)", "fromJSON(needs.policy.outputs.shards)", 1)),
     )

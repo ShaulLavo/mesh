@@ -166,7 +166,7 @@ class InstalledGateWiringTests(unittest.TestCase):
         sections = re.split(r"^      - ", prepare, flags=re.M)
         self.assertNotIn("continue-on-error", sections[0])
         for step in sections[1:]:
-            if step.startswith("name: Cache this exact native preparation for parallel proof shards\n"):
+            if step.startswith("name: Cache this exact native preparation for parallel proofs\n"):
                 self.assertIn("uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25", step)
                 self.assertIn("continue-on-error: true", step)
                 continue
@@ -175,7 +175,7 @@ class InstalledGateWiringTests(unittest.TestCase):
     def test_native_build_upload_and_job_failures_cannot_be_optional(self):
         prepare = GATE.job(PROOFS, "prepare")
         for marker in ("    needs: policy", "      - name: Build the native candidate and startup-fault fixture once",
-                       "      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1"):
+                       "      - id: native-upload"):
             changed = prepare.replace(marker, marker + "\n        continue-on-error: true", 1)
             with self.assertRaises(AssertionError):
                 self.assert_only_cache_save_is_optional(changed)

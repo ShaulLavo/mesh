@@ -18,6 +18,9 @@ SPEC.loader.exec_module(BASELINES)
 RUN_SPEC = importlib.util.spec_from_file_location("proof_runner", Path(__file__).with_name("run-update-proofs.py"))
 RUNNER = importlib.util.module_from_spec(RUN_SPEC)
 RUN_SPEC.loader.exec_module(RUNNER)
+COLLECT_SPEC = importlib.util.spec_from_file_location("collect_proofs", Path(__file__).with_name("collect-update-proofs.py"))
+COLLECT = importlib.util.module_from_spec(COLLECT_SPEC)
+COLLECT_SPEC.loader.exec_module(COLLECT)
 
 
 class BaselineTests(unittest.TestCase):
@@ -34,10 +37,12 @@ class BaselineTests(unittest.TestCase):
 
     def download(self, command, **_):
         self.calls += 1
+        directory = Path(command[command.index("--dir") + 1])
+        self.assertEqual(directory.parent, self.cache)
         if self.calls <= self.failures:
             return subprocess.CompletedProcess(command, 1)
         name = command[command.index("--pattern") + 1]
-        destination = Path(command[command.index("--dir") + 1]) / name
+        destination = directory / name
         destination.write_bytes(self.archive)
         return subprocess.CompletedProcess(command, 0)
 
@@ -52,7 +57,7 @@ class BaselineTests(unittest.TestCase):
 
     def acquire(self, digest):
         with mock.patch.object(BASELINES.subprocess, "run", side_effect=self.download), mock.patch.object(BASELINES.time, "sleep"):
-            return BASELINES.acquire("v0.1.249", "mesh_linux_amd64.tar.gz", digest, self.output, self.cache)
+            return BASELINES.acquire("v0.1.249", "mesh_linux_amd64.tar.gz", digest, self.cache)
 
     def test_two_acquisition_failures_then_success_and_real_cache_hit(self):
         archive, binary = self.fixture()
@@ -63,6 +68,7 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual((self.output / "mesh").read_bytes(), b"original published executable")
         self.assertEqual(self.acquire(archive), path)
         self.assertEqual(self.calls, 3)
+        self.assertEqual(list(self.cache.iterdir()), [path])
 
     def test_bounded_failure_never_drops_a_source(self):
         archive, _ = self.fixture()
@@ -70,7 +76,7 @@ class BaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "required baseline acquisition failed"):
             self.acquire(archive)
         self.assertEqual(self.calls, 3)
-        self.assertFalse((self.cache / archive).exists())
+        self.assertEqual(list(self.cache.iterdir()), [])
 
     def test_changed_archive_binary_or_immutable_cache_fails(self):
         archive, binary = self.fixture()
@@ -153,13 +159,16 @@ class BaselineTests(unittest.TestCase):
         listing.write_text("\n".join(paths) + "\n")
         return {"baselines": selected}, tools, custom, listing
 
-    def run_shard(self, tools, listing, shard, count):
+    def run_shard(self, tools, listing, shard, count, batch=False):
         output = self.root / f"proof-{shard}"
         args = ["runner", str(tools), str(listing), "linux/amd64", str(output),
                 "--shard", str(shard), "--shards", str(count), "--manifest", str(self.root / "manifest.json")]
         def fake_run(_command, _environment, log):
             log.write_text("--- PASS: TestLegacyWorkerProcessProtocolAndVersion\n")
-        with mock.patch.object(sys, "argv", args), mock.patch.object(RUNNER, "run", side_effect=fake_run):
+        if batch:
+            args.append("--batch")
+        with mock.patch.object(sys, "argv", args), mock.patch.object(RUNNER, "run", side_effect=fake_run), \
+                mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "2"}):
             RUNNER.main()
         return json.loads((output / "timings.json").read_bytes())
 
@@ -201,11 +210,20 @@ class BaselineTests(unittest.TestCase):
                 RUNNER.main()
         run.assert_not_called()
 
-    def test_release_proves_every_shard_on_every_platform(self):
-        matrix = BASELINES.prove_matrix([0, 1, 2], True)["include"]
+    def test_release_limits_batches_but_proves_the_same_sources_and_profiles(self):
+        selected, tools, custom, listing = self.shard_sources()
+        shards = BASELINES.proof_shards(selected, custom.name)
+        matrix = BASELINES.prove_matrix(shards, True)["include"]
         self.assertEqual(sorted((row["platform"], row["shard"]) for row in matrix),
-                         sorted((platform, shard) for platform in ("linux/amd64", "linux/arm64", "darwin/arm64") for shard in (0, 1, 2)))
-        self.assertIn({"platform": "darwin/arm64", "key": "darwin-arm64", "runner": "macos-15", "shard": 2}, matrix)
+                         sorted((platform, shard) for platform in ("linux/amd64", "linux/arm64", "darwin/arm64") for shard in (0, 1)))
+        self.assertEqual(len(BASELINES.prove_matrix([0], True)["include"]), 3)
+        original = [row for shard in shards for row in self.run_shard(tools, listing, shard, len(shards))]
+        results = [self.run_shard(tools, listing, shard, 2, batch=True) for shard in range(2)]
+        self.assertEqual([sum(row["rollback"] for row in result) for result in results], [2, 2])
+        self.assertCountEqual([{key: value for key, value in row.items() if key != "seconds"} for row in original],
+                              [{key: value for key, value in row.items() if key != "seconds"} for row in results[0] + results[1]])
+        record = json.loads((self.root / "proof-1/proof-batch.json").read_bytes())
+        self.assertEqual(record, {"attempt": "2", "platform": "linux/amd64", "run": "42", "shard": 1})
 
     def test_pull_request_keeps_every_linux_shard_and_one_darwin_shard(self):
         matrix = BASELINES.prove_matrix([0, 1, 2, 3], False)["include"]
@@ -224,6 +242,64 @@ class BaselineTests(unittest.TestCase):
                 BASELINES.prove_matrix(shards, True)
         main_mode = subprocess.run([sys.executable, script, "--prove-matrix", "[0]", "yes"], capture_output=True, text=True, timeout=30)
         self.assertNotEqual(main_mode.returncode, 0)
+
+
+class ReleaseBatchIntakeTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="release-batches-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.matrix = BASELINES.prove_matrix([0, 1], True)
+        self.manifest = {"version": "v0.1.9000", "commit": "a" * 40, "artifacts": []}
+        self.uploads = {}
+        for index, row in enumerate(self.matrix["include"], start=1):
+            platform = dict(zip(("os", "arch"), row["platform"].split("/")))
+            digest = hashlib.sha256(row["platform"].encode()).hexdigest()
+            if not row["shard"]:
+                self.manifest["artifacts"].append({"platform": platform, "binarySha256": digest})
+            build = {"platform": platform, "digest": digest, "modified": False,
+                     "version": self.manifest["version"], "commit": self.manifest["commit"]}
+            key = f"{row['key']}-{row['shard']}"
+            self.uploads[key] = str(index)
+            self.batch(key, row["platform"], row["shard"], str(1 + row["shard"]), build)
+
+    def batch(self, key, platform, shard, attempt, build):
+        path = self.root / f"update-proofs-{key}-attempt-{attempt}"
+        path.mkdir()
+        (path / "proof-batch.json").write_text(json.dumps({"run": "42", "attempt": attempt,
+            "platform": platform, "shard": shard}))
+        (path / "candidate-reader.json").write_text(json.dumps({"build": build}))
+
+    def check(self, attempt="2"):
+        COLLECT.check_batches(self.root, self.matrix, "42", attempt, self.manifest)
+
+    def test_exact_attempt_set_accepts_carried_successes_from_same_run(self):
+        self.assertEqual(COLLECT.batch_artifact_ids(self.matrix, self.uploads), "1,2,3,4,5,6")
+        self.check()
+        with self.assertRaisesRegex(ValueError, "wrong run, attempt or platform"):
+            self.check(attempt="1")
+
+    def test_missing_extra_and_duplicate_upload_ids_fail(self):
+        absent = {key: value for key, value in self.uploads.items() if key != "linux-amd64-0"}
+        for uploads in (absent, self.uploads | {"unexpected": "7"}, self.uploads | {"linux-amd64-0": "2"}):
+            with self.subTest(uploads=uploads), self.assertRaises(ValueError):
+                COLLECT.batch_artifact_ids(self.matrix, uploads)
+
+    def test_wrong_run_platform_or_candidate_cannot_reach_signing(self):
+        path = self.root / "update-proofs-linux-amd64-0-attempt-1"
+        record = path / "proof-batch.json"
+        original = json.loads(record.read_bytes())
+        for invalid in ({"run": "43"}, {"platform": "darwin/arm64"}, {"attempt": "2"}):
+            record.write_text(json.dumps(original | invalid))
+            with self.assertRaisesRegex(ValueError, "wrong run, attempt or platform"):
+                self.check()
+        record.write_text(json.dumps(original))
+        report = path / "candidate-reader.json"
+        candidate = json.loads(report.read_bytes())
+        candidate["build"]["digest"] = "0" * 64
+        report.write_text(json.dumps(candidate))
+        with self.assertRaisesRegex(ValueError, "another candidate"):
+            self.check()
 
 
 if __name__ == "__main__":
