@@ -38,10 +38,6 @@ func dialServiceExchange(host HostRecord, dial HostDialer) serviceExchange {
 	}
 }
 
-func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer, service protocol.ServiceInfo) (protocol.ServicePreview, string, error) {
-	return previewServiceVia(ctx, host, dialServiceExchange(host, dial), service)
-}
-
 func previewServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, service protocol.ServiceInfo) (protocol.ServicePreview, string, error) {
 	response, info, err := exchange(ctx, protocol.Control{
 		Type: protocol.TypeServicePreview, Service: &service,
@@ -80,10 +76,6 @@ type remoteServicePublication struct {
 	Service     protocol.ServiceInfo
 	PrivateName string
 	Warning     string
-}
-
-func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string) (remoteServicePublication, error) {
-	return upsertServiceVia(ctx, host, dialServiceExchange(host, dial), requested, preview, privateName)
 }
 
 func upsertServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string) (remoteServicePublication, error) {
