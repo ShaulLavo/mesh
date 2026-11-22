@@ -90,6 +90,13 @@ type FileTarget struct {
 	HostID string `json:"hostId"`
 	// Account is optional on requests and always present on results.
 	Account string `json:"account,omitempty"`
+	// ContextID names an execution context whose working directory resolves a
+	// relative path. The request must carry the application caller that owns
+	// the context. Results repeat it with the context's Cwd, the workspace the
+	// work ran in.
+	ContextID string `json:"contextId,omitempty"`
+	// Cwd is set on results only.
+	Cwd string `json:"cwd,omitempty"`
 }
 
 // FileReadRequest asks for one page of a regular file. A continuation sends

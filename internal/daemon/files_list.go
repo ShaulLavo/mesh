@@ -25,7 +25,7 @@ const maxListedDirectory = 100000
 // list returns one page of a directory in name order. The cursor is the last
 // name returned, so entries added or removed between pages shift nothing.
 func (c *fileController) list(ctx context.Context, request protocol.FileListRequest) (protocol.FileListResult, error) {
-	target, dirPath, err := c.beginTreeRequest(request.Target, request.Path)
+	target, dirPath, err := c.beginTreeRequest(ctx, request.Target, request.Path)
 	if err != nil {
 		return protocol.FileListResult{}, err
 	}
@@ -148,7 +148,7 @@ type fileSearch struct {
 // starts a process, never follows a symlink and stops at the documented bounds,
 // naming the bound it hit.
 func (c *fileController) search(ctx context.Context, request protocol.FileSearchRequest) (protocol.FileSearchResult, error) {
-	target, root, err := c.beginTreeRequest(request.Target, request.Path)
+	target, root, err := c.beginTreeRequest(ctx, request.Target, request.Path)
 	if err != nil {
 		return protocol.FileSearchResult{}, err
 	}

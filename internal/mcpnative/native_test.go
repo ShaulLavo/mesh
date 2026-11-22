@@ -68,6 +68,7 @@ type stubControls struct {
 	outputFn func(ctx context.Context, req JobOutputRequest) (CallOutcome, error)
 	cancelFn func(ctx context.Context, req JobRefRequest) (CallOutcome, error)
 	hostsFn  func(ctx context.Context, req ListHostsRequest) (CallOutcome, error)
+	fileStub
 }
 
 func (s *stubControls) ListHosts(ctx context.Context, req ListHostsRequest) (CallOutcome, error) {

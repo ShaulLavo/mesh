@@ -83,9 +83,11 @@ func (a *application) copyFiles(ctx context.Context, source, destination string,
 	}
 	defer conn.Close() //nolint:errcheck // The copy result determines success.
 	if src.host != "" {
-		return downloadCopy(ctx, conn, src.path, dst.path, recursive)
+		_, err = downloadCopy(ctx, conn, src.path, dst.path, recursive)
+		return err
 	}
-	return uploadCopy(ctx, conn, src.path, dst.path, recursive)
+	_, err = uploadCopy(ctx, conn, src.path, dst.path, recursive)
+	return err
 }
 
 func copyRequest(ctx context.Context, conn transport.Conn, request transfer.Request) (transfer.Result, error) {
@@ -114,15 +116,17 @@ func copyRequest(ctx context.Context, conn transport.Conn, request transfer.Requ
 	return result, nil
 }
 
-func uploadCopy(ctx context.Context, conn transport.Conn, source, destination string, recursive bool) error {
+// uploadCopy sends source to destination and returns the bytes of the archive
+// it transferred.
+func uploadCopy(ctx context.Context, conn transport.Conn, source, destination string, recursive bool) (int64, error) {
 	stream, err := transfer.OpenSource(ctx, source, recursive)
 	if err != nil {
-		return fmt.Errorf("open copy source: %w", err)
+		return 0, fmt.Errorf("open copy source: %w", err)
 	}
 	defer stream.Close() //nolint:errcheck // The transfer outcome is authoritative.
 	_, err = copyRequest(ctx, conn, transfer.Request{Action: "upload.begin", Path: destination, Info: stream.Info})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var size int64
 	err = transfer.Upload(ctx, stream, func(ctx context.Context, offset int64, data []byte) error {
@@ -131,27 +135,31 @@ func uploadCopy(ctx context.Context, conn transport.Conn, source, destination st
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("upload copy archive: %w", err)
+		return 0, fmt.Errorf("upload copy archive: %w", err)
 	}
 	info, err := stream.Finish()
 	if err != nil {
-		return fmt.Errorf("pack copy source: %w", err)
+		return 0, fmt.Errorf("pack copy source: %w", err)
 	}
-	_, err = copyRequest(ctx, conn, transfer.Request{Action: "upload.commit", Info: info, Size: size})
-	return err
+	if _, err = copyRequest(ctx, conn, transfer.Request{Action: "upload.commit", Info: info, Size: size}); err != nil {
+		return 0, err
+	}
+	return size, nil
 }
 
-func downloadCopy(ctx context.Context, conn transport.Conn, source, destination string, recursive bool) error {
+// downloadCopy fetches source into destination and returns the bytes of the
+// archive it received.
+func downloadCopy(ctx context.Context, conn transport.Conn, source, destination string, recursive bool) (int64, error) {
 	result, err := copyRequest(ctx, conn, transfer.Request{Action: "download.begin", Path: source, Recursive: recursive})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if result.Info.Directory && !recursive {
-		return errors.New("host returned a directory without --recursive")
+		return 0, errors.New("host returned a directory without --recursive")
 	}
 	archive, err := transfer.Temporary(destination)
 	if err != nil {
-		return fmt.Errorf("create copy download: %w", err)
+		return 0, fmt.Errorf("create copy download: %w", err)
 	}
 	defer archive.Close() //nolint:errcheck // Receive checks its IO.
 	var final transfer.Result
@@ -166,13 +174,13 @@ func downloadCopy(ctx context.Context, conn transport.Conn, source, destination 
 		return transfer.Chunk{Data: chunk.Data, Done: chunk.Done}, nil
 	})
 	if err != nil {
-		return fmt.Errorf("download copy archive: %w", err)
+		return 0, fmt.Errorf("download copy archive: %w", err)
 	}
 	if received != final.Size || result.Info.Name != final.Info.Name || result.Info.Directory != final.Info.Directory {
-		return errors.New("copy download returned inconsistent source metadata")
+		return 0, errors.New("copy download returned inconsistent source metadata")
 	}
 	if err := transfer.Receive(ctx, archive, final.Info, destination); err != nil {
-		return fmt.Errorf("receive copy archive: %w", err)
+		return 0, fmt.Errorf("receive copy archive: %w", err)
 	}
-	return nil
+	return received, nil
 }

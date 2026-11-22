@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,10 +11,18 @@ import (
 
 	"github.com/shaul/mesh/internal/agentapi"
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/transport"
 )
 
 // scriptedFileConn answers each request with the next canned control and keeps
 // what it was sent.
+// exchangeOnConn runs requests one at a time on conn.
+func exchangeOnConn(conn transport.Conn) FileExchange {
+	return func(ctx context.Context, request protocol.Control) (protocol.Control, error) {
+		return controlRequest(ctx, conn, request)
+	}
+}
+
 type scriptedFileConn struct {
 	replies []protocol.Control
 	sent    []protocol.Control
@@ -69,7 +78,7 @@ func TestHostFilesAddressesTheExactTargetAndDecodesResults(t *testing.T) {
 		fileReply(t, protocol.TypeFileWriteResult, protocol.FileWriteResult{Target: testFileTarget, Path: "/a", Size: 2, Created: true}),
 		fileReply(t, protocol.TypeFilePatchResult, protocol.FilePatchResult{Target: testFileTarget, Path: "/a", Size: 3, Edits: 1}),
 	}}
-	files := HostFiles{Conn: conn, Target: testFileTarget}
+	files := HostFiles{Exchange: exchangeOnConn(conn), Target: testFileTarget}
 	ctx := t.Context()
 	// A target the caller put in the request is replaced by the helper's.
 	read, err := files.Read(ctx, protocol.FileReadRequest{Target: protocol.FileTarget{HostID: "OTHER"}, Path: "/a"})
@@ -112,7 +121,7 @@ func TestHostFilesKeepsTheDaemonsErrorCode(t *testing.T) {
 		"resource.limit":         agentapi.ResourceLimit,
 	} {
 		conn := &scriptedFileConn{replies: []protocol.Control{{Type: protocol.TypeError, ErrorCode: code, Message: "refused"}}}
-		_, err := HostFiles{Conn: conn, Target: testFileTarget}.Write(t.Context(), protocol.FileWriteRequest{Path: "/a", Data: "x", CreateOnly: true})
+		_, err := HostFiles{Exchange: exchangeOnConn(conn), Target: testFileTarget}.Write(t.Context(), protocol.FileWriteRequest{Path: "/a", Data: "x", CreateOnly: true})
 		var control *ControlError
 		if !errors.As(err, &control) || control.Code != code {
 			t.Fatalf("%s: %v", code, err)
@@ -125,11 +134,11 @@ func TestHostFilesKeepsTheDaemonsErrorCode(t *testing.T) {
 
 func TestHostFilesRefusesBadReplies(t *testing.T) {
 	conn := &scriptedFileConn{replies: []protocol.Control{fileReply(t, protocol.TypeFileListResult, protocol.FileListResult{})}}
-	if _, err := (HostFiles{Conn: conn, Target: testFileTarget}).Read(t.Context(), protocol.FileReadRequest{Path: "/a"}); err == nil {
+	if _, err := (HostFiles{Exchange: exchangeOnConn(conn), Target: testFileTarget}).Read(t.Context(), protocol.FileReadRequest{Path: "/a"}); err == nil {
 		t.Fatal("a result of the wrong type was accepted")
 	}
 	conn = &scriptedFileConn{replies: []protocol.Control{{Type: protocol.TypeFileReadResult, Files: []byte(`{"path":1}`)}}}
-	if _, err := (HostFiles{Conn: conn, Target: testFileTarget}).Read(t.Context(), protocol.FileReadRequest{Path: "/a"}); err == nil {
+	if _, err := (HostFiles{Exchange: exchangeOnConn(conn), Target: testFileTarget}).Read(t.Context(), protocol.FileReadRequest{Path: "/a"}); err == nil {
 		t.Fatal("a malformed result was accepted")
 	}
 	if _, err := (HostFiles{Target: testFileTarget}).Read(t.Context(), protocol.FileReadRequest{Path: "/a"}); err == nil {
@@ -139,7 +148,7 @@ func TestHostFilesRefusesBadReplies(t *testing.T) {
 
 func TestHostFilesDoesNotSendWhatCannotFitOneFrame(t *testing.T) {
 	conn := &scriptedFileConn{}
-	_, err := HostFiles{Conn: conn, Target: testFileTarget}.Write(t.Context(), protocol.FileWriteRequest{Path: "/a", Data: strings.Repeat("x", protocol.MaxPayload), CreateOnly: true})
+	_, err := HostFiles{Exchange: exchangeOnConn(conn), Target: testFileTarget}.Write(t.Context(), protocol.FileWriteRequest{Path: "/a", Data: strings.Repeat("x", protocol.MaxPayload), CreateOnly: true})
 	var control *ControlError
 	if !errors.As(err, &control) || control.Code != "resource.limit" || len(conn.sent) != 0 {
 		t.Fatalf("oversized request: %v, sent %d", err, len(conn.sent))

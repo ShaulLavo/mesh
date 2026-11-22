@@ -26,6 +26,9 @@ type mcpControls struct {
 	app     *application
 	pool    *mcpHostPool
 	account string
+	// fileCallerCredential is the application credential file requests send
+	// when they name a context.
+	fileCallerCredential protocol.CallerCredential
 }
 
 func newMCPControls(app *application, pool *mcpHostPool) *mcpControls {
@@ -64,6 +67,7 @@ func (c *mcpControls) targetMeta(host HostRecord, info protocol.HostInfo) *mcpna
 func hostCapabilitiesFromInfo(info protocol.HostInfo) *agentapi.HostCapabilities {
 	return &agentapi.HostCapabilities{
 		ExecutionPipe: info.ExecutionPipeSupported,
+		Files:         info.FilesSupported,
 	}
 }
 

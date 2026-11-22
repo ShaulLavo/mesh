@@ -521,7 +521,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	go func() { defer close(fleetProfileDone); fleetProfile.Run(daemonCtx) }()
 	defer func() { cancelDaemon(); <-fleetProfileDone }()
 	server.updates = updates
-	server.files = newFileController(string(meshHost.ID))
+	files := newFileController(string(meshHost.ID))
+	files.contexts = lifecycle.fileContext
+	server.files = files
 	server.context = &agentContextController{configDir: cfg.ConfigDir, stateDir: stateDir, hostID: meshHost.ID, trusted: updates.authority.IsAdministrator}
 
 	controlAddrs := tailnetAddrs
