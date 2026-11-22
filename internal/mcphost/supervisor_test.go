@@ -644,6 +644,41 @@ func TestBadResultsAfterProbeFailOnlyThatCall(t *testing.T) {
 	}
 }
 
+func TestInstanceRequestCap(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo", InstancePolicy: PolicyShared})
+	if _, err := whoami(t, f.sup, caller("a"), Target{Service: "repo"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	for i := range maxInstanceRequests {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = f.sup.Forward(ctx, caller(fmt.Sprint(i)), Target{Service: "repo"}, callRequest(t, `1`, toolParams("slow", `{}`, "")), (&collected{}).emit)
+		}(i)
+	}
+	eventually(t, func() bool {
+		f.sup.mu.Lock()
+		defer f.sup.mu.Unlock()
+		for _, inst := range f.sup.instances {
+			if inst.current != nil && inst.current.requests == maxInstanceRequests {
+				return true
+			}
+		}
+		return false
+	})
+	if _, err := whoami(t, f.sup, caller("extra"), Target{Service: "repo"}); Classify(err).Code != codeResourceLimit {
+		t.Fatalf("request beyond the instance cap: %v", err)
+	}
+	cancel()
+	wg.Wait()
+	if _, err := whoami(t, f.sup, caller("after"), Target{Service: "repo"}); err != nil {
+		t.Fatalf("slots were not released: %v", err)
+	}
+}
+
 func TestNewRevisionStartsANewGeneration(t *testing.T) {
 	f := newSupervisorFixture(t)
 	d := f.publish(t, Definition{Name: "repo"})

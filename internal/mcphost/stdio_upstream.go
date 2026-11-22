@@ -18,6 +18,7 @@ import (
 const (
 	callQueueBytes     = 8 << 20
 	instanceQueueBytes = 32 << 20
+	hostQueueBytes     = 128 << 20
 	cancelWriteTimeout = 5 * time.Second
 )
 
@@ -66,9 +67,9 @@ type stdioCall struct {
 // newStdioUpstream starts the reader and the cancellation writer. The
 // upstream lives until Close or a fault, not until parent's deadline, which
 // may only bound the probe that follows.
-func newStdioUpstream(parent context.Context, conn LineConn, ids *hostIDs) *StdioUpstream {
+func newStdioUpstream(parent context.Context, conn LineConn, router *Router) *StdioUpstream {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
-	u := &StdioUpstream{conn: conn, ids: ids, budget: &byteBudget{limit: instanceQueueBytes}, ctx: ctx, cancel: cancel, calls: make(map[string]*stdioCall), progress: make(map[string]*stdioCall), cancels: make(chan string, maxQueuedCancels), done: make(chan struct{})}
+	u := &StdioUpstream{conn: conn, ids: router.ids, budget: &byteBudget{limit: instanceQueueBytes, parent: router.budget}, ctx: ctx, cancel: cancel, calls: make(map[string]*stdioCall), progress: make(map[string]*stdioCall), cancels: make(chan string, maxQueuedCancels), done: make(chan struct{})}
 	go u.readLoop()
 	go u.cancelLoop(ctx)
 	return u
@@ -419,16 +420,22 @@ func (u *StdioUpstream) take(call *stdioCall) ([]queuedEvent, error) {
 }
 
 // byteBudget is a shared admission counter for queued reply bytes.
+// A budget with a parent also charges the parent, so the host-wide limit
+// holds however many instances are queueing replies.
 type byteBudget struct {
-	mu    sync.Mutex
-	limit int
-	used  int
+	mu     sync.Mutex
+	limit  int
+	used   int
+	parent *byteBudget
 }
 
 func (b *byteBudget) take(n int) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.used+n > b.limit {
+		return false
+	}
+	if b.parent != nil && !b.parent.take(n) {
 		return false
 	}
 	b.used += n
@@ -439,4 +446,7 @@ func (b *byteBudget) release(n int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.used -= n
+	if b.parent != nil {
+		b.parent.release(n)
+	}
 }

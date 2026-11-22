@@ -104,7 +104,7 @@ func newTestHost(t *testing.T) *testHost {
 		t.Fatal(err)
 	}
 	lines := newMemLines(t)
-	upstream := newStdioUpstream(t.Context(), lines, router.ids)
+	upstream := newStdioUpstream(t.Context(), lines, router)
 	t.Cleanup(func() { _ = upstream.Close() })
 	return &testHost{router: router, upstream: upstream, lines: lines}
 }

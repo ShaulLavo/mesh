@@ -136,6 +136,8 @@ type generation struct {
 	tools      atomic.Pointer[ToolHeaders]
 	serverInfo json.RawMessage
 	active     int
+	requests   int
+	listens    int
 	draining   bool
 }
 

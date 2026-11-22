@@ -28,6 +28,12 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 	if err != nil {
 		return err
 	}
+	done, err := s.admit(gen, request.Method() == mcpwire.MethodListen)
+	if err != nil {
+		s.release(inst, gen)
+		return err
+	}
+	defer done()
 	held := true
 	if request.Method() == mcpwire.MethodListen {
 		s.release(inst, gen)
@@ -68,6 +74,31 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 // nothing reached the caller and no continuation was consumed.
 func retryableHeaderMismatch(err error, emitted bool, request mcpwire.Message) bool {
 	return errors.Is(err, ErrHeaderMismatch) && !emitted && member(request.Params(), requestStateKey) == nil
+}
+
+// Section 2.5: at most 16 ordinary requests and 16 upstream listens per
+// instance, counted separately so listens never take request slots.
+const (
+	maxInstanceRequests = 16
+	maxInstanceListens  = 16
+)
+
+func (s *Supervisor) admit(gen *generation, listen bool) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counter, limit, what := &gen.requests, maxInstanceRequests, "requests"
+	if listen {
+		counter, limit, what = &gen.listens, maxInstanceListens, "listens"
+	}
+	if *counter >= limit {
+		return nil, failure(codeResourceLimit, true, "the instance already has %d %s in progress", limit, what)
+	}
+	*counter++
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		*counter--
+	}, nil
 }
 
 func (s *Supervisor) hold(inst *instance, gen *generation) {

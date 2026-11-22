@@ -260,7 +260,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 	if err != nil {
 		return nil, s.failStart(ctx, inst, key, ref, "attach to worker: "+err.Error())
 	}
-	upstream := newStdioUpstream(ctx, conn, s.router.ids)
+	upstream := newStdioUpstream(ctx, conn, s.router)
 	info, err := s.probe(ctx, upstream, d.ReadyTimeout)
 	if err != nil {
 		_ = upstream.Close()

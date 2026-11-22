@@ -64,6 +64,8 @@ type Route struct {
 type Router struct {
 	ids           *hostIDs
 	continuations *continuations
+	// budget bounds reply bytes queued across every stdio instance.
+	budget *byteBudget
 }
 
 func NewRouter() (*Router, error) {
@@ -71,7 +73,7 @@ func NewRouter() (*Router, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Router{ids: ids, continuations: newContinuations()}, nil
+	return &Router{ids: ids, continuations: newContinuations(), budget: &byteBudget{limit: hostQueueBytes}}, nil
 }
 
 // Emit receives restored messages for the caller. The last call carries the

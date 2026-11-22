@@ -101,7 +101,7 @@ func TestSDKServerThroughTheRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	upstream := newStdioUpstream(t.Context(), startSDKLines(t, server), router.ids)
+	upstream := newStdioUpstream(t.Context(), startSDKLines(t, server), router)
 	defer func() { _ = upstream.Close() }()
 	sup := &Supervisor{router: router}
 	info, err := sup.probe(t.Context(), upstream, testHang)
