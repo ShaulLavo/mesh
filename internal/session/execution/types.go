@@ -91,6 +91,16 @@ type Intent struct {
 
 const InternalServiceClass = "internal-service"
 
+// validInternalNamespace restricts line workers to internal services while
+// allowing internal services (such as managed HTTP MCP servers) to also own
+// plain pipe workers.
+func validInternalNamespace(kind, class string) bool {
+	if class == InternalServiceClass {
+		return kind == KindLine || kind == KindPipe
+	}
+	return kind != KindLine
+}
+
 const (
 	KindPTY      = "pty"
 	KindPipe     = "pipe"
@@ -305,7 +315,7 @@ func (r Receipt) validate() error {
 	if err := r.validateContext(); err != nil {
 		return err
 	}
-	if (r.Binding.Mode() == KindLine) != (r.Key.Class == InternalServiceClass) {
+	if !validInternalNamespace(r.Binding.Mode(), r.Key.Class) {
 		return fmt.Errorf("execution: invalid internal request namespace")
 	}
 	if r.Binding.RequestHash != r.Key.Hash() || r.Binding.Host != r.Key.Host || !validDigest(r.IntentDigest) || r.Owner == "" || r.AcceptedAt.IsZero() {

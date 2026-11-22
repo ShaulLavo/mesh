@@ -29,6 +29,9 @@ func (a *application) mcpServiceCommands() []*cobra.Command {
 		a.mcpInstanceCommand("start", "mcp.start", "Start a hosted MCP server's instance now", protocol.TypeMCPServiceStart),
 		a.mcpInstanceCommand("stop", "mcp.stop", "Stop a hosted MCP server's processes and keep its definition", protocol.TypeMCPServiceStop),
 		a.mcpInstanceCommand("restart", "mcp.restart", "Replace a hosted MCP server instance's process", protocol.TypeMCPServiceRestart),
+		a.mcpInstanceCommand("probe", "mcp.probe", "Probe a hosted MCP server's stateless 2026-07-28 readiness", protocol.TypeMCPServiceProbe),
+		a.mcpToggleCommand("enable", "mcp.enable", "Enable a disabled hosted MCP server", protocol.TypeMCPServiceEnable),
+		a.mcpToggleCommand("disable", "mcp.disable", "Disable a hosted MCP server and stop active instances", protocol.TypeMCPServiceDisable),
 		a.mcpLogsCommand(),
 		a.mcpRemoveCommand(),
 	}
@@ -43,7 +46,7 @@ func (a *application) mcpServiceCommands() []*cobra.Command {
 type mcpPublishOptions struct {
 	host, cwd, url, run, runCwd, accountMode, accountLabel string
 	env, secretEnv, headerSecrets                          []string
-	shared, kept, asJSON                                   bool
+	shared, kept, probe, asJSON                            bool
 	idle, ready                                            time.Duration
 }
 
@@ -56,27 +59,29 @@ func (a *application) mcpPublishCommand() *cobra.Command {
 			"A stdio server runs COMMAND; an HTTP server is reached at --url, optionally started\n" +
 			"with --run. Each application caller gets its own isolated instance unless --shared is given.",
 		Example: "mesh mcp publish repo-tools --cwd /work/app -- ./repo-mcp\n" +
-			"mesh mcp publish search --host pc --url http://127.0.0.1:8080/mcp --shared",
+			"mesh mcp publish search --host pc --url http://127.0.0.1:8080/mcp --shared --probe\n" +
+			"mesh mcp publish managed-search --url http://127.0.0.1:8080/mcp --shared --account-mode host-account --account-label search --run ./search-server --cwd /srv/search --probe",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			d, err := o.definition(args)
 			if err != nil {
 				return agentapi.Usage("mcp.publish", err.Error())
 			}
-			return a.publishMCP(cmd, o.host, d, o.asJSON)
+			return a.publishMCP(cmd, o.host, d, o.probe, o.asJSON)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&o.host, "host", "", "target host (machine name, exact host ID, or local; defaults to local)")
-	f.StringVar(&o.cwd, "cwd", "", "working directory on the target host for a stdio server")
+	f.StringVar(&o.cwd, "cwd", "", "working directory on the target host for a stdio server or --run")
 	f.StringArrayVar(&o.env, "env", nil, "NAME=VALUE for the server's environment; repeat as needed")
 	f.StringArrayVar(&o.secretEnv, "secret-env", nil, "NAME=/absolute/file read into NAME at launch; the file must be mode 0600")
 	f.StringVar(&o.url, "url", "", "loopback Streamable HTTP endpoint of an HTTP server")
 	f.StringArrayVar(&o.headerSecrets, "header-secret", nil, "HEADER=/absolute/file sent to the HTTP server")
 	f.StringVar(&o.run, "run", "", "command that starts the HTTP server at --url")
-	f.StringVar(&o.runCwd, "run-cwd", "", "working directory for --run")
+	f.StringVar(&o.runCwd, "run-cwd", "", "working directory for --run (alias for --cwd when --run is set)")
 	f.BoolVar(&o.shared, "shared", false, "give every caller one shared instance")
-	f.BoolVar(&o.kept, "kept", false, "keep the server running instead of starting it on demand")
+	f.BoolVar(&o.kept, "kept", false, "keep the server running instead of starting it on demand (requires --shared)")
+	f.BoolVar(&o.probe, "probe", false, "probe server/discover and tool schemas immediately after publishing")
 	f.DurationVar(&o.idle, "idle", 0, "stop an on-demand instance after this long unused (default 15m)")
 	f.DurationVar(&o.ready, "ready-timeout", 0, "how long the server has to answer server/discover (default 30s)")
 	f.StringVar(&o.accountMode, "account-mode", "", "none, or host-account when the server uses the host's credentials")
@@ -102,6 +107,13 @@ func (o mcpPublishOptions) definition(args []string) (mcphost.Definition, error)
 		RunCwd: o.runCwd, Idle: o.idle, ReadyTimeout: o.ready, AccountMode: o.accountMode, AccountLabel: o.accountLabel}
 	if o.run != "" {
 		d.RunArgv = []string{"/bin/sh", "-c", o.run}
+		if d.RunCwd != "" && d.Cwd != "" {
+			return mcphost.Definition{}, errors.New("use either --cwd or --run-cwd with --run")
+		}
+		if d.RunCwd == "" && d.Cwd != "" {
+			d.RunCwd = d.Cwd
+			d.Cwd = ""
+		}
 	}
 	if o.shared {
 		d.InstancePolicy = mcphost.PolicyShared
@@ -128,7 +140,7 @@ func assignments(values []string, flag string) (map[string]string, error) {
 }
 
 // publishMCP creates the service, or replaces the revision it finds now.
-func (a *application) publishMCP(cmd *cobra.Command, hostArg string, d mcphost.Definition, asJSON bool) error {
+func (a *application) publishMCP(cmd *cobra.Command, hostArg string, d mcphost.Definition, probe, asJSON bool) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), mcpControlTimeout)
 	defer cancel()
 	host, err := resolveMCPTargetHost(ctx, hostArg, a.dependencies.DialPassive)
@@ -153,12 +165,39 @@ func (a *application) publishMCP(cmd *cobra.Command, hostArg string, d mcphost.D
 	if _, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceUpsert, Definition: raw, ExpectedRevision: expected}, &out, false); err != nil {
 		return err
 	}
+	probedState := ""
+	if probe {
+		probedState, err = a.probePublishedMCP(ctx, host, &out.Service)
+		if err != nil {
+			return err
+		}
+	}
 	if asJSON {
 		now := a.dependencies.Now().UTC()
 		svc := convertOneMCPService(host, hostDisplayName(host, info), out.Service, classifyMCPServiceState(out.Service), string(agentapi.FreshnessLive), &now)
 		return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: svc})
 	}
+	if probedState != "" {
+		return printLine(cmd.OutOrStdout(), "published %s revision %d (%s, %s, %s)\n", out.Service.Name, out.Service.Revision, out.Service.Transport, out.Service.InstancePolicy, probedState)
+	}
 	return printLine(cmd.OutOrStdout(), "published %s revision %d (%s, %s)\n", out.Service.Name, out.Service.Revision, out.Service.Transport, out.Service.InstancePolicy)
+}
+
+func (a *application) probePublishedMCP(ctx context.Context, host HostRecord, service *mcphost.CatalogService) (string, error) {
+	var probed struct {
+		Instance mcphost.InstanceView `json:"instance"`
+	}
+	if _, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceProbe, Service: service.Name}, &probed, false); err != nil {
+		return "", err
+	}
+	refreshed, _, err := a.hostMCPServices(ctx, host, "")
+	if err != nil {
+		return "", err
+	}
+	if idx := slices.IndexFunc(refreshed, func(s mcphost.CatalogService) bool { return s.ID == service.ID }); idx >= 0 {
+		*service = refreshed[idx]
+	}
+	return probed.Instance.State, nil
 }
 
 func (a *application) mcpShowCommand() *cobra.Command {
@@ -202,6 +241,9 @@ func (a *application) mcpShowCommand() *cobra.Command {
 func writeMCPService(w io.Writer, s mcphost.CatalogService) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (revision %d, %s, %s, %s)\n", s.Name, s.Revision, s.Transport, s.InstancePolicy, s.Lifecycle)
+	if s.Disabled {
+		b.WriteString("  state: disabled\n")
+	}
 	fmt.Fprintf(&b, "  account: %s\n", mcpAccountText(s.AccountMode, s.AccountLabel))
 	if s.ProtocolVersion != "" {
 		fmt.Fprintf(&b, "  protocol: %s\n", s.ProtocolVersion)
@@ -217,6 +259,41 @@ func writeMCPService(w io.Writer, s mcphost.CatalogService) error {
 		return fmt.Errorf("write MCP service: %w", err)
 	}
 	return nil
+}
+
+func (a *application) mcpToggleCommand(use, operation, short, kind string) *cobra.Command {
+	var asJSON bool
+	cmd := &cobra.Command{Use: use + " [HOST/]NAME", Short: short, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		hostArg, name, err := splitOptionalHostServiceRef(args[0], operation)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), mcpControlTimeout)
+		defer cancel()
+		host, err := resolveMCPTargetHost(ctx, hostArg, a.dependencies.DialPassive)
+		if err != nil {
+			return err
+		}
+		var out struct {
+			Service mcphost.CatalogService `json:"service"`
+		}
+		info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: kind, Service: name}, &out, false)
+		if err != nil {
+			return err
+		}
+		if asJSON {
+			now := a.dependencies.Now().UTC()
+			svc := convertOneMCPService(host, hostDisplayName(host, info), out.Service, classifyMCPServiceState(out.Service), string(agentapi.FreshnessLive), &now)
+			return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: svc})
+		}
+		state := "enabled"
+		if out.Service.Disabled {
+			state = mcpServiceDisabled
+		}
+		return printLine(cmd.OutOrStdout(), "%s %s (revision %d)\n", state, out.Service.Name, out.Service.Revision)
+	}}
+	cmd.Flags().BoolVar(&asJSON, "json", false, "write one agent result")
+	return cmd
 }
 
 func (a *application) mcpInstanceCommand(use, operation, short, kind string) *cobra.Command {

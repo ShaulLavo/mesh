@@ -75,7 +75,7 @@ func (w *Worker) serveLineAttach(conn net.Conn, reader *protocol.Reader, req pro
 
 func (w *Worker) sendLines(ctx context.Context, a *lineAttachment, reply protocol.Control) {
 	for ctx.Err() == nil {
-		seq, line, fault, changed := a.takeLine(w.pipe.lines)
+		seq, frame, fault, changed := a.takeLine(w.pipe.lines)
 		if changed != nil {
 			select {
 			case <-changed:
@@ -84,11 +84,19 @@ func (w *Worker) sendLines(ctx context.Context, a *lineAttachment, reply protoco
 				return
 			}
 		}
-		if line == nil {
+		if !frame.present() {
 			_ = a.control(lineEnd(reply, fault))
 			return
 		}
-		if err := a.write(func(writer *protocol.Writer) error { return writer.WriteData(w.sid, seq, line) }); err != nil {
+		if len(frame.oversizeID) > 0 {
+			oversized := reply
+			oversized.Type, oversized.Message = protocol.TypeWorkerLineOversize, string(frame.oversizeID)
+			if err := a.control(oversized); err != nil {
+				return
+			}
+			continue
+		}
+		if err := a.write(func(writer *protocol.Writer) error { return writer.WriteData(w.sid, seq, frame.data) }); err != nil {
 			return
 		}
 	}
@@ -102,20 +110,20 @@ func lineEnd(reply protocol.Control, fault string) protocol.Control {
 	return reply
 }
 
-func (a *lineAttachment) takeLine(output *lineOutput) (uint64, []byte, string, <-chan struct{}) {
+func (a *lineAttachment) takeLine(output *lineOutput) (uint64, lineFrame, string, <-chan struct{}) {
 	a.admission.Lock()
 	defer a.admission.Unlock()
 	seq := a.next
-	line, fault, changed := output.readFrame(seq)
+	frame, fault, changed := output.readLineFrame(seq)
 	if fault != "" {
 		a.fault = fault
 	}
-	if line != nil {
+	if frame.present() {
 		// The attachment holds this frame while writing it. Only subsequent
 		// frames can fall out of the ring.
 		a.next++
 	}
-	return seq, line, fault, changed
+	return seq, frame, fault, changed
 }
 
 func (w *Worker) readLineRequests(a *lineAttachment, reader *protocol.Reader, reply protocol.Control) {

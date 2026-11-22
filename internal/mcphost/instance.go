@@ -236,7 +236,7 @@ func (s *Supervisor) usableLocked(inst *instance, d Definition) *generation {
 	}
 	if gen.upstream.Err() != nil || gen.revision != d.Revision {
 		inst.current = nil
-		s.drainLocked(gen)
+		s.drainLocked(inst, gen)
 		return nil
 	}
 	return gen
@@ -265,15 +265,22 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 	if !d.Owned() {
 		return s.connectExternal(ctx, inst, d)
 	}
+	argv, cwd, plainPipe := d.Argv, d.Cwd, false
+	if d.Transport == TransportHTTP {
+		argv, cwd, plainPipe = d.RunArgv, d.RunCwd, true
+		if _, err := secretHeaders(d); err != nil {
+			return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
+		}
+		s.awaitDrainingManaged(ctx, inst)
+	}
 	env, err := launchEnvironment(d)
 	if err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
 	}
-	cwd := d.Cwd
 	if cwd == "" {
 		cwd = s.cfg.HostDefaultCwd
 	}
-	if err := findCommand(d.Argv, cwd, d.Env); err != nil {
+	if err := findCommand(argv, cwd, d.Env); err != nil {
 		return nil, s.settle(ctx, inst, StateFailed, err.Error(), nil)
 	}
 	s.mu.Lock()
@@ -285,7 +292,7 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 	if err := s.persist(ctx, inst); err != nil {
 		return nil, err
 	}
-	ref, err := s.cfg.Launcher.Launch(ctx, LaunchSpec{Key: key, Argv: d.Argv, Cwd: cwd, Env: env})
+	ref, err := s.cfg.Launcher.Launch(ctx, LaunchSpec{Key: key, Argv: argv, Cwd: cwd, Env: env, PlainPipe: plainPipe})
 	if errors.Is(err, ErrLaunchUncertain) {
 		return nil, s.settle(ctx, inst, StateUncertain, "worker launch outcome is unknown; no second worker starts until it settles: "+err.Error(), nil)
 	}
@@ -304,6 +311,9 @@ func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (
 }
 
 func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, key LaunchKey, ref WorkerRef) (*generation, error) {
+	if d.Transport == TransportHTTP {
+		return s.connectManagedHTTP(ctx, inst, d, key, ref)
+	}
 	conn, err := s.cfg.Launcher.Dial(ctx, ref)
 	if err != nil {
 		return nil, s.failStart(ctx, inst, key, ref, "attach to worker: "+err.Error())
@@ -429,6 +439,10 @@ func (s *Supervisor) hostCall(ctx context.Context, upstream Upstream, method str
 }
 
 func probeResult(reply mcpwire.Message, err error) (json.RawMessage, error) {
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr.Status >= 500 {
+		return nil, fmt.Errorf("server did not answer server/discover: %w", err)
+	}
 	if errors.Is(err, ErrOutcomeUnknown) && errors.Is(err, mcpwire.ErrPeerMessage) {
 		return nil, failure(codeIncompatible, false, "server/discover reply is not a valid %s result: %w", mcpwire.Version, err)
 	}
@@ -446,9 +460,8 @@ func probeResult(reply mcpwire.Message, err error) (json.RawMessage, error) {
 
 // watch notices a generation whose pipe faulted or whose process ended.
 func (s *Supervisor) watch(ctx context.Context, inst *instance, gen *generation) {
-	select {
-	case <-gen.upstream.Done():
-	case <-ctx.Done():
+	s.waitManagedExit(ctx, inst, gen)
+	if ctx.Err() != nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
@@ -515,7 +528,11 @@ func (s *Supervisor) release(inst *instance, gen *generation) {
 	defer s.mu.Unlock()
 	gen.active--
 	if gen.draining && gen.active == 0 {
-		s.detach(func(ctx context.Context) { s.stopGeneration(ctx, gen) })
+		stop := gen.stopDrain
+		if stop == nil {
+			stop = func(ctx context.Context) { s.stopGeneration(ctx, gen) }
+		}
+		s.detach(stop)
 		return
 	}
 	if d, err := s.serviceLocked(inst.rec.ServiceID); err == nil {
@@ -524,10 +541,10 @@ func (s *Supervisor) release(inst *instance, gen *generation) {
 }
 
 // armIdleLocked starts the idle timer once active calls, acknowledged listens
-// and leases reach zero.
+// and leases reach zero. Idle expiry applies only to Mesh-owned processes.
 func (s *Supervisor) armIdleLocked(inst *instance, d Definition) {
 	gen := inst.current
-	if gen == nil || gen.active > 0 || d.Lifecycle != LifecycleOnDemand || d.Idle <= 0 || s.leasedLocked(inst) {
+	if gen == nil || !d.Owned() || gen.active > 0 || d.Lifecycle != LifecycleOnDemand || d.Idle <= 0 || s.leasedLocked(inst) {
 		return
 	}
 	stopTimer(inst.idle)

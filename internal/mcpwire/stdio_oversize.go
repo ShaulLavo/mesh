@@ -26,34 +26,49 @@ type OversizedStdioRequest struct {
 func (*OversizedStdioRequest) Error() string { return ErrTooLarge.Error() }
 func (*OversizedStdioRequest) Unwrap() error { return ErrTooLarge }
 
+// DrainOversizedReply drains an oversized stdio reply line through its newline
+// delimiter within MaxStdioDrain and returns its verified JSON-RPC response ID
+// when both framing and envelope attribution remain intact.
+func DrainOversizedReply(r *bufio.Reader, prefix []byte, delimited bool) (ID, error) {
+	tail := &stdioDrain{
+		reader:    r,
+		remaining: MaxMessage + MaxStdioDrain - len(prefix),
+		delimited: delimited,
+	}
+	id := oversizedReplyID(io.MultiReader(bytes.NewReader(prefix), tail))
+	if _, err := io.Copy(io.Discard, tail); err != nil {
+		return ID{}, fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, err)
+	}
+	if !id.Valid() {
+		return ID{}, fmt.Errorf("%w: oversized stdio reply has no verified response ID: %w", ErrFramingLost, ErrTooLarge)
+	}
+	return id, nil
+}
+
 func (s *StdioReader) rejectOversize(prefix []byte, readErr error, reply bool) error {
 	if readErr != nil && !errors.Is(readErr, bufio.ErrBufferFull) {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, readErr)
+	}
+	if reply {
+		id, err := DrainOversizedReply(s.r, prefix, readErr == nil)
+		if err != nil {
+			return err
+		}
+		return &OversizedStdioReply{ID: id}
 	}
 	tail := &stdioDrain{
 		reader:    s.r,
 		remaining: MaxMessage + MaxStdioDrain - len(prefix),
 		delimited: readErr == nil,
 	}
-	var id ID
-	if reply {
-		id = oversizedReplyID(io.MultiReader(bytes.NewReader(prefix), tail))
-	} else {
-		id = oversizedRequestID(io.MultiReader(bytes.NewReader(prefix), tail))
-	}
+	id := oversizedRequestID(io.MultiReader(bytes.NewReader(prefix), tail))
 	if _, err := io.Copy(io.Discard, tail); err != nil {
 		return fmt.Errorf("%w: drain oversized stdio line: %w", ErrFramingLost, err)
 	}
-	if !reply {
-		if id.Valid() {
-			return &OversizedStdioRequest{ID: id}
-		}
-		return ErrTooLarge
+	if id.Valid() {
+		return &OversizedStdioRequest{ID: id}
 	}
-	if !id.Valid() {
-		return fmt.Errorf("%w: oversized stdio reply has no verified response ID: %w", ErrFramingLost, ErrTooLarge)
-	}
-	return &OversizedStdioReply{ID: id}
+	return ErrTooLarge
 }
 
 type stdioDrain struct {
@@ -232,15 +247,11 @@ func (m *oversizedEnvelope) readID() bool {
 }
 
 func (m *oversizedEnvelope) skipValue(objectOnly bool) bool {
-	depth := m.decoder.StackDepth()
-	token, err := m.next()
-	if err != nil || (objectOnly && token.Kind() != '{') {
+	// SkipValue streams without buffering the skipped JSON value, while
+	// stdioDrain still enforces the 16 MiB drain cap on the underlying pipe.
+	m.source.limit = MaxMessage + MaxStdioDrain + 2
+	if objectOnly && m.decoder.PeekKind() != '{' {
 		return false
 	}
-	for m.decoder.StackDepth() > depth {
-		if _, err := m.next(); err != nil {
-			return false
-		}
-	}
-	return true
+	return m.decoder.SkipValue() == nil
 }

@@ -223,8 +223,24 @@ func (s *Supervisor) adminInstance(target Target) ([]*instance, error) {
 	return []*instance{inst}, nil
 }
 
+// requireOwned rejects process lifecycle and diagnostics calls against
+// external HTTP definitions, for which Mesh owns no process (PLAN §6.1).
+func (s *Supervisor) requireOwned(ref string) error {
+	d, err := s.service(ref)
+	if err != nil {
+		return err
+	}
+	if !d.Owned() {
+		return fmt.Errorf("service %s: %w (use probe, enable, disable or rm)", d.Name, ErrNotOwned)
+	}
+	return nil
+}
+
 // StartInstance starts the selected instance now, clearing a recorded failure.
 func (s *Supervisor) StartInstance(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -268,6 +284,9 @@ func (s *Supervisor) viewOf(caller Caller, inst *instance) InstanceView {
 // StopInstance stops the selected instances' processes and keeps their
 // definitions and identities.
 func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Target) ([]InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	instances, err := s.manageable(ctx, caller, target)
 	if err != nil {
 		return nil, err
@@ -284,6 +303,9 @@ func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Tar
 
 // Restart replaces the selected instance's process with a new generation.
 func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -300,6 +322,9 @@ func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) 
 
 // Logs returns the bounded private stderr ring of the selected instance.
 func (s *Supervisor) Logs(ctx context.Context, caller Caller, target Target, limit int) ([]byte, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > stderrLimit {
 		limit = stderrLimit
 	}

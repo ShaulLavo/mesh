@@ -15,6 +15,11 @@ import (
 // and the next stdin offset in InputOffset.
 const LineTail = ^uint64(0)
 
+// TypeWorkerLineOversize reports one oversized JSON-RPC reply line whose
+// delimiter and response ID were verified within the stdio drain cap, so
+// framing remains intact for subsequent lines.
+const TypeWorkerLineOversize = "worker.line.oversize"
+
 // DecodeLineInput decodes one stdin frame from an exclusive worker connection.
 // The first control binds the exact reservation and next output frame. After
 // that, KindData carries stdout lines numbered from zero. KindInput carries

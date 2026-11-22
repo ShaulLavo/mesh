@@ -132,6 +132,10 @@ func withDefaults(d Definition) Definition {
 	if d.AccountMode == "" {
 		d.AccountMode = AccountNone
 	}
+	if d.Transport == TransportHTTP && len(d.RunArgv) > 0 && d.RunCwd == "" && d.Cwd != "" {
+		d.RunCwd = d.Cwd
+		d.Cwd = ""
+	}
 	return d
 }
 
@@ -162,7 +166,13 @@ func validHTTP(d Definition) error {
 		}
 	}
 	if len(d.RunArgv) == 0 {
+		if d.Cwd != "" || d.RunCwd != "" {
+			return invalid("an external HTTP service has no process working directory")
+		}
 		return nil
+	}
+	if d.Cwd != "" {
+		return invalid("use --cwd or --run-cwd, not both, for a managed HTTP service")
 	}
 	if d.InstancePolicy != PolicyShared {
 		return invalid("a managed HTTP service owns one process at its URL and needs --shared")

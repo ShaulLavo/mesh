@@ -552,15 +552,16 @@ mesh mcp publish repo-tools --cwd /work/app --json -- ./repo-mcp
 ```
 
 - `--host HOST`: target host (defaults to local).
-- `--cwd PATH`: working directory on the target host for a stdio server.
+- `--cwd PATH`: working directory on the target host for a stdio server or --run.
 - `--env NAME=VALUE`: plain environment variable (repeatable).
 - `--secret-env NAME=PATH`: secret file path read into NAME at launch (mode 0600).
 - `--url URL`: loopback Streamable HTTP endpoint of an HTTP server.
 - `--header-secret HEADER=PATH`: credential header secret file sent to the HTTP server.
 - `--run COMMAND`: command that starts the HTTP server at --url.
-- `--run-cwd PATH`: working directory for --run.
+- `--run-cwd PATH`: working directory for --run (alias for --cwd when --run is set).
 - `--shared`: give every authorized caller one shared instance.
-- `--kept`: keep the server running instead of starting on demand.
+- `--kept`: keep the server running instead of starting on demand (requires --shared).
+- `--probe`: probe server/discover and tool schemas immediately after publishing.
 - `--idle D`: idle timeout for an on-demand instance (default 15m).
 - `--ready-timeout D`: readiness probe timeout (default 30s).
 - `--account-mode MODE`: none or host-account.
@@ -626,6 +627,38 @@ mesh mcp restart local/repo-tools --json
 
 - `--instance HANDLE`: instance ID or mi1 handle.
 - `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp probe
+
+Probe a hosted MCP server's stateless 2026-07-28 readiness and tool schemas.
+
+```sh
+mesh mcp probe local/search --json
+```
+
+- `--instance HANDLE`: instance ID or mi1 handle.
+- `--identity NAME`: act as this local application identity.
+- `--json`: write one agent result.
+
+## mesh mcp enable
+
+Enable a disabled hosted MCP server definition.
+
+```sh
+mesh mcp enable local/search --json
+```
+
+- `--json`: write one agent result.
+
+## mesh mcp disable
+
+Disable a hosted MCP server definition and stop active instances.
+
+```sh
+mesh mcp disable local/search --json
+```
+
 - `--json`: write one agent result.
 
 ## mesh mcp logs

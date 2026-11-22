@@ -25,6 +25,7 @@ const (
 	mcpWriteWatchdog = 30 * time.Second
 	mcpAccessDenied  = "access.denied"
 	mcpInstanceKey   = "instance"
+	mcpServiceKey    = "service"
 	mcpServicesKey   = "services"
 )
 
@@ -96,7 +97,7 @@ func (c *mcpController) jobActive(ctx context.Context, account, app, job string)
 		return false
 	}
 	r, err := journal.Exact(ctx, b)
-	if err != nil || r.Phase == executionTerminalPhase {
+	if err != nil || r.Phase == executionTerminalPhase || r.Key.Class == execution.InternalServiceClass {
 		return false
 	}
 	if app != "" {
@@ -175,9 +176,9 @@ func mcpErrorCode(err error) (string, bool) {
 		return resourceLimitCode, false
 	case errors.Is(err, mcphost.ErrConflict):
 		return "service.conflict", false
-	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrSecretFile), errors.As(err, new(*callerValidationError)):
+	case errors.Is(err, mcphost.ErrInvalid), errors.Is(err, mcphost.ErrNotOwned), errors.Is(err, mcphost.ErrSecretFile), errors.As(err, new(*callerValidationError)):
 		return executionUsageInvalidCode, false
-	case errors.Is(err, mcphost.ErrHTTPUnavailable), errors.Is(err, mcphost.ErrManagedHTTPUnsupported):
+	case errors.Is(err, mcphost.ErrHTTPUnavailable):
 		return "protocol.unsupported", false
 	default:
 		return stateUnavailableCode, true
@@ -203,6 +204,13 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 	case protocol.TypeMCPServiceRestart:
 		view, err := c.sup.Restart(ctx, caller, target)
 		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
+	case protocol.TypeMCPServiceEnable:
+		return c.setDisabled(ctx, caller, req.Service, false)
+	case protocol.TypeMCPServiceDisable:
+		return c.setDisabled(ctx, caller, req.Service, true)
+	case protocol.TypeMCPServiceProbe:
+		view, err := c.sup.Probe(ctx, caller, target)
+		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
 	case protocol.TypeMCPServiceStop:
 		views, err := c.sup.StopInstance(ctx, caller, target)
 		return mcpResult(map[string]any{"instances": views}, err)
@@ -226,6 +234,16 @@ func (c *mcpController) admin(caller mcphost.Caller, run func() (any, error)) (j
 	return mcpResult(run())
 }
 
+func (c *mcpController) setDisabled(ctx context.Context, caller mcphost.Caller, service string, disabled bool) (json.RawMessage, error) {
+	return c.admin(caller, func() (any, error) {
+		view, err := c.sup.SetDisabled(ctx, service, disabled)
+		if err != nil {
+			return nil, fmt.Errorf("update MCP service %s: %w", service, err)
+		}
+		return map[string]any{mcpServiceKey: view}, nil
+	})
+}
+
 func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req protocol.MCPServiceRequest) (json.RawMessage, error) {
 	return c.admin(caller, func() (any, error) {
 		var d mcphost.Definition
@@ -240,7 +258,7 @@ func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req p
 		if err != nil {
 			return nil, fmt.Errorf("show published MCP service: %w", err)
 		}
-		return map[string]any{"service": view}, nil
+		return map[string]any{mcpServiceKey: view}, nil
 	})
 }
 

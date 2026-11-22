@@ -47,6 +47,15 @@ type LaunchSpec struct {
 	Argv []string
 	Cwd  string
 	Env  []string
+	// PlainPipe runs the process on a plain pipe worker (stdin closed,
+	// stdout and stderr captured) instead of the MCP line worker.
+	PlainPipe bool
+}
+
+// WorkerWaiter is optionally implemented by a Launcher to signal when a
+// managed worker exits without polling.
+type WorkerWaiter interface {
+	Wait(ctx context.Context, ref WorkerRef) error
 }
 
 // Launcher owns worker processes for the supervisor. The daemon implements it
@@ -68,8 +77,9 @@ var (
 	ErrDenied          = errors.New("mcp instance belongs to another caller")
 	ErrLimit           = errors.New("mcp host limit reached")
 	ErrConflict        = errors.New("mcp service changed")
-	// ErrManagedHTTPUnsupported refuses --run HTTP definitions in this release.
-	ErrManagedHTTPUnsupported = errors.New("Mesh-managed HTTP server processes (--run) are not supported yet; start the server yourself and publish its --url")
+	// ErrNotOwned reports a process lifecycle operation against an external
+	// HTTP server for which Mesh owns no process.
+	ErrNotOwned = errors.New("external HTTP service has no Mesh-managed process")
 )
 
 const (
@@ -126,12 +136,13 @@ type Supervisor struct {
 type instance struct {
 	persisting sync.Mutex
 
-	rec      InstanceRecord
-	current  *generation
-	starting chan struct{}
-	idle     *time.Timer
-	retry    *time.Timer
-	backoff  time.Duration
+	rec          InstanceRecord
+	current      *generation
+	starting     chan struct{}
+	drainingDone chan struct{}
+	idle         *time.Timer
+	retry        *time.Timer
+	backoff      time.Duration
 	// stops counts explicit stops, so callers waiting across one give up.
 	stops int
 }
@@ -150,6 +161,7 @@ type generation struct {
 	requests     int
 	listens      int
 	draining     bool
+	stopDrain    func(context.Context)
 }
 
 func NewSupervisor(cfg Config) (*Supervisor, error) {
@@ -323,11 +335,6 @@ func publishable(d Definition) (Definition, error) {
 	if d.Transport == TransportHTTP && newHTTPUpstream == nil {
 		return d, fmt.Errorf("service %s: %w", d.Name, ErrHTTPUnavailable)
 	}
-	if len(d.RunArgv) > 0 {
-		// The managed process's stdout is not MCP framing, so it needs a
-		// plain pipe worker rather than the line worker stdio servers use.
-		return d, fmt.Errorf("service %s: %w", d.Name, ErrManagedHTTPUnsupported)
-	}
 	if d.Lifecycle == LifecycleKept && d.InstancePolicy != PolicyShared {
 		return d, invalid("a kept service has no caller to own an isolated instance; use --shared")
 	}
@@ -356,13 +363,22 @@ func (s *Supervisor) retireRevisionLocked(d Definition) {
 			continue
 		}
 		inst.current = nil
-		s.drainLocked(gen)
+		s.drainLocked(inst, gen)
 	}
 }
 
-func (s *Supervisor) drainLocked(gen *generation) {
+func (s *Supervisor) drainLocked(inst *instance, gen *generation) {
 	gen.draining = true
-	stop := func(ctx context.Context) { s.stopGeneration(ctx, gen) }
+	done := make(chan struct{})
+	inst.drainingDone = done
+	var once sync.Once
+	stop := func(ctx context.Context) {
+		once.Do(func() {
+			defer close(done)
+			s.stopGeneration(ctx, gen)
+		})
+	}
+	gen.stopDrain = stop
 	if gen.active == 0 {
 		s.detach(stop)
 		return

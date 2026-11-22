@@ -75,6 +75,7 @@ func TestOversizedStdioReplyAttribution(t *testing.T) {
 	}{
 		{"numeric ID", version + `"id":` + largeID + "," + result + big + `"}}`, largeID, false},
 		{"string ID follows large payload", version + result + big + `"},"id":"\u0078"}`, `"\u0078"`, false},
+		{"4 MiB single string payload", version + `"id":"big4m",` + result + strings.Repeat("y", 4<<20) + `"}}`, `"big4m"`, false},
 		{"huge compound value", version + `"result":{"parts":["` + big + `","` + big + `"]},"id":8}`, "8", false},
 		{"escaped duplicate ID", version + `"id":1,` + result + big + `"},"\u0069d":2}`, "", true},
 		{"nested ID only", version + result + big + `","id":1}}`, "", true},

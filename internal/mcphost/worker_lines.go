@@ -1,6 +1,7 @@
 package mcphost
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -12,9 +13,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/shaul/mesh/internal/mcpwire"
 	"github.com/shaul/mesh/internal/paths"
 	"github.com/shaul/mesh/internal/protocol"
 )
+
+// ErrOversizedLine reports one stdout line over 3.5 MiB whose delimiter and
+// JSON-RPC response ID were recovered within the drain cap. Framing stays
+// intact so only that correlated request fails with mcp.message_too_large.
+type ErrOversizedLine struct {
+	ID mcpwire.ID
+}
+
+func (*ErrOversizedLine) Error() string { return mcpwire.ErrTooLarge.Error() }
+func (*ErrOversizedLine) Unwrap() error { return mcpwire.ErrTooLarge }
 
 // LineConn is the daemon's exclusive framed duplex attach to one stdio
 // worker. The worker owns the pipes and keeps draining them while no
@@ -48,6 +60,11 @@ var ErrLineFault = errors.New("mcp host: worker line framing lost")
 // exiting.
 var ErrStdoutClosed = errors.New("mcp host: server closed stdout")
 
+type workerLine struct {
+	data       []byte
+	oversizeID mcpwire.ID
+}
+
 type workerLines struct {
 	conn   net.Conn
 	writer *protocol.Writer
@@ -58,7 +75,7 @@ type workerLines struct {
 	offset  uint64
 	counter uint64
 
-	lines chan []byte
+	lines chan workerLine
 	acks  chan protocol.Control
 	done  chan struct{}
 	once  sync.Once
@@ -76,7 +93,7 @@ func DialWorkerLines(ctx context.Context, ref WorkerRef) (LineConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial worker %s: %w", ref.SessionID, err)
 	}
-	l := &workerLines{conn: conn, writer: protocol.NewWriter(conn), sid: sid, ref: ref, lines: make(chan []byte, 64), acks: make(chan protocol.Control, 1), done: make(chan struct{})}
+	l := &workerLines{conn: conn, writer: protocol.NewWriter(conn), sid: sid, ref: ref, lines: make(chan workerLine, 64), acks: make(chan protocol.Control, 1), done: make(chan struct{})}
 	if err := l.attach(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -125,12 +142,7 @@ func (l *workerLines) readLoop(reader *protocol.Reader) {
 
 func (l *workerLines) handleFrame(frame protocol.Frame) bool {
 	if frame.Kind == protocol.KindData && frame.Session == l.sid {
-		select {
-		case l.lines <- frame.Payload:
-			return true
-		case <-l.done:
-			return false
-		}
+		return l.enqueueLine(workerLine{data: frame.Payload})
 	}
 	if frame.Kind != protocol.KindControl {
 		l.fail(fmt.Errorf("worker %s sent an unexpected frame: %w", l.ref.SessionID, ErrLineFault))
@@ -140,6 +152,14 @@ func (l *workerLines) handleFrame(frame protocol.Frame) bool {
 	if err != nil {
 		l.fail(fmt.Errorf("worker %s: %w", l.ref.SessionID, err))
 		return false
+	}
+	if reply.Type == protocol.TypeWorkerLineOversize {
+		id, ok := mcpwire.ParseID([]byte(reply.Message))
+		if !ok || !id.Valid() {
+			l.fail(fmt.Errorf("worker %s: malformed oversized reply ID: %w", l.ref.SessionID, ErrLineFault))
+			return false
+		}
+		return l.enqueueLine(workerLine{oversizeID: id})
 	}
 	if reply.Type == protocol.TypeExit && reply.ErrorCode == "" {
 		l.fail(fmt.Errorf("worker %s: %w", l.ref.SessionID, ErrStdoutClosed))
@@ -151,6 +171,15 @@ func (l *workerLines) handleFrame(frame protocol.Frame) bool {
 	}
 	select {
 	case l.acks <- reply:
+		return true
+	case <-l.done:
+		return false
+	}
+}
+
+func (l *workerLines) enqueueLine(line workerLine) bool {
+	select {
+	case l.lines <- line:
 		return true
 	case <-l.done:
 		return false
@@ -177,7 +206,10 @@ func (l *workerLines) ReadLine() ([]byte, error) {
 	if !ok {
 		return nil, l.err
 	}
-	return line, nil
+	if line.oversizeID.Valid() {
+		return nil, &ErrOversizedLine{ID: line.oversizeID}
+	}
+	return bytes.TrimSuffix(bytes.TrimSuffix(line.data, []byte("\n")), []byte("\r")), nil
 }
 
 func (l *workerLines) WriteLine(ctx context.Context, line []byte) error {

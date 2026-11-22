@@ -29,7 +29,7 @@ func TestLineTailAttachReportsPositionAndAcksStayIndependent(t *testing.T) {
 	defer func() { _ = client.Close() }()
 	w := &Worker{cfg: Config{ID: b.Reservation.ID, Execution: &b}, sid: sid, pipe: &pipeExecution{input: p, lines: newLineOutput()}}
 	for range 3 {
-		w.pipe.lines.offer([]byte("before attach\n"))
+		w.pipe.lines.offerFrame(lineFrame{data: []byte("before attach\n")})
 	}
 	done := make(chan struct{})
 	go func() { defer close(done); w.serve(server) }()
@@ -74,7 +74,7 @@ func TestLineTailAttachReportsPositionAndAcksStayIndependent(t *testing.T) {
 		// Advance stdout while this input's acknowledgment is encoded.
 		go func() {
 			for range 4 {
-				w.pipe.lines.offer([]byte("output\n"))
+				w.pipe.lines.offerFrame(lineFrame{data: []byte("output\n")})
 			}
 		}()
 		if err := writer.WriteInput(sid, payload); err != nil {

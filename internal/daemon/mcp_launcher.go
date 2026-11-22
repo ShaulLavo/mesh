@@ -37,7 +37,11 @@ func (m mcpLauncher) Launch(ctx context.Context, spec mcphost.LaunchSpec) (mcpho
 	if err != nil {
 		return mcphost.WorkerRef{}, err
 	}
-	intent, err := execution.Normalize(execution.Intent{Kind: execution.KindLine, Stdin: execution.StdinOpen, Command: spec.Argv, Cwd: spec.Cwd})
+	kind, stdin := execution.KindLine, execution.StdinOpen
+	if spec.PlainPipe {
+		kind, stdin = execution.KindPipe, execution.StdinClosed
+	}
+	intent, err := execution.Normalize(execution.Intent{Kind: kind, Stdin: stdin, Command: spec.Argv, Cwd: spec.Cwd})
 	if err != nil {
 		return mcphost.WorkerRef{}, fmt.Errorf("launch MCP worker: %w", err)
 	}
@@ -147,7 +151,7 @@ func (m mcpLauncher) binding(ref mcphost.WorkerRef) (*execution.Journal, executi
 	if err != nil {
 		return nil, execution.Binding{}, fmt.Errorf("MCP worker %s: %w", ref.SessionID, err)
 	}
-	if b.Mode() != execution.KindLine || b.LaunchDigest != ref.LaunchDigest {
+	if (b.Mode() != execution.KindLine && b.Mode() != execution.KindPipe) || b.LaunchDigest != ref.LaunchDigest {
 		return nil, execution.Binding{}, fmt.Errorf("MCP worker %s: %w", ref.SessionID, execution.ErrInstance)
 	}
 	return journal, b, nil
@@ -194,17 +198,39 @@ func (m mcpLauncher) awaitTerminal(ctx context.Context, journal *execution.Journ
 	}
 }
 
-// Stderr reads the private 1 MiB diagnostics ring the worker retains.
+// Stderr reads up to limit bytes from the tail of the private diagnostics ring
+// the worker retains.
 func (m mcpLauncher) Stderr(ctx context.Context, ref mcphost.WorkerRef, limit int) ([]byte, error) {
 	_, b, err := m.binding(ref)
 	if err != nil {
 		return nil, err
 	}
-	page, err := m.l.executionOutput.Page(ctx, b, execution.StreamStderr, "", limit)
-	if err != nil {
-		return nil, fmt.Errorf("read MCP worker %s stderr: %w", ref.SessionID, err)
+	var tail []byte
+	cursor := ""
+	for range 16 {
+		page, err := m.l.executionOutput.Page(ctx, b, execution.StreamStderr, cursor, limit)
+		if err != nil {
+			return nil, fmt.Errorf("read MCP worker %s stderr: %w", ref.SessionID, err)
+		}
+		tail = appendTail(tail, page.Bytes, limit)
+		if page.NextCursor == "" || page.NextCursor == cursor || len(page.Bytes) == 0 {
+			break
+		}
+		cursor = page.NextCursor
 	}
-	return page.Bytes, nil
+	return tail, nil
+}
+
+func appendTail(tail, chunk []byte, limit int) []byte {
+	if len(chunk) >= limit {
+		return append(tail[:0], chunk[len(chunk)-limit:]...)
+	}
+	tail = append(tail, chunk...)
+	if len(tail) > limit {
+		copy(tail, tail[len(tail)-limit:])
+		tail = tail[:limit]
+	}
+	return tail
 }
 
 func (m mcpLauncher) Dial(ctx context.Context, ref mcphost.WorkerRef) (mcphost.LineConn, error) {

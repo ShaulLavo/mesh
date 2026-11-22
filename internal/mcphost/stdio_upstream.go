@@ -147,6 +147,14 @@ func (u *StdioUpstream) fault(err error) {
 func (u *StdioUpstream) readLoop() {
 	for {
 		line, err := u.conn.ReadLine()
+		var oversized *ErrOversizedLine
+		if errors.As(err, &oversized) {
+			if err := u.routeOversized(oversized.ID); err != nil {
+				u.fault(err)
+				return
+			}
+			continue
+		}
 		if errors.Is(err, ErrLineFault) {
 			u.fault(fmt.Errorf("%w: %w", ErrProtocolFault, err))
 			return
@@ -161,6 +169,22 @@ func (u *StdioUpstream) readLoop() {
 			return
 		}
 	}
+}
+
+// routeOversized fails only the correlated request when an oversized reply's
+// delimiter and ID were recovered, keeping the server instance usable.
+func (u *StdioUpstream) routeOversized(id mcpwire.ID) error {
+	raw, _ := id.MarshalJSON()
+	value, ok := decodeJSONString(raw)
+	u.mu.Lock()
+	call := u.calls[value]
+	if call != nil && ok {
+		u.endLocked(call, fmt.Errorf("reply exceeds %d bytes: %w", mcpwire.MaxMessage, mcpwire.ErrTooLarge), false)
+		u.mu.Unlock()
+		return nil
+	}
+	u.mu.Unlock()
+	return u.unmatched(value, ok, "request ID")
 }
 
 func (u *StdioUpstream) route(line []byte) error {
