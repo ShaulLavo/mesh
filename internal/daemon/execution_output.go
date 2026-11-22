@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
@@ -69,6 +70,10 @@ func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j 
 	switch req.Type {
 	case protocol.TypeExecutionInput:
 		return l.executionInput(ctx, req, r, response)
+	case protocol.TypeExecutionResize:
+		return l.executionResize(ctx, req, r, response)
+	case protocol.TypeExecutionScreen:
+		return l.executionScreen(ctx, req, r, response)
 	case protocol.TypeExecutionInspect:
 		if r.Phase == "uncertain" {
 			return response, execution.ErrUnknown
@@ -268,9 +273,43 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 const executionTerminalPhase = "terminal"
 const executionWaitCompleted = "completed"
 
-func (l *lifecycle) pipeSession(id string) bool {
+// privateSession reports a worker whose output belongs to its caller or to
+// Mesh itself, which public-session routes such as scoped output and
+// recovery never serve: pipe and framed workers, managed service and app
+// workers, keyed terminal jobs owned by an application or an internal
+// service, and any session whose ownership evidence cannot be read. Only a
+// person's session and a terminal job proven to be account- or device-owned
+// stay public.
+func (l *lifecycle) privateSession(ctx context.Context, id string) bool {
 	if !isCanonicalSessionID(id) {
 		return false
 	}
-	return worker.ReservedPurpose(filepath.Join(l.sessionsDir, id)).IsPipe()
+	dir := filepath.Join(l.sessionsDir, id)
+	if ref, ok := worker.ReservedAllocation(dir); ok && ref.Purpose == session.Execution {
+		return !l.accountOwnedExecution(ctx, ref)
+	}
+	return !worker.PersonSession(dir)
 }
+
+// accountOwnedExecution reads the owner of a keyed terminal job. Only jobs
+// keyed by the daemon account or a device stay public sessions.
+func (l *lifecycle) accountOwnedExecution(ctx context.Context, ref session.Reservation) bool {
+	journal, err := l.executionJournal()
+	if err != nil {
+		return false
+	}
+	b, err := l.executionOutput.Binding(ref.ID, ref.Instance, string(l.host.ID))
+	if err != nil {
+		return false
+	}
+	r, err := journal.Peek(ctx, b)
+	if err != nil {
+		return false
+	}
+	return r.Key.Class == executionDeviceClass || r.Key.Class == executionLocalAccountClass
+}
+
+const (
+	executionDeviceClass       = "device"
+	executionLocalAccountClass = "local-account"
+)

@@ -27,8 +27,19 @@ func dialControlHost(ctx context.Context, host HostRecord) (transport.Conn, erro
 	return conn, nil
 }
 
-func previewRemoteService(ctx context.Context, host HostRecord, dial HostDialer, service protocol.ServiceInfo) (protocol.ServicePreview, string, error) {
-	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
+// serviceExchange sends one service control to its owning host. The CLI
+// dials a fresh connection; mesh mcp uses its pooled one. Both share the
+// validation below, so their results agree.
+type serviceExchange func(ctx context.Context, request protocol.Control, expectedPrivateName *string) (protocol.Control, protocol.HostInfo, error)
+
+func dialServiceExchange(host HostRecord, dial HostDialer) serviceExchange {
+	return func(ctx context.Context, request protocol.Control, expectedPrivateName *string) (protocol.Control, protocol.HostInfo, error) {
+		return remoteServiceRequest(ctx, host, dial, request, expectedPrivateName)
+	}
+}
+
+func previewServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, service protocol.ServiceInfo) (protocol.ServicePreview, string, error) {
+	response, info, err := exchange(ctx, protocol.Control{
 		Type: protocol.TypeServicePreview, Service: &service,
 	}, nil)
 	if err != nil {
@@ -67,12 +78,12 @@ type remoteServicePublication struct {
 	Warning     string
 }
 
-func upsertRemoteService(ctx context.Context, host HostRecord, dial HostDialer, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string) (remoteServicePublication, error) {
+func upsertServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, requested protocol.ServiceInfo, preview protocol.ServicePreview, privateName string) (remoteServicePublication, error) {
 	var expectedPrivateName *string
 	if privateName != "" {
 		expectedPrivateName = &privateName
 	}
-	response, info, err := remoteServiceRequest(ctx, host, dial, protocol.Control{
+	response, info, err := exchange(ctx, protocol.Control{
 		Type: protocol.TypeServiceUpsert, Service: &requested, ServicePreview: &preview,
 	}, expectedPrivateName)
 	if err != nil {
@@ -152,10 +163,14 @@ func decodeRemoteServices(host HostRecord, response protocol.Control, info proto
 }
 
 func deleteRemoteService(ctx context.Context, host HostRecord, dial HostDialer, name string) error {
+	return deleteServiceVia(ctx, host, dialServiceExchange(host, dial), name)
+}
+
+func deleteServiceVia(ctx context.Context, host HostRecord, exchange serviceExchange, name string) error {
 	if err := meshserve.ValidateName(name); err != nil {
-		return err
+		return fmt.Errorf("route %s: %w", name, err)
 	}
-	response, _, err := remoteServiceRequest(ctx, host, dial, protocol.Control{Type: protocol.TypeServiceDelete, ServiceName: name}, nil)
+	response, _, err := exchange(ctx, protocol.Control{Type: protocol.TypeServiceDelete, ServiceName: name}, nil)
 	if err != nil {
 		return err
 	}
