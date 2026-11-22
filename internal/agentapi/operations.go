@@ -157,7 +157,7 @@ func valueFlag(arg string) bool {
 	case skillDirFlag, "--leave-key", "--detach-key", hostFlag, "--timeout", fileFlag, expectedRevisionFlag, keyDirFlag, identityFlag, "--permissions", "--expires-at", "--expires-in", "--section", sessionFlag, cursorFlag, limitFlag, "--page", "--request-key", "--kind", "--cwd", "--term", "--format", maxBytesFlag, colsFlag, rowsFlag, instanceFlag, "--stream", "--signal", "--stdin", "--offset", "--write-key", "--base64", "--text":
 		return true
 	}
-	return applicationValueFlag(arg) || mcpHTTPValueFlag(arg) || mcpServiceValueFlag(arg)
+	return applicationValueFlag(arg) || mcpHTTPValueFlag(arg) || mcpServiceValueFlag(arg) || mcpGatewayValueFlag(arg)
 }
 
 func sessionReadFlags(list bool) []Flag {

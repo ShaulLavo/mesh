@@ -44,6 +44,10 @@ type ServerOptions struct {
 	MaxConnBytes     int
 	EOFDrainTimeout  time.Duration
 	OnShutdown       func()
+	// PassResults sends terminal results as the forwarder produced them. The
+	// aggregate gateway sets it because it applies its own per-route server
+	// identity; one service's identity must never fall back onto another's.
+	PassResults bool
 }
 
 type queuedFrame struct {
@@ -76,6 +80,7 @@ type Server struct {
 	connBytes      int
 	drainWait      time.Duration
 	onShutdown     func()
+	passResults    bool
 
 	activeIDs mcpwire.ActiveIDs
 
@@ -129,6 +134,7 @@ func NewServer(opts ServerOptions) (*Server, error) {
 		connBytes:      connBytes,
 		drainWait:      drainWait,
 		onShutdown:     opts.OnShutdown,
+		passResults:    opts.PassResults,
 		active:         make(map[string]*activeRequest),
 		progressByKey:  make(map[string][]byte),
 		writerSignal:   make(chan struct{}, 1),
@@ -377,6 +383,9 @@ func (s *Server) executeRequest(ctx context.Context, msg mcpwire.Message, entry 
 }
 
 func (s *Server) prepareResult(id mcpwire.ID, raw []byte) ([]byte, *mcpwire.Fault) {
+	if s.passResults {
+		return raw, nil
+	}
 	s.mu.Lock()
 	fallback := s.lastUpstreamInfo
 	s.mu.Unlock()

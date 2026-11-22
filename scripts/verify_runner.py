@@ -34,8 +34,10 @@ from process_tree import Kernel, Unsupported  # noqa: E402
 # slow budget independently of ordinary session tests.
 # Release transitions build native fixtures and run complete rollback matrices.
 # Pipe execution restarts daemons and moves 50 MiB per stream through workers.
+# The MCP gateway proof runs two hosting daemons and waits out listen setup
+# bounds under deliberate stream saturation.
 SLOW_TESTS = frozenset({"packaging_contract.sh", "name_observation.sh", "temporary_app_size.sh", "copy_files.sh",
-                        "release_transition_checkpoint.sh", "ssh_pool.sh", "pipe_execution.sh"})
+                        "release_transition_checkpoint.sh", "ssh_pool.sh", "pipe_execution.sh", "mcp_gateway.sh"})
 GO_PATHS = ("GOROOT", "GOCACHE", "GOMODCACHE")
 # Module downloads need the caller's network policy; loopback fixtures do not.
 GO_POLICY = ("GOPROXY", "GONOSUMDB", "GONOPROXY", "GOPRIVATE", "GOFLAGS", "GOINSECURE", "GOSUMDB")

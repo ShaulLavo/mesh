@@ -71,6 +71,8 @@ func renderFileData(b *strings.Builder, data any) {
 		renderProfileBody(b, v)
 	case agentapi.ProfileWrite:
 		fmt.Fprintf(b, "profile revision %d committed=%t changed=%t publication=%s", v.Revision, v.Committed, v.Changed, v.Publication)
+	default:
+		renderHostedData(b, data)
 	}
 }
 
