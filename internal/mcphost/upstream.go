@@ -7,7 +7,9 @@ package mcphost
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
+	"net/netip"
 
 	"github.com/shaul/mesh/internal/mcpwire"
 )
@@ -59,6 +61,12 @@ var (
 	// parameter headers it was sent. The router may refresh the tool schema
 	// once and retry within the same revision, generation and account.
 	ErrHeaderMismatch = errors.New("mcp upstream: parameter header mismatch")
+	// ErrManagedListenerNotReady reports that a Mesh-managed HTTP worker has
+	// not bound its loopback listener yet.
+	ErrManagedListenerNotReady = errors.New("mcp upstream: managed HTTP listener is not bound yet")
+	// ErrManagedListenerMismatch reports that a loopback endpoint is held by a
+	// process other than the exact reserved worker for a managed HTTP service.
+	ErrManagedListenerMismatch = errors.New("mcp upstream: managed HTTP endpoint belongs to another process")
 )
 
 // HTTPUpstreamConfig describes one loopback Streamable HTTP endpoint.
@@ -73,6 +81,10 @@ type HTTPUpstreamConfig struct {
 	// tool from the account's current schema, and false when the tool is not
 	// known yet.
 	ToolHeaders func(tool string) (mcpwire.ParameterHeaders, bool)
+	// VerifyDial wraps each loopback TCP dial for a Mesh-managed HTTP server
+	// so listener ownership is proven for the exact reserved worker before any
+	// HTTP request or credential header is written.
+	VerifyDial func(ctx context.Context, target netip.AddrPort, dial func() (net.Conn, error)) (net.Conn, error)
 	// budget is the instance's shared reply budget (section 2.5), whose
 	// parent is the host's. Calls that overflow it fail as slow consumers.
 	budget *byteBudget

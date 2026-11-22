@@ -88,9 +88,9 @@ func TestPeerDiagReplyAuthenticatesClientSocketOnly(t *testing.T) {
 			if tt.change != nil {
 				tt.change(&message)
 			}
-			uid, err := parsePeerDiagReply(peerDiagReply(t, message), id, unix.AF_INET)
-			if (err != nil) != tt.bad || uid != tt.uid {
-				t.Fatalf("diagnostic UID = %d, %v; want %d, error %t", uid, err, tt.uid, tt.bad)
+			info, err := parsePeerDiagReply(peerDiagReply(t, message), id, unix.AF_INET)
+			if (err != nil) != tt.bad || info.UID != tt.uid {
+				t.Fatalf("diagnostic UID = %d, %v; want %d, error %t", info.UID, err, tt.uid, tt.bad)
 			}
 		})
 	}
@@ -100,9 +100,9 @@ func TestPeerDiagReplyAcceptsMappedIPv4Response(t *testing.T) {
 	peer, local := netip.MustParseAddrPort("127.0.0.1:40000"), netip.MustParseAddrPort("127.0.0.1:443")
 	request := peerDiagID(peer, local, unix.AF_INET)
 	message := inetDiagMsg{Family: unix.AF_INET6, State: tcpEstablished, ID: peerDiagID(peer, local, unix.AF_INET6), UID: 1000, Inode: 101}
-	uid, err := parsePeerDiagReply(peerDiagReply(t, message), request, unix.AF_INET)
-	if err != nil || uid != 1000 {
-		t.Fatalf("IPv4 query with mapped IPv6 reply = %d, %v", uid, err)
+	info, err := parsePeerDiagReply(peerDiagReply(t, message), request, unix.AF_INET)
+	if err != nil || info.UID != 1000 || info.Inode != 101 {
+		t.Fatalf("IPv4 query with mapped IPv6 reply = %+v, %v", info, err)
 	}
 }
 
@@ -131,8 +131,8 @@ func TestPeerDiagReplyRejectsMalformedMessages(t *testing.T) {
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if uid, err := parsePeerDiagReply(tt.change(append([]byte(nil), valid...)), id, unix.AF_INET); err == nil || uid != 0 {
-				t.Fatalf("malformed reply authenticated UID %d, error %v", uid, err)
+			if info, err := parsePeerDiagReply(tt.change(append([]byte(nil), valid...)), id, unix.AF_INET); err == nil || info.UID != 0 {
+				t.Fatalf("malformed reply authenticated %+v, error %v", info, err)
 			}
 		})
 	}
@@ -158,9 +158,9 @@ func TestPeerDiagReplyKernelErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			uid, err := parsePeerDiagReply(raw, inetDiagSockID{}, unix.AF_INET)
-			if uid != 0 || err == nil || tt.err != nil && !errors.Is(err, tt.err) {
-				t.Fatalf("kernel error authenticated UID %d, error %v; want rejection, %v", uid, err, tt.err)
+			info, err := parsePeerDiagReply(raw, inetDiagSockID{}, unix.AF_INET)
+			if info.UID != 0 || err == nil || tt.err != nil && !errors.Is(err, tt.err) {
+				t.Fatalf("kernel error authenticated %+v, error %v; want rejection, %v", info, err, tt.err)
 			}
 		})
 	}

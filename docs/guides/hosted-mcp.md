@@ -23,33 +23,61 @@ new calls start a process at the new revision.
 | Flag | Effect |
 | --- | --- |
 | `--host HOST` | Target host (machine name, exact host ID, or `local`; defaults to `local`). |
-| `--cwd DIR` | Working directory on the owning host. Defaults to the daemon account's home directory. |
+| `--cwd DIR` | Working directory on the owning host for a stdio server or `--run`. Defaults to the daemon account's home directory. |
 | `--env NAME=VALUE` | Plain environment variable. Repeat as needed. |
 | `--secret-env NAME=/abs/file` | Read `NAME` from a private `0600` file at launch. Needs `--account-mode host-account`. |
 | `--shared` | One instance for every authorized caller. Without it, each application caller gets its own. |
-| `--kept` | Keep the server running and restart it with backoff. Needs `--shared`. |
+| `--kept` | Keep the server running and restart it with backoff. Requires `--shared` (see below). |
+| `--probe` | Probe `server/discover` and tool schemas immediately after publishing. |
 | `--idle D` | Stop an on-demand instance after `D` without use. Default is 15 minutes. |
 | `--ready-timeout D` | Time allowed for `server/discover` to answer. Default is 30 seconds. |
 | `--account-mode none\|host-account` | Whose upstream account the server uses. |
 | `--account-label TEXT` | Non-secret name of that account, shown to callers. |
 | `--json` | Write one standard Mesh agent envelope. |
 
-## Publish an external loopback HTTP server
+Why `--kept` requires `--shared`: a kept service starts at publish time and
+again after a host reboot before any application caller connects. An isolated
+service owns a separate instance per caller, so there is no single caller to
+own a pre-started isolated process. Isolated callers that need a warm process
+to outlive the idle timer can hold a renewable lease (`mcp.service.lease`, up
+to 24 hours or tied to a running native job).
+
+## Publish a loopback HTTP server (external or managed)
+
+Loopback HTTP URLs must use `127.0.0.1`, `::1`, or `localhost`. Credential
+headers are read from `0600` secret files and sent only to that loopback URL.
+On a cold call or probe, the owning host probes `server/discover`, fetches the
+server's `tools/list` schema for that account, and mirrors declared
+`x-mcp-header` tool parameters into HTTP headers automatically.
+
+### External HTTP server
 
 ```sh
 mesh mcp publish search --url http://127.0.0.1:8080/mcp --shared \
   --account-mode host-account --account-label "search bot" \
-  --header-secret Authorization=/srv/secrets/search-auth
+  --header-secret Authorization=/srv/secrets/search-auth \
+  --probe
 ```
 
-The URL must be `127.0.0.1`, `::1`, or `localhost`. Mesh owns no process for an
-external HTTP server: start, stop, and idle expiry open and close the connection,
-and `mesh mcp logs` has no process stderr to show. Credential headers are read
-from their secret files and sent only to that loopback URL. On a cold direct
-tool call, the owning host privately probes `server/discover`, fetches the
-server's `tools/list` schema for that account, and mirrors declared `x-mcp-header`
-tool parameters into HTTP headers automatically. Mesh-managed HTTP processes
-(`--run`) are refused in this release.
+Mesh owns no process for an external HTTP server: `probe`, `enable`, `disable`,
+and `rm` are supported, while `start`, `stop`, `restart`, `logs`, and idle
+expiry are reserved for Mesh-owned processes.
+
+### Mesh-managed HTTP server
+
+```sh
+mesh mcp publish managed-search --url http://127.0.0.1:8080/mcp --shared \
+  --account-mode host-account --account-label "search bot" \
+  --run ./search-server --cwd /srv/search --probe
+```
+
+With `--run`, Mesh owns one process behind the loopback URL on a plain pipe
+worker (so arbitrary stdout/stderr from the HTTP server never interferes with
+MCP framing) and supports `start`, `stop`, `restart`, `logs`, `probe`,
+`enable`, `disable`, idle expiry, `--kept` restart backoff, and exact worker
+adoption across daemon restarts. Because one process binds the configured URL,
+managed HTTP services require `--shared`. `--run-cwd` is accepted as an alias
+for `--cwd`.
 
 ## Discover hosted servers across the fleet
 
@@ -178,6 +206,9 @@ approved host), plus `--json` for the standard agent envelope:
 
 ```sh
 mesh mcp show pc/repo-tools --json
+mesh mcp probe pc/search --json
+mesh mcp disable pc/search
+mesh mcp enable pc/search
 mesh mcp start pc/repo-tools
 mesh mcp stop pc/repo-tools
 mesh mcp restart pc/repo-tools
@@ -225,7 +256,11 @@ ownership is established.
 - **Non-durable hosted calls**: Hosted calls are not durable; an interrupted
   mutation reports `request.outcome_unknown` and is never replayed automatically.
 - **Message size cap**: MCP messages over 3.5 MiB (or H3 control frames over
-  4 MiB) are refused with `mcp.message_too_large`.
+  4 MiB) are refused with `mcp.message_too_large`. On stdio upstreams, an
+  oversized reply whose JSON-RPC response ID and newline delimiter are verified
+  within the 16 MiB drain cap fails only that request and keeps the server
+  instance running; unattributable or un-delimited oversized output faults the
+  instance.
 - **Client protocol requirement**: Legacy-only MCP clients cannot use `mesh mcp`
   or `mesh mcp connect`. Codex requires its `mcp_2026_07_28` feature flag and
   `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` until enabled by default.

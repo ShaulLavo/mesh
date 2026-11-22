@@ -50,6 +50,14 @@ func TestCatalogProjectionExcludesOperationalConfigAndUnknownMeta(t *testing.T) 
 	}
 
 	// Seed a ready instance with unrecognized upstream serverInfo and capabilities keys.
+	gen := &generation{
+		number:   1,
+		revision: stdioDef.Revision,
+	}
+	gen.setDiscovery(
+		json.RawMessage(`{"name":"safe-srv","version":"2.0","title":"Safe","x-secret":"`+metaSentinel+`"}`),
+		json.RawMessage(`{"tools":{"listChanged":true},"resources":{"subscribe":true},"completions":{},"x-vendor":"`+capSentinel+`"}`),
+	)
 	inst := &instance{
 		rec: InstanceRecord{
 			ID:         strings.Repeat("a", 32),
@@ -58,12 +66,7 @@ func TestCatalogProjectionExcludesOperationalConfigAndUnknownMeta(t *testing.T) 
 			Revision:   stdioDef.Revision,
 			Generation: 1,
 		},
-		current: &generation{
-			number:       1,
-			revision:     stdioDef.Revision,
-			serverInfo:   json.RawMessage(`{"name":"safe-srv","version":"2.0","title":"Safe","x-secret":"` + metaSentinel + `"}`),
-			capabilities: json.RawMessage(`{"tools":{"listChanged":true},"resources":{"subscribe":true},"completions":{},"x-vendor":"` + capSentinel + `"}`),
-		},
+		current: gen,
 	}
 	f.sup.mu.Lock()
 	f.sup.instances[inst.rec.ID] = inst

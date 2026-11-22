@@ -161,7 +161,7 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	if hooks.decorate != nil {
 		hooks.decorate(&r)
 	}
-	if (binding.Mode() == KindLine) != (k.Class == InternalServiceClass) {
+	if !validInternalNamespace(binding.Mode(), k.Class) {
 		return r, false, fmt.Errorf("execution: invalid internal request namespace")
 	}
 	if binding.RequestHash != k.Hash() || binding.Mode() != i.Kind || binding.Stdin != i.Stdin {

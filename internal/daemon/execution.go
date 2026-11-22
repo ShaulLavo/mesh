@@ -60,7 +60,7 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 	}
 	if request.Type == protocol.TypeExecutionRequest {
 		r, err := l.lookupExecution(ctx, journal, key)
-		if r.Binding.Mode() == execution.KindLine {
+		if r.Binding.Mode() == execution.KindLine || r.Key.Class == execution.InternalServiceClass {
 			return executionResponse(request, execution.Receipt{}, execution.ErrNotFound)
 		}
 		return executionResponse(request, r, err)

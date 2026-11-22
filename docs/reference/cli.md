@@ -2069,9 +2069,12 @@ Usage:
 
 Available Commands:
   connect     Connect over stdio to one hosted MCP server on any Mesh host
+  disable     Disable a hosted MCP server and stop active instances
+  enable      Enable a disabled hosted MCP server
   identity    Manage per-agent application identities
   logs        Print a hosted MCP server instance's recent stderr
   ls          List hosted MCP servers across saved Mesh hosts
+  probe       Probe a hosted MCP server's stateless 2026-07-28 readiness
   profile     Manage aggregate gateway profiles in mcp-profiles.json
   publish     Publish an MCP server hosted on a Mesh machine
   restart     Replace a hosted MCP server instance's process
@@ -2117,6 +2120,40 @@ Flags:
   -h, --help              help for connect
       --identity string   local application identity created with mesh mcp identity create NAME (required)
       --instance string   optional instance handle (mi1.<hostId>.<serviceId>.<instanceId>) or instance ID
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp disable
+
+```text
+Disable a hosted MCP server and stop active instances
+
+Usage:
+  mesh mcp disable [HOST/]NAME [flags]
+
+Flags:
+  -h, --help   help for disable
+      --json   write one agent result
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp enable
+
+```text
+Enable a disabled hosted MCP server
+
+Usage:
+  mesh mcp enable [HOST/]NAME [flags]
+
+Flags:
+  -h, --help   help for enable
+      --json   write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2224,6 +2261,25 @@ Flags:
       --identity string    scope visible instances and private catalog cache to this application identity
       --json               write one agent result
       --timeout duration   hard deadline for fleet queries (100ms to 30s) (default 2s)
+
+Global Flags:
+      --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
+      --privacy            mask personal data for recording and screen sharing (MESH_PRIVACY)
+```
+
+## mesh mcp probe
+
+```text
+Probe a hosted MCP server's stateless 2026-07-28 readiness
+
+Usage:
+  mesh mcp probe [HOST/]NAME [flags]
+
+Flags:
+  -h, --help              help for probe
+      --identity string   act as this local application identity
+      --instance string   instance handle or ID; without it, start and restart use your own instance and stop stops all of them
+      --json              write one agent result
 
 Global Flags:
       --leave-key string   key that leaves all nested sessions, or none (default "ctrl+^")
@@ -2368,22 +2424,24 @@ Usage:
 
 Examples:
 mesh mcp publish repo-tools --cwd /work/app -- ./repo-mcp
-mesh mcp publish search --host pc --url http://127.0.0.1:8080/mcp --shared
+mesh mcp publish search --host pc --url http://127.0.0.1:8080/mcp --shared --probe
+mesh mcp publish managed-search --url http://127.0.0.1:8080/mcp --shared --account-mode host-account --account-label search --run ./search-server --cwd /srv/search --probe
 
 Flags:
       --account-label string        non-secret name of the host account, shown to callers
       --account-mode string         none, or host-account when the server uses the host's credentials
-      --cwd string                  working directory on the target host for a stdio server
+      --cwd string                  working directory on the target host for a stdio server or --run
       --env stringArray             NAME=VALUE for the server's environment; repeat as needed
       --header-secret stringArray   HEADER=/absolute/file sent to the HTTP server
   -h, --help                        help for publish
       --host string                 target host (machine name, exact host ID, or local; defaults to local)
       --idle duration               stop an on-demand instance after this long unused (default 15m)
       --json                        write one agent result
-      --kept                        keep the server running instead of starting it on demand
+      --kept                        keep the server running instead of starting it on demand (requires --shared)
+      --probe                       probe server/discover and tool schemas immediately after publishing
       --ready-timeout duration      how long the server has to answer server/discover (default 30s)
       --run string                  command that starts the HTTP server at --url
-      --run-cwd string              working directory for --run
+      --run-cwd string              working directory for --run (alias for --cwd when --run is set)
       --secret-env stringArray      NAME=/absolute/file read into NAME at launch; the file must be mode 0600
       --shared                      give every caller one shared instance
       --url string                  loopback Streamable HTTP endpoint of an HTTP server

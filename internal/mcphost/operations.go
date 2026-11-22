@@ -28,7 +28,7 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 	if err != nil {
 		return err
 	}
-	gen, err := s.acquire(ctx, inst)
+	gen, d, _, err := s.acquireFor(ctx, inst, d.Revision)
 	if err != nil {
 		return err
 	}
@@ -56,7 +56,8 @@ func (s *Supervisor) Forward(ctx context.Context, caller Caller, target Target, 
 			s.release(inst, gen)
 		}
 	}()
-	route := Route{Caller: caller, Service: d.ID, Revision: gen.revision, Account: d.AccountLabel, Instance: inst.rec.ID, Generation: strconv.FormatInt(gen.number, 10), Upstream: gen.upstream, ServerInfo: gen.serverInfo}
+	serverInfo, _ := gen.discoveryInfo()
+	route := Route{Caller: caller, Service: d.ID, Revision: gen.revision, Account: d.AccountLabel, Instance: inst.rec.ID, Generation: strconv.FormatInt(gen.number, 10), Upstream: gen.upstream, ServerInfo: serverInfo}
 	emitted := false
 	counted := func(raw []byte, terminal bool) error {
 		emitted = true
@@ -172,7 +173,8 @@ func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceV
 	v := InstanceView{ID: r.ID, ServiceID: r.ServiceID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
-		v.Active, v.ServerInfo, v.Capabilities = gen.active, gen.serverInfo, gen.capabilities
+		v.Active = gen.active
+		v.ServerInfo, v.Capabilities = gen.discoveryInfo()
 		if stdio, ok := gen.upstream.(*StdioUpstream); ok {
 			v.LateReplies = stdio.LateReplies()
 		}
@@ -226,8 +228,24 @@ func (s *Supervisor) adminInstance(target Target) ([]*instance, error) {
 	return []*instance{inst}, nil
 }
 
+// requireOwned rejects process lifecycle and diagnostics calls against
+// external HTTP definitions, for which Mesh owns no process (PLAN §6.1).
+func (s *Supervisor) requireOwned(ref string) error {
+	d, err := s.service(ref)
+	if err != nil {
+		return err
+	}
+	if !d.Owned() {
+		return fmt.Errorf("service %s: %w (use probe, enable, disable or rm)", d.Name, ErrNotOwned)
+	}
+	return nil
+}
+
 // StartInstance starts the selected instance now, clearing a recorded failure.
 func (s *Supervisor) StartInstance(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -271,6 +289,9 @@ func (s *Supervisor) viewOf(caller Caller, inst *instance) InstanceView {
 // StopInstance stops the selected instances' processes and keeps their
 // definitions and identities.
 func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Target) ([]InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	instances, err := s.manageable(ctx, caller, target)
 	if err != nil {
 		return nil, err
@@ -287,6 +308,9 @@ func (s *Supervisor) StopInstance(ctx context.Context, caller Caller, target Tar
 
 // Restart replaces the selected instance's process with a new generation.
 func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) (InstanceView, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return InstanceView{}, err
+	}
 	if caller.Admin && target.Instance == "" {
 		caller.Admin = false
 	}
@@ -303,6 +327,9 @@ func (s *Supervisor) Restart(ctx context.Context, caller Caller, target Target) 
 
 // Logs returns the bounded private stderr ring of the selected instance.
 func (s *Supervisor) Logs(ctx context.Context, caller Caller, target Target, limit int) ([]byte, error) {
+	if err := s.requireOwned(target.Service); err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > stderrLimit {
 		limit = stderrLimit
 	}
@@ -335,7 +362,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 	if job != "" && !s.jobActive(ctx, caller.Account, caller.App, job) {
 		return Lease{}, InstanceView{}, failure(codeNotFound, false, "job %s is not a running job of this caller", job)
 	}
-	inst, _, err := s.pick(ctx, caller, target)
+	inst, d, err := s.pick(ctx, caller, target)
 	if err != nil {
 		return Lease{}, InstanceView{}, err
 	}
@@ -349,7 +376,7 @@ func (s *Supervisor) Lease(ctx context.Context, caller Caller, target Target, le
 		return Lease{}, InstanceView{}, err
 	}
 	if ttl > 0 {
-		gen, err := s.acquire(ctx, inst)
+		gen, _, _, err := s.acquireFor(ctx, inst, d.Revision)
 		if err != nil {
 			return lease, s.viewOf(caller, inst), err
 		}

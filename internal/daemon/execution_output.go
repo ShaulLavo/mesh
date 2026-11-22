@@ -35,6 +35,9 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if b.Mode() == execution.KindLine {
 		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
 	}
+	if peeked, _ := journal.Peek(ctx, b); peeked.Key.Class == execution.InternalServiceClass {
+		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
+	}
 	if err := l.authorizeBoundExecution(ctx, req, journal, b); err != nil {
 		if journalBusy(err) {
 			// A typed execution failure carries state.unavailable, which callers retry.

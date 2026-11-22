@@ -484,8 +484,16 @@ func TestDefinitionPolicy(t *testing.T) {
 	}
 	f := newSupervisorFixture(t)
 	managed := Definition{Name: "web", URL: "http://127.0.0.1:9/mcp", RunArgv: []string{"x"}, InstancePolicy: PolicyShared}
-	if _, err := f.sup.Publish(t.Context(), managed, 0); !errors.Is(err, ErrManagedHTTPUnsupported) {
-		t.Fatalf("managed HTTP definition: %v", err)
+	saved, err := f.sup.Publish(t.Context(), managed, 0)
+	if err != nil || !saved.Owned() {
+		t.Fatalf("managed HTTP definition: %+v %v", saved, err)
+	}
+	if _, err := Normalize(Definition{Name: "ext", URL: "http://127.0.0.1:9/mcp", Cwd: "/tmp", InstancePolicy: PolicyShared}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("external HTTP with cwd: %v", err)
+	}
+	norm, err := Normalize(Definition{Name: "web2", URL: "http://127.0.0.1:9/mcp", RunArgv: []string{"x"}, Cwd: "/tmp", InstancePolicy: PolicyShared})
+	if err != nil || norm.RunCwd != "/tmp" || norm.Cwd != "" {
+		t.Fatalf("managed HTTP cwd normalization: %+v %v", norm, err)
 	}
 }
 
@@ -498,6 +506,11 @@ func TestExternalHTTPServer(t *testing.T) {
 	}
 	f.publish(t, Definition{Name: "web", Argv: []string{}, URL: endpoint, InstancePolicy: PolicyShared,
 		HeaderSecrets: map[string]string{"Authorization": secret}, AccountMode: AccountHostAccount, AccountLabel: "fixture"})
+	admin := Caller{Account: "local", Admin: true}
+	probed, err := f.sup.Probe(t.Context(), admin, Target{Service: "web"})
+	if err != nil || probed.State != StateReady {
+		t.Fatalf("probe external HTTP: %+v %v", probed, err)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), testHang)
 	defer cancel()
 	out := &collected{}
@@ -509,15 +522,41 @@ func TestExternalHTTPServer(t *testing.T) {
 	if !strings.Contains(out.last(), "eu-west") || string(member([]byte(out.last()), "id")) != `"r"` {
 		t.Fatalf("regional call: %s", out.last())
 	}
-	views := fmt.Sprintf("%+v", f.sup.Catalog(Caller{Account: "local", Admin: true}))
+	views := fmt.Sprintf("%+v", f.sup.Catalog(admin))
 	if strings.Contains(views, "fixture-secret") || strings.Contains(views, secret) {
 		t.Fatalf("credential in the catalog: %s", views)
 	}
 	if f.launcher.launches != 0 {
 		t.Fatal("an external HTTP server started a process")
 	}
-	if _, err := f.sup.StopInstance(t.Context(), Caller{Account: "local", Admin: true}, Target{Service: "web"}); err != nil {
-		t.Fatalf("stopping an external connection: %v", err)
+	// Process lifecycle and diagnostics are reserved for Mesh-owned processes.
+	if _, err := f.sup.StartInstance(t.Context(), admin, Target{Service: "web"}); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("start external HTTP: %v", err)
+	}
+	if _, err := f.sup.StopInstance(t.Context(), admin, Target{Service: "web"}); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("stop external HTTP: %v", err)
+	}
+	if _, err := f.sup.Restart(t.Context(), admin, Target{Service: "web"}); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("restart external HTTP: %v", err)
+	}
+	if _, err := f.sup.Logs(t.Context(), admin, Target{Service: "web"}, 0); !errors.Is(err, ErrNotOwned) {
+		t.Fatalf("logs external HTTP: %v", err)
+	}
+	// Disable withdraws the external HTTP service and closes its connection;
+	// enable restores it.
+	disabled, err := f.sup.SetDisabled(t.Context(), "web", true)
+	if err != nil || !disabled.Disabled {
+		t.Fatalf("disable external HTTP: %+v %v", disabled, err)
+	}
+	if err := f.sup.Forward(ctx, caller("a"), Target{Service: "web"}, callRequest(t, `"r2"`, toolParams("regional", `{"region":"eu-west"}`, "")), (&collected{}).emit); Classify(err).Code != codeUnavailable {
+		t.Fatalf("forward while disabled: %v", err)
+	}
+	enabled, err := f.sup.SetDisabled(t.Context(), "web", false)
+	if err != nil || enabled.Disabled {
+		t.Fatalf("enable external HTTP: %+v %v", enabled, err)
+	}
+	if probed, err := f.sup.Probe(t.Context(), admin, Target{Service: "web"}); err != nil || probed.State != StateReady {
+		t.Fatalf("re-probe after enable: %+v %v", probed, err)
 	}
 }
 

@@ -124,3 +124,45 @@ func TestOutputExpiryCannotPassOwnedLifetime(t *testing.T) {
 		t.Fatalf("fenced output changed: %+v %v", current, err)
 	}
 }
+
+func TestOutputTailReturnsNewestBytesWithSmallLimit(t *testing.T) {
+	j, k, intent, env := journalFixture(t)
+	intent = Intent{Kind: KindPipe, Stdin: StdinClosed, Command: intent.Command, Cwd: intent.Cwd}
+	r, _, err := reserveTest(t, j, k, intent, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Dispatch(t.Context(), r.Binding, intent); err != nil {
+		t.Fatal(err)
+	}
+	a, err := StartAttempt(t.Context(), j.files.root.Name(), r.Binding, intent, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	capture, err := OpenCapture(j.files.root.Name(), r.Binding, StreamStderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := make([]byte, 4096)
+	for i := range payload {
+		payload[i] = 'a'
+	}
+	copy(payload[len(payload)-16:], "TAIL-SENTINEL-99")
+	capture.Offer(payload)
+	if _, err := capture.Finish(t.Context(), "eof"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := OpenOutput(j.files.root.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = output.Close() }()
+	tail, err := output.Tail(t.Context(), r.Binding, StreamStderr, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != 32 || string(tail[16:]) != "TAIL-SENTINEL-99" {
+		t.Fatalf("tail = %q (len=%d), want newest 32 bytes ending in TAIL-SENTINEL-99", tail, len(tail))
+	}
+}
