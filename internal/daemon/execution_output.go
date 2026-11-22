@@ -163,18 +163,26 @@ func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
 	defer cancel()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	// A short command finishes within milliseconds, so the first checks come
+	// quickly and back off to the steady rate a long command needs.
+	interval, started := executionWaitFirstPoll, time.Now()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
 		response, err := l.executionWaitResult(ctx, req, j, r)
 		if err != nil || response.ExecutionWait == executionWaitCompleted {
 			return response, executionBoundaryError("execution control", err)
 		}
+		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			response.ExecutionWait = "timed_out"
 			return response, nil
-		case <-ticker.C:
+		case <-timer.C:
+		}
+		interval = min(interval*2, executionWaitPollCap)
+		if time.Since(started) < executionWaitFastWindow {
+			interval = min(interval, executionWaitFastCap)
 		}
 	}
 }
@@ -288,6 +296,15 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 
 const executionTerminalPhase = "terminal"
 const executionWaitCompleted = "completed"
+
+const (
+	executionWaitFirstPoll = 2 * time.Millisecond
+	executionWaitPollCap   = 100 * time.Millisecond
+	// A check of a pending job reads one missing file, so the first second
+	// polls often enough that a command finishing then is reported promptly.
+	executionWaitFastCap    = 10 * time.Millisecond
+	executionWaitFastWindow = time.Second
+)
 
 // privateSession reports a worker whose output belongs to its caller or to
 // Mesh itself, which public-session routes such as scoped output and
