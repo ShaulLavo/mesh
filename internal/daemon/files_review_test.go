@@ -53,10 +53,17 @@ func TestFileOperationsResolveSymlinkedParents(t *testing.T) {
 	if len(search.Matches) != 1 || search.Matches[0].Path != f.path("real/sub/b.txt") {
 		t.Fatalf("search: %+v", search.Matches)
 	}
-	// The last element is still never followed.
+	// List and search resolve the whole path, so a linked root works too.
+	root := fileOK[protocol.FileListResult](t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("link")}), protocol.TypeFileListResult)
+	if root.Path != f.path("real") || len(root.Entries) != 4 {
+		t.Fatalf("list through a linked root reports %q with %d entries", root.Path, len(root.Entries))
+	}
+	found := f.search(protocol.FileSearchRequest{Path: f.path("link"), Pattern: "beta"})
+	if found.Path != f.path("real") || len(found.Matches) != 1 || found.Matches[0].Path != f.path("real/sub/b.txt") {
+		t.Fatalf("search through a linked root: %q %+v", found.Path, found.Matches)
+	}
+	// Reads, writes and patches never follow a symlink as the last element.
 	fileCode(t, f.read(protocol.FileReadRequest{Path: f.path("link/alias.txt")}), "file.not_regular")
-	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: f.path("link")}), "file.not_regular")
-	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: f.path("link"), Pattern: "beta"}), "file.not_regular")
 	fileCode(t, f.read(protocol.FileReadRequest{Path: f.path("missing/a.txt")}), "file.not_found")
 }
 

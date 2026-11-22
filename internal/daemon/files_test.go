@@ -620,8 +620,13 @@ func TestFileOperationsRefuseSymlinksAndSpecialFiles(t *testing.T) {
 	for _, path := range []string{link, dangling, fifo} {
 		fileCode(t, f.write(protocol.FileWriteRequest{Path: path, Data: "x", CreateOnly: true}), "file.conflict")
 	}
+	// List and search resolve the whole path, so a link to a file lists as a
+	// file, not a directory, and searches as that file.
 	fileCode(t, f.call(protocol.TypeFileList, protocol.FileListRequest{Target: f.target(), Path: link}), "file.not_regular")
-	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: link, Pattern: "real"}), "file.not_regular")
+	if search := f.search(protocol.FileSearchRequest{Path: link, Pattern: "real"}); len(search.Matches) != 1 || search.Path != regular {
+		t.Fatalf("search through a link to a file: %+v", search)
+	}
+	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: dangling, Pattern: "real"}), "file.not_found")
 	fileCode(t, f.call(protocol.TypeFileSearch, protocol.FileSearchRequest{Target: f.target(), Path: fifo, Pattern: "real"}), "file.not_regular")
 	if target, _ := os.Readlink(link); target != regular {
 		t.Fatal("the symlink was replaced")

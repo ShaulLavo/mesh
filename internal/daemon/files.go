@@ -198,6 +198,18 @@ func resolveFilePath(path string) (string, error) {
 
 // beginFileRequest runs the checks every operation shares.
 func (c *fileController) beginFileRequest(target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
+	return c.begin(target, path, canonicalFilePath)
+}
+
+// beginTreeRequest is beginFileRequest for list and search, whose path names a
+// directory (or a file to search) and is resolved in full, so a linked
+// workspace root such as /work/repos works. Reads, writes and patches resolve
+// only the parent.
+func (c *fileController) beginTreeRequest(target protocol.FileTarget, path string) (protocol.FileTarget, string, error) {
+	return c.begin(target, path, canonicalTreePath)
+}
+
+func (c *fileController) begin(target protocol.FileTarget, path string, canonicalize func(string) (string, error)) (protocol.FileTarget, string, error) {
 	checked, err := c.checkTarget(target)
 	if err != nil {
 		return protocol.FileTarget{}, "", err
@@ -206,12 +218,24 @@ func (c *fileController) beginFileRequest(target protocol.FileTarget, path strin
 	if err != nil {
 		return protocol.FileTarget{}, "", err
 	}
-	canonical, err := canonicalFilePath(resolved)
+	canonical, err := canonicalize(resolved)
 	if err != nil {
 		return protocol.FileTarget{}, "", err
 	}
 	c.stage("resolved", canonical)
 	return checked, canonical, nil
+}
+
+// canonicalTreePath resolves every symlink in a path, last element included.
+func canonicalTreePath(path string) (string, error) {
+	if path == "/" {
+		return path, nil
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fileOSFailure("resolve", path, err)
+	}
+	return canonical, nil
 }
 
 // canonicalFilePath resolves the symlinks in a path's parent directories once,
