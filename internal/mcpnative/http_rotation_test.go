@@ -275,6 +275,9 @@ type rotationHarness struct {
 	// idle receives when net/http marks a connection idle, which happens
 	// after the client may already have read the whole response.
 	idle chan struct{}
+	// connClosed receives once net/http has closed a connection and the
+	// frontend's ConnState hook has dropped it.
+	connClosed chan struct{}
 	// before runs once net/http has read a request, before the frontend
 	// sees it; after runs once the frontend's handler has returned, before
 	// net/http finishes the response and marks the connection idle.
@@ -296,22 +299,28 @@ func (h *rotationHarness) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 func startRotationHarness(t *testing.T, gate *rotationGate, opts ServerOptions) *rotationHarness {
 	t.Helper()
+	return startRotationHarnessWith(t, gate, HTTPServerOptions{ServerOptions: opts})
+}
+
+func startRotationHarnessWith(t *testing.T, gate *rotationGate, opts HTTPServerOptions) *rotationHarness {
+	t.Helper()
 	opts.Version = "0.1.0-rot"
-	srv, err := NewHTTPServer(HTTPServerOptions{
-		ServerOptions: opts,
-		Authority:     "127.0.0.1:9000",
-		Token:         testHTTPToken,
-	})
+	opts.Authority = "127.0.0.1:9000"
+	opts.Token = testHTTPToken
+	srv, err := NewHTTPServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &rotationHarness{gate: gate, srv: srv}
+	h := &rotationHarness{gate: gate, srv: srv, connClosed: make(chan struct{}, 16)}
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(h.serveHTTP))
 	srv.Attach(ts.Config)
 	idle := make(chan struct{}, 16)
 	track := ts.Config.ConnState
 	ts.Config.ConnState = func(c net.Conn, state http.ConnState) {
 		track(c, state)
+		if state == http.StateClosed {
+			signalOne(h.connClosed)
+		}
 		if state != http.StateIdle {
 			return
 		}
@@ -707,6 +716,38 @@ func TestHTTPRotationKeepsConnectionWithFinishedReply(t *testing.T) {
 	waitRotation(t, h.rotate(), 0)
 	closeOnce(resume)
 	assertListReply(t, br)
+}
+
+func signalOne(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// A body that stops arriving ends in a read error. The 400 that follows must
+// not leave net/http draining the rest without a deadline, holding the
+// connection, its goroutine and the frontend's record of it.
+func TestHTTPBodyReadErrorDoesNotWaitForRest(t *testing.T) {
+	h := startRotationHarnessWith(t, newRotationGate(""), HTTPServerOptions{
+		ServerOptions: ServerOptions{Controls: &stubControls{}},
+		ReadTimeout:   200 * time.Millisecond,
+	})
+	body := rotationWaitBody("")
+	client := h.dial(t, []byte(rawRequestHead(testHTTPToken, mcpwire.MethodCallTool, "mesh_job_wait", len(body))+body[:10]))
+
+	// A read timeout also cancels the request, so the server may end the
+	// connection without a reply; a reply, if any, is a 400.
+	if resp, err := readRawResponse(bufio.NewReader(client)); err == nil && resp.status != http.StatusBadRequest {
+		t.Fatalf("body read error = %d %q, want 400", resp.status, resp.body)
+	}
+	waitPhase(t, h.connClosed, "the server to close the stalled connection")
+	h.srv.mu.Lock()
+	open := len(h.srv.conns)
+	h.srv.mu.Unlock()
+	if open != 0 {
+		t.Fatalf("frontend still tracks %d connections after the stalled one closed", open)
+	}
 }
 
 func closeOnce(ch chan struct{}) {

@@ -808,6 +808,9 @@ func (s *HTTPServer) readBudgetedHTTP(w http.ResponseWriter, r *http.Request, rc
 
 func (s *HTTPServer) handleReadHTTPError(w http.ResponseWriter, r *http.Request, entry *httpActiveRequest, body *httpBudgetedBody, err error) {
 	s.setIngressBytes(entry, 0)
+	// The body ended in an error, so the rest of it is never read: without
+	// this, net/http would drain it after the reply with no deadline.
+	skipRequestBody(w)
 	if entry.retired.Load() {
 		writeUnauthorized(w)
 		return

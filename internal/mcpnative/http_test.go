@@ -492,6 +492,18 @@ func TestHTTPBothRepresentationsAndStreamCancellationAndRotation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("closing HTTP SSE response stream did not cancel handler context")
 	}
+	// The worker sees the cancellation before the handler finishes its
+	// exchange; rotation below must count only the stream it retires.
+	exchangesDone := make(chan struct{})
+	go func() {
+		srv.exchanges.Wait()
+		close(exchangesDone)
+	}()
+	select {
+	case <-exchangesDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled SSE exchange never finished")
+	}
 
 	// 4. Token rotation: retires old token AND its active SSE stream, while new
 	// token works immediately and token values are never logged.
