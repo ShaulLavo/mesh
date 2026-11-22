@@ -135,9 +135,29 @@ func (s *Supervisor) acquire(ctx context.Context, inst *instance) (*generation, 
 		}
 		inst.starting = make(chan struct{})
 		s.mu.Unlock()
-		if err := s.start(inst, d); err != nil {
+		if err := s.startDetached(ctx, inst, d); err != nil {
 			return nil, err
 		}
+	}
+}
+
+// startDetached launches outside the caller's context, so a caller that
+// leaves cannot abandon a worker half way through its launch, and waits for
+// the outcome while the caller is still there.
+func (s *Supervisor) startDetached(ctx context.Context, inst *instance, d Definition) error {
+	done := make(chan error, 1)
+	if !s.detach(func(lifetime context.Context) { done <- s.start(lifetime, inst, d) }) {
+		s.mu.Lock()
+		close(inst.starting)
+		inst.starting = nil
+		s.mu.Unlock()
+		return failure(codeUnavailable, true, "the host is shutting down")
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("wait for MCP instance start: %w", ctx.Err())
 	}
 }
 
@@ -173,16 +193,14 @@ func (s *Supervisor) usableLocked(inst *instance, d Definition) *generation {
 	}
 	if gen.upstream.Err() != nil || gen.revision != d.Revision {
 		inst.current = nil
-		s.drainLocked(inst, gen)
+		s.drainLocked(gen)
 		return nil
 	}
 	return gen
 }
 
-// start runs one launch without the caller's context: a caller leaving
-// cannot abandon a worker half way through its launch.
-func (s *Supervisor) start(inst *instance, d Definition) error {
-	gen, err := s.launch(inst, d)
+func (s *Supervisor) start(ctx context.Context, inst *instance, d Definition) error {
+	gen, err := s.launch(ctx, inst, d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	close(inst.starting)
@@ -193,14 +211,13 @@ func (s *Supervisor) start(inst *instance, d Definition) error {
 	}
 	inst.current = gen
 	inst.backoff = 0
-	s.wg.Add(1)
-	go s.watch(inst, gen)
+	s.detach(func(ctx context.Context) { s.watch(ctx, inst, gen) })
 	s.armIdleLocked(inst, d)
 	return nil
 }
 
-func (s *Supervisor) launch(inst *instance, d Definition) (*generation, error) {
-	ctx, cancel := context.WithTimeout(s.ctx, d.ReadyTimeout+stopTimeout)
+func (s *Supervisor) launch(ctx context.Context, inst *instance, d Definition) (*generation, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.ReadyTimeout+stopTimeout)
 	defer cancel()
 	env, err := launchEnvironment(d)
 	if err != nil {
@@ -240,7 +257,7 @@ func (s *Supervisor) connect(ctx context.Context, inst *instance, d Definition, 
 	if err != nil {
 		return nil, s.failStart(ctx, inst, key, ref, "attach to worker: "+err.Error())
 	}
-	upstream := newStdioUpstream(conn, s.router.ids)
+	upstream := newStdioUpstream(ctx, conn, s.router.ids)
 	info, err := s.probe(ctx, upstream, d.ReadyTimeout)
 	if err != nil {
 		_ = upstream.Close()
@@ -329,8 +346,8 @@ func (s *Supervisor) probe(ctx context.Context, upstream *StdioUpstream, deadlin
 	ctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	id, _ := s.router.ids.request()
-	raw, err := encodeJSON(map[string]any{"jsonrpc": "2.0", "id": id, "method": mcpwire.MethodDiscover, "params": map[string]any{
-		"_meta": map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "probe"}},
+	raw, err := encodeJSON(map[string]any{jsonrpcKey: jsonrpcVersion, "id": id, "method": mcpwire.MethodDiscover, paramsKey: map[string]any{
+		metaKey: map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "probe"}},
 	}})
 	if err != nil {
 		return nil, err
@@ -360,20 +377,19 @@ func probeResult(reply mcpwire.Message, err error) (json.RawMessage, error) {
 	if reply.ErrorObject() != nil {
 		return nil, failure(codeIncompatible, false, "server refused server/discover; it does not speak MCP %s", mcpwire.Version)
 	}
-	return member(reply.Result(), "_meta", mcpwire.ServerInfoKey), nil
+	return member(reply.Result(), metaKey, mcpwire.ServerInfoKey), nil
 }
 
 // watch notices a generation whose pipe faulted or whose process ended.
-func (s *Supervisor) watch(inst *instance, gen *generation) {
-	defer s.wg.Done()
+func (s *Supervisor) watch(ctx context.Context, inst *instance, gen *generation) {
 	select {
 	case <-gen.upstream.Done():
-	case <-s.ctx.Done():
+	case <-ctx.Done():
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, stopTimeout)
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
-	_, status, code, _ := s.cfg.Launcher.Locate(ctx, LaunchKey{Service: inst.rec.ServiceID, Instance: inst.rec.ID, Generation: gen.number})
+	status, code := s.awaitExit(ctx, LaunchKey{Service: inst.rec.ServiceID, Instance: inst.rec.ID, Generation: gen.number})
 	if status == WorkerLive {
 		// Framing was lost while the process runs on: stop it.
 		_ = s.cfg.Launcher.Stop(ctx, gen.ref)
@@ -390,7 +406,7 @@ func (s *Supervisor) watch(inst *instance, gen *generation) {
 	}
 	inst.rec.State, inst.rec.ExitCode = StateFailed, code
 	inst.rec.Reason = faultReason(gen.upstream.Err(), status, code)
-	go func() { _ = s.persist(s.ctx, inst) }()
+	s.detach(func(ctx context.Context) { _ = s.persist(ctx, inst) })
 	if d, err := s.serviceLocked(inst.rec.ServiceID); err == nil {
 		s.scheduleRetryLocked(inst, d)
 	}
@@ -422,7 +438,7 @@ func (s *Supervisor) scheduleRetryLocked(inst *instance, d Definition) {
 		inst.retry = nil
 		s.mu.Unlock()
 		if d.Lifecycle == LifecycleKept {
-			s.ensureKept(d.ID)
+			s.detach(func(ctx context.Context) { s.ensureKept(ctx, d.ID) })
 		}
 	})
 }
@@ -432,7 +448,7 @@ func (s *Supervisor) release(inst *instance, gen *generation) {
 	defer s.mu.Unlock()
 	gen.active--
 	if gen.draining && gen.active == 0 {
-		go s.stopGeneration(gen)
+		s.detach(func(ctx context.Context) { s.stopGeneration(ctx, gen) })
 		return
 	}
 	if d, err := s.serviceLocked(inst.rec.ServiceID); err == nil {
@@ -448,17 +464,19 @@ func (s *Supervisor) armIdleLocked(inst *instance, d Definition) {
 		return
 	}
 	stopTimer(inst.idle)
-	inst.idle = time.AfterFunc(d.Idle, func() { s.idleStop(inst, gen) })
+	inst.idle = time.AfterFunc(d.Idle, func() {
+		s.detach(func(ctx context.Context) { s.idleStop(ctx, inst, gen) })
+	})
 }
 
-func (s *Supervisor) idleStop(inst *instance, gen *generation) {
+func (s *Supervisor) idleStop(ctx context.Context, inst *instance, gen *generation) {
 	s.mu.Lock()
 	eligible := inst.current == gen && gen.active == 0 && !s.leasedLocked(inst)
 	s.mu.Unlock()
 	if !eligible {
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, stopTimeout)
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
 	_ = s.stopInstance(ctx, inst, "idle")
 }
@@ -522,11 +540,12 @@ func (s *Supervisor) adopt(ctx context.Context, inst *instance, d Definition, ke
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	inst.current = gen
-	s.wg.Add(1)
-	go s.watch(inst, gen)
+	s.detach(func(ctx context.Context) { s.watch(ctx, inst, gen) })
 	s.armIdleLocked(inst, d)
 }
 
+// startKept starts kept services in the background so a slow server never
+// delays the daemon's own startup.
 func (s *Supervisor) startKept() {
 	s.mu.Lock()
 	var kept []string
@@ -537,14 +556,14 @@ func (s *Supervisor) startKept() {
 	}
 	s.mu.Unlock()
 	for _, id := range kept {
-		s.ensureKept(id)
+		s.detach(func(ctx context.Context) { s.ensureKept(ctx, id) })
 	}
 }
 
-func (s *Supervisor) ensureKept(serviceID string) {
-	ctx, cancel := context.WithTimeout(s.ctx, maxReadyTimeout)
+func (s *Supervisor) ensureKept(ctx context.Context, serviceID string) {
+	ctx, cancel := context.WithTimeout(ctx, maxReadyTimeout)
 	defer cancel()
-	inst, _, err := s.pick(ctx, Caller{Account: "host"}, Target{Service: serviceID})
+	inst, _, err := s.pick(ctx, Caller{Account: hostAccount}, Target{Service: serviceID})
 	if err != nil {
 		return
 	}

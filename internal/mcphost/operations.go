@@ -217,9 +217,7 @@ func (s *Supervisor) StartInstance(ctx context.Context, caller Caller, target Ta
 		return InstanceView{}, err
 	}
 	inst := instances[0]
-	if err := s.resettle(ctx, inst); err != nil {
-		return InstanceView{}, err
-	}
+	s.resettle(ctx, inst)
 	gen, err := s.acquire(ctx, inst)
 	if err != nil {
 		return s.viewOf(caller, inst), err
@@ -230,7 +228,7 @@ func (s *Supervisor) StartInstance(ctx context.Context, caller Caller, target Ta
 
 // resettle lets an explicit start retry a failed or incompatible instance.
 // An uncertain one starts only once recovery can see the previous worker.
-func (s *Supervisor) resettle(ctx context.Context, inst *instance) error {
+func (s *Supervisor) resettle(ctx context.Context, inst *instance) {
 	s.mu.Lock()
 	state := inst.rec.State
 	if state == StateFailed || state == StateIncompatible {
@@ -239,11 +237,9 @@ func (s *Supervisor) resettle(ctx context.Context, inst *instance) error {
 		inst.retry, inst.backoff = nil, 0
 	}
 	s.mu.Unlock()
-	if state != StateUncertain {
-		return nil
+	if state == StateUncertain {
+		s.recover(ctx, inst)
 	}
-	s.recover(ctx, inst)
-	return nil
 }
 
 func (s *Supervisor) viewOf(caller Caller, inst *instance) InstanceView {
@@ -374,15 +370,14 @@ func (s *Supervisor) leasedLocked(inst *instance) bool {
 	return false
 }
 
-func (s *Supervisor) sweepLoop() {
-	defer s.wg.Done()
+func (s *Supervisor) sweepLoop(ctx context.Context) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			s.Sweep(s.ctx)
-		case <-s.ctx.Done():
+			s.Sweep(ctx)
+		case <-ctx.Done():
 			return
 		}
 	}

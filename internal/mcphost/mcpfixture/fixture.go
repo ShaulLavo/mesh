@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ const (
 	// resultType) or "exit" (exits before reading anything).
 	EnvMode = "MESH_MCP_FIXTURE_MODE"
 	// EnvSecret is printed to stderr at start, as a careless server would.
-	EnvSecret = "MESH_MCP_FIXTURE_SECRET"
+	EnvSecret = "MESH_MCP_FIXTURE_SECRET" //nolint:gosec // The name of a variable, not a credential.
 )
 
 type server struct {
@@ -82,8 +83,11 @@ func RunEnv(stdin io.Reader, stdout, stderr io.Writer, getenv func(string) strin
 		if len(line) > 0 {
 			go s.handle(line)
 		}
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("fixture: read stdin: %w", err)
 		}
 	}
 }

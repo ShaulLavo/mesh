@@ -266,18 +266,19 @@ func validEnvironment(d Definition) error {
 		}
 		size += len(name) + len(path) + 1
 	}
-	for _, path := range d.SecretEnv {
-		if !filepath.IsAbs(path) {
-			return invalid("secret files must be absolute paths on the host")
-		}
-	}
-	for _, path := range d.HeaderSecrets {
-		if !filepath.IsAbs(path) {
-			return invalid("secret files must be absolute paths on the host")
-		}
-	}
 	if len(d.Env)+len(d.SecretEnv) > maxEnvVars || size > maxEnvBytes {
 		return invalid("at most %d variables and %d bytes of environment", maxEnvVars, maxEnvBytes)
+	}
+	return validSecretPaths(d)
+}
+
+func validSecretPaths(d Definition) error {
+	for _, paths := range []map[string]string{d.SecretEnv, d.HeaderSecrets} {
+		for _, path := range paths {
+			if !filepath.IsAbs(path) {
+				return invalid("secret files must be absolute paths on the host")
+			}
+		}
 	}
 	return nil
 }

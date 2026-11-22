@@ -26,6 +26,9 @@ const (
 	mcpLocalAccount   = "local-account:daemon-account"
 	mcpWriteWatchdog  = 30 * time.Second
 	mcpCredentialSize = 32
+	mcpAccessDenied   = "access.denied"
+	mcpInstanceKey    = "instance"
+	mcpServicesKey    = "services"
 )
 
 // mcpController serves the hosted MCP controls of this host.
@@ -136,7 +139,7 @@ func (c *mcpController) serve(ctx context.Context, conn transport.Conn, relay *c
 	}
 	out, err := protocol.EncodeMCP(response)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("encode %s reply: %w", kind, err)
 	}
 	return false, relay.enqueueAdmittedResponse(out, func() error { return workerExecutionAdmission(ctx) })
 }
@@ -152,7 +155,7 @@ func mcpErrorCode(err error) (string, bool) {
 	case errors.As(err, &f):
 		return f.Code, f.Retryable
 	case errors.Is(err, access.ErrDenied), errors.Is(err, mcphost.ErrDenied):
-		return "access.denied", false
+		return mcpAccessDenied, false
 	case errors.Is(err, mcphost.ErrNotFound):
 		return "service.not_found", false
 	case errors.Is(err, mcphost.ErrLimit):
@@ -176,17 +179,17 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 	target := mcphost.Target{Service: req.Service, Instance: req.Instance, New: req.New}
 	switch req.Type {
 	case protocol.TypeMCPCatalog:
-		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), "services": c.sup.Services(caller)}, nil)
+		return mcpResult(map[string]any{"hostId": string(c.l.host.ID), mcpServicesKey: c.sup.Services(caller)}, nil)
 	case protocol.TypeMCPServiceUpsert:
 		return c.upsert(ctx, caller, req)
 	case protocol.TypeMCPServiceDelete:
 		return c.admin(caller, func() (any, error) { return map[string]any{}, c.sup.Remove(ctx, req.Service) })
 	case protocol.TypeMCPServiceStart:
 		view, err := c.sup.StartInstance(ctx, caller, target)
-		return mcpResult(map[string]any{"instance": view}, err)
+		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
 	case protocol.TypeMCPServiceRestart:
 		view, err := c.sup.Restart(ctx, caller, target)
-		return mcpResult(map[string]any{"instance": view}, err)
+		return mcpResult(map[string]any{mcpInstanceKey: view}, err)
 	case protocol.TypeMCPServiceStop:
 		views, err := c.sup.StopInstance(ctx, caller, target)
 		return mcpResult(map[string]any{"instances": views}, err)
@@ -195,7 +198,7 @@ func (c *mcpController) handle(ctx context.Context, req protocol.MCPServiceReque
 		return mcpResult(map[string]any{"stderr": stderr}, err)
 	case protocol.TypeMCPServiceLease:
 		lease, view, err := c.sup.Lease(ctx, caller, target, req.LeaseID, time.Duration(req.LeaseTTLMillis)*time.Millisecond, req.Job)
-		return mcpResult(map[string]any{"lease": map[string]any{"id": lease.ID, "expires": lease.Expires, "job": lease.Job}, "instance": view}, err)
+		return mcpResult(map[string]any{"lease": map[string]any{"id": lease.ID, "expires": lease.Expires, "job": lease.Job}, mcpInstanceKey: view}, err)
 	default:
 		return nil, fmt.Errorf("%w %q", errUnknownControl, req.Type)
 	}
@@ -218,10 +221,13 @@ func (c *mcpController) upsert(ctx context.Context, caller mcphost.Caller, req p
 		}
 		saved, err := c.sup.Publish(ctx, d, req.ExpectedRevision)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("publish MCP service: %w", err)
 		}
 		view, err := c.sup.Service(caller, saved.ID)
-		return map[string]any{"service": view}, err
+		if err != nil {
+			return nil, fmt.Errorf("show published MCP service: %w", err)
+		}
+		return map[string]any{"service": view}, nil
 	})
 }
 
@@ -270,7 +276,7 @@ func (c *mcpController) forward(ctx context.Context, conn transport.Conn, frame 
 	}
 	reply, encodeErr := mcphost.ErrorReply(request, mcpForwardError(err), host, route.Service)
 	if encodeErr != nil {
-		return encodeErr
+		return fmt.Errorf("encode MCP error reply: %w", encodeErr)
 	}
 	return writeMCPEvent(lifetime, conn, reply, true)
 }
@@ -310,21 +316,26 @@ func writeMCPEvent(ctx context.Context, conn transport.Conn, raw []byte, termina
 	return nil
 }
 
+// writeMCPFault answers a request that failed wire validation with its
+// standard JSON-RPC error.
 func writeMCPFault(conn transport.Conn, request mcpwire.Message, err error) error {
-	fault, ok := err.(*mcpwire.Fault)
-	if !ok {
+	var fault *mcpwire.Fault
+	if !errors.As(err, &fault) {
 		fault = &mcpwire.Fault{Code: mcpwire.InvalidRequest, Message: err.Error()}
 	}
 	if request.ID().Valid() {
 		fault.ID = request.ID()
 	}
-	reply, encodeErr := fault.Reply()
-	if encodeErr != nil {
-		return encodeErr
+	reply, err := fault.Reply()
+	if err != nil {
+		return fmt.Errorf("encode MCP fault: %w", err)
 	}
-	frame, encodeErr := mcpframe.Encode(mcpframe.Result, reply)
-	if encodeErr != nil {
-		return encodeErr
+	frame, err := mcpframe.Encode(mcpframe.Result, reply)
+	if err != nil {
+		return fmt.Errorf("encode MCP fault: %w", err)
 	}
-	return conn.WriteFrame(frame)
+	if err := conn.WriteFrame(frame); err != nil {
+		return fmt.Errorf("write MCP fault: %w", err)
+	}
+	return nil
 }

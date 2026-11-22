@@ -39,6 +39,7 @@ type StdioUpstream struct {
 	mu       sync.Mutex
 	calls    map[string]*stdioCall
 	progress map[string]*stdioCall
+	cancels  chan string
 	done     chan struct{}
 	err      error
 
@@ -62,11 +63,40 @@ type stdioCall struct {
 	failed error
 }
 
-func newStdioUpstream(conn LineConn, ids *hostIDs) *StdioUpstream {
-	ctx, cancel := context.WithCancel(context.Background())
-	u := &StdioUpstream{conn: conn, ids: ids, budget: &byteBudget{limit: instanceQueueBytes}, ctx: ctx, cancel: cancel, calls: make(map[string]*stdioCall), progress: make(map[string]*stdioCall), done: make(chan struct{})}
+// newStdioUpstream starts the reader and the cancellation writer. The
+// upstream lives until Close or a fault, not until parent's deadline, which
+// may only bound the probe that follows.
+func newStdioUpstream(parent context.Context, conn LineConn, ids *hostIDs) *StdioUpstream {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	u := &StdioUpstream{conn: conn, ids: ids, budget: &byteBudget{limit: instanceQueueBytes}, ctx: ctx, cancel: cancel, calls: make(map[string]*stdioCall), progress: make(map[string]*stdioCall), cancels: make(chan string, maxQueuedCancels), done: make(chan struct{})}
 	go u.readLoop()
+	go u.cancelLoop(ctx)
 	return u
+}
+
+// maxQueuedCancels bounds cancellations waiting for the pipe. One more than
+// that means the pipe is stuck, and the instance is faulted instead.
+const maxQueuedCancels = 1024
+
+// queueCancel asks the server to stop one request without blocking the
+// caller or the reader.
+func (u *StdioUpstream) queueCancel(id string) {
+	select {
+	case u.cancels <- id:
+	default:
+		go u.fault(fmt.Errorf("%w: cancellations are not draining", ErrProtocolFault))
+	}
+}
+
+func (u *StdioUpstream) cancelLoop(ctx context.Context) {
+	for {
+		select {
+		case id := <-u.cancels:
+			u.sendCancel(ctx, id)
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // LateReplies counts attributable replies that arrived after their call
@@ -225,7 +255,7 @@ func (u *StdioUpstream) enqueueLocked(call *stdioCall, event mcpwire.Event, size
 // coalescible replaces a progress update the caller has not read yet with a
 // newer one for the same token.
 func coalescible(queued, next mcpwire.Event) bool {
-	return !queued.Terminal && !next.Terminal && queued.Message.Method() == "notifications/progress" && next.Message.Method() == "notifications/progress"
+	return !queued.Terminal && !next.Terminal && queued.Message.Method() == progressMethod && next.Message.Method() == progressMethod
 }
 
 func notify(signal chan struct{}) {
@@ -240,7 +270,7 @@ func (u *StdioUpstream) endLocked(call *stdioCall, err error, cancelUpstream boo
 	u.forgetLocked(call)
 	u.failLocked(call, err)
 	if active && cancelUpstream {
-		go u.sendCancel(call.id)
+		u.queueCancel(call.id)
 	}
 }
 
@@ -260,12 +290,12 @@ func (u *StdioUpstream) forgetLocked(call *stdioCall) {
 	}
 }
 
-func (u *StdioUpstream) sendCancel(id string) {
-	raw, err := encodeJSON(map[string]any{"jsonrpc": "2.0", "method": "notifications/cancelled", "params": map[string]any{"requestId": id}})
+func (u *StdioUpstream) sendCancel(ctx context.Context, id string) {
+	raw, err := encodeJSON(map[string]any{jsonrpcKey: jsonrpcVersion, "method": "notifications/cancelled", paramsKey: map[string]any{"requestId": id}})
 	if err != nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(u.ctx, cancelWriteTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cancelWriteTimeout)
 	defer cancel()
 	_ = u.conn.WriteLine(ctx, append(raw, '\n'))
 }
@@ -281,9 +311,11 @@ func (u *StdioUpstream) Call(ctx context.Context, request mcpwire.Message, sink 
 		u.abandon(call, false)
 		return fmt.Errorf("%w: %w", ErrNotSent, err)
 	}
-	if err := u.conn.WriteLine(u.ctx, line); err != nil {
+	// A caller leaving mid-write must not cut a line in half; the worker's
+	// acknowledgment deadline bounds the write instead.
+	if err := u.conn.WriteLine(context.WithoutCancel(ctx), line); err != nil {
 		u.abandon(call, false)
-		return err
+		return fmt.Errorf("write %s request: %w", request.Method(), err)
 	}
 	return u.drain(ctx, call, sink)
 }
@@ -304,7 +336,7 @@ func (u *StdioUpstream) register(request mcpwire.Message) (*stdioCall, error) {
 	if !ok || u.ids.owner(id) != currentRunID {
 		return nil, fmt.Errorf("%w: request ID was not assigned by this host", ErrNotSent)
 	}
-	token, _ := decodeJSONString(member(request.Raw(), "params", "_meta", "progressToken"))
+	token, _ := decodeJSONString(member(request.Raw(), paramsKey, metaKey, "progressToken"))
 	call := &stdioCall{id: id, token: token, exchange: mcpwire.NewExchange(request, mcpwire.StdioReply), signal: make(chan struct{}, 1)}
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -335,7 +367,7 @@ func (u *StdioUpstream) abandon(call *stdioCall, sent bool) {
 	call.queue, call.bytes = nil, 0
 	u.mu.Unlock()
 	if active && sent {
-		go u.sendCancel(call.id)
+		u.queueCancel(call.id)
 	}
 }
 

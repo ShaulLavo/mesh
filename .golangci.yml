@@ -38,6 +38,10 @@ linters:
           - goconst
           - gocognit
           - dupl
+      # A test-only MCP server that writes literal protocol messages.
+      - path: internal/mcphost/mcpfixture/
+        linters:
+          - goconst
   settings:
     staticcheck:
       checks:

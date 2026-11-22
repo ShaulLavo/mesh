@@ -28,7 +28,7 @@ func runNativePipeDaemon(role string, args []string) error {
 		return runNativePipeWorker(args[1:])
 	}
 	if len(args) != 0 && args[0] == mcpFixtureRole {
-		return mcpfixture.Run(os.Stdin, os.Stdout, os.Stderr)
+		return executionBoundaryError("run MCP fixture", mcpfixture.Run(os.Stdin, os.Stdout, os.Stderr))
 	}
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -67,9 +68,9 @@ func (s *upstreamState) apply(raw []byte) ([]byte, error) {
 		return raw, nil
 	}
 	if s.state == nil {
-		return setMember(raw, []string{"params", "requestState"}, nil)
+		return setMember(raw, []string{paramsKey, requestStateKey}, nil)
 	}
-	return setMember(raw, []string{"params", "requestState"}, jsonString(*s.state))
+	return setMember(raw, []string{paramsKey, requestStateKey}, jsonString(*s.state))
 }
 
 func stateInvalid(reason string) *Failure {
@@ -80,8 +81,8 @@ func stateInvalid(reason string) *Failure {
 // one is a first round and needs nothing.
 func (c *continuations) resolve(route Route, request mcpwire.Message) (*upstreamState, error) {
 	params := request.Params()
-	ref, hasRef := decodeJSONString(member(params, "requestState"))
-	if member(params, "requestState") == nil && member(params, "inputResponses") == nil {
+	ref, hasRef := decodeJSONString(member(params, requestStateKey))
+	if member(params, requestStateKey) == nil && member(params, "inputResponses") == nil {
 		return nil, nil
 	}
 	if !hasRef {
@@ -117,7 +118,7 @@ func (e *continuation) permits(request mcpwire.Message) error {
 	if err != nil && member(request.Params(), "inputResponses") != nil {
 		return stateInvalid("has malformed input responses")
 	}
-	caps := member(request.Raw(), "params", "_meta", mcpwire.ClientCapsKey)
+	caps := member(request.Raw(), paramsKey, metaKey, mcpwire.ClientCapsKey)
 	for key, value := range responses {
 		method, ok := e.inputs[key]
 		if !ok || !responseMatches(method, value) {
@@ -157,14 +158,14 @@ func capabilityFor(method string) string {
 // capture replaces the upstream's requestState in an input_required result
 // with a fresh host reference bound to this caller and request.
 func (c *continuations) capture(route Route, request mcpwire.Message, raw []byte) ([]byte, error) {
-	if !bytes.Equal(member(raw, "result", "resultType"), []byte(`"input_required"`)) {
+	if !bytes.Equal(member(raw, resultKey, "resultType"), []byte(`"input_required"`)) {
 		return raw, nil
 	}
 	entry := &continuation{binding: bindingFor(route, request), inputs: map[string]string{}, size: len(raw)}
-	if state, ok := decodeJSONString(member(raw, "result", "requestState")); ok {
+	if state, ok := decodeJSONString(member(raw, resultKey, requestStateKey)); ok {
 		entry.state = &state
 	}
-	inputs, _ := decodeMembers(member(raw, "result", "inputRequests"))
+	inputs, _ := decodeMembers(member(raw, resultKey, "inputRequests"))
 	for key, input := range inputs {
 		entry.inputs[key], _ = decodeJSONString(member(input, "method"))
 	}
@@ -172,7 +173,7 @@ func (c *continuations) capture(route Route, request mcpwire.Message, raw []byte
 	if err != nil {
 		return nil, err
 	}
-	return setMember(raw, []string{"result", "requestState"}, jsonString(ref))
+	return setMember(raw, []string{resultKey, requestStateKey}, jsonString(ref))
 }
 
 func (c *continuations) store(entry *continuation) (string, error) {
@@ -243,8 +244,8 @@ func bindingFor(route Route, request mcpwire.Message) continuationBinding {
 // fields that change from round to round.
 func operationDigest(params json.RawMessage) [32]byte {
 	fields, _ := decodeMembers(params)
-	delete(fields, "_meta")
-	delete(fields, "requestState")
+	delete(fields, metaKey)
+	delete(fields, requestStateKey)
 	delete(fields, "inputResponses")
 	canonical, _ := canonicalJSON(fields)
 	return sha256.Sum256(canonical)
@@ -254,13 +255,17 @@ func operationDigest(params json.RawMessage) [32]byte {
 func canonicalJSON(fields map[string]json.RawMessage) ([]byte, error) {
 	encoded, err := json.Marshal(fields)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("canonical operation: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("canonical operation: %w", err)
 	}
-	return json.Marshal(value)
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("canonical operation: %w", err)
+	}
+	return canonical, nil
 }

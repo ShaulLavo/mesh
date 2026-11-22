@@ -35,7 +35,11 @@ type syncBuffer struct {
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("fixture stderr: %w", err)
+	}
+	return n, nil
 }
 
 func (b *syncBuffer) String() string {
@@ -71,14 +75,16 @@ func startMemLines(getenv func(string) string) *memLines {
 func (l *memLines) WriteLine(_ context.Context, line []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, err := l.stdin.Write(line)
-	return err
+	if _, err := l.stdin.Write(line); err != nil {
+		return fmt.Errorf("fixture stdin: %w", err)
+	}
+	return nil
 }
 
 func (l *memLines) ReadLine() ([]byte, error) {
 	line, err := l.stdout.ReadBytes('\n')
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fixture stdout: %w", err)
 	}
 	return bytes.TrimSuffix(line, []byte("\n")), nil
 }
@@ -98,7 +104,7 @@ func newTestHost(t *testing.T) *testHost {
 		t.Fatal(err)
 	}
 	lines := newMemLines(t)
-	upstream := newStdioUpstream(lines, router.ids)
+	upstream := newStdioUpstream(t.Context(), lines, router.ids)
 	t.Cleanup(func() { _ = upstream.Close() })
 	return &testHost{router: router, upstream: upstream, lines: lines}
 }

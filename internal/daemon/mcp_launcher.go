@@ -79,7 +79,7 @@ func (m mcpLauncher) dispatch(ctx context.Context, journal *execution.Journal, b
 		if errors.As(err, &started) {
 			return m.ref(b), errors.Join(mcphost.ErrLaunchUncertain, err)
 		}
-		_, saveErr := journal.NotStarted(m.l.context, b, "worker_start_failed")
+		_, saveErr := journal.NotStarted(context.WithoutCancel(ctx), b, "worker_start_failed")
 		return mcphost.WorkerRef{}, errors.Join(err, saveErr)
 	}
 	if launched.Meta.Reservation == nil || *launched.Meta.Reservation != ref {

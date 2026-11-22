@@ -103,7 +103,10 @@ func (r *Router) Forward(ctx context.Context, route Route, request mcpwire.Messa
 		}
 		return emit(raw, event.Terminal)
 	}
-	return route.Upstream.Call(ctx, upstream, sink)
+	if err := route.Upstream.Call(ctx, upstream, sink); err != nil {
+		return fmt.Errorf("%s to service %s: %w", request.Method(), route.Service, err)
+	}
+	return nil
 }
 
 type restoration struct {
@@ -116,17 +119,17 @@ func (r *Router) rewrite(request mcpwire.Message, state *upstreamState) (mcpwire
 	id, _ := r.ids.request()
 	raw, err := request.WithID(id)
 	if err != nil {
-		return mcpwire.Message{}, restoration{}, err
+		return mcpwire.Message{}, restoration{}, fmt.Errorf("assign host request ID: %w", err)
 	}
 	var restore restoration
-	if token := member(raw, "params", "_meta", "progressToken"); token != nil {
+	if token := member(raw, paramsKey, metaKey, "progressToken"); token != nil {
 		restore.progress = token
-		if raw, err = setMember(raw, []string{"params", "_meta", "progressToken"}, jsonString(r.ids.progress())); err != nil {
+		if raw, err = setMember(raw, []string{paramsKey, metaKey, "progressToken"}, jsonString(r.ids.progress())); err != nil {
 			return mcpwire.Message{}, restoration{}, err
 		}
 	}
-	if member(raw, "params", "_meta", mcpwire.ClientCapsKey, "extensions", tasksExtension) != nil {
-		raw, err = setMember(raw, []string{"params", "_meta", mcpwire.ClientCapsKey, "extensions", tasksExtension}, nil)
+	if member(raw, paramsKey, metaKey, mcpwire.ClientCapsKey, "extensions", tasksExtension) != nil {
+		raw, err = setMember(raw, []string{paramsKey, metaKey, mcpwire.ClientCapsKey, "extensions", tasksExtension}, nil)
 		if err != nil {
 			return mcpwire.Message{}, restoration{}, err
 		}
@@ -143,20 +146,21 @@ func (r *Router) restore(route Route, request mcpwire.Message, restore restorati
 	if m.Kind() == mcpwire.Notification && event.Terminal {
 		// A stdio server ends a listen by cancelling it. Downstream, a
 		// graceful close is one complete result.
-		return mcpwire.Complete(request, json.RawMessage(`{}`), serverInfo(route), 0)
+		raw, err := mcpwire.Complete(request, json.RawMessage(`{}`), serverInfo(route), 0)
+		if err != nil {
+			return nil, fmt.Errorf("complete ended listen: %w", err)
+		}
+		return raw, nil
 	}
 	raw := []byte(m.Raw())
 	var err error
 	if m.Kind() == mcpwire.Response {
-		if raw, err = m.WithID(request.ID()); err != nil {
-			return nil, err
-		}
-		if raw, err = r.continuations.capture(route, request, raw); err != nil {
+		if raw, err = r.restoreResponse(route, request, m); err != nil {
 			return nil, err
 		}
 	}
-	if m.Method() == "notifications/progress" {
-		if raw, err = setMember(raw, []string{"params", "progressToken"}, restore.progress); err != nil {
+	if m.Method() == progressMethod {
+		if raw, err = setMember(raw, []string{paramsKey, "progressToken"}, restore.progress); err != nil {
 			return nil, err
 		}
 	}
@@ -172,15 +176,25 @@ func (r *Router) restore(route Route, request mcpwire.Message, restore restorati
 	return raw, nil
 }
 
-func replaceSubscription(raw []byte, original json.RawMessage) ([]byte, error) {
-	location := "params"
-	if member(raw, "result") != nil {
-		location = "result"
+// restoreResponse gives a terminal response the caller's ID and swaps any
+// upstream continuation state for a host reference.
+func (r *Router) restoreResponse(route Route, request, m mcpwire.Message) ([]byte, error) {
+	raw, err := m.WithID(request.ID())
+	if err != nil {
+		return nil, fmt.Errorf("restore caller request ID: %w", err)
 	}
-	if member(raw, location, "_meta", mcpwire.SubscriptionID) == nil {
+	return r.continuations.capture(route, request, raw)
+}
+
+func replaceSubscription(raw []byte, original json.RawMessage) ([]byte, error) {
+	location := paramsKey
+	if member(raw, resultKey) != nil {
+		location = resultKey
+	}
+	if member(raw, location, metaKey, mcpwire.SubscriptionID) == nil {
 		return raw, nil
 	}
-	return setMember(raw, []string{location, "_meta", mcpwire.SubscriptionID}, original)
+	return setMember(raw, []string{location, metaKey, mcpwire.SubscriptionID}, original)
 }
 
 func serverInfo(route Route) json.RawMessage {
@@ -254,8 +268,8 @@ func ErrorReply(request mcpwire.Message, err error, host, service string) ([]byt
 		code = mcpwire.InvalidParams
 	}
 	return encodeJSON(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      request.ID(),
+		jsonrpcKey: jsonrpcVersion,
+		"id":       request.ID(),
 		"error": map[string]any{
 			"code":    code,
 			"message": f.Error(),

@@ -107,6 +107,9 @@ type Supervisor struct {
 	services  map[string]Definition
 	byName    map[string]string
 	instances map[string]*instance
+
+	tasks   sync.Mutex
+	closing bool
 }
 
 type instance struct {
@@ -144,13 +147,13 @@ func NewSupervisor(cfg Config) (*Supervisor, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	return &Supervisor{cfg: cfg, router: router, ctx: ctx, cancel: cancel, services: map[string]Definition{}, byName: map[string]string{}, instances: map[string]*instance{}}, nil
+	return &Supervisor{cfg: cfg, router: router, services: map[string]Definition{}, byName: map[string]string{}, instances: map[string]*instance{}}, nil
 }
 
 // Start loads the store, adopts surviving workers by exact reservation and
-// starts kept services.
+// starts kept services. ctx is the supervisor's whole lifetime.
 func (s *Supervisor) Start(ctx context.Context) error {
+	s.ctx, s.cancel = context.WithCancel(ctx)
 	defs, records, err := loadRecords(ctx, s.cfg.Store)
 	if err != nil {
 		return err
@@ -170,13 +173,15 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		s.recover(ctx, inst)
 	}
 	s.startKept()
-	s.wg.Add(1)
-	go s.sweepLoop()
+	s.detach(s.sweepLoop)
 	return nil
 }
 
 // Close stops supervision. Workers keep running for the next daemon to adopt.
 func (s *Supervisor) Close() {
+	s.tasks.Lock()
+	s.closing = true
+	s.tasks.Unlock()
 	s.cancel()
 	s.mu.Lock()
 	for _, inst := range s.instances {
@@ -264,7 +269,7 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 	s.services[d.ID], s.byName[d.Name] = d, d.ID
 	s.retireRevisionLocked(d)
 	if d.Lifecycle == LifecycleKept && !d.Disabled {
-		go s.ensureKept(d.ID)
+		s.detach(func(ctx context.Context) { s.ensureKept(ctx, d.ID) })
 	}
 	return d, nil
 }
@@ -291,23 +296,41 @@ func (s *Supervisor) retireRevisionLocked(d Definition) {
 			continue
 		}
 		inst.current = nil
-		s.drainLocked(inst, gen)
+		s.drainLocked(gen)
 	}
 }
 
-func (s *Supervisor) drainLocked(inst *instance, gen *generation) {
+func (s *Supervisor) drainLocked(gen *generation) {
 	gen.draining = true
+	stop := func(ctx context.Context) { s.stopGeneration(ctx, gen) }
 	if gen.active == 0 {
-		go s.stopGeneration(gen)
+		s.detach(stop)
 		return
 	}
-	time.AfterFunc(drainGrace, func() { s.stopGeneration(gen) })
+	time.AfterFunc(drainGrace, func() { s.detach(stop) })
+}
+
+// detach runs task under the supervisor's lifetime, never a caller's: a
+// caller leaving must not abandon a launch, a stop or a restart half way.
+// It reports false once the supervisor is closing.
+func (s *Supervisor) detach(task func(context.Context)) bool {
+	s.tasks.Lock()
+	defer s.tasks.Unlock()
+	if s.closing {
+		return false
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		task(s.ctx)
+	}()
+	return true
 }
 
 // stopGeneration stops one replaced generation's exact worker. Stopping twice
 // is harmless: the launcher stops by reservation, never by label.
-func (s *Supervisor) stopGeneration(gen *generation) {
-	ctx, cancel := context.WithTimeout(s.ctx, stopTimeout)
+func (s *Supervisor) stopGeneration(ctx context.Context, gen *generation) {
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
 	defer cancel()
 	_ = gen.upstream.Close()
 	_ = s.cfg.Launcher.Stop(ctx, gen.ref)

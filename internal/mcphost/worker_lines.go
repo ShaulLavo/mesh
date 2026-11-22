@@ -178,7 +178,7 @@ func (l *workerLines) WriteLine(ctx context.Context, line []byte) error {
 	l.counter++
 	key := strconv.FormatUint(l.offset, 10) + ":w" + strconv.FormatUint(l.counter, 36)
 	payload := binary.BigEndian.AppendUint64(make([]byte, 0, 9+len(key)+len(line)), l.offset)
-	payload = append(payload, byte(len(key)))
+	payload = append(payload, byte(len(key))) //nolint:gosec // A decimal offset, ":w" and a base-36 counter stay far below 255 bytes.
 	payload = append(payload, key...)
 	payload = append(payload, line...)
 	_ = l.conn.SetWriteDeadline(time.Now().Add(lineAckTimeout))
