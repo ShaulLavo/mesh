@@ -958,9 +958,18 @@ implementation task.
 Explicit non-goals: scheduling or automatic host placement, cross-host process
 migration, provisioning/configuration management (a runbook in the fleet profile is
 text an agent reads, not something Mesh runs), package installation probes,
-project/agent-provider management, an MCP server, HTTP API, fleet wiki generator,
+project/agent-provider management, a general HTTP API, fleet wiki generator,
 remote host-profile administration, reboot commands, and multi-user sharing.
 Existing serving features remain exposure, not deployment (D22).
+
+The separately Approved MCP work in [#318], [#319] and [#320] reuses this
+interface's host controls and durable execution. Its native stdio frontend,
+owning-host services, local gateway and loopback Streamable HTTP have separate
+milestones and follow [ADR 012](../../docs/adr/012-stateless-mcp.md).
+
+[#318]: https://github.com/ShaulLavo/mesh/issues/318
+[#319]: https://github.com/ShaulLavo/mesh/issues/319
+[#320]: https://github.com/ShaulLavo/mesh/issues/320
 
 Completion means the relevant milestone tests and documentation exist in code;
 approving this plan does not mark any milestone implemented. The plan's central

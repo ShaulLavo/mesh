@@ -15,3 +15,4 @@ One file per decision that has a real "why". The format is in each file. Do not 
 | [009](009-conservative-anchor-search-ranges.md) | Anchor pages advertise conservative search ranges |
 | [010](010-shared-command-ssh.md) | Command SSH transports are shared through a private helper |
 | [011](011-each-host-updates-itself.md) | Each host updates itself |
+| [012](012-stateless-mcp.md) | Mesh speaks only stateless MCP 2026-07-28 |

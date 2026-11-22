@@ -253,6 +253,12 @@ pending deployment. D30 records the authorized scope change from D22.
 Approved: [agent interface, host and fleet context, and bundled skill](05-agent-interface.md).
 Not started.
 
+Approved: [native Mesh MCP](https://github.com/ShaulLavo/mesh/issues/318),
+[owning-host MCP services](https://github.com/ShaulLavo/mesh/issues/319) and
+[the local MCP gateway](https://github.com/ShaulLavo/mesh/issues/320). The wire
+foundation and interoperability tests are in M1. The frontend, services and
+gateway ship in later milestones. See [ADR 012](../../docs/adr/012-stateless-mcp.md).
+
 T18 is complete. Its claims remain inactive across disconnects and edge restarts.
 See [reverse tunnels](../reverse-tunnels.md) for the stock SSH command.
 
