@@ -380,6 +380,8 @@ func (s *oversizeScanner) stepObject(stack *[]containerState, top int, c byte) b
 		}
 		(*stack)[top] = expectObjColon
 		return true
+	case expectArrValueOrEnd, expectArrCommaOrEnd:
+		return false
 	default:
 		return false
 	}
