@@ -163,7 +163,7 @@ func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.
 		return key, err
 	}
 	if local, _ := ctx.Value(localClientKey{}).(bool); local {
-		key.Class = "local-account"
+		key.Class = executionLocalAccountClass
 		key.Principal = "daemon-account"
 		return key, executionBoundaryError("execution.go executionKey", key.Validate())
 	}
@@ -171,7 +171,7 @@ func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.
 	if !ok || peer.Identity == "" {
 		return key, fmt.Errorf("execution: trusted connection required")
 	}
-	key.Class = "device"
+	key.Class = executionDeviceClass
 	key.Principal = peer.Identity
 	return key, executionBoundaryError("execution.go executionKey", key.Validate())
 }

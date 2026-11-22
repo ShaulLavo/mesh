@@ -27,7 +27,7 @@ func (l *lifecycle) recoveryControl(ctx context.Context, request protocol.Contro
 		return protocol.Control{}, err
 	}
 	request.SessionID = id
-	if l.pipeSession(id) {
+	if l.privateSession(ctx, id) {
 		return protocol.Control{}, errAccessNotFound
 	}
 	switch request.Type {

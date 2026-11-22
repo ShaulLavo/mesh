@@ -132,14 +132,21 @@ func RenewRecovery(root string, ref session.Reservation) (session.Reservation, e
 // ReservedPurpose reads the durable allocation, which exists even if the worker
 // has yet to write metadata or its metadata is damaged.
 func ReservedPurpose(dir string) session.Purpose {
+	ref, _ := ReservedAllocation(dir)
+	return ref.Purpose
+}
+
+// ReservedAllocation reads the durable allocation of dir, including the
+// instance that names its execution attempt.
+func ReservedAllocation(dir string) (session.Reservation, bool) {
 	f, err := execution.OpenFiles(dir)
 	if err != nil {
-		return ""
+		return session.Reservation{}, false
 	}
 	defer func() { _ = f.Close() }()
 	var ref session.Reservation
 	if err := f.Read(".reservation", &ref); err != nil || ref.ID != filepath.Base(dir) || ref.Validate() != nil {
-		return ""
+		return session.Reservation{}, false
 	}
-	return ref.Purpose
+	return ref, true
 }

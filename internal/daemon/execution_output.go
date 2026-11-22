@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
@@ -268,9 +269,45 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 const executionTerminalPhase = "terminal"
 const executionWaitCompleted = "completed"
 
-func (l *lifecycle) pipeSession(id string) bool {
+// privateSession reports a worker whose output belongs to its caller or to
+// Mesh itself, which public-session routes such as scoped output and
+// recovery never serve: pipe and framed workers, and keyed terminal jobs
+// owned by an application or an internal service. A keyed terminal job whose
+// owner cannot be read is private too, so a damaged journal never widens
+// access.
+func (l *lifecycle) privateSession(ctx context.Context, id string) bool {
 	if !isCanonicalSessionID(id) {
 		return false
 	}
-	return worker.ReservedPurpose(filepath.Join(l.sessionsDir, id)).IsPipe()
+	ref, ok := worker.ReservedAllocation(filepath.Join(l.sessionsDir, id))
+	if !ok || ref.Purpose.IsPipe() {
+		return ok
+	}
+	if ref.Purpose != session.Execution {
+		return false
+	}
+	return !l.accountOwnedExecution(ctx, ref)
 }
+
+// accountOwnedExecution reads the owner of a keyed terminal job. Only jobs
+// keyed by the daemon account or a device stay public sessions.
+func (l *lifecycle) accountOwnedExecution(ctx context.Context, ref session.Reservation) bool {
+	journal, err := l.executionJournal()
+	if err != nil {
+		return false
+	}
+	b, err := l.executionOutput.Binding(ref.ID, ref.Instance, string(l.host.ID))
+	if err != nil {
+		return false
+	}
+	r, err := journal.Peek(ctx, b)
+	if err != nil {
+		return false
+	}
+	return r.Key.Class == executionDeviceClass || r.Key.Class == executionLocalAccountClass
+}
+
+const (
+	executionDeviceClass       = "device"
+	executionLocalAccountClass = "local-account"
+)
