@@ -359,7 +359,7 @@ func (s *Supervisor) probe(ctx context.Context, upstream Upstream, deadline time
 // capabilities and a host-assigned ID, and returns its terminal reply.
 func (s *Supervisor) hostCall(ctx context.Context, upstream Upstream, method string, params map[string]any) (mcpwire.Message, error) {
 	id, _ := s.router.ids.request()
-	params[metaKey] = map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "host"}}
+	params[metaKey] = map[string]any{mcpwire.VersionKey: mcpwire.Version, mcpwire.ClientCapsKey: map[string]any{}, mcpwire.ClientInfoKey: map[string]any{"name": "mesh", "version": "1"}}
 	raw, err := encodeJSON(map[string]any{jsonrpcKey: jsonrpcVersion, "id": id, "method": method, paramsKey: params})
 	if err != nil {
 		return mcpwire.Message{}, err

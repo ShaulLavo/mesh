@@ -148,8 +148,7 @@ func (a *application) publishMCP(cmd *cobra.Command, d mcphost.Definition, asJSO
 	if asJSON {
 		return writeJSON(cmd.OutOrStdout(), out.Service)
 	}
-	_, err = fmt.Fprintf(cmd.OutOrStdout(), "published %s revision %d (%s, %s)\n", out.Service.Name, out.Service.Revision, out.Service.Transport, out.Service.InstancePolicy)
-	return err
+	return printLine(cmd.OutOrStdout(), "published %s revision %d (%s, %s)\n", out.Service.Name, out.Service.Revision, out.Service.Transport, out.Service.InstancePolicy)
 }
 
 func (a *application) mcpListCommand() *cobra.Command {
@@ -276,7 +275,7 @@ func (a *application) mcpInstanceCommand(use, short, kind string) *cobra.Command
 			out.Instances = append(out.Instances, *out.Instance)
 		}
 		for _, inst := range out.Instances {
-			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s instance %s: %s\n", name, inst.ID, inst.State); err != nil {
+			if err := printLine(cmd.OutOrStdout(), "%s instance %s: %s\n", name, inst.ID, inst.State); err != nil {
 				return err
 			}
 		}
@@ -321,8 +320,7 @@ func (a *application) mcpRemoveCommand() *cobra.Command {
 		if err := localMCPControl(ctx, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceDelete, Service: name}, nil); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", name)
-		return err
+		return printLine(cmd.OutOrStdout(), "removed %s\n", name)
 	}}
 	return cmd
 }
@@ -334,10 +332,19 @@ func localMCPName(ref string) (string, error) {
 	if !qualified {
 		return ref, nil
 	}
-	if host != "local" {
+	if host != mcpLocalHost {
 		return "", fmt.Errorf("mesh mcp %s manages this machine's servers; use NAME or local/NAME", ref)
 	}
 	return name, nil
+}
+
+const mcpLocalHost = "local"
+
+func printLine(w io.Writer, format string, args ...any) error {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		return fmt.Errorf("write output: %w", err)
+	}
+	return nil
 }
 
 func localMCPServices(ctx context.Context) ([]mcphost.ServiceView, error) {
@@ -355,7 +362,7 @@ func localMCPServices(ctx context.Context) ([]mcphost.ServiceView, error) {
 func localMCPControl(ctx context.Context, req protocol.MCPServiceRequest, result any) error {
 	stateDir, err := paths.StateDir()
 	if err != nil {
-		return err
+		return fmt.Errorf("locate the local daemon: %w", err)
 	}
 	if req.RequestID, err = newDaemonRequestID(); err != nil {
 		return err

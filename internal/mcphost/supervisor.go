@@ -265,20 +265,9 @@ func randomID() (string, error) {
 // Publish stores a new definition or a new revision of an existing one.
 // expected is the revision the caller last saw, or zero to create.
 func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) (Definition, error) {
-	d, err := Normalize(d)
+	d, err := publishable(d)
 	if err != nil {
 		return d, err
-	}
-	if d.Transport == TransportHTTP && newHTTPUpstream == nil {
-		return d, fmt.Errorf("service %s: %w", d.Name, ErrHTTPUnavailable)
-	}
-	if len(d.RunArgv) > 0 {
-		// The managed process's stdout is not MCP framing, so it needs a
-		// plain pipe worker rather than the line worker stdio servers use.
-		return d, fmt.Errorf("service %s: %w", d.Name, ErrManagedHTTPUnsupported)
-	}
-	if d.Lifecycle == LifecycleKept && d.InstancePolicy != PolicyShared {
-		return d, invalid("a kept service has no caller to own an isolated instance; use --shared")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -308,6 +297,26 @@ func (s *Supervisor) Publish(ctx context.Context, d Definition, expected int64) 
 	s.retireRevisionLocked(d)
 	if d.Lifecycle == LifecycleKept && !d.Disabled {
 		s.detach(func(ctx context.Context) { s.ensureKept(ctx, d.ID) })
+	}
+	return d, nil
+}
+
+// publishable adds the rules this host's runtime enforces on top of Normalize.
+func publishable(d Definition) (Definition, error) {
+	d, err := Normalize(d)
+	if err != nil {
+		return d, err
+	}
+	if d.Transport == TransportHTTP && newHTTPUpstream == nil {
+		return d, fmt.Errorf("service %s: %w", d.Name, ErrHTTPUnavailable)
+	}
+	if len(d.RunArgv) > 0 {
+		// The managed process's stdout is not MCP framing, so it needs a
+		// plain pipe worker rather than the line worker stdio servers use.
+		return d, fmt.Errorf("service %s: %w", d.Name, ErrManagedHTTPUnsupported)
+	}
+	if d.Lifecycle == LifecycleKept && d.InstancePolicy != PolicyShared {
+		return d, invalid("a kept service has no caller to own an isolated instance; use --shared")
 	}
 	return d, nil
 }
@@ -379,7 +388,10 @@ func (s *Supervisor) stopWorker(ctx context.Context, ref WorkerRef) error {
 	if ref.SessionID == "" {
 		return nil
 	}
-	return s.cfg.Launcher.Stop(ctx, ref)
+	if err := s.cfg.Launcher.Stop(ctx, ref); err != nil {
+		return fmt.Errorf("stop worker %s: %w", ref.SessionID, err)
+	}
+	return nil
 }
 
 // Remove deletes a definition and stops its instances.
