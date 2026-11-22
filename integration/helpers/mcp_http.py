@@ -343,7 +343,9 @@ def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, tok
     # 2. Token rotation: open SSE wait under token1, rotate via CLI -> old SSE stream retires,
     # old token gets 401, new token works, token never logged, and remote job STILL runs!
     wait_body2 = make_body(14, "tools/call", {"name": "mesh_job_wait", "arguments": {"job": job_handle, "wait_ms": 30000}}, progress_token="http-rot-1")
-    conn2, resp2 = open_sse(authority, "/mcp", wait_body2, std_headers(token1, "tools/call", name="mesh_job_wait"))
+    # SSE is close-delimited, so http.client hands the socket to the response
+    # and conn2.sock is None; give the stream its 5 s read limit up front.
+    conn2, resp2 = open_sse(authority, "/mcp", wait_body2, std_headers(token1, "tools/call", name="mesh_job_wait"), timeout=5.0)
     try:
         require(resp2.status == 200 and resp2.getheader("Content-Type", "").startswith("text/event-stream"), f"rot SSE open: {resp2.status}")
         prog2 = read_sse_event(resp2)
@@ -369,7 +371,6 @@ def exercise_remote_jobs_cancel_and_rotation(fixture, authority, token_path, tok
         )
 
         # Retired SSE stream must end promptly with EOF (no terminal JSON-RPC result).
-        conn2.sock.settimeout(5.0)
         tail = read_sse_event(resp2)
         require(tail is None, f"retired SSE stream delivered unexpected event: {tail}")
     finally:
