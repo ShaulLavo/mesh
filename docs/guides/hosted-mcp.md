@@ -61,16 +61,17 @@ mesh mcp ls --cached --json
 ```
 
 `mesh mcp ls` queries all saved hosts concurrently under a 2-second budget
-(configurable with `--timeout`) and keeps partial results (exit 3 in `--json`
-mode when at least one host returns live or stale metadata while another host
+(configurable with `--timeout`) and keeps partial results (exiting with status 3
+when at least one host returns live or stale metadata while another host
 fails). Listing is strictly passive: it never wakes offline hosts and never
 starts stopped on-demand services.
 
 Mesh keeps a private, metadata-only catalog cache under its state directory,
-scoped by pinned host identity and caller scope (device identity plus
-`--identity` application fingerprint, or whole-account administration when
-`--identity` is omitted). Secret values, secret paths, and process stderr never
-enter the catalog or cache.
+scoped by pinned host identity and caller scope (a domain-separated digest of
+the device identity and `--identity` application credential, or whole-account
+administration when `--identity` is omitted). Operational configuration
+(commands, working directories, endpoint URLs, env/secret/header names),
+secret values, secret paths, and process stderr never enter the catalog or cache.
 
 `mesh mcp ls` reports host and service states distinctly:
 
@@ -134,8 +135,26 @@ handle or an instance ID) to reconnect to a specific authorized instance.
 Clients must speak stateless MCP `2026-07-28`; legacy `initialize` handshakes
 are refused with JSON-RPC `-32601`.
 
-**Codex CLI** (with the `mcp_2026_07_28` development feature enabled and stdio
-modern mode opted in):
+Both pairings below were verified end-to-end (`server/discover` -> `tools/list`
+-> `tools/call`) against a hosted stdio MCP server over `mesh mcp connect`.
+
+**Claude Code** (verified with `2.1.322`; speaks stateless MCP `2026-07-28` out
+of the box):
+
+```json
+{
+  "mcpServers": {
+    "repo-tools": {
+      "command": "mesh",
+      "args": ["mcp", "connect", "pc/repo-tools", "--identity", "claude"]
+    }
+  }
+}
+```
+
+**Codex CLI** (verified with `codex-cli 0.167.1`; requires both the
+`mcp_2026_07_28` development feature and `CODEX_MCP_PROTOCOL_VERSION=2026-07-28`
+on stdio):
 
 ```toml
 [features]
@@ -147,19 +166,6 @@ args = ["mcp", "connect", "pc/repo-tools", "--identity", "codex"]
 
 [mcp_servers.repo_tools.env]
 CODEX_MCP_PROTOCOL_VERSION = "2026-07-28"
-```
-
-**Claude Code** (modern v2 stateless stdio server entry):
-
-```json
-{
-  "mcpServers": {
-    "repo-tools": {
-      "command": "mesh",
-      "args": ["mcp", "connect", "pc/repo-tools", "--identity", "claude"]
-    }
-  }
-}
 ```
 
 ## Manage instances and diagnostics

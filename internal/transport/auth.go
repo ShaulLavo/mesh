@@ -42,6 +42,29 @@ var ErrControlAuthenticationRequired = errors.New("transport: destination requir
 
 var ErrAuthenticationRequired = errors.New("transport: peer requires a control-authentication upgrade")
 
+// IsAuthenticationInterrupted reports whether an authentication failure was
+// caused by a transport interruption or timeout during the handshake rather
+// than an explicit peer refusal.
+func IsAuthenticationInterrupted(err error) bool {
+	if errors.Is(err, errAuthenticationInterrupted) {
+		return true
+	}
+	if !errors.Is(err, ErrAuthentication) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// IsAuthenticationRefused reports whether the remote peer explicitly rejected
+// this device's authentication rather than dropping or timing out mid-handshake.
+func IsAuthenticationRefused(err error) bool {
+	return errors.Is(err, ErrAuthentication) && !IsAuthenticationInterrupted(err)
+}
+
 // Authentication binds TLS to Mesh keys, never to certificate names or a public CA.
 type Authentication struct {
 	Key              ed25519.PrivateKey

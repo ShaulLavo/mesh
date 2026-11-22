@@ -379,7 +379,7 @@ func TestIsolatedCallersGetSeparateInstances(t *testing.T) {
 		t.Fatalf("launches = %d", f.launcher.launches)
 	}
 	// Another caller cannot select a's instance by its handle.
-	view, _ := f.sup.Service(caller("a"), "repo")
+	view, _ := f.sup.CatalogService(caller("a"), "repo")
 	if _, err := whoami(t, f.sup, caller("b"), Target{Service: "repo", Instance: view.Instances[0].ID}); !errors.Is(err, ErrDenied) {
 		t.Fatalf("handle swap: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestSecretsReachTheProcessButNotMetadata(t *testing.T) {
 		t.Fatalf("secret in reply: %s", reply)
 	}
 	for _, c := range []Caller{caller("a"), {Account: "local", Admin: true}} {
-		views := fmt.Sprintf("%+v", f.sup.Services(c))
+		views := fmt.Sprintf("%+v", f.sup.Catalog(c))
 		if strings.Contains(views, "s3cr3t") || strings.Contains(views, secret) {
 			t.Fatalf("secret or its path in the catalog: %s", views)
 		}
@@ -429,7 +429,7 @@ func TestSecretsReachTheProcessButNotMetadata(t *testing.T) {
 	if err != nil || !strings.Contains(string(logs), "s3cr3t-value") {
 		t.Fatalf("the owner's diagnostics should show the server's own stderr: %q %v", logs, err)
 	}
-	if _, err := f.sup.Logs(t.Context(), caller("b"), Target{Service: "noisy", Instance: f.sup.Services(caller("a"))[0].Instances[0].ID}, 0); !errors.Is(err, ErrDenied) {
+	if _, err := f.sup.Logs(t.Context(), caller("b"), Target{Service: "noisy", Instance: f.sup.Catalog(caller("a"))[0].Instances[0].ID}, 0); !errors.Is(err, ErrDenied) {
 		t.Fatalf("another caller read diagnostics: %v", err)
 	}
 }
@@ -509,7 +509,7 @@ func TestExternalHTTPServer(t *testing.T) {
 	if !strings.Contains(out.last(), "eu-west") || string(member([]byte(out.last()), "id")) != `"r"` {
 		t.Fatalf("regional call: %s", out.last())
 	}
-	views := fmt.Sprintf("%+v", f.sup.Services(Caller{Account: "local", Admin: true}))
+	views := fmt.Sprintf("%+v", f.sup.Catalog(Caller{Account: "local", Admin: true}))
 	if strings.Contains(views, "fixture-secret") || strings.Contains(views, secret) {
 		t.Fatalf("credential in the catalog: %s", views)
 	}
@@ -540,7 +540,7 @@ func TestRetiredAccountLosesIsolatedInstancesOnly(t *testing.T) {
 	f.mu.Unlock()
 	f.sup.Sweep(t.Context())
 	admin := Caller{Account: "local", Admin: true}
-	for _, v := range f.sup.Services(admin) {
+	for _, v := range f.sup.Catalog(admin) {
 		want := StateReady
 		if v.Name == "repo" {
 			want = StateStopped
@@ -562,14 +562,14 @@ func TestIdleStopWaitsForJobLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if state := f.sup.Services(caller("a"))[0].Instances[0].State; state != StateReady {
+	if state := f.sup.Catalog(caller("a"))[0].Instances[0].State; state != StateReady {
 		t.Fatalf("leased instance went %s", state)
 	}
 	f.mu.Lock()
 	f.jobs["job-1"] = false
 	f.mu.Unlock()
 	f.sup.Sweep(t.Context())
-	eventually(t, func() bool { return f.sup.Services(caller("a"))[0].Instances[0].State == StateStopped })
+	eventually(t, func() bool { return f.sup.Catalog(caller("a"))[0].Instances[0].State == StateStopped })
 	if _, _, err := f.sup.Lease(t.Context(), caller("a"), Target{Service: "repo"}, "", time.Hour, "job-2"); err == nil {
 		t.Fatal("lease named a job that is not running")
 	}
@@ -587,12 +587,12 @@ func TestIdleTimerWaitsForAcknowledgedListen(t *testing.T) {
 	}()
 	waitEvent(t, events)
 	time.Sleep(200 * time.Millisecond)
-	if state := f.sup.Services(caller("a"))[0].Instances[0].State; state != StateReady {
+	if state := f.sup.Catalog(caller("a"))[0].Instances[0].State; state != StateReady {
 		t.Fatalf("listening instance went %s", state)
 	}
 	cancel()
 	<-done
-	eventually(t, func() bool { return f.sup.Services(caller("a"))[0].Instances[0].State == StateStopped })
+	eventually(t, func() bool { return f.sup.Catalog(caller("a"))[0].Instances[0].State == StateStopped })
 }
 
 func TestDaemonRestartAdoptsTheExactWorker(t *testing.T) {
@@ -667,7 +667,7 @@ func TestBadResultsAfterProbeFailOnlyThatCall(t *testing.T) {
 	if _, err := whoami(t, f.sup, caller("a"), Target{Service: "sloppy"}); Classify(err).Code != codeOutcomeUnknown {
 		t.Fatalf("result without resultType: %v", err)
 	}
-	if state := f.sup.Services(caller("a"))[0].Instances[0].State; state != StateReady {
+	if state := f.sup.Catalog(caller("a"))[0].Instances[0].State; state != StateReady {
 		t.Fatalf("an attributable bad result faulted the instance: %s", state)
 	}
 }
@@ -722,7 +722,7 @@ func TestNewRevisionStartsANewGeneration(t *testing.T) {
 	if err != nil || instanceOf(t, first) == instanceOf(t, second) {
 		t.Fatalf("revision change kept the old process: %s %v", second, err)
 	}
-	view := f.sup.Services(caller("a"))[0].Instances[0]
+	view := f.sup.Catalog(caller("a"))[0].Instances[0]
 	if view.Revision != 2 || view.Generation != 2 {
 		t.Fatalf("instance after new revision: %+v", view)
 	}

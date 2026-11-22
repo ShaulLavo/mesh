@@ -89,6 +89,9 @@ type Config struct {
 	Store    Store
 	Launcher Launcher
 	Now      func() time.Time
+	// HostID is the owning host's canonical Mesh ID, used to validate mi1
+	// instance handles on dispatch and management controls.
+	HostID string
 	// GrantCurrent reports whether grant is still the account's current
 	// grant incarnation. Leases, continuations and isolated instances of a
 	// retired grant are retired, even if the device was approved again.

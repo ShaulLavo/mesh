@@ -132,6 +132,7 @@ func (s *Supervisor) hold(inst *instance, gen *generation) {
 // stderr, environment values or secret paths.
 type InstanceView struct {
 	ID           string          `json:"id"`
+	ServiceID    string          `json:"serviceId,omitempty"`
 	Shared       bool            `json:"shared"`
 	Mine         bool            `json:"mine"`
 	Default      bool            `json:"default,omitempty"`
@@ -148,41 +149,6 @@ type InstanceView struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
-// ServiceView is a definition with secrets reduced to their names.
-type ServiceView struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Revision       int64          `json:"revision"`
-	Transport      string         `json:"transport"`
-	Command        []string       `json:"command,omitempty"`
-	Cwd            string         `json:"cwd,omitempty"`
-	URL            string         `json:"url,omitempty"`
-	Lifecycle      string         `json:"lifecycle"`
-	IdleSeconds    int64          `json:"idleSeconds,omitempty"`
-	ReadySeconds   int64          `json:"readySeconds"`
-	InstancePolicy string         `json:"instancePolicy"`
-	AccountMode    string         `json:"accountMode"`
-	AccountLabel   string         `json:"accountLabel,omitempty"`
-	Disabled       bool           `json:"disabled,omitempty"`
-	EnvNames       []string       `json:"env,omitempty"`
-	SecretNames    []string       `json:"secretEnv,omitempty"`
-	HeaderNames    []string       `json:"secretHeaders,omitempty"`
-	Instances      []InstanceView `json:"instances"`
-}
-
-// Services lists every definition with the instances caller may see.
-// Command lines are included only for administrators.
-func (s *Supervisor) Services(caller Caller) []ServiceView {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	views := make([]ServiceView, 0, len(s.services))
-	for _, d := range s.services {
-		views = append(views, s.viewLocked(caller, d))
-	}
-	slices.SortFunc(views, func(a, b ServiceView) int { return compareStrings(a.Name, b.Name) })
-	return views
-}
-
 func compareStrings(a, b string) int {
 	switch {
 	case a < b:
@@ -194,43 +160,13 @@ func compareStrings(a, b string) int {
 	}
 }
 
-// Service shows one definition.
-func (s *Supervisor) Service(caller Caller, ref string) (ServiceView, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	d, err := s.serviceLocked(ref)
-	if err != nil {
-		return ServiceView{}, err
-	}
-	return s.viewLocked(caller, d), nil
-}
-
-func (s *Supervisor) viewLocked(caller Caller, d Definition) ServiceView {
-	v := ServiceView{ID: d.ID, Name: d.Name, Revision: d.Revision, Transport: d.Transport, URL: d.URL, Lifecycle: d.Lifecycle,
-		IdleSeconds: int64(d.Idle / time.Second), ReadySeconds: int64(d.ReadyTimeout / time.Second), InstancePolicy: d.InstancePolicy,
-		AccountMode: d.AccountMode, AccountLabel: d.AccountLabel, Disabled: d.Disabled,
-		EnvNames: slices.Sorted(maps.Keys(d.Env)), SecretNames: slices.Sorted(maps.Keys(d.SecretEnv)), HeaderNames: slices.Sorted(maps.Keys(d.HeaderSecrets)),
-		Instances: []InstanceView{}}
-	if caller.Admin {
-		v.Command, v.Cwd = d.Argv, d.Cwd
-	}
-	for _, inst := range s.instances {
-		if inst.rec.ServiceID != d.ID || !visible(caller, inst) {
-			continue
-		}
-		v.Instances = append(v.Instances, s.instanceViewLocked(caller, inst))
-	}
-	slices.SortFunc(v.Instances, func(a, b InstanceView) int { return compareStrings(a.ID, b.ID) })
-	return v
-}
-
 func visible(caller Caller, inst *instance) bool {
 	return caller.Admin || inst.rec.Owner == "" || caller.owns(inst.rec.Owner)
 }
 
 func (s *Supervisor) instanceViewLocked(caller Caller, inst *instance) InstanceView {
 	r := inst.rec
-	v := InstanceView{ID: r.ID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
+	v := InstanceView{ID: r.ID, ServiceID: r.ServiceID, Shared: r.Owner == "", Mine: r.Owner != "" && caller.owns(r.Owner), Default: r.Default, State: r.State, Reason: r.Reason,
 		ExitCode: r.ExitCode, Revision: r.Revision, Generation: r.Generation, Leases: len(r.Leases), UpdatedAt: r.UpdatedAt}
 	if gen := inst.current; gen != nil {
 		v.Active, v.ServerInfo, v.Capabilities = gen.active, gen.serverInfo, gen.capabilities
@@ -274,11 +210,15 @@ func (s *Supervisor) adminInstance(target Target) ([]*instance, error) {
 	if err != nil {
 		return nil, err
 	}
+	instanceID, err := resolveInstanceTarget(s.cfg.HostID, d.ID, target.Instance)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	inst := s.instances[target.Instance]
+	inst := s.instances[instanceID]
 	if inst == nil || inst.rec.ServiceID != d.ID {
-		return nil, fmt.Errorf("instance %s of %s: %w", target.Instance, d.Name, ErrNotFound)
+		return nil, fmt.Errorf("instance %s of %s: %w", instanceID, d.Name, ErrNotFound)
 	}
 	return []*instance{inst}, nil
 }

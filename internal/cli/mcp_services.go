@@ -140,7 +140,7 @@ func (a *application) publishMCP(cmd *cobra.Command, hostArg string, d mcphost.D
 		return err
 	}
 	var expected int64
-	if index := slices.IndexFunc(current, func(s mcphost.ServiceView) bool { return s.Name == d.Name }); index >= 0 {
+	if index := slices.IndexFunc(current, func(s mcphost.CatalogService) bool { return s.Name == d.Name }); index >= 0 {
 		expected = current[index].Revision
 	}
 	raw, err := json.Marshal(d)
@@ -148,7 +148,7 @@ func (a *application) publishMCP(cmd *cobra.Command, hostArg string, d mcphost.D
 		return fmt.Errorf("encode definition: %w", err)
 	}
 	var out struct {
-		Service mcphost.ServiceView `json:"service"`
+		Service mcphost.CatalogService `json:"service"`
 	}
 	if _, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceUpsert, Definition: raw, ExpectedRevision: expected}, &out, false); err != nil {
 		return err
@@ -183,7 +183,7 @@ func (a *application) mcpShowCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		index := slices.IndexFunc(services, func(s mcphost.ServiceView) bool { return s.Name == name || s.ID == name })
+		index := slices.IndexFunc(services, func(s mcphost.CatalogService) bool { return s.Name == name || s.ID == name })
 		if index < 0 {
 			return agentapi.Fail(agentapi.ServiceNotFound, "mcp.show", name, fmt.Sprintf("No hosted MCP server named %s on %s.", name, mcpHostLabel(host.ID, hostDisplayName(host, info), host.local)))
 		}
@@ -199,18 +199,12 @@ func (a *application) mcpShowCommand() *cobra.Command {
 	return cmd
 }
 
-func writeMCPService(w io.Writer, s mcphost.ServiceView) error {
+func writeMCPService(w io.Writer, s mcphost.CatalogService) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (revision %d, %s, %s, %s)\n", s.Name, s.Revision, s.Transport, s.InstancePolicy, s.Lifecycle)
-	if len(s.Command) > 0 {
-		fmt.Fprintf(&b, "  command: %s\n", strings.Join(s.Command, " "))
-	}
-	if s.URL != "" {
-		fmt.Fprintf(&b, "  url: %s\n", s.URL)
-	}
 	fmt.Fprintf(&b, "  account: %s\n", mcpAccountText(s.AccountMode, s.AccountLabel))
-	if len(s.SecretNames) > 0 {
-		fmt.Fprintf(&b, "  secret variables: %s\n", strings.Join(s.SecretNames, ", "))
+	if s.ProtocolVersion != "" {
+		fmt.Fprintf(&b, "  protocol: %s\n", s.ProtocolVersion)
 	}
 	for _, inst := range s.Instances {
 		fmt.Fprintf(&b, "  instance %s: %s generation %d", inst.ID, inst.State, inst.Generation)
@@ -252,7 +246,7 @@ func (a *application) runMCPInstanceAction(cmd *cobra.Command, operation, kind, 
 	if err != nil {
 		return err
 	}
-	instanceID, err := resolveMCPInstanceArg(operation, instance, host.ID, name)
+	instanceSelector, err := resolveMCPInstanceArg(operation, instance, host.ID)
 	if err != nil {
 		return err
 	}
@@ -260,7 +254,7 @@ func (a *application) runMCPInstanceAction(cmd *cobra.Command, operation, kind, 
 		Instance  *mcphost.InstanceView  `json:"instance"`
 		Instances []mcphost.InstanceView `json:"instances"`
 	}
-	info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: kind, Service: name, Instance: instanceID, Caller: caller}, &out, false)
+	info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: kind, Service: name, Instance: instanceSelector, Caller: caller}, &out, false)
 	if err != nil {
 		return err
 	}
@@ -272,7 +266,7 @@ func (a *application) runMCPInstanceAction(cmd *cobra.Command, operation, kind, 
 			HostID:      host.ID,
 			MachineName: hostDisplayName(host, info),
 			Service:     name,
-			Instances:   convertMCPInstances(host.ID, name, out.Instances),
+			Instances:   convertMCPInstances(host.ID, out.Instances),
 		}
 		return a.agent.write(cmd.OutOrStdout(), agentapi.Envelope{Status: agentapi.StatusOK, Data: data})
 	}
@@ -284,18 +278,20 @@ func (a *application) runMCPInstanceAction(cmd *cobra.Command, operation, kind, 
 	return nil
 }
 
-func convertMCPInstances(hostID, serviceRef string, views []mcphost.InstanceView) []agentapi.MCPCatalogInstance {
+func convertMCPInstances(hostID string, views []mcphost.InstanceView) []agentapi.MCPCatalogInstance {
 	items := make([]agentapi.MCPCatalogInstance, 0, len(views))
 	for _, inst := range views {
 		handle := ""
-		if len(serviceRef) == 32 {
-			handle, _ = mcpconnect.FormatInstanceHandle(hostID, serviceRef, inst.ID)
+		if inst.ServiceID != "" {
+			handle, _ = mcpconnect.FormatInstanceHandle(hostID, inst.ServiceID, inst.ID)
 		}
 		items = append(items, agentapi.MCPCatalogInstance{
 			ID: inst.ID, Handle: handle, Shared: inst.Shared, Mine: inst.Mine, Default: inst.Default,
 			State: inst.State, Reason: inst.Reason, ExitCode: inst.ExitCode, Revision: inst.Revision,
 			Generation: inst.Generation, Active: inst.Active, Leases: inst.Leases,
-			ServerInfo: inst.ServerInfo, Capabilities: inst.Capabilities, LateReplies: inst.LateReplies, UpdatedAt: inst.UpdatedAt,
+			ServerInfo:   toAgentServerInfo(mcphost.ProjectServerInfo(inst.ServerInfo)),
+			Capabilities: toAgentCapabilities(mcphost.ProjectCapabilities(inst.Capabilities)),
+			LateReplies:  inst.LateReplies, UpdatedAt: inst.UpdatedAt,
 		})
 	}
 	return items
@@ -319,14 +315,14 @@ func (a *application) mcpLogsCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		instanceID, err := resolveMCPInstanceArg("mcp.logs", instance, host.ID, name)
+		instanceSelector, err := resolveMCPInstanceArg("mcp.logs", instance, host.ID)
 		if err != nil {
 			return err
 		}
 		var out struct {
 			Stderr []byte `json:"stderr"`
 		}
-		info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, Service: name, Instance: instanceID, Caller: caller}, &out, true)
+		info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPServiceLogs, Service: name, Instance: instanceSelector, Caller: caller}, &out, true)
 		if err != nil {
 			return err
 		}
@@ -335,7 +331,7 @@ func (a *application) mcpLogsCommand() *cobra.Command {
 				HostID:      host.ID,
 				MachineName: hostDisplayName(host, info),
 				Service:     name,
-				Instance:    instanceID,
+				Instance:    instanceSelector,
 				Stderr:      string(out.Stderr),
 				Bytes:       len(out.Stderr),
 			}
@@ -411,9 +407,9 @@ func printLine(w io.Writer, format string, args ...any) error {
 	return nil
 }
 
-func (a *application) hostMCPServices(ctx context.Context, host HostRecord, caller protocol.CallerCredential) ([]mcphost.ServiceView, protocol.HostInfo, error) {
+func (a *application) hostMCPServices(ctx context.Context, host HostRecord, caller protocol.CallerCredential) ([]mcphost.CatalogService, protocol.HostInfo, error) {
 	var out struct {
-		Services []mcphost.ServiceView `json:"services"`
+		Services []mcphost.CatalogService `json:"services"`
 	}
 	info, err := a.hostMCPControl(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, Caller: caller}, &out, true)
 	if err != nil {

@@ -608,7 +608,7 @@ mesh mcp logs local/repo-tools --json
 
 ## mesh mcp rm
 
-Remove a hosted MCP server definition and stop its instances.
+Remove a hosted MCP server definition and stop its running instances.
 
 ```sh
 mesh mcp rm local/repo-tools --json
