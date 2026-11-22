@@ -111,39 +111,42 @@ func (w *Worker) admitTerminalWriteLocked(state *terminalInput, intent session.I
 	if w.input == nil {
 		w.input = newInputRelay(w)
 	}
-	if !w.input.fits(intent.Length) {
-		return execution.ErrInputFull
-	}
 	return nil
 }
 
+// beforeTerminalInputRecord runs between reserving queue room and recording
+// the acknowledgment; tests use it to close the relay there.
+var beforeTerminalInputRecord = func(*Worker) {}
+
 // recordTerminalInputLocked makes the acknowledgment durable before the
 // bytes reach the PTY, so a lost reply is recovered by key and never
-// replayed blindly.
+// replayed blindly. Queue room is reserved first: a relay that closes or
+// fills never leaves a receipt for bytes it did not take.
 func (w *Worker) recordTerminalInputLocked(state *terminalInput, intent session.InputReceipt, data []byte) (*session.InputReceipt, error) {
 	if w.attempt == nil {
 		return nil, execution.ErrInstance
 	}
+	if !w.input.reserve(len(data)) {
+		return nil, execution.ErrInputFull
+	}
+	beforeTerminalInputRecord(w)
 	digest := execution.InputDigest(data)
 	stage, err := w.attempt.RecordInput(intent, digest)
 	if err != nil {
 		state.uncertain = true
 		// A visible receipt can be confirmed by a recovering reader, so its
 		// bytes are delivered even though this reply reports uncertainty.
-		if stage == execution.Unconfirmed {
-			state.offset += uint64(len(data))
-			w.input.enqueue(nil, data)
+		if stage != execution.Unconfirmed {
+			w.input.cancelReserved(len(data))
+			return nil, fmt.Errorf("record terminal input: %w", err)
 		}
+		state.offset += uint64(len(data))
+		w.input.commitReserved(nil, data)
 		return nil, fmt.Errorf("record terminal input: %w", err)
 	}
 	state.receipts[intent.WriteKey] = inputAdmission{receipt: intent, digest: digest}
 	state.offset += uint64(len(data))
-	if !w.input.enqueue(nil, data) {
-		// fits was checked under the same lock and only the writer drains
-		// the queue, so this means the relay stopped with the PTY.
-		state.uncertain = true
-		return nil, execution.ErrInputUnknown
-	}
+	w.input.commitReserved(nil, data)
 	return &intent, nil
 }
 

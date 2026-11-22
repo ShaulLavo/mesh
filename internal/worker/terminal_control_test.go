@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -259,5 +260,28 @@ func TestTerminalScreenIsBoundToTheInstance(t *testing.T) {
 	reply := f.raw(t, other)
 	if reply.ErrorCode != protocol.ErrorCodeInstanceMismatch || reply.Inspection != nil {
 		t.Fatalf("screen for another instance = %+v", reply)
+	}
+}
+
+// An acknowledgment and its durable receipt always agree with what the
+// relay took. A relay that closes while the receipt is being recorded keeps
+// the reserved write; one that is closed beforehand takes nothing and leaves
+// no receipt.
+func TestTerminalInputReceiptMatchesRelayAdmission(t *testing.T) {
+	f := newTerminalJobWorker(t)
+	t.Cleanup(func() { beforeTerminalInputRecord = func(*Worker) {} })
+	beforeTerminalInputRecord = func(w *Worker) { w.input.stop() }
+	during := f.input(t, "during-close", 0, "a")
+	_, recorded := f.output.Input(f.binding, "during-close", nil, nil)
+	if (during.Type == protocol.TypeOK) != (recorded == nil) {
+		t.Fatalf("reply %+v disagrees with durable receipt (lookup err %v)", during, recorded)
+	}
+	beforeTerminalInputRecord = func(*Worker) {}
+	after := f.input(t, "after-close", 1, "b")
+	if after.Type == protocol.TypeOK {
+		t.Fatalf("closed relay acknowledged a write: %+v", after)
+	}
+	if _, err := f.output.Input(f.binding, "after-close", nil, nil); !errors.Is(err, execution.ErrInputUnknown) {
+		t.Fatalf("refused write left a durable receipt: %v", err)
 	}
 }
