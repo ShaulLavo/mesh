@@ -346,4 +346,11 @@ func TestHostedMCPLargeAndSlow(t *testing.T) {
 	if len(resultText(t, readMCP(t, slowReader)[0])) != size {
 		t.Fatal("stalled caller's reply was lost")
 	}
+	if status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", f.cmd.Process.Pid)); err == nil {
+		for _, line := range strings.Split(string(status), "\n") {
+			if strings.HasPrefix(line, "VmHWM:") {
+				t.Logf("daemon peak resident memory: %s", strings.TrimSpace(strings.TrimPrefix(line, "VmHWM:")))
+			}
+		}
+	}
 }

@@ -39,9 +39,9 @@ func (a *application) mcpServiceCommands() []*cobra.Command {
 
 type mcpPublishOptions struct {
 	cwd, url, run, runCwd, accountMode, accountLabel string
-	env, secretEnv, headerSecrets                     []string
-	shared, kept, asJSON                              bool
-	idle, ready                                       time.Duration
+	env, secretEnv, headerSecrets                    []string
+	shared, kept, asJSON                             bool
+	idle, ready                                      time.Duration
 }
 
 func (a *application) mcpPublishCommand() *cobra.Command {
@@ -266,7 +266,7 @@ func (a *application) mcpInstanceCommand(use, short, kind string) *cobra.Command
 		ctx, cancel := context.WithTimeout(cmd.Context(), mcpControlTimeout)
 		defer cancel()
 		var out struct {
-			Instance  *mcphost.InstanceView `json:"instance"`
+			Instance  *mcphost.InstanceView  `json:"instance"`
 			Instances []mcphost.InstanceView `json:"instances"`
 		}
 		if err := localMCPControl(ctx, protocol.MCPServiceRequest{Type: kind, Service: name, Instance: instance}, &out); err != nil {
