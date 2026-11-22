@@ -216,6 +216,27 @@ class InstalledGateWiringTests(unittest.TestCase):
         self.assertNotIn("export TMPDIR=", exercise)
         self.assertLess(exercise.index("scripts/prove-installed-catchup.py"), exercise.index("mktemp -d /tmp/ms-XXXXXX"))
         self.assertLess(exercise.index("mktemp -d /tmp/ms-XXXXXX"), exercise.index("scripts/run-original-update-readers.py"))
+        self.check_publication_exercise_scratch_scope(exercise)
+
+    def check_publication_exercise_scratch_scope(self, exercise):
+        with tempfile.TemporaryDirectory(prefix="pub-exercise-") as temporary:
+            log = Path(temporary) / "calls.tsv"
+            stub = 'python3() { printf "%s\\t%s\\t%s\\n" "$1" "${TMPDIR:-}" "${MESH_SHORT_TMP:-}" >> "$CALL_LOG"; }\n'
+            env = dict(os.environ, CALL_LOG=str(log), RUNNER_TEMP=temporary, PUBLICATION_PLAN=temporary + "/plan.json",
+                       PLAN_SHA="a" * 64, HAS_BASELINE="false", VERSION="v0.1.99", SOURCE="b" * 40,
+                       KEY="darwin-arm64", PLATFORM="darwin/arm64", MESH_RELEASE_TRUST_CACHE=temporary + "/trust",
+                       TMPDIR=temporary + "/outer", MESH_SHORT_TMP="")
+            self.assertEqual(GATE.status(stub + GATE.run_script(exercise), env), 0)
+            rows = [line.split("\t") for line in log.read_text().splitlines()]
+            self.assertEqual([row[0] for row in rows], [
+                "scripts/prove-installed-catchup.py",
+                "scripts/run-original-update-readers.py",
+                "scripts/publication-jobs.py",
+            ])
+            self.assertEqual(rows[0][1:], [temporary + "/outer", ""])
+            self.assertEqual(rows[2][1:], [temporary + "/outer", ""])
+            self.assertTrue(rows[1][1].startswith("/tmp/ms-") and rows[1][1] == rows[1][2], rows[1])
+            self.assertFalse(Path(rows[1][1]).exists())
         publish = GATE.job(RELEASE, "publish")
         self.assertLess(publish.index("name: Upload signed draft assets"), publish.index("name: update-publication-trust"))
         self.assertLess(publish.index("scripts/prepare-draft-intake.py documents"), publish.index("scripts/publication-jobs.py reduced-plan"))
