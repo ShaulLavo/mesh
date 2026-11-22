@@ -32,7 +32,10 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if b.Mode() == execution.KindLine {
 		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
 	}
-	r, err := journal.Exact(ctx, b)
+	if err := l.authorizeBoundExecution(ctx, req, journal, b); err != nil {
+		return protocol.Control{}, executionBoundaryError("execution control", err)
+	}
+	r, err := journal.Exact(admittedContext(ctx), b)
 	if err != nil {
 		return executionResponse(req, r, err)
 	}
@@ -46,6 +49,21 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	}
 	return response, nil
 }
+
+// authorizeBoundExecution applies the owner guard to the stored receipt
+// before anything refreshes or changes it. A caller that names no readable
+// receipt learns nothing either.
+func (l *lifecycle) authorizeBoundExecution(ctx context.Context, req protocol.Control, journal *execution.Journal, b execution.Binding) error {
+	r, err := journal.Peek(ctx, b)
+	if r.Key.Host != "" {
+		return authorizeExecutionOwner(ctx, req, r.Key)
+	}
+	if req.Caller != "" || req.ExecutionContext != nil {
+		return errors.Join(errCallerDenied, err)
+	}
+	return nil
+}
+
 func (l *lifecycle) boundExecution(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {
 	response, _ := executionResponse(req, r, nil)
 	switch req.Type {
@@ -204,6 +222,9 @@ func (c *Catalog) RemoveExecution(ctx context.Context, b execution.Binding) erro
 }
 
 func executionOutputCode(err error) string {
+	if code := applicationErrorCode(err); code != "" {
+		return code
+	}
 	if code := execution.InputErrorCode(err); code != "" {
 		return code
 	}

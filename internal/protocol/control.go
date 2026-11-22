@@ -194,8 +194,10 @@ type HostInfo struct {
 	RecoverySupported       bool               `json:"recoverySupported,omitempty"`
 	ServiceHealthSupported  bool               `json:"serviceHealthSupported,omitempty"`
 	FilesSupported          bool               `json:"filesSupported,omitempty"`
+	ExecutionPipeSupported  bool               `json:"executionPipeSupported,omitempty"`
 	ID                      string             `json:"id"`
 	MeshIdentity            string             `json:"meshIdentity"`
+	Account                 string             `json:"account,omitempty"`
 	TailscaleName           string             `json:"tailscaleName,omitempty"`
 	PrivateName             string             `json:"privateName,omitempty"`
 	Wake                    *wake.Grant        `json:"wake,omitempty"`
@@ -394,24 +396,40 @@ type Control struct {
 	CertificatePrivateName string              `json:"certificatePrivateName,omitempty"`
 
 	// Keyed detached admission is distinct from legacy correlation IDs.
-	ExecutionKind     string                `json:"kind,omitempty"`
-	RequestKey        string                `json:"requestKey,omitempty"`
-	ExecutionReceipt  *ExecutionReceipt     `json:"executionReceipt,omitempty"`
-	Instance          string                `json:"instance,omitempty"`
-	Stream            string                `json:"stream,omitempty"`
-	Cursor            string                `json:"cursor,omitempty"`
-	MaxBytes          int                   `json:"maxBytes,omitempty"`
-	TimeoutMillis     int                   `json:"timeoutMillis,omitempty"`
-	ExecutionPage     *ExecutionPage        `json:"executionPage,omitempty"`
-	ExecutionWait     string                `json:"executionWait,omitempty"`
-	ExecutionDelivery string                `json:"executionDelivery,omitempty"`
-	Stdin             string                `json:"stdin,omitempty"`
-	WriteKey          string                `json:"writeKey,omitempty"`
-	InputOffset       *uint64               `json:"inputOffset,string,omitempty"`
-	InputBytes        []byte                `json:"inputBytes,omitempty"`
-	InputEOF          bool                  `json:"inputEOF,omitempty"`
-	InputReceipt      *session.InputReceipt `json:"inputReceipt,omitempty"`
-	LaunchDigest      string                `json:"launchDigest,omitempty"`
+	ExecutionKind      string                `json:"kind,omitempty"`
+	RequestKey         string                `json:"requestKey,omitempty"`
+	ExecutionReceipt   *ExecutionReceipt     `json:"executionReceipt,omitempty"`
+	ExecutionReceipts  []ExecutionReceipt    `json:"executionReceipts,omitempty"`
+	ExecutionListAll   bool                  `json:"listAll,omitempty"`
+	ExecutionListLimit int                   `json:"listLimit,omitempty"`
+	ExecutionNextPage  *string               `json:"executionNextPage,omitempty"`
+	Instance           string                `json:"instance,omitempty"`
+	Stream             string                `json:"stream,omitempty"`
+	Cursor             string                `json:"cursor,omitempty"`
+	MaxBytes           int                   `json:"maxBytes,omitempty"`
+	TimeoutMillis      int                   `json:"timeoutMillis,omitempty"`
+	ExecutionPage      *ExecutionPage        `json:"executionPage,omitempty"`
+	ExecutionWait      string                `json:"executionWait,omitempty"`
+	ExecutionDelivery  string                `json:"executionDelivery,omitempty"`
+	Stdin              string                `json:"stdin,omitempty"`
+	WriteKey           string                `json:"writeKey,omitempty"`
+	InputOffset        *uint64               `json:"inputOffset,string,omitempty"`
+	InputBytes         []byte                `json:"inputBytes,omitempty"`
+	InputEOF           bool                  `json:"inputEOF,omitempty"`
+	InputReceipt       *session.InputReceipt `json:"inputReceipt,omitempty"`
+	LaunchDigest       string                `json:"launchDigest,omitempty"`
+
+	// Application callers (see internal/appcaller) and execution contexts.
+	// Caller is the encoded credential; it travels only inside this
+	// authenticated control and is never echoed. Administration marks an
+	// explicit whole-account CLI operation on application-owned work.
+	Caller           CallerCredential         `json:"caller,omitempty"`
+	Administration   bool                     `json:"administration,omitempty"`
+	ExecutionContext *ExecutionContextRequest `json:"executionContext,omitempty"`
+	ContextInfo      *ExecutionContextInfo    `json:"contextInfo,omitempty"`
+	ContextInfos     []ExecutionContextInfo   `json:"contextInfos,omitempty"`
+	// ContextNextCursor continues a context.list reply that did not fit.
+	ContextNextCursor string `json:"contextNextCursor,omitempty"`
 
 	// Error
 	ErrorCode string `json:"errorCode,omitempty"`

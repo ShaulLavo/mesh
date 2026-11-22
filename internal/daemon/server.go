@@ -122,7 +122,13 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			continue
 		}
 
-		if protocol.IsExecutionControl(request.Type) {
+		if err := rejectStrayCaller(request); err != nil {
+			if err := writeClientRequestError(relay, request, err); err != nil {
+				return clientOperationError(ctx, "report stray application caller", err)
+			}
+			continue
+		}
+		if protocol.IsExecutionControl(request.Type) || protocol.IsContextControl(request.Type) {
 			if err := s.replyExecution(ctx, relay, request); err != nil {
 				return clientOperationError(ctx, "reply to execution request", err)
 			}

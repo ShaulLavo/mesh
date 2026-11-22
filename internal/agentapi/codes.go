@@ -46,6 +46,9 @@ const (
 	FilePatchMismatch        Code = "file.patch_mismatch"
 	FilePermissionDenied     Code = "file.permission_denied"
 	FileTargetMismatch       Code = "file.target_mismatch"
+	ContextNotFound          Code = "context.not_found"
+	ContextClosed            Code = "context.closed"
+	ContextConflict          Code = "context.conflict"
 )
 
 type ErrorClass struct {
@@ -69,4 +72,5 @@ var Codes = map[Code]ErrorClass{
 	ResultExpired: {Exit: 1}, AccessDenied: {Exit: 1}, ResourceLimit: {Exit: 1},
 	FileNotFound: {Exit: 1}, FileNotRegular: {Exit: 1}, FileChanged: {Exit: 1}, FileCursorInvalid: {Exit: 1},
 	FileConflict: {Exit: 1}, FilePatchMismatch: {Exit: 1}, FilePermissionDenied: {Exit: 1}, FileTargetMismatch: {Exit: 1},
+	ContextNotFound: {Exit: 1}, ContextClosed: {Exit: 1}, ContextConflict: {Exit: 1},
 }

@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -57,8 +56,9 @@ func (c *fileController) stage(stage, path string) {
 }
 
 func daemonAccount() string {
-	if current, err := user.Current(); err == nil && current.Username != "" {
-		return current.Username
+	// The same name host.info reports, so a caller can put it in a target.
+	if account := currentDaemonAccount(); account != "" {
+		return account
 	}
 	return strconv.Itoa(os.Getuid())
 }

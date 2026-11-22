@@ -51,13 +51,14 @@ type HostsData struct {
 }
 
 type HostSummary struct {
-	HostID       *string   `json:"hostId"`
-	MachineName  string    `json:"machineName,omitempty"`
-	Local        bool      `json:"local"`
-	NameShadowed bool      `json:"nameShadowed"`
-	Reachability string    `json:"reachability"`
-	Observed     *Observed `json:"observed"`
-	Declared     Declared  `json:"declared"`
+	HostID       *string           `json:"hostId"`
+	MachineName  string            `json:"machineName,omitempty"`
+	Local        bool              `json:"local"`
+	NameShadowed bool              `json:"nameShadowed"`
+	Reachability string            `json:"reachability"`
+	Observed     *Observed         `json:"observed"`
+	Capabilities *HostCapabilities `json:"capabilities,omitempty"`
+	Declared     Declared          `json:"declared"`
 }
 
 type Observed struct {
@@ -235,10 +236,13 @@ type ExecutionReceipt struct {
 	Removal            string           `json:"removal"`
 	ReceiptRetainUntil *time.Time       `json:"receiptRetainUntil"`
 	RetentionReason    string           `json:"retentionReason,omitempty"`
+	CreatedAt          *time.Time       `json:"createdAt,omitempty"`
 	OutputRetainUntil  *time.Time       `json:"outputRetainUntil"`
 	OutputExpired      bool             `json:"outputExpired"`
 	KillRequested      bool             `json:"killRequested"`
 	Result             *ExecutionResult `json:"result"`
+	ContextID          string           `json:"contextId,omitempty"`
+	ContextRevision    *uint64          `json:"contextRevision,string,omitempty"`
 }
 
 // ScopeSubject identifies the authenticated key without legacy output-bearing records.

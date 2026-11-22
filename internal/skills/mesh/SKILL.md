@@ -7,7 +7,7 @@ metadata:
 
 # Mesh
 
-Run `mesh version` and `mesh skill status --dir ROOT` to check that this skill matches the binary. Read [commands](references/commands.md) for the shipped operations and [safety](references/safety.md) before working on a machine.
+Run `mesh version` and `mesh skill status --dir ROOT` to check that this skill matches the binary. Read [commands](references/commands.md) for the shipped CLI operations, [mcp-tools](references/mcp-tools.md) for the native MCP stdio tools (`mesh mcp`), and [safety](references/safety.md) before working on a machine.
 
 ## Read context before acting
 

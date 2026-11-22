@@ -76,7 +76,7 @@ func agentError(err error, operation, target string, fallback agentapi.Code) age
 	switch {
 	case errors.As(err, &rejected):
 		code = controlAgentCode(rejected.Code)
-	case errors.As(err, &mismatch):
+	case errors.As(err, &mismatch), errors.Is(err, transport.ErrDestinationIdentityMismatch):
 		code = agentapi.HostIdentityMismatch
 	case errors.Is(err, transport.ErrAuthentication):
 		code = agentapi.HostAuthenticationFailed
@@ -88,7 +88,7 @@ func controlAgentCode(code string) agentapi.Code {
 	switch code {
 	case "control.unknown":
 		return agentapi.ProtocolUnsupported
-	case "request.key_conflict", "request.in_progress", "request.outcome_unknown", "request.not_found", "resource.limit", "state.unavailable", "logs.cursor_expired", "logs.cursor_invalid", "result.expired", "session.instance_mismatch", "usage.invalid", "input.outcome_unknown", "input.key_conflict", "input.offset_mismatch", "input.closed", "input.backpressure", "access.denied",
+	case "request.key_conflict", "request.in_progress", "request.outcome_unknown", "request.not_found", "resource.limit", "state.unavailable", "logs.cursor_expired", "logs.cursor_invalid", "result.expired", "session.instance_mismatch", "usage.invalid", "input.outcome_unknown", "input.key_conflict", "input.offset_mismatch", "input.closed", "input.backpressure", "access.denied", "context.not_found", "context.closed", "context.conflict",
 		"host.identity_mismatch", "file.not_found", "file.not_regular", "file.changed", "file.cursor_invalid", "file.conflict", "file.patch_mismatch", "file.permission_denied", "file.target_mismatch":
 		return agentapi.Code(code)
 	case "session.not_found":

@@ -396,7 +396,7 @@ func NewCommand(dependencies Dependencies) *Command {
 	)
 	root.AddCommand(
 		inGroup(groupSessions, app.listCommand(), app.sessionCommand(), app.attachCommand(), app.localCommand(),
-			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand())...,
+			app.logsCommand(), app.killCommand(), app.hibernateCommand(), app.gcCommand(), app.signalCommand(), app.removeCommand(), app.recoverCommand(), app.recoveryCommandCommand(), app.agentCommand(), app.backCommand(), app.contextCommand())...,
 	)
 	root.AddCommand(inGroup(groupHosts, app.addCommand(), app.sshCommand(), app.copyCommand(), app.renameCommand(), app.wakeCommand(), app.dashboardCommand(), app.fleetCommand(), app.profileCommand(), app.hostsCommand(), app.inspectHostCommand())...)
 	root.AddCommand(inGroup(groupServing, app.serveCommand(), app.unserveCommand(), app.appCommand())...)
@@ -404,7 +404,7 @@ func NewCommand(dependencies Dependencies) *Command {
 	device.AddCommand(app.deviceScopeCommand())
 	updates := app.updateCommand()
 	updates.AddCommand(app.updateConfigurationCommand())
-	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), updates, app.skillCommand(), device, versionCommand())...)
+	root.AddCommand(inGroup(groupSetup, daemonWithInstall(app), app.privateNamesCommand(), app.shellInitCommand(), updates, app.skillCommand(), app.mcpCommand(), device, versionCommand())...)
 	root.AddCommand(app.fileControlCommand(), app.workerCommand(), app.shellUpdateCommand(), app.agentHookCommand(), app.agentResumeCommand(), updateHelperCommand(), newUpdateNoticeCheckCommand(), updateBootstrapCommand(), updateBootstrapStatusCommand(), updateReaderCommand(), sshHelperCommand())
 	protectPrivacyErrors(root, &privacyEnabled)
 	protectAgentFlagErrors(root, app.agent)

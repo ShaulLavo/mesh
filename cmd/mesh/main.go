@@ -20,6 +20,8 @@ import (
 	"github.com/shaul/mesh/internal/update"
 )
 
+const mcpCommandName = "mcp"
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "update-reader" {
 		finishEnvelopeCommand(cli.RunUpdateReader(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
@@ -30,12 +32,8 @@ func main() {
 
 func clientMain() {
 	if err := initializeDeployment(os.Args[1:]); err != nil {
-		if agentapi.Requested(os.Args[1:]) && agentapi.Classify(os.Args[1:]) != "" {
-			finishEnvelopeCommand(cli.WriteAgentFailure(os.Stdout, os.Args[1:], err))
-			return
-		}
-		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		exitDeploymentFailure(os.Args[1:], err)
+		return
 	}
 
 	root := cli.NewCommand(commandDependencies())
@@ -48,7 +46,7 @@ func clientMain() {
 		return
 	}
 	if plainAgentCommand(os.Args[1:]) {
-		finishAgentCommand(os.Args[1], root.ExecuteContext(context.Background()))
+		finishAgentCommand(entryCommand(os.Args[1:]), root.ExecuteContext(context.Background()))
 		return
 	}
 	options := []fang.Option{
@@ -89,14 +87,29 @@ func finishEnvelopeCommand(err error) {
 	os.Exit(1)
 }
 
+func exitDeploymentFailure(args []string, err error) {
+	if agentapi.Requested(args) && agentapi.Classify(args) != "" {
+		finishEnvelopeCommand(cli.WriteAgentFailure(os.Stdout, args, err))
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, err)
+	if entryCommand(args) == mcpCommandName {
+		os.Exit(2)
+	}
+	os.Exit(1)
+}
+
 func plainAgentCommand(arguments []string) bool {
 	if len(arguments) == 0 {
 		return false
 	}
+	if entryCommand(arguments) == mcpCommandName {
+		return true
+	}
 	switch arguments[0] {
 	// session-worker sets its own signal policy; Fang's NotifyContext would
 	// silently decide which signals end a session.
-	case "ssh-helper", "session-worker", "agent", "agent-hook", "agent-resume", "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "update-reader":
+	case "ssh-helper", "session-worker", "agent", "agent-hook", "agent-resume", mcpCommandName, "version", "update", "update-helper", "update-notice-check", "update-bootstrap", "update-bootstrap-status", "update-reader":
 		return true
 	default:
 		return false
@@ -112,6 +125,13 @@ func finishAgentCommand(name string, err error) {
 		os.Exit(status)
 	}
 	_, _ = fmt.Fprintln(os.Stderr, err)
+	var failure *agentapi.Failure
+	if errors.As(err, &failure) && failure.Exit != 0 {
+		os.Exit(failure.Exit)
+	}
+	if name == mcpCommandName {
+		os.Exit(2)
+	}
 	os.Exit(1)
 }
 
@@ -134,7 +154,7 @@ func entryCommand(args []string) string {
 
 func namingCommand(args []string) bool {
 	command := entryCommand(args)
-	return command != "device" && !plainAgentCommand([]string{command})
+	return command != "device" && (command == mcpCommandName || !plainAgentCommand([]string{command}))
 }
 
 func deploymentRequested(args []string) bool {
@@ -147,11 +167,12 @@ func deploymentRequested(args []string) bool {
 	return false
 }
 
+func readOnlyDeploymentCommand(args []string) bool {
+	return agentapi.Classify(args) != "" || entryCommand(args) == mcpCommandName
+}
+
 func initializeDeployment(args []string) error {
-	if agentapi.Classify(args) == "skill.show" {
-		return nil
-	}
-	if !namingCommand(args) {
+	if agentapi.Classify(args) == "skill.show" || !namingCommand(args) {
 		return nil
 	}
 	config, err := cli.ConfigPath()
@@ -163,13 +184,16 @@ func initializeDeployment(args []string) error {
 		return fmt.Errorf("deployment state: %w", err)
 	}
 	path := filepath.Join(filepath.Dir(config), "domains.json")
-	var policyErr error
-	if agentapi.Classify(args) != "" {
+	if readOnlyDeploymentCommand(args) {
 		if err := domainpolicy.InitializeReadOnlyDeployment(path, state); err != nil {
 			return fmt.Errorf("initialize read-only deployment policy: %w", err)
 		}
 		return nil
 	}
+	return initializeInteractiveDeployment(args, path, state)
+}
+
+func initializeInteractiveDeployment(args []string, path, state string) error {
 	requested := deploymentRequested(args)
 	pendingAdoption, err := update.AdoptionPending(context.Background(), state)
 	if err != nil {
@@ -181,6 +205,7 @@ func initializeDeployment(args []string) error {
 		}
 		return nil
 	}
+	var policyErr error
 	if entryCommand(args) == "daemon" || requested {
 		policyErr = domainpolicy.InitializeDeployment(path, state, requested)
 	} else {
