@@ -33,6 +33,14 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
 	}
 	r, err := journal.Exact(ctx, b)
+	if r.Key.Host != "" {
+		// The owner guard runs before any receipt detail leaves the host.
+		if guardErr := authorizeExecutionOwner(ctx, req, r.Key); guardErr != nil {
+			return protocol.Control{}, executionBoundaryError("execution control", guardErr)
+		}
+	} else if req.Caller != "" || req.ExecutionContext != nil {
+		return protocol.Control{}, executionBoundaryError("execution control", errors.Join(errCallerDenied, err))
+	}
 	if err != nil {
 		return executionResponse(req, r, err)
 	}
@@ -204,6 +212,9 @@ func (c *Catalog) RemoveExecution(ctx context.Context, b execution.Binding) erro
 }
 
 func executionOutputCode(err error) string {
+	if code := applicationErrorCode(err); code != "" {
+		return code
+	}
 	if code := execution.InputErrorCode(err); code != "" {
 		return code
 	}

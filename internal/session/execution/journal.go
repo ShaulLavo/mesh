@@ -113,9 +113,12 @@ func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve
 	if !errors.Is(err, os.ErrNotExist) {
 		return r, false, err
 	}
-	return j.acceptNew(ctx, k, normalized, reserve)
+	return j.acceptNew(ctx, k, normalized, reserve, nil)
 }
-func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func() (Binding, error)) (Receipt, bool, error) {
+
+// acceptNew publishes a fresh reservation under the journal lock. decorate,
+// when set, adds context evidence before the receipt becomes durable.
+func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func() (Binding, error), decorate func(*Receipt)) (Receipt, bool, error) {
 	var r Receipt
 	if err := j.capacity(); err != nil {
 		return Receipt{}, false, err
@@ -131,6 +134,9 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 		return Receipt{}, false, err
 	}
 	r = Receipt{Binding: binding, Key: k, IntentDigest: digest(i), Owner: j.owner, Phase: phaseReserved, Acceptance: string(BeforePublish), Publication: pending, LaunchOutcome: notStarted, AcceptedAt: j.now().UTC(), Removal: removalPresent}
+	if decorate != nil {
+		decorate(&r)
+	}
 	if (binding.Mode() == KindLine) != (k.Class == InternalServiceClass) {
 		return r, false, fmt.Errorf("execution: invalid internal request namespace")
 	}
@@ -223,7 +229,7 @@ func (j *Journal) Dispatch(ctx context.Context, b Binding, i Intent) error {
 	if err != nil {
 		return err
 	}
-	if r.Binding != b || r.Owner != j.owner || r.Phase != phaseReserved || r.IntentDigest != digest(i) {
+	if r.Binding != b || r.Owner != j.owner || r.Phase != phaseReserved || r.launchIntentDigest() != digest(i) {
 		return ErrUnknown
 	}
 	d := dispatch{Binding: b, Key: r.Key, Intent: i}

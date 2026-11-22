@@ -1,0 +1,185 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/shaul/mesh/internal/access"
+	"github.com/shaul/mesh/internal/protocol"
+	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/updategate"
+	"github.com/shaul/mesh/internal/worker"
+)
+
+// contextJobIntent is the canonical caller-supplied request of a context
+// job. Its digest decides replays; wait and page sizes are not part of it.
+type contextJobIntent struct {
+	Kind         string            `json:"kind"`
+	Command      []string          `json:"command,omitempty"`
+	ShellCommand string            `json:"shellCommand,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Stdin        string            `json:"stdin"`
+}
+
+// executionKeyFor scopes a creation or lookup key. An application caller's
+// key covers host, caller, context, operation and the caller key; other
+// requests keep the account or device namespace.
+func (l *lifecycle) executionKeyFor(ctx context.Context, request protocol.Control) (execution.Key, error) {
+	caller, present, err := applicationCaller(ctx, request)
+	if err != nil {
+		return execution.Key{}, err
+	}
+	if !present && request.ExecutionContext == nil {
+		return l.executionKey(ctx, request.RequestKey)
+	}
+	if !present {
+		return execution.Key{}, &callerValidationError{err: errCallerRequired}
+	}
+	if request.ExecutionContext == nil || !protocol.ValidContextID(request.ExecutionContext.ContextID) {
+		return execution.Key{}, contextUsage("application jobs need executionContext.contextId")
+	}
+	key := execution.Key{Host: string(l.host.ID), Class: execution.ApplicationClass, Principal: string(caller.ID), Opaque: request.RequestKey, Context: request.ExecutionContext.ContextID, Operation: execution.OperationExec}
+	return key, executionBoundaryError("execution.go executionKeyFor", key.Validate())
+}
+
+func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key) (protocol.Control, error) {
+	if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
+		return protocol.Control{}, executionBoundaryError("execution.go contextExecutionCreate", err)
+	}
+	job, err := contextJobRequest(request)
+	if err != nil {
+		return protocol.Control{}, err
+	}
+	var overlay map[string]string
+	resolve := func(c execution.Context) (execution.Intent, error) {
+		intent, env, err := resolveContextJob(c, job)
+		overlay = env
+		return intent, err
+	}
+	reserve := func() (execution.Receipt, bool, []string, execution.Intent, error) {
+		var env []string
+		var launch execution.Intent
+		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, func(intent execution.Intent) (execution.Binding, error) {
+			launch = intent
+			ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(intent.Kind))
+			if err != nil {
+				return execution.Binding{}, executionBoundaryError("reserve context job", err)
+			}
+			env = worker.ExecutionEnvironment(withEnvOverlay(l.environment(), overlay), string(l.host.ID), ref, intent.Term)
+			return execution.NewBinding(key, intent, ref, env), nil
+		})
+		return r, owner, env, launch, executionBoundaryError("reserve context job", err)
+	}
+	return l.createExecution(ctx, request, journal, key, reserve)
+}
+
+func (l *lifecycle) environment() []string {
+	if l.env != nil {
+		return l.env
+	}
+	return os.Environ()
+}
+
+// contextJobRequest validates the caller-supplied part of a context job.
+// Pipe jobs only: the scoped session-output route still reads PTY execution
+// tails, and application-owned output must stay private to its caller.
+func contextJobRequest(request protocol.Control) (contextJobIntent, error) {
+	params := request.ExecutionContext
+	job := contextJobIntent{Kind: request.ExecutionKind, Command: request.Command, ShellCommand: params.ShellCommand, Cwd: request.Cwd, Env: params.Env, Stdin: request.Stdin}
+	if job.Kind != execution.KindPipe {
+		return job, contextUsage("context jobs use kind pipe")
+	}
+	if job.Stdin == "" {
+		job.Stdin = execution.StdinClosed
+	}
+	if (len(job.Command) == 0) == (job.ShellCommand == "") {
+		return job, contextUsage("pass exactly one of command (argv) or executionContext.shellCommand")
+	}
+	if len(job.Env) == 0 {
+		job.Env = nil
+	}
+	if !validContextText(job.ShellCommand) || !validContextText(job.Cwd) || len(job.Cwd) > 4096 {
+		return job, contextUsage("command and cwd must be valid text")
+	}
+	return job, validContextEnv(job.Env)
+}
+
+// resolveContextJob turns a job request into its launch intent against one
+// context revision. The child's own cd or export never reaches the context.
+func resolveContextJob(c execution.Context, job contextJobIntent) (execution.Intent, map[string]string, error) {
+	cwd := c.Cwd
+	if job.Cwd != "" && filepath.IsAbs(job.Cwd) {
+		cwd = filepath.Clean(job.Cwd)
+	} else if job.Cwd != "" {
+		cwd = filepath.Join(c.Cwd, job.Cwd)
+	}
+	command := job.Command
+	if job.ShellCommand != "" {
+		switch c.Shell {
+		case protocol.ContextShellLogin:
+			command = []string{c.ShellPath, "-l", "-c", job.ShellCommand}
+		case protocol.ContextShellSh:
+			command = []string{posixShellPath, "-c", job.ShellCommand}
+		default:
+			return execution.Intent{}, nil, contextUsage("this context has shell none; pass command as argv")
+		}
+	}
+	env := make(map[string]string, len(c.Env)+len(job.Env))
+	for name, value := range c.Env {
+		env[name] = value
+	}
+	for name, value := range job.Env {
+		env[name] = value
+	}
+	intent := execution.Intent{Kind: job.Kind, Command: command, Cwd: cwd, Stdin: job.Stdin}
+	return intent, env, nil
+}
+
+// withEnvOverlay replaces or adds overlay variables in a copy of base.
+func withEnvOverlay(base []string, overlay map[string]string) []string {
+	if len(overlay) == 0 {
+		return base
+	}
+	out := make([]string, 0, len(base)+len(overlay))
+	for _, entry := range base {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overlay[name]; !replaced {
+			out = append(out, entry)
+		}
+	}
+	names := make([]string, 0, len(overlay))
+	for name := range overlay {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, name+"="+overlay[name])
+	}
+	return out
+}
+
+// decorateApplicationError gives context replies their record and specific
+// codes. Raw execution replies already carry their partial receipt.
+func decorateApplicationError(reply *protocol.Control, request protocol.Control, err error) {
+	if code := applicationErrorCode(err); code != "" {
+		reply.ErrorCode = code
+	}
+	if !protocol.IsContextControl(request.Type) {
+		return
+	}
+	if applicationErrorCode(err) == "" {
+		reply.ErrorCode = executionCode(err)
+	}
+	if errors.Is(err, access.ErrDenied) {
+		reply.ErrorCode = accessDeniedCode
+	}
+	var failure *contextFailure
+	if errors.As(err, &failure) {
+		reply.ContextInfo = failure.response.ContextInfo
+	}
+}
