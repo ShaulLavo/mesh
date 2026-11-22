@@ -138,7 +138,7 @@ jobs:
             archive: mesh_darwin_arm64.tar.gz
             runner: macos-15
     # Draft release proofs share the owner's Mac. All PR proofs run hosted.
-    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -270,8 +270,8 @@ jobs:
       # --prove-matrix: all of them for a release, one Darwin shard on a PR.
       matrix: ${{ fromJSON(needs.policy.outputs.prove) }}
     # Draft proofs on the shared Mac runners carry the Mac FIFO wait in their cap.
-    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
-    timeout-minutes: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 105 || 60 }}
+    runs-on: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && fromJSON('["self-hosted","macOS","ARM64","mesh-mac-shared"]') || matrix.runner }}
+    timeout-minutes: ${{ matrix.runner == 'macos-15' && inputs.draft && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 105 || 60 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

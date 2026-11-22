@@ -1,24 +1,18 @@
 name: Publish tested release
 
 on:
-  workflow_call:
-    inputs:
-      source_sha:
-        description: Exact main commit whose complete CI gate passed
-        required: true
-        type: string
-      version:
-        description: Optional explicit stable version for a non-patch release
-        required: false
-        type: string
+  schedule:
+    # Cut batched releases up to three times a day when main has unpublished
+    # commits with a green Complete CI gate.
+    - cron: '0 2,10,18 * * *'
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Exact tested commit on main
-        required: true
+        description: Exact tested commit on main (defaults to the workflow main commit; skips if its main CI is not green)
+        required: false
         type: string
       version:
-        description: Optional explicit stable version
+        description: Optional explicit stable version for a non-patch release
         required: false
         type: string
 
@@ -33,7 +27,9 @@ permissions:
 jobs:
   reserve:
     name: Reserve source and version
+    if: github.ref == 'refs/heads/main'
     permissions:
+      actions: read
       checks: read
       contents: write
     runs-on: ubuntu-24.04
@@ -47,11 +43,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
       - id: reserve
         name: Reserve a monotonic release
         env:
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
           SOURCE_SHA: ${{ inputs.source_sha }}
           EXPLICIT_VERSION: ${{ inputs.version }}
         # Explicit bash adds pipefail, so a failed reservation fails the step

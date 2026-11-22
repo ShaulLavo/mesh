@@ -113,15 +113,18 @@ if [[ $1 == verify-metadata && ${FAIL:-} == metadata ]]; then exit 1; fi
         self.assertNotIn("always()", signing)
 
     def test_signing_permissions_are_confined_to_trusted_publication(self):
-        for text in (WORKFLOW, (ROOT / ".github/workflows/ci.yml").read_text()):
-            publish = text.index("\n  publish:\n")
-            earlier = text[:publish]
-            guarded = text[publish:]
-            for grant in ("id-token: write", "attestations: write", "artifact-metadata: write"):
-                self.assertNotIn(grant, earlier)
-                self.assertIn(grant, guarded)
-        caller = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn("if: ${{ !cancelled() && needs.gate.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}", caller[caller.index("\n  publish:\n"):])
+        publish = WORKFLOW.index("\n  publish:\n")
+        earlier = WORKFLOW[:publish]
+        guarded = WORKFLOW[publish:]
+        for grant in ("id-token: write", "attestations: write", "artifact-metadata: write"):
+            self.assertNotIn(grant, earlier)
+            self.assertIn(grant, guarded)
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("\n  publish:\n", ci)
+        self.assertNotIn("uses: ./.github/workflows/release.yml", ci)
+        for grant in ("id-token: write", "attestations: write", "artifact-metadata: write"):
+            self.assertNotIn(grant, ci)
+        self.assertIn("if: needs.reserve.outputs.action == 'publish' && github.ref == 'refs/heads/main'", guarded)
 
     def test_original_reader_jobs_are_required_before_finalization(self):
         finalize = WORKFLOW[WORKFLOW.index("\n  finalize:\n"):]
