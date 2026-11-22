@@ -158,3 +158,159 @@ func TestMCPPublishManagedHTTPProbeAndToggleCLI(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// TestMCPHostedCommandsAcceptLeadingDashHostID proves that base64url canonical
+// host IDs starting with '-' or '--' work as HOST/NAME operands (and --host
+// values) across mesh mcp connect and every hosted MCP command without being
+// parsed as Cobra flags.
+func TestMCPHostedCommandsAcceptLeadingDashHostID(t *testing.T) {
+	// argumentIdentities returns [no-dash, single-dash "-", double-dash "--"].
+	ids := argumentIdentities(t)[1:]
+	for _, hostID := range ids {
+		t.Run(hostID[:2], func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("MESH_CONFIG_DIR", t.TempDir())
+			stateDir := t.TempDir()
+			t.Setenv("MESH_STATE_DIR", stateDir)
+			if _, _, err := identity.LoadOrCreate(stateDir); err != nil {
+				t.Fatal(err)
+			}
+			remote := HostRecord{ID: hostID, MeshIdentity: hostID, MachineName: "dash-host", Endpoint: "ws://127.0.0.1:7337/mesh"}
+			if err := saveNamedTestHost(t, remote); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := executeCommand(t, Dependencies{}, "mcp", "identity", "create", "dash-id"); err != nil {
+				t.Fatalf("create identity: %v", err)
+			}
+
+			var mu sync.Mutex
+			seenControls := map[string]string{}
+			dial := func(_ context.Context, target HostRecord) (transport.Conn, error) {
+				if target.ID != hostID {
+					return nil, fmt.Errorf("dialed host %q, want %q", target.ID, hostID)
+				}
+				clientPipe, serverPipe := net.Pipe()
+				clientConn, err := transport.NewStreamConn(clientPipe)
+				if err != nil {
+					return nil, fmt.Errorf("wrap client pipe: %w", err)
+				}
+				serverConn, err := transport.NewStreamConn(serverPipe)
+				if err != nil {
+					return nil, fmt.Errorf("wrap server pipe: %w", err)
+				}
+				go func() {
+					defer func() { _ = serverConn.Close() }()
+					for {
+						frame, err := serverConn.ReadFrame()
+						if err != nil {
+							return
+						}
+						if kind, ok := protocol.MCPControlType(frame); ok {
+							req, err := protocol.DecodeMCPServiceRequest(frame.Payload)
+							if err != nil {
+								return
+							}
+							mu.Lock()
+							seenControls[kind] = req.Service
+							mu.Unlock()
+							payload := dashHostMCPPayload(hostID, kind)
+							raw, _ := json.Marshal(payload)
+							reply, _ := protocol.EncodeMCP(protocol.MCPServiceResponse{Type: protocol.TypeMCPServiceResult, RequestID: req.RequestID, Result: raw})
+							_ = serverConn.WriteFrame(reply)
+							continue
+						}
+						ctrl, err := protocol.DecodeControl(frame.Payload)
+						if err != nil {
+							return
+						}
+						if ctrl.Type == protocol.TypeHostInfo {
+							info := protocol.HostInfo{ID: hostID, MeshIdentity: hostID, MachineName: "dash-host", NameRevision: 1, MCPHostingSupported: true}
+							frames, _ := protocol.ControlFrames(protocol.Control{Type: protocol.TypeHostInfoResult, RequestID: ctrl.RequestID, Host: &info})
+							for _, f := range frames {
+								_ = serverConn.WriteFrame(f)
+							}
+						}
+					}
+				}()
+				return clientConn, nil
+			}
+
+			ref := hostID + "/repo-tools"
+			// Exercise mesh mcp connect with HOST/NAME both before and after --identity.
+			for _, args := range [][]string{
+				{"mcp", "connect", ref, "--identity", "dash-id"},
+				{"mcp", "connect", "--identity", "dash-id", ref},
+			} {
+				if out, errOut, err := executeCommand(t, Dependencies{DialPassive: dial}, args...); err != nil {
+					t.Fatalf("mesh %s failed: %v\nstdout=%s\nstderr=%s", strings.Join(args, " "), err, out, errOut)
+				}
+			}
+
+			// Exercise every hosted management command with HOST/NAME and --host.
+			commands := [][]string{
+				{"mcp", "ls", "--host", hostID, "--json"},
+				{"mcp", "publish", "repo-tools", "--host", hostID, "--url", "http://127.0.0.1:8080/mcp", "--shared", "--json"},
+				{"mcp", "show", ref, "--json"},
+				{"mcp", "start", ref, "--json"},
+				{"mcp", "stop", ref, "--json"},
+				{"mcp", "restart", ref, "--json"},
+				{"mcp", "probe", ref, "--json"},
+				{"mcp", "enable", ref, "--json"},
+				{"mcp", "disable", ref, "--json"},
+				{"mcp", "logs", ref, "--json"},
+				{"mcp", "rm", ref, "--json"},
+			}
+			for _, args := range commands {
+				if out, errOut, err := executeCommand(t, Dependencies{DialPassive: dial}, args...); err != nil {
+					t.Fatalf("mesh %s failed: %v\nstdout=%s\nstderr=%s", strings.Join(args, " "), err, out, errOut)
+				}
+			}
+			for _, kind := range []string{
+				protocol.TypeMCPCatalog,
+				protocol.TypeMCPServiceUpsert,
+				protocol.TypeMCPServiceStart,
+				protocol.TypeMCPServiceStop,
+				protocol.TypeMCPServiceRestart,
+				protocol.TypeMCPServiceProbe,
+				protocol.TypeMCPServiceEnable,
+				protocol.TypeMCPServiceDisable,
+				protocol.TypeMCPServiceLogs,
+				protocol.TypeMCPServiceDelete,
+			} {
+				mu.Lock()
+				_, ok := seenControls[kind]
+				mu.Unlock()
+				if !ok {
+					t.Fatalf("expected control %s to reach leading-dash host %s", kind, hostID)
+				}
+			}
+		})
+	}
+}
+
+func dashHostMCPPayload(hostID, kind string) any {
+	svc := mcphost.CatalogService{
+		ID: "11111111111111111111111111111111", Name: "repo-tools", Revision: 1,
+		Transport: mcphost.TransportHTTP, Lifecycle: mcphost.LifecycleOnDemand,
+		InstancePolicy: mcphost.PolicyShared,
+		Instances:      []mcphost.CatalogInstance{{ID: "22222222222222222222222222222222", State: mcphost.StateReady, Generation: 1}},
+	}
+	inst := mcphost.InstanceView{
+		ID: "22222222222222222222222222222222", ServiceID: svc.ID, Shared: true, State: mcphost.StateReady, Generation: 1,
+	}
+	switch kind {
+	case protocol.TypeMCPCatalog:
+		return map[string]any{"hostId": hostID, "services": []mcphost.CatalogService{svc}}
+	case protocol.TypeMCPServiceUpsert, protocol.TypeMCPServiceEnable, protocol.TypeMCPServiceDisable:
+		return map[string]any{"service": svc}
+	case protocol.TypeMCPServiceStop:
+		return map[string]any{"instances": []mcphost.InstanceView{inst}}
+	case protocol.TypeMCPServiceLogs:
+		return map[string]any{"stderr": []byte("ok\n")}
+	case protocol.TypeMCPServiceDelete:
+		return map[string]any{}
+	default:
+		return map[string]any{"instance": inst}
+	}
+}
