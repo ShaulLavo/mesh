@@ -65,6 +65,9 @@ func (c *Capture) initialize() error {
 	if err := s.files.Confirm(s.path("stream.lock")); err != nil {
 		return executionBoundaryError("capture", err)
 	}
+	if err := s.createTurnLocks(); err != nil {
+		return err
+	}
 	generation, err := freshToken()
 	if err != nil {
 		return executionBoundaryError("capture", err)
@@ -267,7 +270,7 @@ func (c *Capture) commit(b captureBatch) (StreamResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	gate, err := s.writerTurn(ctx, !b.final)
 	if err != nil {
 		return StreamResult{}, err
 	}

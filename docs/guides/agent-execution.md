@@ -103,8 +103,10 @@ command wrote before it exited. The whole drain ends after 2 seconds.
 
 Two separate budgets bound what a slow results disk can cost. If the capture is
 still blocked when the 2 second drain ends, the bytes the worker holds are
-dropped. The worker then allows 5 seconds for the final flush, and a flush that
-does not finish records `capture: not_recorded` for the job. These bounds cover
+dropped. The worker then allows 30 seconds for the final save of the capture,
+which can still hold up to 1 MiB of output a busy command wrote before it
+exited, and a save that does not finish records `capture: not_recorded` for the
+job. These bounds cover
 the capture only: the worker still writes and syncs the final result on the
 state volume, so a stalled results disk can delay worker exit and durable
 completion. Mesh expects the state volume to respond.

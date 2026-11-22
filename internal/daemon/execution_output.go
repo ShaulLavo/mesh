@@ -19,6 +19,8 @@ func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Cont
 	if err := validateRequestID(req); err != nil {
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
+	ctx, cancel := executionReadWait(ctx, req)
+	defer cancel()
 	if _, err := l.executionKey(ctx, "binding-admission"); err != nil {
 		return protocol.Control{}, executionBoundaryError("execution control", err)
 	}
@@ -155,6 +157,20 @@ func (l *lifecycle) executionLogPage(ctx context.Context, req protocol.Control, 
 		}
 	}
 	return execution.Page{}, execution.ErrResultExpired
+}
+
+// executionReadWait gives an output read its caller's remaining wait, from
+// before the first output-stream fence: a result that just appeared is
+// confirmed under the same stream lock while the receipt is refreshed. A busy
+// stream then holds the read up to that budget, not the short default lock
+// wait that answered a 30 s request with a failure after about 2 s. The
+// protocol boundary already limits the value to 1 through 60000.
+func executionReadWait(ctx context.Context, req protocol.Control) (context.Context, context.CancelFunc) {
+	if req.Type != protocol.TypeExecutionLogs || req.TimeoutMillis == 0 {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(req.TimeoutMillis)*time.Millisecond)
+	return execution.WithCallerWait(ctx), cancel
 }
 
 func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *execution.Journal, r execution.Receipt) (protocol.Control, error) {

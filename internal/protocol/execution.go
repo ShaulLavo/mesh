@@ -244,8 +244,15 @@ func executionInteger(name string, raw []byte) error {
 	if bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, &n) != nil || (name == "depth" && n != 0) {
 		return fmt.Errorf("execution: invalid %s", name)
 	}
+	if name == "timeoutMillis" && (n < 1 || n > MaxExecutionWaitMillis) {
+		return fmt.Errorf("execution: timeoutMillis must be 1 to %d", MaxExecutionWaitMillis)
+	}
 	return nil
 }
+
+// MaxExecutionWaitMillis bounds how long one wait or output read may hold the host.
+const MaxExecutionWaitMillis = 60000
+
 func executionString(raw []byte) error {
 	var value string
 	if bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, &value) != nil || strings.ContainsRune(value, 0) {
@@ -373,7 +380,7 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 		return executionString(raw)
 	}
 	field, ok := boundExecutionFields[name]
-	if !ok || field.kind != kind {
+	if !ok || (field.kind != kind && field.also != kind) {
 		return fmt.Errorf("execution: unexpected field %s", name)
 	}
 	if field.integer {
@@ -382,17 +389,19 @@ func validateExecutionBoundField(kind, name string, raw json.RawMessage) error {
 	return executionString(raw)
 }
 
-// boundExecutionFields names the one exact-instance control that may carry
+// boundExecutionFields names the exact-instance controls that may carry
 // each optional field, and whether it is an integer.
 var boundExecutionFields = map[string]struct {
-	kind    string
-	integer bool
+	kind, also string
+	integer    bool
 }{
-	"writeKey":      {kind: TypeWorkerLineRetire},
-	"stream":        {kind: TypeExecutionLogs},
-	"cursor":        {kind: TypeExecutionLogs},
-	"maxBytes":      {kind: TypeExecutionLogs, integer: true},
-	"timeoutMillis": {kind: TypeExecutionWait, integer: true},
+	"writeKey": {kind: TypeWorkerLineRetire},
+	"stream":   {kind: TypeExecutionLogs},
+	"cursor":   {kind: TypeExecutionLogs},
+	"maxBytes": {kind: TypeExecutionLogs, integer: true},
+	// A logs read carries its caller's remaining wait, so the host waits for a
+	// busy output stream up to that budget instead of its short default.
+	"timeoutMillis": {kind: TypeExecutionWait, also: TypeExecutionLogs, integer: true},
 	"signal":        {kind: TypeExecutionSignal},
 	"cols":          {kind: TypeExecutionResize, integer: true},
 	"rows":          {kind: TypeExecutionResize, integer: true},

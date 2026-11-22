@@ -53,9 +53,6 @@ const (
 	// Only the attachment writer waits on the socket, so this deadline cannot
 	// delay PTY reads.
 	attachmentWriteTimeout = 5 * time.Second
-	// A per-frame deadline alone lets many slow writes extend shutdown for
-	// minutes. Bound the complete flush too.
-	finalFlushTimeout = 5 * time.Second
 	// A command can exit before Spawn's readiness probe becomes the real attach.
 	// Keep the completed worker available long enough for that second dial.
 	firstAttachTimeout = 5 * time.Second
@@ -71,6 +68,10 @@ const (
 	inputQueueFrameLimit = 256
 	inputQueueByteLimit  = 8 << 20
 )
+
+// A per-frame deadline alone lets many slow writes extend shutdown for
+// minutes. Bound the complete flush too. A variable so tests can shorten it.
+var finalFlushTimeout = 5 * time.Second
 
 func validateTerminalSize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
@@ -787,7 +788,7 @@ func (w *Worker) hasExited() bool {
 
 // inputExitWait bounds how long refused input waits for the command's exit to
 // be recorded before its client is dropped as stuck.
-const inputExitWait = finalFlushTimeout
+var inputExitWait = finalFlushTimeout
 
 // exitFollows reports whether the command's exit is recorded shortly after
 // input for owner was refused. Only the current owner waits: a replaced client

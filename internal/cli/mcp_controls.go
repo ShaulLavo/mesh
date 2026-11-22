@@ -574,12 +574,36 @@ func (c *mcpControls) JobOutput(ctx context.Context, req mcpnative.JobOutputRequ
 		MaxBytes:  req.MaxBytes,
 	}
 	c.attachCaller(&control, req.Context)
-	response, info, err := c.pool.ExchangeShort(callCtx, host, control, false)
+	sent, response, info, err := c.exchangeOutputRead(callCtx, host, control)
 	target := c.targetMeta(host, info)
 	if err != nil {
-		return failOutcome("sessions.logs", target, agentError(err, "sessions.logs", host.ID, agentapi.HostUnreachable)), nil
+		return failOutcome("sessions.logs", target, outputReadError(err, host.ID)), nil
 	}
-	return c.jobOutputOutcome(control, response, host.ID, target)
+	return c.jobOutputOutcome(sent, response, host.ID, target)
+}
+
+// exchangeOutputRead sends one output read on a long-stream slot. A read can
+// wait on a busy stream for its whole deadline, so it must not hold one of the
+// short-control slots that signal and cancel need. The host's wait is what
+// remains of the deadline when the request leaves, less the reply margin.
+func (c *mcpControls) exchangeOutputRead(ctx context.Context, host HostRecord, control protocol.Control) (protocol.Control, protocol.Control, protocol.HostInfo, error) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return protocol.Control{}, protocol.Control{}, protocol.HostInfo{}, errors.New("output read requires a deadline")
+	}
+	sent := control
+	response, info, err := c.pool.ExchangeStreamBudgeted(ctx, host, deadline, func(timeoutMS int) protocol.Control {
+		sent.TimeoutMillis = min(protocol.MaxExecutionWaitMillis, max(1, timeoutMS-executionReadMarginMillis))
+		return sent
+	})
+	return sent, response, info, err
+}
+
+func outputReadError(err error, hostID string) agentapi.Error {
+	if errors.Is(err, errWaitBudgetExpired) {
+		return agentapi.Fail(agentapi.StateUnavailable, "sessions.logs", hostID, "No connection to the host was free before the read's deadline.").Err
+	}
+	return agentError(err, "sessions.logs", hostID, agentapi.HostUnreachable)
 }
 
 func (c *mcpControls) jobOutputOutcome(control, response protocol.Control, hostID string, target *mcpnative.TargetMeta) (mcpnative.CallOutcome, error) {

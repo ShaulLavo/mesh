@@ -69,8 +69,8 @@ def create(fixture, key, command, stdin="closed"):
     return receipt(exchange(fixture, creation(fixture, key, command, stdin)))
 
 
-def wait(fixture, job):
-    reply = exchange(fixture, bound("wait", job, timeoutMillis=20000))
+def wait(fixture, job, millis=20000):
+    reply = exchange(fixture, bound("wait", job, timeoutMillis=millis), timeout=millis / 1000 + 10)
     assert reply.get("executionWait") == "completed", reply
     done = receipt(reply)
     assert done["kind"] == "pipe", done
@@ -449,7 +449,9 @@ while True:
             eof = bound("input", job, writeKey="eof", inputOffset="0", inputEOF=True)
             assert exchange(fixture, eof)["inputReceipt"]["closed"]
             eventually(lambda: fixture.kernel.stat(leader) is None, "pipe leader was not reaped")
-            result = wait(fixture, job)
+            # The worker gives a blocked final save its whole 30 s budget after
+            # the 2 s drain before it records no capture.
+            result = wait(fixture, job, 60000)
             assert result["termination"]["code"] == 0 and result["capture"] == "not_recorded", result
             eventually(lambda: not fixture.alive(worker), "capture lock kept the worker alive")
             with (attempt / "lifetime.lock").open("rb") as lifetime:

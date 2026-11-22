@@ -504,6 +504,7 @@ func (c *mcpControls) probeObservedBytes(ctx context.Context, host HostRecord, c
 		Stream:           stream,
 		MaxBytes:         1,
 		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxRef.ContextID},
+		TimeoutMillis:    executionReadMillis(probeCtx),
 	}
 	resp, _, err := c.pool.ExchangeShort(probeCtx, host, ctrl, false)
 	if err != nil || resp.Type != protocol.TypeExecutionReceipt || resp.ExecutionPage == nil {
@@ -541,6 +542,7 @@ func (c *mcpControls) fetchOneExecStream(ctx context.Context, host HostRecord, c
 		Stream:           stream,
 		MaxBytes:         maxBytes,
 		ExecutionContext: &protocol.ExecutionContextRequest{ContextID: ctxRef.ContextID},
+		TimeoutMillis:    executionReadMillis(ctx),
 	}
 	resp, _, err := c.pool.ExchangeShort(ctx, host, ctrl, true)
 	if err != nil {
