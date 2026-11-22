@@ -57,7 +57,11 @@ def crash_during_restart(fixture, server, stage):
         hold.unlink()
         reached.unlink(missing_ok=True)
     fixture.start_local_daemon()
-    return before, show(fixture, "shtools")["instances"][0]
+    # Recovery runs in the background; wait until it settles the instance.
+    def settled():
+        instance = show(fixture, "shtools")["instances"][0]
+        return instance if instance["state"] != "starting" else None
+    return before, eventually(settled, "recovery did not settle the instance")
 
 
 def main():
