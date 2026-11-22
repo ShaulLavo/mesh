@@ -108,15 +108,41 @@ func (s *server) writeRaw(raw []byte) {
 	_ = s.out.Flush()
 }
 
+// JSON-RPC and MCP member names the fixture writes.
+const (
+	keyJSONRPC   = "jsonrpc"
+	jsonRPC      = "2.0"
+	keyMeta      = "_meta"
+	keyType      = "type"
+	keyText      = "text"
+	keyName      = "name"
+	toolExit     = "exit"
+	toolProgress = "progress"
+)
+
+// reply sends a raw result object, exactly as given.
+func (s *server) reply(id json.RawMessage, result map[string]any) {
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "id": id, "result": result})
+}
+
+// notify sends one server notification.
+func (s *server) notify(method string, params map[string]any) {
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "method": method, "params": params})
+}
+
+func subscription(id any) map[string]any {
+	return map[string]any{"io.modelcontextprotocol/subscriptionId": id}
+}
+
 func (s *server) result(id json.RawMessage, result map[string]any) {
 	if _, ok := result["resultType"]; !ok && s.mode != "bad-after-probe" {
 		result["resultType"] = "complete"
 	}
-	s.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	s.reply(id, result)
 }
 
 func (s *server) fail(id json.RawMessage, code int, message string) {
-	s.write(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": message}})
+	s.write(map[string]any{keyJSONRPC: jsonRPC, "id": id, "error": map[string]any{"code": code, "message": message}})
 }
 
 func (s *server) handle(line []byte) {
@@ -164,27 +190,35 @@ func (s *server) discover(req request) {
 		s.fail(req.ID, -32601, "method not found")
 		return
 	}
-	s.write(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+	s.reply(req.ID, map[string]any{
 		"resultType":        "complete",
 		"supportedVersions": []string{"2026-07-28"},
 		"capabilities":      map[string]any{"tools": map[string]any{"listChanged": true}},
 		"ttlMs":             60000,
 		"cacheScope":        "private",
-		"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "mesh-fixture", "version": "1"}},
-	}})
+		keyMeta:             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{keyName: "mesh-fixture", "version": "1"}},
+	})
 }
 
 func tools() []map[string]any {
-	names := []string{"echo", "big", "slow", "progress", "ask", "whoami", "garbage", "touch", "exit"}
+	names := []string{"echo", "big", "slow", toolProgress, "ask", "whoami", "garbage", "touch", toolExit}
 	out := make([]map[string]any, 0, len(names))
 	for _, name := range names {
-		out = append(out, map[string]any{"name": name, "inputSchema": map[string]any{"type": "object"}})
+		out = append(out, map[string]any{keyName: name, "inputSchema": map[string]any{keyType: "object"}})
 	}
 	return out
 }
 
 func text(value string) map[string]any {
-	return map[string]any{"content": []map[string]any{{"type": "text", "text": value}}}
+	return textBlock(value, false)
+}
+
+func textBlock(value string, isError bool) map[string]any {
+	result := map[string]any{"content": []map[string]any{{keyType: keyText, keyText: value}}}
+	if isError {
+		result["isError"] = true
+	}
+	return result
 }
 
 func (s *server) call(req request) {
@@ -197,14 +231,14 @@ func (s *server) call(req request) {
 	switch p.Name {
 	case "echo":
 		var value string
-		_ = json.Unmarshal(p.Arguments["text"], &value)
+		_ = json.Unmarshal(p.Arguments[keyText], &value)
 		s.result(req.ID, text(value))
 	case "big":
 		n, _ := strconv.Atoi(string(p.Arguments["bytes"]))
 		s.result(req.ID, text(strings.Repeat("x", n)))
 	case "slow":
 		s.slow(req)
-	case "progress":
+	case toolProgress:
 		s.progress(req, p)
 	case "ask":
 		s.ask(req, p)
@@ -215,11 +249,11 @@ func (s *server) call(req request) {
 		s.writeRaw([]byte("this is not json"))
 	case "touch":
 		s.listens.Range(func(key, _ any) bool {
-			s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed", "params": map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/subscriptionId": json.RawMessage(key.(string))}}})
+			s.notify("notifications/tools/list_changed", map[string]any{keyMeta: subscription(json.RawMessage(key.(string)))})
 			return true
 		})
 		s.result(req.ID, text("touched"))
-	case "exit":
+	case toolExit:
 		s.result(req.ID, text("exiting"))
 		time.Sleep(50 * time.Millisecond)
 		os.Exit(3)
@@ -243,7 +277,7 @@ func (s *server) progress(req request, p callParams) {
 	token := p.Meta["progressToken"]
 	for i := range n {
 		if token != nil {
-			s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/progress", "params": map[string]any{"progressToken": token, "progress": i + 1, "total": n}})
+			s.notify("notifications/progress", map[string]any{"progressToken": token, toolProgress: i + 1, "total": n})
 		}
 	}
 	s.result(req.ID, text(fmt.Sprintf("progressed %d", n)))
@@ -251,15 +285,16 @@ func (s *server) progress(req request, p callParams) {
 
 func (s *server) ask(req request, p callParams) {
 	if p.InputResponses == nil {
-		s.write(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+		schema := map[string]any{keyType: "object", "properties": map[string]any{keyName: map[string]any{keyType: "string"}}}
+		s.reply(req.ID, map[string]any{
 			"resultType":    "input_required",
 			"requestState":  "fixture-state-1",
-			"inputRequests": map[string]any{"name": map[string]any{"method": "elicitation/create", "params": map[string]any{"message": "Name?", "requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}}}}},
-		}})
+			"inputRequests": map[string]any{keyName: map[string]any{"method": "elicitation/create", "params": map[string]any{"message": "Name?", "requestedSchema": schema}}},
+		})
 		return
 	}
 	if p.RequestState == nil || *p.RequestState != "fixture-state-1" {
-		s.result(req.ID, map[string]any{"content": []map[string]any{{"type": "text", "text": "bad state"}}, "isError": true})
+		s.result(req.ID, textBlock("bad state", true))
 		return
 	}
 	var answer struct {
@@ -267,7 +302,7 @@ func (s *server) ask(req request, p callParams) {
 			Name string `json:"name"`
 		} `json:"content"`
 	}
-	_ = json.Unmarshal(p.InputResponses["name"], &answer)
+	_ = json.Unmarshal(p.InputResponses[keyName], &answer)
 	s.result(req.ID, text("hello "+answer.Content.Name))
 }
 
@@ -281,5 +316,5 @@ func (s *server) listen(req request) {
 		acknowledged["toolsListChanged"] = true
 	}
 	s.listens.Store(string(req.ID), struct{}{})
-	s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged", "params": map[string]any{"notifications": acknowledged, "_meta": map[string]any{"io.modelcontextprotocol/subscriptionId": req.ID}}})
+	s.notify("notifications/subscriptions/acknowledged", map[string]any{"notifications": acknowledged, keyMeta: subscription(req.ID)})
 }

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +197,34 @@ func TestSweepKeepsLeaseAddedConcurrently(t *testing.T) {
 	<-swept
 	if leases := f.sup.Services(caller("b"))[0].Instances[0].Leases; leases != 1 {
 		t.Fatalf("leases after the sweep: %d, want only the new one", leases)
+	}
+}
+
+func TestMissingCommandFailsBeforeLaunch(t *testing.T) {
+	f := newSupervisorFixture(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plain"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, argv := range map[string][]string{
+		"absolute": {"/no/such/server"},
+		"on-path":  {"mesh-no-such-server"},
+		"relative": {"./missing"},
+		"not-exec": {filepath.Join(dir, "plain")},
+		"path-env": {"sh"},
+	} {
+		d := Definition{Name: name, Argv: argv, Cwd: dir}
+		if name == "path-env" {
+			d.Env = map[string]string{"PATH": dir}
+		}
+		f.publish(t, d)
+		_, err := whoami(t, f.sup, caller("a"), Target{Service: name})
+		if Classify(err).Code != codeFailed || !strings.Contains(err.Error(), "server command") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if f.launcher.launches != 0 {
+		t.Fatalf("a missing command reached the launcher %d times", f.launcher.launches)
 	}
 }
 
