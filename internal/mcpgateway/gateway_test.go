@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,27 @@ type fakeService struct {
 	listens   []*fakeListen
 	ackDelay  time.Duration
 	ackFilter func(json.RawMessage) string
+	expects   []*Expect
+	// discoverDelay holds server/discover, as a silent host would.
+	discoverDelay time.Duration
+	// afterAck is sent right after the listen acknowledgment.
+	afterAck string
+	// endAfterAck completes the listen right after acknowledging it.
+	endAfterAck bool
+	template    string
+	pageExtra   string
+}
+
+func (s *fakeService) setExpect(e *Expect) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expects = append(s.expects, e)
+}
+
+func (s *fakeService) lastExpect() *Expect {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.expects[len(s.expects)-1]
 }
 
 type fakeListen struct {
@@ -57,6 +79,14 @@ func (s *fakeService) Forward(ctx context.Context, req mcpwire.Message, _ transp
 	}
 	switch req.Method() {
 	case mcpwire.MethodDiscover:
+		s.mu.Lock()
+		delay := s.discoverDelay
+		s.mu.Unlock()
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return fmt.Errorf("discover: %w", ctx.Err())
+		}
 		return reply(`{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":` + s.caps + `,"ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"` + s.name + `","version":"1"}}}`)
 	case mcpwire.MethodListTools:
 		return reply(s.page(req, "tools", s.tools, func(n string) string {
@@ -67,7 +97,13 @@ func (s *fakeService) Forward(ctx context.Context, req mcpwire.Message, _ transp
 	case mcpwire.MethodListResources:
 		return reply(s.page(req, "resources", s.resources, func(u string) string { return `{"name":"r","uri":"` + u + `"}` }))
 	case mcpwire.MethodListResourceTemplates:
-		return reply(`{"resultType":"complete","resourceTemplates":[{"name":"t","uriTemplate":"repo://{owner}/{name}"}],"ttlMs":60000,"cacheScope":"private"}`)
+		s.mu.Lock()
+		template := s.template
+		s.mu.Unlock()
+		if template == "" {
+			template = "repo://{owner}/{name}"
+		}
+		return reply(`{"resultType":"complete","resourceTemplates":[{"name":"t","uriTemplate":` + string(quoted(template)) + `}],"ttlMs":60000,"cacheScope":"private"}`)
 	case mcpwire.MethodCallTool:
 		return s.call(req, reply)
 	case mcpwire.MethodGetPrompt:
@@ -93,7 +129,7 @@ func (s *fakeService) page(req mcpwire.Message, field string, names []string, it
 	for _, n := range names[start:end] {
 		items = append(items, item(n))
 	}
-	out := `{"resultType":"complete","` + field + `":[` + strings.Join(items, ",") + `],"ttlMs":` + fmt.Sprint(s.ttlMS) + `,"cacheScope":"private"`
+	out := `{"resultType":"complete","` + field + `":[` + strings.Join(items, ",") + `],"ttlMs":` + fmt.Sprint(s.ttlMS) + `,"cacheScope":"private"` + s.pageExtra
 	if end < len(names) {
 		out += `,"nextCursor":"c` + fmt.Sprint(end) + `"`
 	}
@@ -132,6 +168,14 @@ func (s *fakeService) listen(ctx context.Context, req mcpwire.Message, id json.R
 	if err := emit([]byte(`{"jsonrpc":"2.0","method":"notifications/subscriptions/acknowledged","params":{"notifications":`+ack+`,`+sub+`}}`), false); err != nil {
 		return err
 	}
+	if s.endAfterAck {
+		return emit([]byte(`{"jsonrpc":"2.0","id":`+string(id)+`,"result":{"resultType":"complete","_meta":{"io.modelcontextprotocol/subscriptionId":`+string(id)+`}}}`), true)
+	}
+	if s.afterAck != "" {
+		if err := emit([]byte(strings.ReplaceAll(s.afterAck, "SUB", sub)), false); err != nil {
+			return err
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -157,18 +201,79 @@ func (s *fakeService) lastCall() json.RawMessage {
 }
 
 type fakeCatalog struct {
-	mu      sync.Mutex
-	entries map[string][]CatalogEntry
-	fail    map[string]error
+	mu          sync.Mutex
+	entries     map[string][]CatalogEntry
+	fail        map[string]error
+	scopes      map[string]string
+	unsupported bool
+	watchers    map[string][]func(ListingChange)
+	lookups     int
 }
 
-func (c *fakeCatalog) Services(_ context.Context, hostID string) ([]CatalogEntry, error) {
+func (c *fakeCatalog) Services(_ context.Context, hostID string) (HostCatalog, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.lookups++
 	if err := c.fail[hostID]; err != nil {
-		return nil, err
+		return HostCatalog{}, err
 	}
-	return c.entries[hostID], nil
+	scope := c.scopes[hostID]
+	if scope == "" {
+		scope = "scope-1"
+	}
+	return HostCatalog{Scope: scope, Entries: append([]CatalogEntry(nil), c.entries[hostID]...)}, nil
+}
+
+func (c *fakeCatalog) Watch(ctx context.Context, hostID string, changed func(ListingChange)) error {
+	c.mu.Lock()
+	if c.unsupported {
+		c.mu.Unlock()
+		return ErrWatchUnsupported
+	}
+	c.watchers[hostID] = append(c.watchers[hostID], changed)
+	c.mu.Unlock()
+	<-ctx.Done()
+	return nil
+}
+
+// publish advances a service's listing revision and tells the watchers.
+func (c *fakeCatalog) publish(t *testing.T, hostID, serviceID string) {
+	t.Helper()
+	c.mu.Lock()
+	var change ListingChange
+	for i, e := range c.entries[hostID] {
+		if e.ServiceID == serviceID {
+			c.entries[hostID][i].ListingRevision += "+"
+			change = ListingChange{ServiceID: serviceID, Token: c.entries[hostID][i].ListingRevision}
+		}
+	}
+	watchers := slices.Clone(c.watchers[hostID])
+	c.mu.Unlock()
+	for _, w := range watchers {
+		w(change)
+	}
+}
+
+func (c *fakeCatalog) watching(hostID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.watchers[hostID]) > 0
+}
+
+func (c *fakeCatalog) setScope(hostID, scope string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.scopes[hostID] = scope
+}
+
+func (c *fakeCatalog) setRevision(hostID, serviceID string, revision int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, e := range c.entries[hostID] {
+		if e.ServiceID == serviceID {
+			c.entries[hostID][i].Revision = revision
+		}
+	}
 }
 
 func (c *fakeCatalog) setFail(hostID string, err error) {
@@ -203,6 +308,9 @@ type harness struct {
 	store    *Store
 	catalog  *fakeCatalog
 	services map[routeKey]*fakeService
+	cache    ListingCache
+	hosted   bool
+	refresh  time.Duration
 	now      time.Time
 	mu       sync.Mutex
 }
@@ -221,7 +329,7 @@ func (h *harness) advance(d time.Duration) {
 
 func newHarness(t *testing.T, services ...*fakeService) *harness {
 	t.Helper()
-	h := &harness{t: t, store: NewStore(t.TempDir()), catalog: &fakeCatalog{entries: map[string][]CatalogEntry{}, fail: map[string]error{}},
+	h := &harness{t: t, store: NewStore(t.TempDir()), catalog: &fakeCatalog{entries: map[string][]CatalogEntry{}, fail: map[string]error{}, scopes: map[string]string{}, watchers: map[string][]func(ListingChange){}},
 		services: map[routeKey]*fakeService{}, now: time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)}
 	var sels []Selection
 	for i, s := range services {
@@ -234,8 +342,8 @@ func newHarness(t *testing.T, services ...*fakeService) *harness {
 		}
 		sel := Selection{Alias: s.name, HostID: testHostID(t, byte(10*(i+1))), ServiceID: testServiceID(byte(i + 1)), ServiceName: s.name, Include: []string{}, Exclude: []string{}}
 		sels = append(sels, sel)
-		h.services[routeKey{sel.HostID, sel.ServiceID}] = s
-		h.catalog.entries[sel.HostID] = append(h.catalog.entries[sel.HostID], CatalogEntry{ServiceID: sel.ServiceID, Name: s.name, Revision: 1, State: "ready"})
+		h.services[keyOf(sel)] = s
+		h.catalog.entries[sel.HostID] = append(h.catalog.entries[sel.HostID], CatalogEntry{ServiceID: sel.ServiceID, Name: s.name, Revision: 1, ListingRevision: "1.e.0", State: "ready"})
 	}
 	if _, err := h.store.Update(context.Background(), nil, func(f *File) error {
 		f.Profiles["dev"] = Profile{Native: []string{"hosts"}, Services: sels}
@@ -243,18 +351,45 @@ func newHarness(t *testing.T, services ...*fakeService) *harness {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	h.hosted = true
+	h.open()
+	return h
+}
+
+// open starts a fresh gateway frontend over the same profile, catalog and
+// services, as a newly started `mesh mcp --profile` would be.
+func (h *harness) open() {
 	gw, err := New(Options{
-		Profile: "dev", Store: h.store, Native: fakeNative{names: []string{"mesh_hosts_list", "mesh_skill"}}, Catalog: h.catalog,
-		Upstream: func(sel Selection) Upstream {
-			return h.services[routeKey{sel.HostID, sel.ServiceID}]
+		Profile: "dev", Store: h.store, Native: fakeNative{names: []string{"mesh_hosts_list", "mesh_skill"}}, Catalog: h.catalog, Hosted: h.hosted,
+		Upstream: func(sel Selection, expect *Expect) Upstream {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			s := h.services[keyOf(sel)]
+			if s == nil {
+				return failingUpstream{}
+			}
+			s.setExpect(expect)
+			return s
 		},
-		CursorSecret: []byte("caller"), Now: h.clock, ListenSetup: 300 * time.Millisecond, ProfileEvery: 20 * time.Millisecond, RefreshEvery: time.Hour,
+		Cache: h.cache, CursorSecret: []byte("caller"), Now: h.clock, ListenSetup: time.Second, ProfileEvery: 20 * time.Millisecond, RefreshEvery: h.refreshEvery(),
 	})
 	if err != nil {
-		t.Fatal(err)
+		h.t.Fatal(err)
 	}
 	h.gw = gw
-	return h
+}
+
+func (h *harness) refreshEvery() time.Duration {
+	if h.refresh == 0 {
+		return time.Hour
+	}
+	return h.refresh
+}
+
+type failingUpstream struct{}
+
+func (failingUpstream) Forward(context.Context, mcpwire.Message, transport.InboundByteBudget, func([]byte, bool) error) error {
+	return &mcpconnect.RouteFailure{Code: agentapi.ServiceNotFound, Message: "no such instance"}
 }
 
 func (h *harness) profile() Profile {
@@ -607,7 +742,7 @@ func TestGatewayServiceReplacementGetsNewNames(t *testing.T) {
 	if got := names(t, h.do("2", mcpwire.MethodListTools, ""), "tools", "name"); len(got) != 2 || h.gw.Statuses()[0].State != agentapi.GatewayNotFound {
 		t.Fatalf("removed service still listed: %v %+v", got, h.gw.Statuses())
 	}
-	h.services[routeKey{old.HostID, replacement}] = svc
+	h.services[routeKey{old.HostID, replacement, ""}] = svc
 	if _, err := h.store.Update(context.Background(), nil, func(f *File) error {
 		p := f.Profiles["dev"]
 		p.Services[0].ServiceID = replacement
@@ -839,15 +974,9 @@ func TestGatewayIdentityChangeMapsToRouteCode(t *testing.T) {
 
 // Statuses returns the gateway's view of each entry of the current profile.
 func (g *Gateway) Statuses() []Status {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	out := make([]Status, 0, len(g.profile.Services))
-	for _, sel := range g.profile.Services {
-		st, ok := g.statuses[routeKey{sel.HostID, sel.ServiceID}]
-		if !ok {
-			st = Status{Alias: sel.Alias, HostID: sel.HostID, ServiceID: sel.ServiceID, Name: sel.ServiceName, State: agentapi.GatewayStopped}
-		}
-		out = append(out, st)
+	_, profile, err := g.current()
+	if err != nil {
+		return nil
 	}
-	return out
+	return g.routeStatuses(profile)
 }

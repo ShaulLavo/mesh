@@ -136,16 +136,27 @@ func DecodeURI(uri string, template bool) (hostID, serviceID, original string, e
 	if !ok1 || !ok2 || !hostOK || !serviceOK || original == "" {
 		return "", "", "", fmt.Errorf("%w: %q", ErrUnknownName, uri)
 	}
-	if !template && !absoluteURI(original) {
-		return "", "", "", fmt.Errorf("%w: %q does not wrap an absolute URI", ErrUnknownName, uri)
+	if !validResourceURI(original, template) {
+		return "", "", "", fmt.Errorf("%w: %q does not wrap a valid resource URI", ErrUnknownName, uri)
 	}
 	return base64.RawURLEncoding.EncodeToString(host), hex.EncodeToString(service), original, nil
 }
 
-// absoluteURI checks the RFC 3986 scheme and rejects whitespace and control
-// characters. It deliberately does not reparse the rest, so an upstream's
-// own encoding (such as %2F in an authority) round-trips untouched.
-func absoluteURI(uri string) bool {
+// validResourceURI checks an upstream resource URI or URI template without
+// changing its spelling: an RFC 3986 scheme (a template may also start with
+// an expression), no whitespace or control characters, well-formed percent
+// escapes outside template expressions, and balanced expressions.
+func validResourceURI(uri string, template bool) bool {
+	if uri == "" || strings.ContainsFunc(uri, func(r rune) bool { return r <= ' ' || r == 0x7f }) {
+		return false
+	}
+	if !(template && uri[0] == '{') && !validScheme(uri) {
+		return false
+	}
+	return validEscapes(uri, template)
+}
+
+func validScheme(uri string) bool {
 	scheme, _, ok := strings.Cut(uri, ":")
 	if !ok || scheme == "" || !isAlpha(scheme[0]) {
 		return false
@@ -156,7 +167,34 @@ func absoluteURI(uri string) bool {
 			return false
 		}
 	}
-	return !strings.ContainsFunc(uri, func(r rune) bool { return r <= ' ' || r == 0x7f })
+	return true
+}
+
+// validEscapes walks the URI once, tracking template expressions.
+func validEscapes(uri string, template bool) bool {
+	depth := 0
+	for i := 0; i < len(uri); i++ {
+		switch {
+		case template && uri[i] == '{':
+			depth++
+		case template && uri[i] == '}':
+			depth--
+		case uri[i] == '%' && depth == 0 && !hexEscape(uri, i):
+			return false
+		}
+		if depth < 0 || depth > 1 {
+			return false
+		}
+	}
+	return depth == 0
+}
+
+func hexEscape(uri string, i int) bool {
+	return i+2 < len(uri) && isHex(uri[i+1]) && isHex(uri[i+2])
+}
+
+func isHex(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 func isAlpha(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }

@@ -544,23 +544,36 @@ func (a *application) runMCPProfileRepair(cmd *cobra.Command, flags mcpProfileFl
 	}
 	repair := agentapi.MCPProfileRepair{Profile: name, Alias: alias, HostID: entry.HostID, ServiceName: entry.ServiceName,
 		OldServiceID: entry.ServiceID, NewServiceID: view.ID, Revision: file.Revision}
+	if expected := flags.expected(cmd); expected != nil && *expected != file.Revision {
+		return profileUsage(operation, fmt.Errorf("%w: expected revision %d, file is at %d", mcpgateway.ErrConflict, *expected, file.Revision))
+	}
 	if confirm && view.ID != entry.ServiceID {
-		expected := flags.expected(cmd)
-		if expected == nil {
-			expected = &file.Revision
-		}
-		updated, err := store.Update(cmd.Context(), expected, func(f *mcpgateway.File) error {
-			current := f.Profiles[name]
-			current.Services[index].ServiceID, current.Services[index].Instance = view.ID, ""
-			f.Profiles[name] = current
-			return nil
-		})
+		updated, err := commitRepair(cmd.Context(), store, file.Revision, name, entry, view.ID)
 		if err != nil {
 			return profileUsage(operation, err)
 		}
 		repair.Confirmed, repair.Revision = true, updated.Revision
 	}
 	return a.writeRepair(cmd, flags.asJSON, confirm, repair)
+}
+
+// commitRepair rebinds exactly the entry read at revision: the write fails
+// unless the file is still at that revision and still holds that entry.
+func commitRepair(ctx context.Context, store *mcpgateway.Store, revision uint64, name string, entry mcpgateway.Selection, serviceID string) (mcpgateway.File, error) {
+	file, err := store.Update(ctx, &revision, func(f *mcpgateway.File) error {
+		current := f.Profiles[name]
+		index := slices.IndexFunc(current.Services, func(s mcpgateway.Selection) bool { return s.Alias == entry.Alias })
+		if index < 0 || current.Services[index].HostID != entry.HostID || current.Services[index].ServiceID != entry.ServiceID {
+			return fmt.Errorf("%w: entry %s changed since it was read", mcpgateway.ErrConflict, entry.Alias)
+		}
+		current.Services[index].ServiceID, current.Services[index].Instance = serviceID, ""
+		f.Profiles[name] = current
+		return nil
+	})
+	if err != nil {
+		return file, fmt.Errorf("repair %s: %w", entry.Alias, err)
+	}
+	return file, nil
 }
 
 func (a *application) writeRepair(cmd *cobra.Command, asJSON, confirm bool, repair agentapi.MCPProfileRepair) error {

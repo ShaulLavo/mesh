@@ -215,7 +215,7 @@ func TestCursorSignerBindsIdentity(t *testing.T) {
 	secret := make([]byte, 32)
 	_, _ = rand.Read(secret)
 	a, b := newCursorSigner(secret), newCursorSigner(secret)
-	c := pageCursor{Version: 1, Profile: "dev", Selection: "s", Method: "tools/list", Snapshot: "x", Offset: 200}
+	c := pageCursor{Version: 1, Profile: "dev", Revision: 7, Method: "tools/list", Snapshot: "x", Offset: 200}
 	token := a.sign(c)
 	if got, err := b.verify(token); err != nil || got != c {
 		t.Fatalf("a fresh frontend with the same identity rejected the cursor: %v", err)

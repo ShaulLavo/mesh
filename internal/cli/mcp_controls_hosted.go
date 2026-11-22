@@ -16,6 +16,11 @@ import (
 // hostedCatalog reads the hosted MCP catalog of hosts passively, scoped to
 // this frontend's caller, with the private catalog cache as fallback.
 func (c *mcpControls) hostedCatalog(ctx context.Context, hosts []HostRecord, timeout time.Duration) []agentapi.MCPCatalogService {
+	// Hosted servers are an application's resources; passive discovery
+	// without an identity never reads them as the whole account.
+	if c.caller == "" {
+		return []agentapi.MCPCatalogService{}
+	}
 	state, err := paths.StateDirPath()
 	if err != nil {
 		return nil
@@ -64,6 +69,9 @@ func (c *mcpControls) inspectHosted(ctx context.Context, host HostRecord, name s
 // LeaseService holds or releases one hosted instance through mcp.service.lease.
 func (c *mcpControls) LeaseService(ctx context.Context, req mcpnative.LeaseServiceRequest) (mcpnative.CallOutcome, error) {
 	const operation = "mcp.lease"
+	if c.caller == "" {
+		return c.identityRequiredOutcome(operation, ""), nil
+	}
 	hosts, err := LoadHosts()
 	if err != nil {
 		return mcpnative.CallOutcome{}, err

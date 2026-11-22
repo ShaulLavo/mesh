@@ -59,6 +59,7 @@ func (f *Frontend) Serve(ctx context.Context, in io.Reader, out io.Writer) error
 
 func (f *Frontend) handle(ctx context.Context, msg mcpwire.Message, responder *mcpnative.StdioResponder) {
 	var terminal []byte
+	ctx = WithRetire(ctx, responder.DropNotifications)
 	err := f.gateway.Forward(ctx, msg, responder.Budget(), func(raw []byte, last bool) error {
 		if last {
 			terminal = raw

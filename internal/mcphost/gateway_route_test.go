@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shaul/mesh/internal/mcpwire"
 )
@@ -154,4 +155,23 @@ func parseMessage(t *testing.T, raw string) mcpwire.Message {
 		t.Fatalf("parse %s: %v", raw, fault)
 	}
 	return m
+}
+
+// Review 13: a lease is keyed by the caller, so repeating a creation after a
+// lost reply returns the same lease instead of adding another.
+func TestRepeatedLeaseKeyReturnsTheSameLease(t *testing.T) {
+	f := newSupervisorFixture(t)
+	f.publish(t, Definition{Name: "repo", InstancePolicy: PolicyShared})
+	a := caller("a")
+	first, _, err := f.sup.Lease(t.Context(), a, Target{Service: "repo"}, "job-key", time.Hour, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, view, err := f.sup.Lease(t.Context(), a, Target{Service: "repo"}, "job-key", time.Hour, "")
+	if err != nil || again.ID != first.ID || view.Leases != 1 {
+		t.Fatalf("a repeated key made another lease: %+v %+v %v", again, view, err)
+	}
+	if _, _, err := f.sup.Lease(t.Context(), caller("b"), Target{Service: "repo"}, "job-key", time.Hour, ""); !errors.Is(err, ErrDenied) {
+		t.Fatalf("another caller reused the key: %v", err)
+	}
 }

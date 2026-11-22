@@ -15,8 +15,16 @@ import (
 	"github.com/shaul/mesh/internal/transport"
 )
 
-// MetaRoute is the Mesh-owned route metadata on every hosted entry.
-const MetaRoute = mcpconnect.MetaPrefix + "route"
+// Mesh-owned metadata keys of the gateway (PLAN section 2.6).
+const (
+	// MetaRoute is the route metadata on every hosted entry.
+	MetaRoute = mcpconnect.MetaPrefix + "route"
+	// MetaRoutes is the state of every selected route on each list page.
+	MetaRoutes = mcpconnect.MetaPrefix + "routes"
+	// MetaUpstreams carries each upstream's own page-level fields and
+	// metadata, which cannot be merged into one result.
+	MetaUpstreams = mcpconnect.MetaPrefix + "upstreams"
+)
 
 // Emit receives one MCP message for the downstream client. The last call
 // carries the terminal response.
@@ -34,20 +42,53 @@ type Native interface {
 // Upstream forwards one MCP request to a selected hosted service over H3.
 type Upstream = mcpconnect.Forwarder
 
+// Expect is the service state a request was resolved against. The owning
+// host refuses the request when the service moved on.
+type Expect struct {
+	Revision int64
+	Account  string
+}
+
 // CatalogEntry is one hosted service in a host's passive catalog.
 type CatalogEntry struct {
 	ServiceID string
 	Name      string
 	Revision  int64
+	Account   string
+	// ListingRevision changes whenever the owning host sees the service's
+	// listings change.
+	ListingRevision string
 	// State is the hosted service state: ready, stopped, starting,
 	// uncertain, incompatible or failed.
 	State string
 }
 
+// HostCatalog is one host's passive catalog as this caller sees it.
+type HostCatalog struct {
+	// Scope names the caller's authenticated scope on the host, grant
+	// incarnation included. Cached listings are bound to it.
+	Scope   string
+	Entries []CatalogEntry
+}
+
+// ListingChange is one listing revision a host published.
+type ListingChange struct {
+	ServiceID string
+	Account   string
+	Token     string
+}
+
+// ErrWatchUnsupported means a host cannot deliver listing revisions; the
+// gateway refreshes that host's listings itself.
+var ErrWatchUnsupported = errors.New("host cannot watch listing revisions")
+
 // Catalog reads one host's passive catalog. It never starts a service.
 // Errors are *mcpconnect.RouteFailure values carrying the host's code.
 type Catalog interface {
-	Services(ctx context.Context, hostID string) ([]CatalogEntry, error)
+	Services(ctx context.Context, hostID string) (HostCatalog, error)
+	// Watch delivers the host's listing revisions until ctx ends or the
+	// watch fails.
+	Watch(ctx context.Context, hostID string, changed func(ListingChange)) error
 }
 
 // Options configures one gateway frontend.
@@ -55,8 +96,12 @@ type Options struct {
 	Profile string
 	Store   *Store
 	Native  Native
-	// Upstream builds the H3 forwarder for one selection.
-	Upstream func(Selection) Upstream
+	// Hosted reports whether this frontend has a verified application
+	// identity. Without one, hosted routes are never used.
+	Hosted bool
+	// Upstream builds the H3 forwarder for one selection, resolved against
+	// expect when known.
+	Upstream func(sel Selection, expect *Expect) Upstream
 	Catalog  Catalog
 	// Cache persists listings for stale fallback across frontends.
 	Cache ListingCache
@@ -65,10 +110,10 @@ type Options struct {
 	ServerInfo   json.RawMessage
 	Now          func() time.Time
 	Log          func(string)
-	// ListenSetup bounds how long a listen waits for upstream acknowledgments.
+	// ListenSetup bounds the discovery and acknowledgments of a listen.
 	ListenSetup time.Duration
-	// RefreshEvery is the base interval for polling listings that have no
-	// upstream listener.
+	// RefreshEvery is the base interval for polling listings of hosts that
+	// cannot deliver listing revisions.
 	RefreshEvery time.Duration
 	// ProfileEvery is how often an active listen checks the profile file.
 	ProfileEvery time.Duration
@@ -76,27 +121,35 @@ type Options struct {
 
 // Gateway implements the aggregate stateless MCP entry for one profile. It
 // keeps only request state and caches; every request resolves its route
-// under the current profile file.
+// under the current profile file and the host's current authorization.
 type Gateway struct {
 	opts   Options
 	signer cursorSigner
 
 	mu        sync.Mutex
-	loaded    bool
-	file      File
-	profile   Profile
-	upstreams map[routeKey]Upstream
 	listings  map[listingKey]*Listing
+	retained  int
 	statuses  map[routeKey]Status
 	refreshMu map[listingKey]*sync.Mutex
 	starts    map[string]chan struct{}
+	// hostScope is the last scope each host reported for this caller, and
+	// hostGen fences saves started before a host's listings were retired.
+	hostScope map[string]string
+	hostGen   map[string]uint64
+	watches   *hostWatches
 }
 
-type routeKey struct{ host, service string }
+// routeKey names one route: a service, and the instance a profile pins.
+type routeKey struct{ host, service, instance string }
+
+func keyOf(sel Selection) routeKey { return routeKey{sel.HostID, sel.ServiceID, sel.Instance} }
 
 type listingKey struct {
 	route  routeKey
 	method string
+	// params digests the unowned list request parameters, which can change
+	// what an upstream lists.
+	params string
 }
 
 // New builds a gateway. It reads the profile on first use.
@@ -125,24 +178,43 @@ func New(opts Options) (*Gateway, error) {
 	if opts.Cache == nil {
 		opts.Cache = nopCache{}
 	}
-	return &Gateway{
+	g := &Gateway{
 		opts:      opts,
 		signer:    newCursorSigner(opts.CursorSecret),
-		upstreams: map[routeKey]Upstream{},
 		listings:  map[listingKey]*Listing{},
 		statuses:  map[routeKey]Status{},
 		refreshMu: map[listingKey]*sync.Mutex{},
 		starts:    map[string]chan struct{}{},
-	}, nil
+		hostScope: map[string]string{},
+		hostGen:   map[string]uint64{},
+	}
+	g.watches = newHostWatches(g)
+	return g, nil
 }
 
 type budgetKey struct{}
 
 // budgetOf returns the downstream request's byte budget, which every
-// upstream exchange made on its behalf is charged against.
+// upstream exchange and buffer made on its behalf is charged against.
 func budgetOf(ctx context.Context) transport.InboundByteBudget {
 	budget, _ := ctx.Value(budgetKey{}).(transport.InboundByteBudget)
 	return budget
+}
+
+type retireKey struct{}
+
+// WithRetire attaches the frontend's way to discard a stream's queued
+// notifications, used when the stream's authorization is retired.
+func WithRetire(ctx context.Context, retire func()) context.Context {
+	return context.WithValue(ctx, retireKey{}, retire)
+}
+
+func retireOf(ctx context.Context) func() {
+	retire, _ := ctx.Value(retireKey{}).(func())
+	if retire == nil {
+		return func() {}
+	}
+	return retire
 }
 
 // Methods are the requests the gateway serves.
@@ -176,7 +248,7 @@ func (g *Gateway) Forward(ctx context.Context, req mcpwire.Message, budget trans
 	}
 }
 
-// current returns the profile file, reloading it when it changed.
+// current returns the profile file as it is now.
 func (g *Gateway) current() (File, Profile, error) {
 	file, err := g.opts.Store.Load()
 	if err != nil {
@@ -187,22 +259,26 @@ func (g *Gateway) current() (File, Profile, error) {
 		// A removed profile exposes only mesh_skill until it returns.
 		profile = Profile{Native: []string{}}
 	}
-	g.mu.Lock()
-	g.loaded, g.file, g.profile = true, file, profile
-	g.mu.Unlock()
 	return file, profile, nil
 }
 
-func (g *Gateway) upstream(sel Selection) Upstream {
-	key := routeKey{sel.HostID, sel.ServiceID}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if u, ok := g.upstreams[key]; ok {
-		return u
+// routes is the profile's hosted selections this frontend may use. Without
+// a verified application identity there are none, whatever the profile
+// says after an edit.
+func (g *Gateway) routes(profile Profile) []Selection {
+	if g.opts.Hosted {
+		return profile.Services
 	}
-	u := g.opts.Upstream(sel)
-	g.upstreams[key] = u
-	return u
+	for _, sel := range profile.Services {
+		g.setStatusCode(sel, agentapi.GatewayUnauthorized, agentapi.AccessDenied, identityRequired)
+	}
+	return nil
+}
+
+const identityRequired = "hosted services need a verified application identity; start mesh mcp with --identity NAME"
+
+func (g *Gateway) hostedRefused(sel Selection) error {
+	return &mcpconnect.RouteFailure{Code: agentapi.AccessDenied, Host: sel.HostID, Service: sel.Alias, Message: identityRequired}
 }
 
 // callNamed routes tools/call and prompts/get by exposed name.
@@ -307,19 +383,48 @@ func rewriteRequest(req mcpwire.Message, path []string, value json.RawMessage) (
 	return msg, nil
 }
 
+// resolveExpect binds a call to the service state the gateway resolved: the
+// one its current listing came from, or the host's catalog now.
+func (g *Gateway) resolveExpect(ctx context.Context, sel Selection) (*Expect, error) {
+	g.mu.Lock()
+	scope := g.hostScope[sel.HostID]
+	for key, l := range g.listings {
+		if key.route == keyOf(sel) && scope != "" && l.Scope == scope {
+			g.mu.Unlock()
+			return &Expect{Revision: l.Revision, Account: l.Account}, nil
+		}
+	}
+	g.mu.Unlock()
+	_, entry, err := newCatalogMemo(g).lookup(ctx, sel)
+	if err != nil {
+		return nil, err
+	}
+	return &Expect{Revision: entry.Revision, Account: entry.Account}, nil
+}
+
 // forward sends one request to its owning host and rewrites resource
 // identities and server identity in what comes back.
 func (g *Gateway) forward(ctx context.Context, sel Selection, req mcpwire.Message, emit Emit) error {
+	if !g.opts.Hosted {
+		return g.hostedRefused(sel)
+	}
+	expect, err := g.resolveExpect(ctx, sel)
+	if err != nil {
+		return g.routeError(sel, err)
+	}
 	rewriter := uriRewriter{hostID: sel.HostID, serviceID: sel.ServiceID}
-	err := g.upstream(sel).Forward(ctx, req, budgetOf(ctx), func(raw []byte, terminal bool) error {
+	err = g.opts.Upstream(sel, expect).Forward(ctx, req, budgetOf(ctx), func(raw []byte, terminal bool) error {
 		var err error
 		if terminal {
 			raw, err = g.terminal(req, sel, raw, rewriter)
 		} else {
 			raw, err = rewriter.notification(raw)
 		}
+		if err == nil && len(raw) > mcpwire.MaxMessage {
+			err = mcpwire.ErrTooLarge
+		}
 		if err != nil {
-			return g.failure(agentapi.ServiceFailed, false, sel.HostID, sel.ServiceID, err)
+			return g.failure(agentapi.ServiceFailed, false, sel.HostID, sel.Alias, err)
 		}
 		return emit(raw, terminal)
 	})
@@ -327,6 +432,7 @@ func (g *Gateway) forward(ctx context.Context, sel Selection, req mcpwire.Messag
 }
 
 func (g *Gateway) terminal(req mcpwire.Message, sel Selection, raw []byte, rewriter uriRewriter) ([]byte, error) {
+	g.observeReplyError(sel, raw)
 	// A host's Mesh failure inside tools/call is a tool execution error the
 	// model can act on (section 2.4).
 	if converted, matched, err := mcpconnect.TranslateHostToolError(req, raw, sel.HostID, sel.Alias, g.opts.ServerInfo); matched || err != nil {
@@ -345,10 +451,18 @@ func (g *Gateway) terminal(req mcpwire.Message, sel Selection, raw []byte, rewri
 	if err != nil {
 		return nil, fmt.Errorf("rewrite server identity: %w", err)
 	}
-	if len(raw) > mcpwire.MaxMessage {
-		return nil, mcpwire.ErrTooLarge
-	}
 	return raw, nil
+}
+
+// observeReplyError applies what a host's in-band Mesh error says about the
+// route, so a denial retires protected listings like any other.
+func (g *Gateway) observeReplyError(sel Selection, raw []byte) {
+	code, ok := stringMember(raw, "error", "data", "meshCode")
+	if !ok {
+		return
+	}
+	message, _ := stringMember(raw, "error", "message")
+	g.observeFailure(sel, &mcpconnect.RouteFailure{Code: agentapi.Code(code), Host: sel.HostID, Service: sel.Alias, Message: message})
 }
 
 // routeError gives a hosted failure its gateway code and records what it
@@ -360,7 +474,7 @@ func (g *Gateway) routeError(sel Selection, err error) error {
 	var rf *mcpconnect.RouteFailure
 	if !errors.As(err, &rf) {
 		if errors.Is(err, mcpwire.ErrTooLarge) {
-			return g.failure(agentapi.MCPMessageTooLarge, false, sel.HostID, sel.ServiceID, err)
+			return g.failure(agentapi.MCPMessageTooLarge, false, sel.HostID, sel.Alias, err)
 		}
 		return err
 	}
@@ -398,12 +512,12 @@ func (g *Gateway) completeReply(req mcpwire.Message, result any, ttl time.Durati
 	return reply, nil
 }
 
-func (g *Gateway) instructions(profile Profile) string {
+func (g *Gateway) instructions(routes []Selection) string {
 	var b strings.Builder
 	b.WriteString("Mesh gateway profile " + g.opts.Profile + ". Call mesh_skill to read Mesh usage instructions before acting on a host.")
-	if len(profile.Services) > 0 {
-		aliases := make([]string, 0, len(profile.Services))
-		for _, s := range profile.Services {
+	if len(routes) > 0 {
+		aliases := make([]string, 0, len(routes))
+		for _, s := range routes {
 			aliases = append(aliases, s.Alias)
 		}
 		b.WriteString(" Hosted services: " + strings.Join(aliases, ", ") + ". Their tools and prompts use h_ names; their resources use mesh-mcp:// URIs.")

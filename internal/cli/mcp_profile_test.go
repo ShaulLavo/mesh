@@ -62,3 +62,42 @@ func TestParseNativeGroups(t *testing.T) {
 		t.Fatal("an unknown group was accepted")
 	}
 }
+
+// Review 11: repair commits only against the revision and entry it read; a
+// second writer in between makes it fail without touching another entry.
+func TestRepairCommitsTheEntryItRead(t *testing.T) {
+	dir := t.TempDir()
+	writer := mcpgateway.NewStore(dir)
+	other := mcpgateway.NewStore(dir)
+	host := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+	a := profileSelection("a", host, "00000000000000000000000000000001")
+	b := profileSelection("b", host, "00000000000000000000000000000002")
+	f, err := writer.Update(t.Context(), nil, func(f *mcpgateway.File) error {
+		f.Profiles["dev"] = mcpgateway.Profile{Services: []mcpgateway.Selection{a, b}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := f.Revision
+	if _, err := other.Update(t.Context(), nil, func(f *mcpgateway.File) error {
+		p := f.Profiles["dev"]
+		p.Services = []mcpgateway.Selection{b, a}
+		f.Profiles["dev"] = p
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := commitRepair(t.Context(), writer, read, "dev", a, "00000000000000000000000000000009"); !errors.Is(err, mcpgateway.ErrConflict) {
+		t.Fatalf("a repair over another writer's change: %v", err)
+	}
+	current, _ := writer.Load()
+	if _, err := commitRepair(t.Context(), writer, current.Revision, "dev", a, "00000000000000000000000000000009"); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := writer.Load()
+	p := final.Profiles["dev"]
+	if p.Services[0].ServiceID != b.ServiceID || p.Services[1].ServiceID != "00000000000000000000000000000009" {
+		t.Fatalf("repair touched the wrong entry: %+v", p.Services)
+	}
+}

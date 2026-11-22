@@ -18,12 +18,12 @@ var errBadCursor = errors.New("invalid pagination cursor")
 type pageCursor struct {
 	Version int    `json:"v"`
 	Profile string `json:"p"`
-	// Selection digests the profile entry, so a profile change fails the
-	// cursor while an hx_ allocation elsewhere in the file does not.
-	Selection string `json:"r"`
-	Method    string `json:"m"`
-	Snapshot  string `json:"s"`
-	Offset    int    `json:"o"`
+	// Revision is the profiles file's monotonic revision, so any edit,
+	// even one later reverted, fails the cursor.
+	Revision uint64 `json:"r"`
+	Method   string `json:"m"`
+	Snapshot string `json:"s"`
+	Offset   int    `json:"o"`
 }
 
 type cursorSigner struct {

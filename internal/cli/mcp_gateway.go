@@ -139,8 +139,9 @@ func newMCPGateway(a *application, pool *mcpHostPool, store *mcpgateway.Store, p
 		Store:        store,
 		Native:       native,
 		Upstream:     gatewayUpstream(pool, hosts, caller),
+		Hosted:       caller != "",
 		Catalog:      &gatewayCatalog{pool: pool, hosts: hosts, caller: caller},
-		Cache:        mcpgateway.NewFileCache(filepath.Join(state, mcpGatewayCacheDir), scope, a.dependencies.Now),
+		Cache:        mcpgateway.NewFileCache(filepath.Join(state, mcpGatewayCacheDir), scope),
 		CursorSecret: secret,
 		ServerInfo:   serverInfo,
 		Now:          a.dependencies.Now,
@@ -174,24 +175,40 @@ func mcpCallerScopeFor(caller protocol.CallerCredential, localHostID string) str
 	return "app:" + string(derived)
 }
 
-func gatewayUpstream(pool *mcpHostPool, hosts gatewayHosts, caller protocol.CallerCredential) func(mcpgateway.Selection) mcpgateway.Upstream {
-	return func(sel mcpgateway.Selection) mcpgateway.Upstream {
+// gatewayUpstream builds the H3 forwarder for one call: by exact service ID,
+// bound to the revision and account the gateway resolved, and always with
+// the frontend's verified application credential.
+func gatewayUpstream(pool *mcpHostPool, hosts gatewayHosts, caller protocol.CallerCredential) func(mcpgateway.Selection, *mcpgateway.Expect) mcpgateway.Upstream {
+	return func(sel mcpgateway.Selection, expect *mcpgateway.Expect) mcpgateway.Upstream {
 		instance, err := resolveMCPInstanceArg("mcp.serve", sel.Instance, sel.HostID)
 		if err != nil {
 			instance = sel.Instance
 		}
+		route := mcpframe.Route{Service: sel.ServiceID, Instance: instance, Caller: caller, ExactID: true}
+		if expect != nil {
+			route.Expect = &mcpframe.RouteExpect{Revision: expect.Revision, Account: expect.Account}
+		}
 		return &mcpconnect.H3Forwarder{
-			Open: func(ctx context.Context, listen bool) (mcpconnect.Stream, error) {
-				host, err := hosts.lookup(sel.HostID)
-				if err != nil {
-					return nil, err
-				}
-				return pool.OpenMCPStream(ctx, host, listen)
-			},
-			Route:    mcpframe.Route{Service: sel.ServiceID, Instance: instance, Caller: caller},
+			Open:     gatewayOpener(pool, hosts, caller, sel.HostID),
+			Route:    route,
 			HostID:   sel.HostID,
 			Classify: classifyGatewayTransportError,
 		}
+	}
+}
+
+// gatewayOpener opens H3 streams to one host, refusing to without the
+// frontend's verified application credential.
+func gatewayOpener(pool *mcpHostPool, hosts gatewayHosts, caller protocol.CallerCredential, hostID string) mcpconnect.Opener {
+	return func(ctx context.Context, listen bool) (mcpconnect.Stream, error) {
+		if caller == "" {
+			return nil, &mcpconnect.RouteFailure{Code: agentapi.AccessDenied, Host: hostID, Message: "hosted services need a verified application identity"}
+		}
+		host, err := hosts.lookup(hostID)
+		if err != nil {
+			return nil, err
+		}
+		return pool.OpenMCPStream(ctx, host, listen)
 	}
 }
 
@@ -210,38 +227,51 @@ type gatewayCatalog struct {
 	caller protocol.CallerCredential
 }
 
-func (c *gatewayCatalog) Services(ctx context.Context, hostID string) ([]mcpgateway.CatalogEntry, error) {
+func (c *gatewayCatalog) Services(ctx context.Context, hostID string) (mcpgateway.HostCatalog, error) {
 	host, err := c.hosts.lookup(hostID)
 	if err != nil {
-		return nil, err
+		return mcpgateway.HostCatalog{}, err
 	}
-	views, err := fetchMCPCatalogViews(ctx, c.pool, host, c.caller)
+	reply, err := fetchMCPCatalog(ctx, c.pool, host, c.caller)
 	if err != nil {
-		code, retryable := classifyGatewayTransportError(err)
-		return nil, &mcpconnect.RouteFailure{Code: code, Retryable: retryable, Host: hostID, Message: agentapi.CleanMessage(err.Error()), Err: err}
+		return mcpgateway.HostCatalog{}, gatewayFailure(hostID, err)
 	}
-	entries := make([]mcpgateway.CatalogEntry, 0, len(views))
-	for _, v := range views {
-		entries = append(entries, mcpgateway.CatalogEntry{ServiceID: v.ID, Name: v.Name, Revision: v.Revision, State: classifyMCPServiceState(v)})
+	catalog := mcpgateway.HostCatalog{Scope: reply.Scope, Entries: make([]mcpgateway.CatalogEntry, 0, len(reply.Services))}
+	for _, v := range reply.Services {
+		catalog.Entries = append(catalog.Entries, mcpgateway.CatalogEntry{ServiceID: v.ID, Name: v.Name, Revision: v.Revision, Account: v.AccountLabel,
+			ListingRevision: v.ListingRevision, State: classifyMCPServiceState(v)})
 	}
-	return entries, nil
+	return catalog, nil
 }
 
-// fetchMCPCatalogViews reads mcp.catalog from one host, retrying once after
-// a transport failure as a passive read may.
+func gatewayFailure(hostID string, err error) error {
+	code, retryable := classifyGatewayTransportError(err)
+	return &mcpconnect.RouteFailure{Code: code, Retryable: retryable, Host: hostID, Message: agentapi.CleanMessage(err.Error()), Err: err}
+}
+
+type mcpCatalogReply struct {
+	Scope    string                   `json:"scope"`
+	Services []mcphost.CatalogService `json:"services"`
+}
+
 func fetchMCPCatalogViews(ctx context.Context, pool *mcpHostPool, host HostRecord, caller protocol.CallerCredential) ([]mcphost.CatalogService, error) {
+	reply, err := fetchMCPCatalog(ctx, pool, host, caller)
+	return reply.Services, err
+}
+
+// fetchMCPCatalog reads mcp.catalog from one host, retrying once after a
+// transport failure as a passive read may.
+func fetchMCPCatalog(ctx context.Context, pool *mcpHostPool, host HostRecord, caller protocol.CallerCredential) (mcpCatalogReply, error) {
 	resp, _, err := pool.ExchangeMCP(ctx, host, protocol.MCPServiceRequest{Type: protocol.TypeMCPCatalog, Caller: caller}, true)
 	if err != nil {
-		return nil, err
+		return mcpCatalogReply{}, err
 	}
 	if resp.Type == protocol.TypeError {
-		return nil, typedControlError(resp.ErrorCode, protocol.TypeMCPCatalog, resp.Message, resp.Message)
+		return mcpCatalogReply{}, typedControlError(resp.ErrorCode, protocol.TypeMCPCatalog, resp.Message, resp.Message)
 	}
-	var payload struct {
-		Services []mcphost.CatalogService `json:"services"`
+	var reply mcpCatalogReply
+	if err := json.Unmarshal(resp.Result, &reply); err != nil {
+		return mcpCatalogReply{}, fmt.Errorf("decode mcp.catalog reply from %s: %w", host.ID, err)
 	}
-	if err := json.Unmarshal(resp.Result, &payload); err != nil {
-		return nil, fmt.Errorf("decode mcp.catalog reply from %s: %w", host.ID, err)
-	}
-	return payload.Services, nil
+	return reply, nil
 }

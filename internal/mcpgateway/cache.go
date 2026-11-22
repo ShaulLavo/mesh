@@ -11,37 +11,49 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // ListingCache persists complete listings privately so a fresh frontend can
-// serve stale entries while a host is unreachable.
+// reuse them, and serve them as stale while a host is unreachable. Every
+// record carries the host scope and service state it was fetched under; the
+// gateway checks them against the host before use.
 type ListingCache interface {
-	Load(hostID, serviceID, method string) (*Listing, bool)
+	// Load returns a record even past its 24-hour window, so the gateway
+	// can report it as expired.
+	Load(hostID, serviceID, instance, method, params string) (*Listing, bool)
 	Save(l *Listing)
+	// DropHost removes this caller's records of one host.
 	DropHost(hostID string)
 	DropRoute(hostID, serviceID string)
+	// Expire makes a route's records revalidate on next use; no methods
+	// means all of them.
+	Expire(hostID, serviceID, instance string, methods ...string)
 }
 
 type nopCache struct{}
 
-func (nopCache) Load(string, string, string) (*Listing, bool) { return nil, false }
-func (nopCache) Save(*Listing)                                {}
-func (nopCache) DropHost(string)                              {}
-func (nopCache) DropRoute(string, string)                     {}
+func (nopCache) Load(string, string, string, string, string) (*Listing, bool) { return nil, false }
+func (nopCache) Save(*Listing)                                                {}
+func (nopCache) DropHost(string)                                              {}
+func (nopCache) DropRoute(string, string)                                     {}
+func (nopCache) Expire(string, string, string, ...string)                     {}
 
 // Section 2.5: at most 32 MiB of cached metadata per frontend state.
-const maxCacheBytes = 32 << 20
+const (
+	maxCacheBytes = 32 << 20
+	cacheLockName = ".lock"
+)
 
 // FileCache keeps one private 0600 file per listing under a 0700 directory.
-// Its scope binds entries to the pinned host identity and application
-// caller, so another identity or a re-pinned host never reads them.
+// Its scope binds records to the pinned host identity and application
+// caller, so another identity or a re-pinned host never reads them, and a
+// drop for one caller leaves other callers' records alone.
 type FileCache struct {
 	dir   string
 	scope func(hostID string) string
-	now   func() time.Time
-	mu    sync.Mutex
 }
 
 type cacheRecord struct {
@@ -51,22 +63,20 @@ type cacheRecord struct {
 
 // NewFileCache stores listings in dir. scope returns the caller and pin
 // scope for a host; an empty scope disables caching for that host.
-func NewFileCache(dir string, scope func(hostID string) string, now func() time.Time) *FileCache {
-	if now == nil {
-		now = time.Now
-	}
-	return &FileCache{dir: dir, scope: scope, now: now}
+func NewFileCache(dir string, scope func(hostID string) string) *FileCache {
+	return &FileCache{dir: dir, scope: scope}
 }
 
-func (c *FileCache) name(scope, hostID, serviceID, method string) string {
-	sum := sha256.Sum256([]byte(scope + "\x00" + hostID + "\x00" + serviceID + "\x00" + method))
-	return hostTag(hostID) + "-" + hex.EncodeToString(sum[:16]) + ".json"
+func digest(parts ...string) string {
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(sum[:])
 }
 
-// hostTag lets DropHost find a host's files without reading them.
-func hostTag(hostID string) string {
-	sum := sha256.Sum256([]byte(hostID))
-	return hex.EncodeToString(sum[:6])
+// prefix names one caller's files of one host.
+func prefix(scope, hostID string) string { return digest(scope, hostID)[:16] + "-" }
+
+func (c *FileCache) name(scope, hostID, serviceID, instance, method, params string) string {
+	return prefix(scope, hostID) + digest(scope, hostID, serviceID, instance, method, params)[:32] + ".json"
 }
 
 func (c *FileCache) root(create bool) (*os.Root, error) {
@@ -89,17 +99,28 @@ func (c *FileCache) root(create bool) (*os.Root, error) {
 	return root, nil
 }
 
-func (c *FileCache) Load(hostID, serviceID, method string) (*Listing, bool) {
-	scope := c.scope(hostID)
-	if scope == "" {
-		return nil, false
-	}
-	root, err := c.root(false)
+// locked runs fn with the cache directory locked against other frontends,
+// so saves, evictions and drops never interleave.
+func (c *FileCache) locked(create bool, fn func(*os.Root)) {
+	root, err := c.root(create)
 	if err != nil {
-		return nil, false
+		return
 	}
 	defer func() { _ = root.Close() }()
-	file, err := root.Open(c.name(scope, hostID, serviceID, method))
+	lock, err := root.OpenFile(cacheLockName, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return
+	}
+	defer func() { _ = lock.Close() }()
+	if unix.Flock(int(lock.Fd()), unix.LOCK_EX) != nil {
+		return
+	}
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+	fn(root)
+}
+
+func readRecord(root *os.Root, name string) (*cacheRecord, bool) {
+	file, err := root.Open(name)
 	if err != nil {
 		return nil, false
 	}
@@ -109,35 +130,22 @@ func (c *FileCache) Load(hostID, serviceID, method string) (*Listing, bool) {
 		return nil, false
 	}
 	var rec cacheRecord
-	if json.Unmarshal(raw, &rec) != nil || rec.Scope != scope || rec.Listing == nil || rec.Listing.HostID != hostID ||
-		rec.Listing.ServiceID != serviceID || rec.Listing.Method != method || !rec.Listing.usable(c.now()) {
+	if json.Unmarshal(raw, &rec) != nil || rec.Listing == nil {
 		return nil, false
 	}
-	return rec.Listing, true
+	return &rec, true
 }
 
-func (c *FileCache) Save(l *Listing) {
-	scope := c.scope(l.HostID)
-	if scope == "" {
-		return
-	}
-	raw, err := json.Marshal(cacheRecord{Scope: scope, Listing: l})
+func writeRecord(root *os.Root, name string, rec *cacheRecord) {
+	raw, err := json.Marshal(rec)
 	if err != nil || len(raw) > maxCacheBytes {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	root, err := c.root(true)
-	if err != nil {
-		return
-	}
-	defer func() { _ = root.Close() }()
-	name := c.name(scope, l.HostID, l.ServiceID, l.Method)
 	evict(root, name, len(raw))
 	var suffix [6]byte
 	_, _ = rand.Read(suffix[:])
 	temp := "." + name + "." + hex.EncodeToString(suffix[:])
-	if err := root.WriteFile(temp, raw, 0o600); err != nil {
+	if root.WriteFile(temp, raw, 0o600) != nil {
 		return
 	}
 	if root.Rename(temp, name) != nil {
@@ -145,17 +153,41 @@ func (c *FileCache) Save(l *Listing) {
 	}
 }
 
+func (c *FileCache) Load(hostID, serviceID, instance, method, params string) (*Listing, bool) {
+	scope := c.scope(hostID)
+	if scope == "" {
+		return nil, false
+	}
+	var out *Listing
+	c.locked(false, func(root *os.Root) {
+		rec, ok := readRecord(root, c.name(scope, hostID, serviceID, instance, method, params))
+		l := rec.listingIf(ok, scope)
+		if l != nil && l.HostID == hostID && l.ServiceID == serviceID && l.Instance == instance && l.Method == method && l.Params == params {
+			out = l
+		}
+	})
+	return out, out != nil
+}
+
+func (rec *cacheRecord) listingIf(ok bool, scope string) *Listing {
+	if !ok || rec.Scope != scope {
+		return nil
+	}
+	return rec.Listing
+}
+
+func (c *FileCache) Save(l *Listing) {
+	scope := c.scope(l.HostID)
+	if scope == "" {
+		return
+	}
+	c.locked(true, func(root *os.Root) {
+		writeRecord(root, c.name(scope, l.HostID, l.ServiceID, l.Instance, l.Method, l.Params), &cacheRecord{Scope: scope, Listing: l})
+	})
+}
+
 // evict removes the oldest files until incoming bytes fit the budget.
 func evict(root *os.Root, replacing string, incoming int) {
-	dir, err := root.Open(".")
-	if err != nil {
-		return
-	}
-	entries, err := dir.ReadDir(-1)
-	_ = dir.Close()
-	if err != nil {
-		return
-	}
 	type sized struct {
 		name string
 		size int64
@@ -163,12 +195,12 @@ func evict(root *os.Root, replacing string, incoming int) {
 	}
 	var files []sized
 	total := int64(incoming)
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || !strings.HasSuffix(e.Name(), ".json") || e.Name() == replacing {
+	for _, name := range cacheFiles(root) {
+		info, err := root.Stat(name)
+		if err != nil || name == replacing {
 			continue
 		}
-		files = append(files, sized{e.Name(), info.Size(), info.ModTime()})
+		files = append(files, sized{name, info.Size(), info.ModTime()})
 		total += info.Size()
 	}
 	slices.SortFunc(files, func(a, b sized) int { return a.mod.Compare(b.mod) })
@@ -182,39 +214,54 @@ func evict(root *os.Root, replacing string, incoming int) {
 	}
 }
 
-func (c *FileCache) drop(prefix string, match func(name string) bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	root, err := c.root(false)
-	if err != nil {
-		return
-	}
-	defer func() { _ = root.Close() }()
+func cacheFiles(root *os.Root) []string {
 	dir, err := root.Open(".")
 	if err != nil {
-		return
+		return nil
 	}
 	names, _ := dir.Readdirnames(-1)
 	_ = dir.Close()
-	for _, name := range names {
-		if strings.HasPrefix(name, prefix) && match(name) {
-			_ = root.Remove(name)
-		}
-	}
+	return slices.DeleteFunc(names, func(n string) bool { return !strings.HasSuffix(n, ".json") || strings.HasPrefix(n, ".") })
 }
 
-func (c *FileCache) DropHost(hostID string) {
-	c.drop(hostTag(hostID)+"-", func(string) bool { return true })
-}
-
-func (c *FileCache) DropRoute(hostID, serviceID string) {
+// each runs fn on every record of this caller for one host.
+func (c *FileCache) each(hostID string, fn func(root *os.Root, name string, rec *cacheRecord)) {
 	scope := c.scope(hostID)
 	if scope == "" {
 		return
 	}
-	names := map[string]bool{}
-	for _, method := range []string{toolsKind.method, promptsKind.method, resourcesKind.method, templatesKind.method, "server/discover"} {
-		names[c.name(scope, hostID, serviceID, method)] = true
-	}
-	c.drop(hostTag(hostID)+"-", func(name string) bool { return names[name] })
+	mine := prefix(scope, hostID)
+	c.locked(false, func(root *os.Root) {
+		for _, name := range cacheFiles(root) {
+			if !strings.HasPrefix(name, mine) {
+				continue
+			}
+			if rec, ok := readRecord(root, name); ok && rec.Scope == scope {
+				fn(root, name, rec)
+			}
+		}
+	})
+}
+
+func (c *FileCache) DropHost(hostID string) {
+	c.each(hostID, func(root *os.Root, name string, _ *cacheRecord) { _ = root.Remove(name) })
+}
+
+func (c *FileCache) DropRoute(hostID, serviceID string) {
+	c.each(hostID, func(root *os.Root, name string, rec *cacheRecord) {
+		if rec.Listing.ServiceID == serviceID {
+			_ = root.Remove(name)
+		}
+	})
+}
+
+func (c *FileCache) Expire(hostID, serviceID, instance string, methods ...string) {
+	c.each(hostID, func(root *os.Root, name string, rec *cacheRecord) {
+		l := rec.Listing
+		if l.ServiceID != serviceID || l.Instance != instance || (len(methods) > 0 && !slices.Contains(methods, l.Method)) {
+			return
+		}
+		l.TTL = 0
+		writeRecord(root, name, rec)
+	})
 }

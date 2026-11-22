@@ -18,6 +18,9 @@ func (r uriRewriter) uri(raw json.RawMessage) (json.RawMessage, error) {
 	if err := json.Unmarshal(raw, &original); err != nil {
 		return nil, fmt.Errorf("gateway: resource URI is not a string: %w", err)
 	}
+	if !validResourceURI(original, false) {
+		return nil, fmt.Errorf("gateway: upstream sent a malformed resource URI %q", original)
+	}
 	encoded, err := EncodeURI(r.hostID, r.serviceID, original)
 	if err != nil {
 		return nil, err

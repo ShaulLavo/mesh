@@ -62,12 +62,12 @@ func hostedToolSpecs() []ToolSpec {
 		Operation: leaseOperation,
 		Group:     groupServices,
 		Description: "Hold or release one hosted MCP server instance for a renewable TTL of at most 24 hours, so an on-demand instance stays running for upstream work Mesh cannot see. " +
-			"Pass the same lease_id to renew; ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.",
-		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["host","service","ttl_seconds"],"properties":{` +
+			"lease_id is your key for the lease: repeating a call with the same key returns the same lease with the new TTL, and ttl_seconds 0 releases it. A lease naming a running native job of this caller ends with that job. Leases end when this application's device grant is retired.",
+		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["host","service","lease_id","ttl_seconds"],"properties":{` +
 			`"host":{"type":"string","description":"Machine name, exact host ID, or local."},` +
 			`"service":{"type":"string","description":"Hosted MCP server name or ID on that host."},` +
 			`"instance":{"type":"string","description":"Instance ID or mi1 handle; omit for this caller's default or the shared instance."},` +
-			`"lease_id":{"type":"string","description":"Existing lease to renew or release."},` +
+			`"lease_id":{"type":"string","pattern":"^[A-Za-z0-9._-]{1,64}$","description":"Caller-chosen lease key; the same key always names the same lease."},` +
 			`"job":{"type":"string","description":"Optional running native job ID that bounds the lease."},` +
 			`"ttl_seconds":{"type":"integer","minimum":0,"maximum":86400,"description":"Lease lifetime in seconds; 0 releases the lease."},` +
 			`"timeout_ms":{"type":"integer","minimum":100,"maximum":60000,"description":"Hard deadline in milliseconds (default 5000)."}}}`),
@@ -100,6 +100,9 @@ func handleServiceLease(ctx context.Context, controls Controls, raw json.RawMess
 	if err != nil {
 		return CallOutcome{}, err
 	}
+	if !validLeaseKey(args.LeaseID) {
+		return CallOutcome{}, invalidParam("lease_id must be 1 to 64 letters, digits, dots, underscores or hyphens")
+	}
 	if args.TTLSeconds == nil || *args.TTLSeconds < 0 || *args.TTLSeconds > maxLeaseSeconds {
 		return CallOutcome{}, invalidParam("ttl_seconds must be between 0 and %d", maxLeaseSeconds)
 	}
@@ -114,6 +117,18 @@ func handleServiceLease(ctx context.Context, controls Controls, raw json.RawMess
 	out, err := hosted.LeaseService(ctx, LeaseServiceRequest{Host: host, Service: service, Instance: strings.TrimSpace(args.Instance),
 		LeaseID: strings.TrimSpace(args.LeaseID), Job: strings.TrimSpace(args.Job), TTL: time.Duration(*args.TTLSeconds) * time.Second, Timeout: timeout})
 	return wrapControl("mesh_service_lease", out, err)
+}
+
+func validLeaseKey(key string) bool {
+	if key == "" || len(key) > 64 {
+		return false
+	}
+	for _, r := range key {
+		if !(r == '.' || r == '_' || r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+			return false
+		}
+	}
+	return true
 }
 
 func renderHostedData(b *strings.Builder, data any) {

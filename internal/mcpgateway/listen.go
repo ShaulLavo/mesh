@@ -19,11 +19,13 @@ import (
 // Section 7.4 bounds for one downstream listen.
 const (
 	maxPendingURIs  = 256
+	maxEarlyBytes   = 1 << 20
 	maxRefreshEvery = 5 * time.Minute
+	ackMethod       = "notifications/subscriptions/acknowledged"
+	updatedMethod   = "notifications/resources/updated"
 	// authorizationProbe bounds the catalog read that classifies a lost
 	// upstream listen.
 	authorizationProbe = 3 * time.Second
-	ackMethod          = "notifications/subscriptions/acknowledged"
 )
 
 var listChangedMethods = map[string]string{
@@ -40,6 +42,10 @@ type filter struct {
 	uris  []string
 }
 
+func (f filter) empty() bool {
+	return len(f.uris) == 0 && !slices.ContainsFunc(filterFlags, func(flag string) bool { return f.flags[flag] })
+}
+
 func parseListenFilter(raw json.RawMessage) (filter, error) {
 	f := filter{flags: map[string]bool{}}
 	fields, err := decodeObject(raw)
@@ -49,10 +55,11 @@ func parseListenFilter(raw json.RawMessage) (filter, error) {
 	for _, flag := range filterFlags {
 		f.flags[flag] = string(fields[flag]) == jsonTrue
 	}
-	if fields["resourceSubscriptions"] != nil {
-		if err := json.Unmarshal(fields["resourceSubscriptions"], &f.uris); err != nil {
-			return f, fmt.Errorf("resourceSubscriptions must be a list of URIs: %w", err)
-		}
+	if fields["resourceSubscriptions"] == nil {
+		return f, nil
+	}
+	if err := json.Unmarshal(fields["resourceSubscriptions"], &f.uris); err != nil {
+		return f, fmt.Errorf("resourceSubscriptions must be a list of URIs: %w", err)
 	}
 	return f, nil
 }
@@ -70,34 +77,58 @@ func (f filter) encode() map[string]any {
 	return out
 }
 
-// upstreamListen is one route's part of a downstream listen.
-type upstreamListen struct {
-	sel     Selection
-	caps    json.RawMessage
+type partState int
+
+const (
+	partPending partState = iota
+	partAccepted
+	partDeclined
+)
+
+// listenPart is one route's part of a downstream listen.
+type listenPart struct {
+	sel   Selection
+	caps  json.RawMessage
+	scope string
+	// request is what the upstream is asked for: the list-change filters it
+	// can deliver and the resource URIs that belong to it.
 	request filter
 	uris    map[string]string // original upstream URI -> downstream URI
 	cancel  context.CancelFunc
 	acked   chan filter
-	// ack is the upstream's acknowledged filter once collectAcks accepted it
-	// within the setup bound. Guarded by fanIn.mu.
-	ack *filter
+	// Guarded by fanIn.mu.
+	state partState
+	ack   filter
+	early []json.RawMessage
 }
 
-// fanIn delivers one downstream listen from its upstream parts, the profile
-// watcher and bounded listing refresh. Events are coalesced so a slow client
-// never stalls an upstream reader.
+func (p *listenPart) wants() bool { return !p.request.empty() }
+
+// fanIn delivers one downstream listen from its upstream parts, the hosts'
+// listing revisions (or bounded refresh where a host cannot deliver them)
+// and the profile watcher. Events are coalesced and charged to the shared
+// byte budget, so a slow client never stalls an upstream reader.
 type fanIn struct {
-	g       *Gateway
-	req     mcpwire.Message
-	emit    Emit
-	backed  filter
-	signal  chan struct{}
-	mu      sync.Mutex
-	kinds   map[string]bool
-	updates map[string]json.RawMessage
-	order   []string
-	ended   error
-	done    bool
+	g      *Gateway
+	req    mcpwire.Message
+	emit   Emit
+	retire func()
+	budget interface {
+		ReserveBytes(int) bool
+		ReleaseBytes(int)
+	}
+	backed filter
+	parts  []*listenPart
+	signal chan struct{}
+
+	mu        sync.Mutex
+	kinds     map[string]json.RawMessage
+	updates   map[string]json.RawMessage
+	order     []string
+	charged   int
+	pollHosts map[string]bool
+	ended     error
+	done      bool
 }
 
 func (g *Gateway) listen(ctx context.Context, req mcpwire.Message, profile Profile, emit Emit) error {
@@ -107,49 +138,60 @@ func (g *Gateway) listen(ctx context.Context, req mcpwire.Message, profile Profi
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	f := &fanIn{g: g, req: req, emit: emit, signal: make(chan struct{}, 1), kinds: map[string]bool{}, updates: map[string]json.RawMessage{}}
-	parts := g.planListen(ctx, req, profile, requested)
-	for _, part := range parts {
-		partCtx, partCancel := context.WithCancel(ctx)
-		part.cancel = partCancel
-		if !part.wants() {
-			close(part.acked)
-			continue
-		}
-		go f.runUpstream(partCtx, part)
-	}
-	f.backed = f.collectAcks(ctx, requested, parts)
+	f := &fanIn{g: g, req: req, emit: emit, retire: retireOf(ctx), budget: budgetOf(ctx), signal: make(chan struct{}, 1),
+		kinds: map[string]json.RawMessage{}, updates: map[string]json.RawMessage{}, pollHosts: map[string]bool{}}
+	defer f.releaseAll()
+	setup, setupCancel := context.WithTimeout(ctx, g.opts.ListenSetup)
+	prepared := f.prepare(ctx, setup, g.routes(profile), requested)
+	f.backed = f.collectAcks(setup, requested)
+	setupCancel()
+	prepared.Wait()
 	if err := f.send(ackMethod, map[string]any{"notifications": f.backed.encode()}); err != nil {
 		return err
 	}
-	polled := f.pollTargets(parts)
-	return f.loop(ctx, profile, parts, polled)
+	f.admitEarly()
+	f.watchHosts(ctx)
+	go f.poll(ctx)
+	return f.loop(ctx, profile)
 }
 
-// planListen splits the request into per-route upstream listens. A route
-// gets the list-change filters its upstream can deliver and the resource
-// URIs that belong to it.
-func (g *Gateway) planListen(ctx context.Context, req mcpwire.Message, profile Profile, requested filter) []*upstreamListen {
-	catalogs := newCatalogMemo(g.opts.Catalog)
-	parts := make([]*upstreamListen, 0, len(profile.Services))
-	for _, sel := range profile.Services {
-		part := &upstreamListen{sel: sel, request: filter{flags: map[string]bool{}}, uris: map[string]string{}, acked: make(chan filter, 1)}
-		part.caps = g.routeCapabilities(ctx, req, sel, catalogs)
-		for _, flag := range filterFlags {
-			if requested.flags[flag] && string(member(part.caps, capabilityForFlag(flag), keyListChanged)) == jsonTrue {
-				part.request.flags[flag] = true
-			}
-		}
-		for _, uri := range requested.uris {
-			hostID, serviceID, original, err := DecodeURI(uri, false)
-			if err == nil && hostID == sel.HostID && serviceID == sel.ServiceID {
-				part.uris[original] = uri
-				part.request.uris = append(part.request.uris, original)
-			}
-		}
-		parts = append(parts, part)
+// prepare resolves every route concurrently within the setup bound and
+// starts each route's upstream listen as soon as that route is resolved, so
+// one silent host neither holds the acknowledgment past the bound nor
+// delays the others.
+func (f *fanIn) prepare(ctx, setup context.Context, routes []Selection, requested filter) *sync.WaitGroup {
+	catalogs := newCatalogMemo(f.g)
+	f.parts = make([]*listenPart, len(routes))
+	var wg sync.WaitGroup
+	for i, sel := range routes {
+		partCtx, partCancel := context.WithCancel(ctx)
+		part := &listenPart{sel: sel, request: filter{flags: map[string]bool{}}, uris: map[string]string{}, acked: make(chan filter, 1), cancel: partCancel}
+		f.parts[i] = part
+		wg.Go(func() {
+			f.g.planPart(setup, f.req, part, requested, catalogs)
+			f.start(partCtx, part)
+		})
 	}
-	return parts
+	return &wg
+}
+
+func (g *Gateway) planPart(setup context.Context, req mcpwire.Message, part *listenPart, requested filter, catalogs *catalogMemo) {
+	sel := part.sel
+	part.caps = g.routeCapabilities(setup, req, sel, catalogs)
+	g.mu.Lock()
+	part.scope = g.hostScope[sel.HostID]
+	g.mu.Unlock()
+	for _, flag := range filterFlags {
+		part.request.flags[flag] = requested.flags[flag] && string(member(part.caps, capabilityForFlag(flag), keyListChanged)) == jsonTrue
+	}
+	for _, uri := range requested.uris {
+		hostID, serviceID, original, err := DecodeURI(uri, false)
+		if err != nil || hostID != sel.HostID || serviceID != sel.ServiceID {
+			continue
+		}
+		part.uris[original] = uri
+		part.request.uris = append(part.request.uris, original)
+	}
 }
 
 func capabilityForFlag(flag string) string {
@@ -163,33 +205,25 @@ func capabilityForFlag(flag string) string {
 	}
 }
 
-func (p *upstreamListen) wants() bool {
-	return len(p.request.uris) > 0 || slices.ContainsFunc(filterFlags, func(flag string) bool { return p.request.flags[flag] })
-}
-
-func (f *fanIn) acknowledged(p *upstreamListen, flag string) bool {
+// start runs a resolved part's upstream listen, unless the setup bound
+// already declined it.
+func (f *fanIn) start(ctx context.Context, part *listenPart) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return p.ack != nil && p.ack.flags[flag]
+	declined := part.state == partDeclined
+	f.mu.Unlock()
+	if declined || !part.wants() {
+		close(part.acked)
+		return
+	}
+	go f.runUpstream(ctx, part)
 }
 
-func (f *fanIn) acknowledgedURI(p *upstreamListen, uri string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return p.ack != nil && slices.Contains(p.ack.uris, uri)
-}
-
-func (f *fanIn) accepted(p *upstreamListen) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return p.ack != nil
-}
-
-// collectAcks waits within the setup bound. List-change filters are always
-// backed: the gateway watches its profile and refreshes listings whose
-// upstream did not acknowledge. Resource URIs are backed only when their
-// upstream accepted them.
-func (f *fanIn) collectAcks(ctx context.Context, requested filter, parts []*upstreamListen) filter {
+// collectAcks waits for the upstream acknowledgments within the same setup
+// bound as discovery. List-change filters are always backed: hosts publish
+// listing revisions, or the gateway refreshes, and it watches its profile.
+// Resource URIs are backed only when their upstream accepted them. An
+// upstream that acknowledged nothing is declined and never ends the listen.
+func (f *fanIn) collectAcks(setup context.Context, requested filter) filter {
 	backed := filter{flags: map[string]bool{}}
 	for _, flag := range filterFlags {
 		backed.flags[flag] = requested.flags[flag]
@@ -197,36 +231,53 @@ func (f *fanIn) collectAcks(ctx context.Context, requested filter, parts []*upst
 	if requested.uris != nil {
 		backed.uris = []string{}
 	}
-	setup, cancel := context.WithTimeout(ctx, f.g.opts.ListenSetup)
-	defer cancel()
-	for _, part := range parts {
-		var ack filter
-		ok := false
-		select {
-		case ack, ok = <-part.acked:
-		case <-setup.Done():
-		}
-		if !ok {
-			part.cancel()
-			continue
-		}
-		f.mu.Lock()
-		part.ack = &ack
-		f.mu.Unlock()
-		for _, original := range ack.uris {
-			if downstream, ok := part.uris[original]; ok {
-				backed.uris = append(backed.uris, downstream)
-			}
-		}
+	for _, part := range f.parts {
+		backed.uris = append(backed.uris, f.decide(setup, part)...)
 	}
 	return backed
 }
 
+// decide settles one part and returns the downstream URIs it backs.
+func (f *fanIn) decide(setup context.Context, part *listenPart) []string {
+	ack, ok := awaitAck(setup, part.acked)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !ok || ack.empty() {
+		part.state, part.early = partDeclined, nil
+		part.cancel()
+		return nil
+	}
+	part.state, part.ack = partAccepted, ack
+	var uris []string
+	for _, original := range ack.uris {
+		if downstream, found := part.uris[original]; found {
+			uris = append(uris, downstream)
+		}
+	}
+	return uris
+}
+
+// awaitAck takes an acknowledgment that arrived within the setup bound, even
+// when the bound has already passed by the time this part is examined.
+func awaitAck(setup context.Context, acked <-chan filter) (filter, bool) {
+	select {
+	case ack, ok := <-acked:
+		return ack, ok
+	default:
+	}
+	select {
+	case ack, ok := <-acked:
+		return ack, ok
+	case <-setup.Done():
+		return filter{}, false
+	}
+}
+
 // runUpstream holds one upstream listen and feeds its events to the fan-in.
-func (f *fanIn) runUpstream(ctx context.Context, part *upstreamListen) {
+func (f *fanIn) runUpstream(ctx context.Context, part *listenPart) {
 	msg, err := listenRequest(f.req, part.request)
 	if err != nil {
-		f.end(err)
+		close(part.acked)
 		return
 	}
 	acked := false
@@ -235,46 +286,26 @@ func (f *fanIn) runUpstream(ctx context.Context, part *upstreamListen) {
 			close(part.acked)
 		}
 	}()
-	err = f.g.upstream(part.sel).Forward(ctx, msg, budgetOf(ctx), func(raw []byte, terminal bool) error {
+	expect, err := f.g.resolveExpect(ctx, part.sel)
+	if err != nil {
+		return
+	}
+	err = f.g.opts.Upstream(part.sel, expect).Forward(ctx, msg, f.budget, func(raw []byte, terminal bool) error {
 		if terminal {
-			return f.upstreamEnded(part, raw)
-		}
-		if !acked {
-			acked = true
-			ack, _ := parseListenFilter(member(raw, keyParams, "notifications"))
-			part.acked <- ack
+			f.partEnded(ctx, part, raw, nil)
 			return nil
 		}
-		return f.queue(part, raw)
+		if acked {
+			return f.queuePart(part, raw)
+		}
+		acked = true
+		ack, _ := parseListenFilter(member(raw, keyParams, "notifications"))
+		part.acked <- ack
+		return nil
 	})
-	if err == nil || ctx.Err() != nil {
-		return
+	if err != nil && ctx.Err() == nil {
+		f.partEnded(ctx, part, nil, err)
 	}
-	if !acked {
-		// A listen that never started only narrows the acknowledgment.
-		_ = f.g.routeError(part.sel, err)
-		return
-	}
-	f.end(f.g.routeError(part.sel, f.g.explainLoss(ctx, part.sel, err)))
-}
-
-// explainLoss tells a retired grant from a lost link. A host retires a
-// revoked grant's streams by closing them, which reads as an interruption;
-// one passive catalog read says whether authorization is what ended it.
-func (g *Gateway) explainLoss(ctx context.Context, sel Selection, err error) error {
-	var rf *mcpconnect.RouteFailure
-	if !errors.As(err, &rf) || (rf.Code != agentapi.RequestOutcomeUnknown && rf.Code != agentapi.HostUnreachable) {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorizationProbe)
-	defer cancel()
-	_, probeErr := g.opts.Catalog.Services(ctx, sel.HostID)
-	var denied *mcpconnect.RouteFailure
-	if errors.As(probeErr, &denied) && (denied.Code == agentapi.AccessDenied || denied.Code == agentapi.HostAuthenticationFailed) {
-		return &mcpconnect.RouteFailure{Code: agentapi.AccessDenied, Host: sel.HostID, Service: sel.Alias,
-			Message: "authorization for " + sel.Alias + " was retired", Err: err}
-	}
-	return err
 }
 
 func listenRequest(downstream mcpwire.Message, request filter) (mcpwire.Message, error) {
@@ -293,87 +324,234 @@ func listenRequest(downstream mcpwire.Message, request filter) (mcpwire.Message,
 	return msg, nil
 }
 
-// upstreamEnded turns an upstream's end into the downstream end: a graceful
-// completion ends the listen with one complete result; an error ends it
-// with that error.
-func (f *fanIn) upstreamEnded(part *upstreamListen, raw []byte) error {
-	if errObj := member(raw, "error"); errObj != nil {
-		f.end(f.g.routeError(part.sel, upstreamError(part.sel, mcpwire.MethodListen, errObj)))
-		return nil
+// partEnded ends the downstream listen when an accepted part ends: a
+// graceful completion with one complete result, a failure with its error.
+// A declined or still pending part ending changes nothing.
+func (f *fanIn) partEnded(ctx context.Context, part *listenPart, raw []byte, err error) {
+	f.mu.Lock()
+	accepted := part.state == partAccepted
+	if !accepted {
+		part.state, part.early = partDeclined, nil
 	}
-	f.end(nil)
+	f.mu.Unlock()
+	if !accepted {
+		return
+	}
+	if errObj := member(raw, "error"); errObj != nil {
+		err = upstreamError(part.sel, mcpwire.MethodListen, errObj)
+	}
+	if err != nil {
+		err = f.g.routeError(part.sel, f.g.explainLoss(ctx, part, err))
+	}
+	f.end(err)
+}
+
+// explainLoss tells a retired grant from a lost link. A host retires a
+// revoked grant's streams by closing them, which reads as an interruption;
+// one passive catalog read says whether authorization ended it, including
+// when the device was already approved again under a new grant.
+func (g *Gateway) explainLoss(ctx context.Context, part *listenPart, err error) error {
+	var rf *mcpconnect.RouteFailure
+	if !errors.As(err, &rf) || (rf.Code != agentapi.RequestOutcomeUnknown && rf.Code != agentapi.HostUnreachable) {
+		return err
+	}
+	probe, cancel := context.WithTimeout(context.WithoutCancel(ctx), authorizationProbe)
+	defer cancel()
+	hc, probeErr := g.opts.Catalog.Services(probe, part.sel.HostID)
+	var denied *mcpconnect.RouteFailure
+	retired := errors.As(probeErr, &denied) && stateForCode(denied.Code) == agentapi.GatewayUnauthorized
+	if retired || (probeErr == nil && part.scope != "" && hc.Scope != part.scope) {
+		return &mcpconnect.RouteFailure{Code: agentapi.AccessDenied, Host: part.sel.HostID, Service: part.sel.Alias,
+			Message: "authorization for " + part.sel.Alias + " was retired", Err: err}
+	}
+	return err
+}
+
+// queuePart takes one upstream event. Before the downstream acknowledgment
+// an accepted part's events wait in its early buffer; a declined part's
+// events are dropped.
+func (f *fanIn) queuePart(part *listenPart, raw []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch part.state {
+	case partDeclined:
+		return nil
+	case partPending:
+		return f.holdEarlyLocked(part, raw)
+	case partAccepted:
+		return f.takeLocked(part, raw)
+	}
 	return nil
 }
 
-// queue coalesces one upstream event. List changes merge by kind; resource
-// updates keep the latest per URI.
-func (f *fanIn) queue(part *upstreamListen, raw []byte) error {
-	if !f.accepted(part) {
-		// Not part of the downstream acknowledgment, so never delivered.
+func (f *fanIn) holdEarlyLocked(part *listenPart, raw []byte) error {
+	size := 0
+	for _, e := range part.early {
+		size += len(e)
+	}
+	if size+len(raw) > maxEarlyBytes || !f.reserveLocked(len(raw)) {
+		f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.ResourceLimit, Retryable: true, Message: "too many subscription events before the acknowledgment"})
+		return nil
+	}
+	part.early = append(part.early, append([]byte(nil), raw...))
+	return nil
+}
+
+// admitEarly moves accepted parts' early events into the queue, after the
+// downstream acknowledgment went out.
+func (f *fanIn) admitEarly() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, part := range f.parts {
+		early := part.early
+		part.early = nil
+		for _, raw := range early {
+			f.releaseLocked(len(raw))
+			_ = f.takeLocked(part, raw)
+		}
+	}
+	f.wake()
+}
+
+// takeLocked coalesces one accepted event. List changes merge by kind and
+// keep the upstream's own fields; resource updates keep the latest per URI.
+func (f *fanIn) takeLocked(part *listenPart, raw []byte) error {
+	if f.done {
 		return nil
 	}
 	method, _ := stringMember(raw, "method")
-	for flag, kind := range listChangedMethods {
-		if method == kind && f.acknowledged(part, flag) {
-			f.g.invalidate(part.sel, listMethodForFlag(flag))
-			f.mark(kind)
-			return nil
-		}
+	if flag, ok := flagFor(method); ok {
+		return f.takeListChangeLocked(part, flag, raw)
 	}
-	if method != "notifications/resources/updated" {
+	if method != updatedMethod {
 		return nil
 	}
 	original, _ := stringMember(raw, keyParams, keyURI)
 	downstream, ok := part.uris[original]
-	if !ok || !f.acknowledgedURI(part, original) {
+	if !ok || !slices.Contains(part.ack.uris, original) {
 		return nil
 	}
 	rewritten, err := setMember(raw, []string{keyParams, keyURI}, quoted(downstream))
 	if err != nil {
 		return err
 	}
-	return f.update(downstream, rewritten)
+	return f.updateLocked(downstream, rewritten)
 }
 
-func listMethodForFlag(flag string) string {
+func flagFor(method string) (string, bool) {
+	for flag, kind := range listChangedMethods {
+		if kind == method {
+			return flag, true
+		}
+	}
+	return "", false
+}
+
+func (f *fanIn) takeListChangeLocked(part *listenPart, flag string, raw []byte) error {
+	if !part.ack.flags[flag] {
+		return nil
+	}
+	f.g.invalidate(part.sel, listMethodsForFlag(flag)...)
+	f.markLocked(listChangedMethods[flag], raw)
+	return nil
+}
+
+func listMethodsForFlag(flag string) []string {
 	switch flag {
 	case flagTools:
-		return mcpwire.MethodListTools
+		return []string{mcpwire.MethodListTools}
 	case flagPrompts:
-		return mcpwire.MethodListPrompts
+		return []string{mcpwire.MethodListPrompts}
 	default:
-		return mcpwire.MethodListResources
+		return []string{mcpwire.MethodListResources, mcpwire.MethodListResourceTemplates}
 	}
+}
+
+// markLocked records one list change. raw is the upstream notification, or
+// nil for a change the gateway found itself.
+func (f *fanIn) markLocked(kind string, raw []byte) {
+	if f.done {
+		return
+	}
+	previous, exists := f.kinds[kind]
+	if exists && raw == nil {
+		return
+	}
+	stripped := stripSubscription(raw)
+	if !f.reserveLocked(len(stripped) - len(previous)) {
+		f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.ResourceLimit, Retryable: true, Message: "subscription buffer is full"})
+		return
+	}
+	f.kinds[kind] = stripped
+	f.wake()
+}
+
+func stripSubscription(raw []byte) json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	stripped, err := setMember(raw, []string{keyParams, keyMeta, mcpwire.SubscriptionID}, nil)
+	if err != nil {
+		return nil
+	}
+	return stripped
 }
 
 func (f *fanIn) mark(kind string) {
 	f.mu.Lock()
-	if !f.done {
-		f.kinds[kind] = true
-	}
-	f.mu.Unlock()
-	f.wake()
+	defer f.mu.Unlock()
+	f.markLocked(kind, nil)
 }
 
-func (f *fanIn) update(uri string, raw []byte) error {
-	f.mu.Lock()
-	defer f.wakeAfter()
-	defer f.mu.Unlock()
-	if f.done {
+func (f *fanIn) updateLocked(uri string, raw []byte) error {
+	if len(raw) > mcpwire.MaxMessage {
+		f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.MCPMessageTooLarge, Message: "a rewritten resource update exceeds the 3.5 MiB message limit"})
 		return nil
 	}
-	if _, ok := f.updates[uri]; !ok {
-		if len(f.order) >= maxPendingURIs {
-			f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.ResourceLimit, Retryable: true, Message: "too many pending resource updates for a slow client"})
-			return nil
-		}
+	previous, exists := f.updates[uri]
+	if !exists && len(f.order) >= maxPendingURIs {
+		f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.ResourceLimit, Retryable: true, Message: "too many pending resource updates for a slow client"})
+		return nil
+	}
+	if !f.reserveLocked(len(raw) - len(previous)) {
+		f.endLocked(&mcpconnect.RouteFailure{Code: agentapi.ResourceLimit, Retryable: true, Message: "subscription buffer is full"})
+		return nil
+	}
+	if !exists {
 		f.order = append(f.order, uri)
 	}
 	f.updates[uri] = raw
+	f.wake()
 	return nil
 }
 
-func (f *fanIn) wakeAfter() { f.wake() }
+func (f *fanIn) reserveLocked(n int) bool {
+	if n <= 0 {
+		f.releaseLocked(-n)
+		return true
+	}
+	if f.budget != nil && !f.budget.ReserveBytes(n) {
+		return false
+	}
+	f.charged += n
+	return true
+}
+
+func (f *fanIn) releaseLocked(n int) {
+	if n <= 0 {
+		return
+	}
+	f.charged -= n
+	if f.budget != nil {
+		f.budget.ReleaseBytes(n)
+	}
+}
+
+func (f *fanIn) releaseAll() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseLocked(f.charged)
+}
 
 func (f *fanIn) wake() {
 	select {
@@ -388,7 +566,6 @@ func (f *fanIn) end(reason error) {
 	f.mu.Lock()
 	f.endLocked(reason)
 	f.mu.Unlock()
-	f.wake()
 }
 
 func (f *fanIn) endLocked(reason error) {
@@ -396,74 +573,42 @@ func (f *fanIn) endLocked(reason error) {
 		return
 	}
 	f.done, f.ended = true, reason
-	// Revocation fences delivery: nothing queued before it goes out.
 	var rf *mcpconnect.RouteFailure
 	if errors.As(reason, &rf) && rf.Code == agentapi.AccessDenied {
-		f.kinds, f.updates, f.order = map[string]bool{}, map[string]json.RawMessage{}, nil
+		// Revocation fences delivery: nothing queued before it goes out,
+		// here or in the frontend's output queue.
+		f.kinds, f.updates, f.order = map[string]json.RawMessage{}, map[string]json.RawMessage{}, nil
+		f.releaseLocked(f.charged)
+		go f.retire()
 	}
+	f.wake()
 }
 
-type pollTarget struct {
-	sel    Selection
-	method string
-	kind   string
-	every  time.Duration
-	next   time.Time
-	digest string
-}
-
-// pollTargets lists the routes whose list changes the gateway must find by
-// refreshing, because no upstream listener acknowledged them.
-func (f *fanIn) pollTargets(parts []*upstreamListen) []*pollTarget {
-	var targets []*pollTarget
-	now := f.g.opts.Now()
-	for _, part := range parts {
-		sel := part.sel
-		for _, flag := range filterFlags {
-			if !f.backed.flags[flag] || f.acknowledged(part, flag) || member(part.caps, capabilityForFlag(flag)) == nil {
-				continue
-			}
-			method := listMethodForFlag(flag)
-			t := &pollTarget{sel: sel, method: method, kind: listChangedMethods[flag], every: f.g.opts.RefreshEvery}
-			t.next = now.Add(jitter(t.every))
-			if l := f.g.cached(listingKey{routeKey{sel.HostID, sel.ServiceID}, method}); l != nil {
-				t.digest = l.Digest
-			}
-			targets = append(targets, t)
-		}
-	}
-	return targets
-}
-
-// jitter spreads refreshes over half to one and a half intervals so many
-// frontends do not poll a host in step.
-func jitter(d time.Duration) time.Duration {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	// A 32-bit fraction of d keeps the arithmetic within int64.
-	fraction := time.Duration(binary.LittleEndian.Uint32(b[:]))
-	return d/2 + d/(1<<32)*fraction
+func (f *fanIn) ending() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.done
 }
 
 // loop delivers coalesced events until the listen ends, the client cancels,
-// or the profile drops a route this listen depends on.
-func (f *fanIn) loop(ctx context.Context, profile Profile, parts []*upstreamListen, polled []*pollTarget) error {
+// or the profile changes the routes this listen covers.
+func (f *fanIn) loop(ctx context.Context, profile Profile) error {
 	tick := time.NewTicker(f.g.opts.ProfileEvery)
 	defer tick.Stop()
 	defer func() {
-		for _, p := range parts {
+		for _, p := range f.parts {
 			p.cancel()
 		}
 	}()
-	digest := profileDigest(profile)
+	routes := routesDigest(f.g.routes(profile))
+	native := profileDigest(profile)
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("listen cancelled: %w", ctx.Err())
 		case <-f.signal:
 		case <-tick.C:
-			digest = f.checkProfile(digest, parts)
-			f.poll(ctx, polled)
+			native = f.checkProfile(routes, native)
 		}
 		finished, err := f.flush()
 		if finished || err != nil {
@@ -472,70 +617,50 @@ func (f *fanIn) loop(ctx context.Context, profile Profile, parts []*upstreamList
 	}
 }
 
-// checkProfile notices local selection changes. Removing a route this listen
-// holds ends the listen; any other change is a list change for the client.
-func (f *fanIn) checkProfile(digest string, parts []*upstreamListen) string {
+func routesDigest(routes []Selection) string {
+	raw, _ := json.Marshal(routes)
+	return digest(string(raw))
+}
+
+// checkProfile notices local selection changes. Any change to the routes,
+// including an instance pin, reports the list changes and ends the listen,
+// so the client listens again over exactly the current routes; a change to
+// native groups only reports a tools change.
+func (f *fanIn) checkProfile(routes, native string) string {
 	_, profile, err := f.g.current()
 	if err != nil {
-		return digest
+		return native
 	}
 	next := profileDigest(profile)
-	if next == digest {
-		return digest
-	}
-	for _, p := range parts {
-		if _, still := profile.Lookup(p.sel.HostID, p.sel.ServiceID); !still && f.accepted(p) {
-			f.end(nil)
-			return next
-		}
+	if next == native {
+		return native
 	}
 	for _, flag := range filterFlags {
 		if f.backed.flags[flag] {
 			f.mark(listChangedMethods[flag])
 		}
 	}
+	if routesDigest(f.g.routes(profile)) != routes {
+		f.end(nil)
+	}
 	return next
 }
 
-// poll refreshes due listings with backoff and reports changed ones.
-func (f *fanIn) poll(ctx context.Context, targets []*pollTarget) {
-	now := f.g.opts.Now()
-	for _, t := range targets {
-		if now.Before(t.next) {
-			continue
-		}
-		l, err := f.g.fetchListing(ctx, f.req, t.sel, kindFor(t.method), 0)
-		if err != nil {
-			t.every = min(t.every*2, maxRefreshEvery)
-			t.next = now.Add(jitter(t.every))
-			continue
-		}
-		t.every = f.g.opts.RefreshEvery
-		t.next = now.Add(jitter(t.every))
-		if t.digest != "" && l.Digest != t.digest {
-			f.g.invalidate(t.sel, t.method)
-			f.mark(t.kind)
-		}
-		t.digest = l.Digest
-	}
-}
-
 // flush writes pending events in a stable order and, once the listen has
-// ended, its single terminal reply.
+// ended, its single terminal reply. Bytes stay charged until written.
 func (f *fanIn) flush() (bool, error) {
 	f.mu.Lock()
 	kinds, updates, order, done, reason := f.kinds, f.updates, f.order, f.done, f.ended
-	f.kinds, f.updates, f.order = map[string]bool{}, map[string]json.RawMessage{}, nil
+	f.kinds, f.updates, f.order = map[string]json.RawMessage{}, map[string]json.RawMessage{}, nil
 	f.mu.Unlock()
-	for _, flag := range filterFlags {
-		if kinds[listChangedMethods[flag]] {
-			if err := f.send(listChangedMethods[flag], map[string]any{}); err != nil {
-				return true, err
-			}
-		}
+	if err := f.flushKinds(kinds); err != nil {
+		return true, err
 	}
 	for _, uri := range order {
-		if err := f.emit(f.tag(updates[uri]), false); err != nil {
+		raw := updates[uri]
+		err := f.emit(f.tag(raw), false)
+		f.release(len(raw))
+		if err != nil {
 			return true, err
 		}
 	}
@@ -550,6 +675,36 @@ func (f *fanIn) flush() (bool, error) {
 		return true, err
 	}
 	return true, f.emit(reply, true)
+}
+
+func (f *fanIn) flushKinds(kinds map[string]json.RawMessage) error {
+	for _, flag := range filterFlags {
+		kind := listChangedMethods[flag]
+		raw, ok := kinds[kind]
+		if !ok {
+			continue
+		}
+		f.release(len(raw))
+		if err := f.sendChange(kind, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *fanIn) release(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseLocked(n)
+}
+
+// sendChange forwards an upstream list change with its own fields, or a
+// plain one the gateway found.
+func (f *fanIn) sendChange(kind string, raw json.RawMessage) error {
+	if raw == nil {
+		return f.send(kind, map[string]any{})
+	}
+	return f.emit(f.tag(raw), false)
 }
 
 func (f *fanIn) tag(raw []byte) []byte {
@@ -569,16 +724,12 @@ func (f *fanIn) send(method string, params map[string]any) error {
 	return f.emit(f.tag(raw), false)
 }
 
-// invalidate marks a route's cached listing as needing revalidation while
-// keeping it usable as a stale fallback.
-func (g *Gateway) invalidate(sel Selection, method string) {
-	key := listingKey{routeKey{sel.HostID, sel.ServiceID}, method}
-	g.cached(key)
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if l := g.listings[key]; l != nil {
-		expired := *l
-		expired.TTL = 0
-		g.listings[key] = &expired
-	}
+// jitter spreads refreshes over half to one and a half intervals so many
+// frontends do not poll a host in step.
+func jitter(d time.Duration) time.Duration {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	// A 32-bit fraction of d keeps the arithmetic within int64.
+	fraction := time.Duration(binary.LittleEndian.Uint32(b[:]))
+	return d/2 + d/(1<<32)*fraction
 }
