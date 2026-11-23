@@ -245,6 +245,92 @@ func TestContextExpiryAfterARebootWaitsAFullIdlePeriod(t *testing.T) {
 	}
 }
 
+// A read made while the wall clock was rolled back, then restored, still
+// counts as use: the read throttle compares the uptime clock, not the wall
+// clock, so the old anchor cannot expire the context a minute later.
+func TestContextReadDuringAClockRollbackStillCountsAsUse(t *testing.T) {
+	j := contextJournal(t)
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	opened, start := c.LastUsedAt, j.clock()
+	at := func(wall time.Time, uptime time.Duration) {
+		j.now = func() time.Time { return wall }
+		j.clock = func() ClockAnchor { return clockEvidence(start.Boot, start.Elapsed+int64(uptime)) }
+	}
+	month := contextIdleExpiry + 24*time.Hour
+	at(opened.Add(time.Minute), month)
+	if _, err := j.GetContext(t.Context(), ownerA, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	at(opened.Add(month+time.Minute), month+time.Minute)
+	if err := j.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !contextRecordKept(j, c.ID) {
+		t.Fatal("context expired a minute after it was read")
+	}
+}
+
+// A full record quota reclaims closed contexts with no active job, the
+// longest closed first; a closed context with a running job is kept, and a
+// reclaimed context's open key then opens a new context.
+func TestClosedContextsMakeRoomWhenTheRecordQuotaIsFull(t *testing.T) {
+	j := contextJournal(t)
+	j.contextRetainLimit = 2
+	idle := openTestContext(t, j, ownerA, "idle", "/work")
+	busy := openTestContext(t, j, ownerA, "busy", "/work")
+	if _, _, err := reserveJob(t, j, jobKey(ownerA, busy.ID, "run"), "x", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{idle.ID, busy.ID} {
+		if _, err := j.CloseContext(t.Context(), ownerA, id, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	openTestContext(t, j, ownerB, "fresh", "/work")
+	if contextRecordKept(j, idle.ID) || !contextRecordKept(j, busy.ID) {
+		t.Fatalf("reclaim kept idle %t, busy %t; want only the busy one", contextRecordKept(j, idle.ID), contextRecordKept(j, busy.ID))
+	}
+	if _, _, err := j.OpenContext(t.Context(), openKey(ownerA, "idle"), Digest("x"), fixedSpec(ContextSpec{Cwd: "/work", Shell: "none"})); !errors.Is(err, ErrContextLimit) {
+		t.Fatalf("open with only active or open records = %v", err)
+	}
+	j.contextRetainLimit = 3
+	if again := openTestContext(t, j, ownerA, "idle", "/work"); again.ID == idle.ID {
+		t.Fatal("a reclaimed context's open key replayed the purged context")
+	}
+}
+
+// A record written before idle anchors existed stays readable, gains an
+// anchor without a new last use or revision once its deadline has passed,
+// and expires with its receipt after an idle period of that boot.
+func TestContextWithoutAnAnchorGainsOneAndExpiresAfterAnIdlePeriod(t *testing.T) {
+	j := contextJournal(t)
+	c := openTestContext(t, j, ownerA, "legacy", "/work")
+	record, err := j.readContext(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.IdleAnchor = nil
+	if _, err := j.saveContext(record); err != nil {
+		t.Fatal(err)
+	}
+	late := record.LastUsedAt.Add(contextIdleExpiry + time.Minute)
+	j.now = func() time.Time { return late }
+	if err := j.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	anchored, err := j.readContext(c.ID)
+	if err != nil || anchored.IdleAnchor == nil || !anchored.LastUsedAt.Equal(record.LastUsedAt) || anchored.Revision != record.Revision {
+		t.Fatalf("legacy record after its deadline = %+v, %v", anchored, err)
+	}
+	passIdlePeriod(j)
+	if err := j.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if found, _, _ := j.readRequest(openKey(ownerA, "legacy").Hash()); contextRecordKept(j, c.ID) || found.ContextID != "" {
+		t.Fatal("legacy context or its receipt kept after an idle period")
+	}
+}
+
 func TestContextQuotaPerHostAndExpiredReclaim(t *testing.T) {
 	j := contextJournal(t)
 	j.contextHostLimit = 2

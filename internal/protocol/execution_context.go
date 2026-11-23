@@ -126,8 +126,10 @@ type ExecutionContextInfo struct {
 	CreatedAt     time.Time  `json:"createdAt"`
 	LastUsedAt    time.Time  `json:"lastUsedAt"`
 	ClosedAt      *time.Time `json:"closedAt,omitempty"`
-	// ExpiresAt is when the record goes away if it stays unused and no job
-	// runs. A running job postpones expiry.
+	// ExpiresAt is the wall-clock date from which the record may expire if it
+	// stays unused and no job runs. A running job postpones expiry, and the
+	// host's uptime clock must also show the idle period, so the record can
+	// go away later than this date, never earlier.
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 

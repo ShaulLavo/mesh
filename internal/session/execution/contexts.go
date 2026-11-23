@@ -284,10 +284,70 @@ func (j *Journal) contextCapacity(owner string) error {
 			mine++
 		}
 	}
+	if total >= j.contextRetainLimit {
+		total -= j.reclaimClosed(total - j.contextRetainLimit + 1)
+	}
 	if total >= j.contextRetainLimit || host >= j.contextHostLimit || mine >= j.contextOwnerLimit {
 		return ErrContextLimit
 	}
 	return nil
+}
+
+// closedContext is a closed context that reclaimClosed may purge.
+type closedContext struct {
+	request  contextRequest
+	closedAt time.Time
+}
+
+// reclaimClosed purges up to need closed contexts with no active job, the
+// longest closed first, so closed records cannot fill the host's record
+// quota on a host that never stays up a whole idle period. A closed context
+// takes no new jobs, so only its open receipt is lost: the same open key
+// then opens a new context, as after expiry. It returns how many it purged.
+func (j *Journal) reclaimClosed(need int) int {
+	entries, err := j.files.Names(contextRequestDir)
+	if err != nil {
+		return 0
+	}
+	var closed []closedContext
+	for _, entry := range entries {
+		if candidate, ok := j.closedCandidate(entry.Name()); ok {
+			closed = append(closed, candidate)
+		}
+	}
+	sort.Slice(closed, func(a, b int) bool { return closed[a].closedAt.Before(closed[b].closedAt) })
+	reclaimed := 0
+	for _, candidate := range closed {
+		if reclaimed == need {
+			break
+		}
+		if j.expire(candidate.request) == nil {
+			reclaimed++
+		}
+	}
+	return reclaimed
+}
+
+// closedCandidate reports a closed context whose membership is readable and
+// holds no active job.
+func (j *Journal) closedCandidate(name string) (closedContext, bool) {
+	hash, ok := cutJSON(name)
+	if !ok || !validDigest(hash) {
+		return closedContext{}, false
+	}
+	request, found, err := j.readRequest(hash)
+	if err != nil || !found || request.Expired {
+		return closedContext{}, false
+	}
+	c, err := j.readContext(request.ContextID)
+	if err != nil || c.ClosedAt == nil {
+		return closedContext{}, false
+	}
+	c, known := j.withMembers(c)
+	if !known || len(c.Members) != 0 {
+		return closedContext{}, false
+	}
+	return closedContext{request: request, closedAt: *c.ClosedAt}, true
 }
 
 // requestSlot reports whether a receipt still holds a slot and whether that
@@ -440,13 +500,24 @@ func (j *Journal) finishExpiry(request contextRequest) error {
 // touch records use at most once per granularity, so reads do not write on
 // every call.
 func (j *Journal) touch(c Context, force bool) (Context, error) {
-	now := j.now().UTC()
-	if !force && now.Sub(c.LastUsedAt) < contextUseGranularity {
+	if !force && j.usedRecently(c) {
 		return c, nil
 	}
 	c = j.anchorUse(c)
-	c.LastUsedAt = now
+	c.LastUsedAt = j.now().UTC()
 	return j.saveContext(c)
+}
+
+// usedRecently reports a use anchored less than the granularity ago on this
+// boot's monotonic clock. A wall-clock correction cannot make an old use look
+// recent, and an anchor from another boot, or none, cannot be compared, so
+// that use is recorded again.
+func (j *Journal) usedRecently(c Context) bool {
+	now, anchor := j.clock(), c.IdleAnchor
+	if anchor == nil || !anchor.valid() || !now.valid() || anchor.Boot != now.Boot {
+		return false
+	}
+	return now.Elapsed >= anchor.Elapsed && now.Elapsed-anchor.Elapsed < int64(contextUseGranularity)
 }
 
 // GetContext returns the owner's context, closed or open.
