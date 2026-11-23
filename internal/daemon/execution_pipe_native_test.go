@@ -122,12 +122,27 @@ func newNativePipeDaemon(t *testing.T, extraEnv ...string) *nativePipeDaemon {
 		t.Fatal(err)
 	}
 	f := &nativePipeDaemon{root: root, state: state, sessions: filepath.Join(state, "s"), executable: bin, extraEnv: extraEnv}
+	t.Cleanup(func() { f.dumpLogsOnFailure(t) })
 	t.Cleanup(func() {
 		f.stop(t)
 		f.stopWorkers(t)
 	})
 	f.start(t)
 	return f
+}
+
+// dumpLogsOnFailure shows the daemon's and every worker's log when the test
+// failed, before the fixture root is removed.
+func (f *nativePipeDaemon) dumpLogsOnFailure(t *testing.T) {
+	if !t.Failed() {
+		return
+	}
+	logs, _ := filepath.Glob(filepath.Join(f.sessions, "*", "worker.log"))
+	for _, path := range append([]string{filepath.Join(f.root, "daemon.log")}, logs...) {
+		if data, err := os.ReadFile(path); err == nil { //nolint:gosec // the fixture's own logs
+			t.Logf("%s:\n%s", path, data)
+		}
+	}
 }
 
 func (f *nativePipeDaemon) env() []string {
