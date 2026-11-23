@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestClaimCacheBatchSettlesOnePublicationBarrier(t *testing.T) {
+func TestClaimCacheBatchReadsEveryOwner(t *testing.T) {
 	directory := t.TempDir()
 	owners := make([]string, 3)
 	for i := range owners {
@@ -18,14 +18,7 @@ func TestClaimCacheBatchSettlesOnePublicationBarrier(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	var barriers int
-	syncRoot := func(root *os.Root) error {
-		if filepath.Base(root.Name()) == cacheDirectory {
-			barriers++
-		}
-		return syncCacheRoot(root)
-	}
-	claims, err := cachedClaimsWithSync(directory, owners, syncRoot)
+	claims, err := CachedClaims(directory, owners)
 	if err != nil || len(claims) != len(owners) {
 		t.Fatalf("batch claims: %+v %v", claims, err)
 	}
@@ -34,12 +27,11 @@ func TestClaimCacheBatchSettlesOnePublicationBarrier(t *testing.T) {
 			t.Fatalf("owner %s revision=%d", owner, claims[owner].Revision)
 		}
 	}
-	if barriers != 1 {
-		t.Fatalf("batch publication barriers=%d, want 1 after all records", barriers)
-	}
 }
 
-func TestClaimCacheBatchFailedBarrierReturnsNoClaims(t *testing.T) {
+// A batch read returns a visible claim whose publication barrier failed;
+// readers don't sync, so only the writer's retry settles it.
+func TestClaimCacheBatchReturnsVisibleUnsettledPublication(t *testing.T) {
 	directory := t.TempDir()
 	claim := cacheFixtureClaim(t, "destination", 7)
 	other := cacheFixtureClaim(t, "other", 1)
@@ -57,12 +49,9 @@ func TestClaimCacheBatchFailedBarrierReturnsNoClaims(t *testing.T) {
 		t.Fatalf("uncertain publication acknowledged: %t %v", changed, err)
 	}
 	owners := []string{other.ID, claim.ID}
-	if claims, err := cachedClaimsWithSync(directory, owners, failPublished); claims != nil || !errors.Is(err, failure) {
-		t.Fatalf("batch exposed uncertain publication: %+v %v", claims, err)
-	}
 	claims, err := CachedClaims(directory, owners)
 	if err != nil || claims[claim.ID] != claim || claims[other.ID] != other {
-		t.Fatalf("batch failed to settle visible publication: %+v %v", claims, err)
+		t.Fatalf("batch of a visible unsettled publication: %+v %v", claims, err)
 	}
 }
 

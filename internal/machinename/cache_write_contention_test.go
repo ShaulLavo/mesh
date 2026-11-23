@@ -108,8 +108,9 @@ func TestClaimCacheWriterSettlesVisibleFailedPublication(t *testing.T) {
 			if len(observed) != 1 || observed[0] != revision {
 				t.Fatalf("writer barrier did not settle the final record: %v", observed)
 			}
-			if got, err := readCacheFixtureClaimWithSync(directory, claim.ID, failPublished); got != (Claim{}) || !errors.Is(err, failure) {
-				t.Fatalf("reader acknowledged uncertain retry: %+v %v", got, err)
+			// Readers don't sync, so they see the visible, unsettled revision.
+			if got, err := readCacheFixtureClaim(directory, claim.ID); got != next || err != nil {
+				t.Fatalf("reader of an unsettled retry: %+v %v", got, err)
 			}
 			var settled int
 			settle := func(root *os.Root) error {

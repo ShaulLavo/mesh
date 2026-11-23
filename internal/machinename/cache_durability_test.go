@@ -48,26 +48,26 @@ func TestClaimCacheDirectoryCreationBarriers(t *testing.T) {
 	}
 }
 
-func TestClaimCacheReaderSettlesVisibleFailedPublication(t *testing.T) {
+// A reader returns a visible claim whose publication barrier failed, without
+// syncing it, and the writer still refuses an older revision.
+func TestClaimCacheReaderReturnsVisibleFailedPublication(t *testing.T) {
 	directory := t.TempDir()
 	claim := cacheFixtureClaim(t, "destination", 7)
 	failure := errors.New("fixture post-rename directory sync failure")
 	failPublished := func(root *os.Root) error {
-		if filepath.Base(root.Name()) == cacheDirectory {
-			if _, err := root.Lstat(claim.ID + ".json"); err == nil {
-				return failure
-			}
+		if filepath.Base(root.Name()) != cacheDirectory {
+			return syncCacheRoot(root)
+		}
+		if _, err := root.Lstat(claim.ID + ".json"); err == nil {
+			return failure
 		}
 		return syncCacheRoot(root)
 	}
 	if changed, err := rememberClaimWithSync(t.Context(), directory, claim.ID, claim, failPublished); changed || !errors.Is(err, failure) {
 		t.Fatalf("uncertain publication acknowledged: %t %v", changed, err)
 	}
-	if got, err := readCacheFixtureClaimWithSync(directory, claim.ID, failPublished); !errors.Is(err, failure) || got != (Claim{}) {
-		t.Fatalf("reader exposed unsynced revision: %+v %v", got, err)
-	}
 	if got, err := readCacheFixtureClaim(directory, claim.ID); err != nil || got != claim {
-		t.Fatalf("durability recovery failed: %+v %v", got, err)
+		t.Fatalf("reader of a visible unsettled revision: %+v %v", got, err)
 	}
 	older := claim
 	older.Revision--
