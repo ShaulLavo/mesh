@@ -1,10 +1,8 @@
 name: Publish tested release
 
 on:
-  schedule:
-    # Cut batched releases up to three times a day when main has unpublished
-    # commits with a green Complete CI gate.
-    - cron: '0 2,10,18 * * *'
+  # Releases happen only when the owner asks for one (2026-11-23): manual
+  # dispatch only, no schedule.
   workflow_dispatch:
     inputs:
       source_sha:

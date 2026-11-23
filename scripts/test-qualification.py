@@ -80,14 +80,13 @@ class QualificationTests(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "completed draft writer"):
             qualification.confirm_unpublished("v0.1.347", 6)
 
-    def test_check_run_accepts_main_ci_push_and_release_schedule_or_dispatch(self):
+    def test_check_run_accepts_main_ci_push_and_release_dispatch(self):
         source = "a" * 40
         spec = {"run": 6, "release": {"version": "v0.1.350", "source": source, "id": 42}}
         base = {"head_repository": {"full_name": qualification.REPO}, "head_branch": "main",
                 "head_sha": source, "path": ".github/workflows/ci.yml", "event": "push"}
         with patch.dict(os.environ, GITHUB_RUN_ID="99"):
             for path, event in ((".github/workflows/ci.yml", "push"),
-                                (".github/workflows/release.yml", "schedule"),
                                 (".github/workflows/release.yml", "workflow_dispatch")):
                 with self.subTest(path=path, event=event), \
                         patch.object(qualification.installed_artifacts, "api", return_value=base | {"path": path, "event": event}):
@@ -95,6 +94,7 @@ class QualificationTests(unittest.TestCase):
             for bad in ({"head_repository": {"full_name": "other/mesh"}}, {"head_branch": "feature"},
                         {"head_sha": "b" * 40}, {"path": ".github/workflows/ci.yml", "event": "pull_request"},
                         {"path": ".github/workflows/ci.yml", "event": "workflow_dispatch"},
+                        {"path": ".github/workflows/release.yml", "event": "schedule"},
                         {"path": ".github/workflows/release.yml", "event": "push"},
                         {"path": ".github/workflows/release.yml", "event": "pull_request"}):
                 with self.subTest(bad=bad), \

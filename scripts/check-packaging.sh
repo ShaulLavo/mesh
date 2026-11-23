@@ -144,7 +144,7 @@ check_source_contract() {
   contains scripts/check-default-branch.py '"--jq", ".default_branch"'
   contains .github/workflows/ci.yml 'refs/heads/main'
   does_not_contain .github/workflows/ci.yml '      - master'
-  contains .github/workflows/release.yml 'schedule:'
+  does_not_contain .github/workflows/release.yml 'schedule:'
   contains .github/workflows/release.yml 'workflow_dispatch:'
   does_not_contain .github/workflows/release.yml 'workflow_call:'
   contains .github/workflows/release.yml 'queue: max'
