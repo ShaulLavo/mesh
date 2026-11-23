@@ -512,7 +512,7 @@ func (c *mcpControls) JobWait(ctx context.Context, req mcpnative.JobWaitRequest,
 				Job:    req.Job.String(),
 				Target: *target,
 				State:  mcpnative.JobStateRunning,
-				Wait:   "timed_out",
+				Wait:   execWaitTimedOut,
 			}), nil
 		}
 		return failOutcome("sessions.wait", target, agentError(err, "sessions.wait", host.ID, agentapi.HostUnreachable)), nil

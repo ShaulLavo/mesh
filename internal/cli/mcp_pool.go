@@ -18,6 +18,9 @@ import (
 const (
 	mcpPoolShortLimit  = 8
 	mcpPoolStreamLimit = 4
+	// Creates that wait on the host get their own budget, so they never hold
+	// the short slots a signal or kill for those same jobs needs.
+	mcpPoolInlineLimit = 4
 	mcpPoolIdleTimeout = 60 * time.Second
 )
 
@@ -60,6 +63,7 @@ type mcpPooledConn struct {
 type mcpHostBucket struct {
 	shortSlots  chan struct{}
 	streamSlots chan struct{}
+	inlineSlots chan struct{}
 
 	mu   sync.Mutex
 	idle []*mcpPooledConn
@@ -69,6 +73,7 @@ func newMCPHostBucket() *mcpHostBucket {
 	return &mcpHostBucket{
 		shortSlots:  make(chan struct{}, mcpPoolShortLimit),
 		streamSlots: make(chan struct{}, mcpPoolStreamLimit),
+		inlineSlots: make(chan struct{}, mcpPoolInlineLimit),
 	}
 }
 
@@ -413,7 +418,31 @@ func (p *mcpHostPool) exchangeShort(ctx context.Context, host HostRecord, req pr
 		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 	}
 	defer func() { <-bucket.shortSlots }()
+	return p.exchangeIn(ctx, bucket, host, req, retryRead)
+}
 
+// ExchangeInline sends a create that waits on the host through the inline
+// budget. admitted is false, with nothing sent, when every inline slot is
+// busy; the caller then sends a plain create instead of waiting for one.
+func (p *mcpHostPool) ExchangeInline(ctx context.Context, host HostRecord, req protocol.Control) (resp protocol.Control, info protocol.HostInfo, admitted bool, err error) {
+	bucket, err := p.bucket(host)
+	if err != nil {
+		return protocol.Control{}, protocol.HostInfo{}, true, &preDispatchError{err: err}
+	}
+	select {
+	case bucket.inlineSlots <- struct{}{}:
+	default:
+		return protocol.Control{}, protocol.HostInfo{}, false, nil
+	}
+	defer func() { <-bucket.inlineSlots }()
+	resp, info, err = p.exchangeIn(ctx, bucket, host, req, false)
+	return resp, info, true, err
+}
+
+// exchangeIn sends one request on a pooled connection; the caller holds the
+// slot that admits it.
+func (p *mcpHostPool) exchangeIn(ctx context.Context, bucket *mcpHostBucket, host HostRecord, req protocol.Control, retryRead bool) (protocol.Control, protocol.HostInfo, error) {
+	var err error
 	if req.RequestID == "" {
 		req.RequestID, err = newDaemonRequestID()
 		if err != nil {

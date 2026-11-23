@@ -100,6 +100,9 @@ func validateExecutionRaw(payload []byte) error {
 			return err
 		}
 	}
+	if scan.fields["outputBytes"] != nil && scan.fields["waitMillis"] == nil {
+		return fmt.Errorf("execution: outputBytes requires waitMillis")
+	}
 	return validateExecutionRequired(kind, scan.fields)
 }
 
@@ -203,7 +206,7 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 		return executionString(raw)
 	case "command":
 		return executionArguments(raw)
-	case "cols", "rows", "depth":
+	case "cols", "rows", "depth", "waitMillis", "outputBytes":
 		return executionInteger(name, raw)
 	default:
 		return fmt.Errorf("execution: unexpected field %s", name)
@@ -244,14 +247,21 @@ func executionInteger(name string, raw []byte) error {
 	if bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, &n) != nil || (name == "depth" && n != 0) {
 		return fmt.Errorf("execution: invalid %s", name)
 	}
-	if name == "timeoutMillis" && (n < 1 || n > MaxExecutionWaitMillis) {
-		return fmt.Errorf("execution: timeoutMillis must be 1 to %d", MaxExecutionWaitMillis)
+	if (name == "timeoutMillis" || name == "waitMillis") && (n < 1 || n > MaxExecutionWaitMillis) {
+		return fmt.Errorf("execution: %s must be 1 to %d", name, MaxExecutionWaitMillis)
+	}
+	if name == "outputBytes" && (n < 1 || n > MaxExecutionInlineOutput) {
+		return fmt.Errorf("execution: outputBytes must be 1 to %d", MaxExecutionInlineOutput)
 	}
 	return nil
 }
 
 // MaxExecutionWaitMillis bounds how long one wait or output read may hold the host.
 const MaxExecutionWaitMillis = 60000
+
+// MaxExecutionInlineOutput bounds each stream's page in a create reply. Two
+// full pages, base64 encoded, stay well inside one frame.
+const MaxExecutionInlineOutput = 1 << 20
 
 func executionString(raw []byte) error {
 	var value string
