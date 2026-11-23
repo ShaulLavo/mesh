@@ -343,10 +343,15 @@ func TestTerminalCaptureSetupTakesTwoRounds(t *testing.T) {
 func requireStreamFiles(t *testing.T, j *Journal, stores []*streamStore) {
 	t.Helper()
 	for _, s := range stores {
-		for _, name := range []string{"stream.lock", readerLockName, writerLockName, "manifest.json"} {
-			if err := j.files.check(s.path(name), false); err != nil {
-				t.Fatalf("%s: %v", s.path(name), err)
-			}
+		requireOneStreamFiles(t, j, s)
+	}
+}
+
+func requireOneStreamFiles(t *testing.T, j *Journal, s *streamStore) {
+	t.Helper()
+	for _, name := range []string{"stream.lock", readerLockName, writerLockName, "manifest.json"} {
+		if err := j.files.check(s.path(name), false); err != nil {
+			t.Fatalf("%s: %v", s.path(name), err)
 		}
 	}
 }
