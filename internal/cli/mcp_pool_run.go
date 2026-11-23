@@ -18,13 +18,13 @@ var errRunPoolFull = errors.New("every mesh_run slot for this host is busy")
 // sent. The run may have happened.
 var errInvalidRunReply = errors.New("host sent an invalid execution.run reply")
 
-const (
-	// runProbeIdle is how long a pooled connection may sit idle before a run
-	// checks it is still alive.
-	runProbeIdle = 10 * time.Second
-	// runProbeTimeout bounds that check on its own.
-	runProbeTimeout = 2 * time.Second
-)
+// runProbeIdle is how long a pooled connection may sit idle before a run
+// checks it is still alive.
+const runProbeIdle = 10 * time.Second
+
+// runProbeTimeout bounds that check on its own. A variable so tests can
+// shorten it.
+var runProbeTimeout = 2 * time.Second
 
 // ExchangeRun sends one execution.run on a pooled connection from the host's
 // run budget and waits for its single reply. It never retries: once the
@@ -55,12 +55,22 @@ func (p *mcpHostPool) ExchangeRun(ctx context.Context, host HostRecord, req prot
 	if err == nil {
 		err = validRunReply(resp, req.OutputBytes)
 	}
-	if err != nil || !reusable {
+	if err != nil {
 		p.discard(entry.conn)
 		return protocol.Control{}, entry.info, err
 	}
-	p.checkin(bucket, entry)
+	// A valid reply is the run's result even when the call's cancellation
+	// fired as it arrived; only the connection it may be closing is dropped.
+	p.settleRunConnection(bucket, entry, reusable)
 	return resp, entry.info, nil
+}
+
+func (p *mcpHostPool) settleRunConnection(bucket *mcpHostBucket, entry *mcpPooledConn, reusable bool) {
+	if !reusable {
+		p.discard(entry.conn)
+		return
+	}
+	p.checkin(bucket, entry)
 }
 
 func validRunReply(resp protocol.Control, outputBytes int) error {
@@ -140,7 +150,9 @@ func exchangeOneFrame(ctx context.Context, conn transport.Conn, req protocol.Con
 	if err := ctx.Err(); err != nil {
 		return protocol.Control{}, false, &preDispatchError{err: err}
 	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	// Abort, not Close: a graceful close waits for a peer that may never
+	// answer, and the caller has already given up on this connection.
+	stop := context.AfterFunc(ctx, func() { _ = transport.Abort(conn) })
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
 		stop()
 		return protocol.Control{}, false, daemonOperationError(ctx, "write "+req.Type+" request", err)

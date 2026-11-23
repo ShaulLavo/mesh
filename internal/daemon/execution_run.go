@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"path/filepath"
 	"sync"
@@ -47,7 +48,9 @@ var (
 	errRunsClosed = errors.New("execution.run: the daemon is stopping")
 	// errRunEnded tells the client loop that a run's caller left or sent a
 	// frame during the run, so the connection ends without a reply.
-	errRunEnded = errors.New("daemon: execution.run ended its connection")
+	// It wraps context.Canceled because that is what it is: the request was
+	// cancelled, and the client loop ends quietly on it.
+	errRunEnded = fmt.Errorf("daemon: execution.run ended its connection: %w", context.Canceled)
 )
 
 // runSupervisor admits runs and owns the started ones until their cleanup
@@ -306,15 +309,6 @@ func commitRunReply(ctx context.Context, relay *clientRelay, commit func() bool,
 	return writeRunReply(ctx, relay, reply)
 }
 
-// runConnectionError ends the client loop after a run: quietly when the
-// run's caller left or pipelined a frame, and with the error otherwise.
-func runConnectionError(ctx context.Context, err error) error {
-	if errors.Is(err, errRunEnded) {
-		return nil
-	}
-	return clientOperationError(ctx, "reply to execution.run", err)
-}
-
 func writeRunReply(ctx context.Context, relay *clientRelay, reply protocol.Control) error {
 	frame, err := encodeClientControl(reply)
 	if err != nil {
@@ -469,10 +463,17 @@ func wireRunStream(s oneshot.Stream) protocol.ExecutionRunStream {
 	return protocol.ExecutionRunStream{Bytes: s.Bytes, Total: s.Total, Truncated: s.Truncated, CloseReason: s.CloseReason}
 }
 
+// runErrorReply always carries a code: a client treats a run reply it
+// cannot classify as an unknown outcome, so a refusal must say it is one.
+// Anything not more specific, such as an unreadable update gate, is
+// state.unavailable.
 func runErrorReply(request protocol.Control, err error) protocol.Control {
 	reply := clientRequestError(request, err)
 	if code := runErrorCode(err); code != "" {
 		reply.ErrorCode = code
+	}
+	if reply.ErrorCode == "" {
+		reply.ErrorCode = stateUnavailableCode
 	}
 	return reply
 }

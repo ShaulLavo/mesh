@@ -62,9 +62,9 @@ const (
 	watchInterrupted
 )
 
-// lookaheadFrameRead runs after watchAny settles a read; tests use it to
-// order a frame against a reply.
-var lookaheadFrameRead = func() {}
+// lookaheadFrameClaimed runs after watchAny claims a read and before it
+// publishes it; tests use it to order a frame against a reply.
+var lookaheadFrameClaimed = func() {}
 
 // watchAny is watch for a request that must be its connection's only one in
 // flight: a frame that arrives before the reply is committed interrupts the
@@ -79,11 +79,13 @@ func (l *frameLookahead) watchAny(ctx context.Context) (watched context.Context,
 	var state atomic.Int32
 	go func() {
 		frame, err := l.conn.ReadFrame()
-		pending <- lookaheadRead{frame: frame, err: err}
+		// Claim the interruption before the read becomes visible, so a reply
+		// can never be committed with this frame already pending.
 		if state.CompareAndSwap(watchRunning, watchInterrupted) || err != nil {
 			cancel()
 		}
-		lookaheadFrameRead()
+		lookaheadFrameClaimed()
+		pending <- lookaheadRead{frame: frame, err: err}
 	}()
 	return watched, cancel, func() bool { return state.CompareAndSwap(watchRunning, watchCommitted) }
 }

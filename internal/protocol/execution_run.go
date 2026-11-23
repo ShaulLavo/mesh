@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -90,14 +91,23 @@ func executionRunContextField(name string, raw json.RawMessage) error {
 	}
 }
 
-// Validate checks a run reply against the request it answers: a known
-// termination with only the fields its kind has, and streams within the
-// requested size whose totals and flags agree.
+// Validate checks a run reply against the request it answers. Every reply
+// names its absolute working directory, context revision and start time.
+// A command that started ended by exit (code 0 to 255) or signal (1 to
+// 127), or was interrupted with a reason, and both its streams have a close
+// reason, bounded bytes and consistent totals. A command that never started
+// says why and carries no output, timeout or duration.
 func (r *ExecutionRunResult) Validate(outputBytes int) error {
 	if r == nil {
 		return fmt.Errorf("execution: run reply has no result")
 	}
-	if err := r.Termination.validateRun(); err != nil {
+	if !strings.HasPrefix(r.Cwd, "/") || r.ContextRevision == 0 || r.StartedAt.IsZero() || r.DurationMillis < 0 {
+		return fmt.Errorf("execution: run reply lacks its cwd, revision or start")
+	}
+	if r.Termination.Kind == "not_started" {
+		return r.validateNotStarted()
+	}
+	if err := r.Termination.validateStarted(); err != nil {
 		return err
 	}
 	for _, s := range []ExecutionRunStream{r.Stdout, r.Stderr} {
@@ -108,20 +118,35 @@ func (r *ExecutionRunResult) Validate(outputBytes int) error {
 	return nil
 }
 
-func (t ExecutionTermination) validateRun() error {
+func (r *ExecutionRunResult) validateNotStarted() error {
+	t := r.Termination
+	if t.Code != nil || t.Signal != nil || t.Reason == "" || r.TimedOut || r.DurationMillis != 0 {
+		return fmt.Errorf("execution: invalid not_started run")
+	}
+	if !r.Stdout.empty() || !r.Stderr.empty() {
+		return fmt.Errorf("execution: a run that never started has output")
+	}
+	return nil
+}
+
+func (t ExecutionTermination) validateStarted() error {
 	valid := false
 	switch t.Kind {
 	case "exit":
-		valid = t.Code != nil && t.Signal == nil
+		valid = t.Code != nil && *t.Code >= 0 && *t.Code <= 255 && t.Signal == nil && t.Reason == ""
 	case "signal":
-		valid = t.Signal != nil && t.Code == nil
-	case "not_started", "interrupted":
-		valid = t.Code == nil && t.Signal == nil
+		valid = t.Signal != nil && *t.Signal >= 1 && *t.Signal <= 127 && t.Code == nil && t.Reason == ""
+	case "interrupted":
+		valid = t.Code == nil && t.Signal == nil && t.Reason != ""
 	}
 	if !valid {
 		return fmt.Errorf("execution: invalid run termination %q", t.Kind)
 	}
 	return nil
+}
+
+func (s ExecutionRunStream) empty() bool {
+	return len(s.Bytes) == 0 && s.Total == 0 && !s.Truncated && s.CloseReason == ""
 }
 
 func (s ExecutionRunStream) validate(outputBytes int) error {
@@ -130,7 +155,7 @@ func (s ExecutionRunStream) validate(outputBytes int) error {
 		return fmt.Errorf("execution: invalid run stream bounds")
 	}
 	switch s.CloseReason {
-	case "", "eof", "drain_timeout", "read_error":
+	case "eof", "drain_timeout", "read_error":
 		return nil
 	default:
 		return fmt.Errorf("execution: invalid run stream close reason %q", s.CloseReason)

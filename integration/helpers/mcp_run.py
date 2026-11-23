@@ -229,31 +229,41 @@ def stop_local_daemon(daemon, log):
     log.close()
 
 
+def create_identities(fixture):
+    for name in ("runner", "run-stranger"):
+        res = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
+        require(res.returncode == 0, f"identity create {name} failed: {res.stdout!r} {res.stderr!r}")
+
+
+def exercise_all(fixture, local):
+    client = MCPClient(fixture.binary, fixture.environment, args=("--identity", "runner"))
+    try:
+        remote_handle, remote_work = exercise_host(fixture, client, fixture.remote_id, "websocket")
+        local_handle, local_work = exercise_host(fixture, client, local[2], "unix")
+        exercise_revocation(fixture, client, remote_handle, remote_work)
+        exercise_daemon_stop(client, local_handle, local_work, local)
+    finally:
+        client.terminate()
+
+
+def run_fixture(binary, root):
+    fixture = MCPFixture(binary, root)
+    local = None
+    try:
+        fixture.start_remote()
+        local = start_local_daemon(fixture)
+        create_identities(fixture)
+        exercise_all(fixture, local)
+    finally:
+        # Stopping an already stopped daemon is harmless.
+        if local is not None:
+            stop_local_daemon(local[0], local[1])
+        fixture.close()
+
+
 def main():
-    binary = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="mesh-mcp-run-") as directory:
-        root = Path(directory)
-        fixture = MCPFixture(binary, root)
-        local = None
-        try:
-            fixture.start_remote()
-            local = start_local_daemon(fixture)
-            for name in ("runner", "run-stranger"):
-                res = run_cli(fixture.binary, fixture.environment, "mcp", "identity", "create", name, "--json")
-                require(res.returncode == 0, f"identity create {name} failed: {res.stdout!r} {res.stderr!r}")
-            client = MCPClient(fixture.binary, fixture.environment, args=("--identity", "runner"))
-            try:
-                remote_handle, remote_work = exercise_host(fixture, client, fixture.remote_id, "websocket")
-                local_handle, local_work = exercise_host(fixture, client, local[2], "unix")
-                exercise_revocation(fixture, client, remote_handle, remote_work)
-                exercise_daemon_stop(client, local_handle, local_work, local)
-                local = None
-            finally:
-                client.terminate()
-        finally:
-            if local is not None:
-                stop_local_daemon(local[0], local[1])
-            fixture.close()
+        run_fixture(sys.argv[1], Path(directory))
     print("PASS: mesh_run over Unix and WebSocket: results, binary and control output, deadline, cancel, short controls beside a run, refusals, revocation and daemon stop clean up the group")
 
 

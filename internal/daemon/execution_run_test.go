@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/oneshot"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -400,31 +401,47 @@ func TestRunDaemonStopCleansUpTheGroup(t *testing.T) {
 // reply is not sent and the connection ends, never both.
 func TestRunFrameBeforeCommitEndsTheConnection(t *testing.T) {
 	f := newRunFixture(t)
-	read := make(chan struct{}, 1)
+	claimed := make(chan struct{}, 1)
+	publish := make(chan struct{})
 	committing := make(chan struct{})
-	proceed := make(chan struct{})
-	lookaheadFrameRead = func() {
+	// The watcher pauses after claiming the second frame and before
+	// publishing it, the window in which the reply must not commit.
+	lookaheadFrameClaimed = func() {
 		select {
-		case read <- struct{}{}:
+		case claimed <- struct{}{}:
 		default:
 		}
+		<-publish
 	}
 	runBeforeCommit = func() {
 		close(committing)
-		<-proceed
+		waitSignal(t, claimed, "the claimed frame")
 	}
-	t.Cleanup(func() { lookaheadFrameRead, runBeforeCommit = func() {}, func() {} })
+	t.Cleanup(func() { lookaheadFrameClaimed, runBeforeCommit = func() {}, func() {} })
+	defer close(publish)
 	client, done := f.serve()
 	client.pushRead(serverControlFrame(t, f.request("true")))
 	waitSignal(t, committing, "the reply commit")
 	client.pushRead(serverControlFrame(t, f.request("true")))
-	waitSignal(t, read, "the queued frame")
-	close(proceed)
 	if err := waitServerResult(t, done, "run server"); err != nil {
 		t.Fatal(err)
 	}
 	assertNoRunReply(t, client)
 	assertRunsReleased(t, f.l.runs)
+}
+
+// A refusal the daemon has no specific code for still carries one, so the
+// client can tell it from an unknown outcome.
+func TestRunRefusalWithoutASpecificCodeIsStillCoded(t *testing.T) {
+	f := newRunFixture(t)
+	gate := updategate.Path(filepath.Dir(f.l.sessionsDir))
+	if err := os.MkdirAll(gate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reply := f.call(f.request("true"))
+	if code := runCode(t, reply); code != stateUnavailableCode || reply.Message == "" {
+		t.Fatalf("unreadable update gate = %+v", reply)
+	}
 }
 
 func TestRunValidationRejectsOtherFields(t *testing.T) {

@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,8 +23,9 @@ type runPoolFixture struct {
 	badReply         bool
 	emptyTermination bool
 	wrongHost        bool
+	uncodedRefusal   bool
 	deadConns        map[*poolFixtureConn]bool
-	conns            []*poolFixtureConn
+	conns            []*scriptedConn
 	clock            time.Time
 }
 
@@ -41,18 +44,20 @@ func (f *runPoolFixture) now() time.Time {
 	return f.clock
 }
 
-func (f *runPoolFixture) advance(d time.Duration) {
+// passProbeIdle moves the pool's clock past the idle time after which a run
+// probes a pooled connection.
+func (f *runPoolFixture) passProbeIdle() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.clock = f.clock.Add(d)
+	f.clock = f.clock.Add(runProbeIdle + time.Second)
 }
 
-func (f *runPoolFixture) dial() *poolFixtureConn {
+func (f *runPoolFixture) dial() *scriptedConn {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dials++
-	var conn *poolFixtureConn
-	conn = newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) { return f.answer(conn, req) })
+	conn := &scriptedConn{aborted: make(chan struct{})}
+	conn.poolFixtureConn = newPoolFixtureConn(func(req protocol.Control) (protocol.Control, error) { return f.answer(conn.poolFixtureConn, req) })
 	f.conns = append(f.conns, conn)
 	return conn
 }
@@ -78,8 +83,54 @@ func (f *runPoolFixture) answer(conn *poolFixtureConn, req protocol.Control) (pr
 	if f.emptyTermination {
 		return protocol.Control{Type: protocol.TypeExecutionRunResult, ExecutionRun: &protocol.ExecutionRunResult{}}, nil
 	}
+	if f.uncodedRefusal {
+		return protocol.Control{Type: protocol.TypeError, Message: "refused"}, nil
+	}
+	return protocol.Control{Type: protocol.TypeExecutionRunResult, ExecutionRun: validRunResult()}, nil
+}
+
+func validRunResult() *protocol.ExecutionRunResult {
 	code := 0
-	return protocol.Control{Type: protocol.TypeExecutionRunResult, ExecutionRun: &protocol.ExecutionRunResult{Termination: protocol.ExecutionTermination{Kind: "exit", Code: &code}}}, nil
+	eof := protocol.ExecutionRunStream{CloseReason: "eof"}
+	return &protocol.ExecutionRunResult{Termination: protocol.ExecutionTermination{Kind: "exit", Code: &code}, Cwd: "/work", ContextRevision: 1, StartedAt: time.Now(), Stdout: eof, Stderr: eof}
+}
+
+// scriptedConn is a fixture connection that can turn silent (reads block,
+// and a graceful Close waits like a close handshake nobody answers) or run
+// a hook before it reads.
+type scriptedConn struct {
+	*poolFixtureConn
+	silent     atomic.Bool
+	beforeRead func()
+	aborted    chan struct{}
+	abortOnce  sync.Once
+	closes     atomic.Int32
+}
+
+// Abort only marks the connection; a queued reply stays readable, as one
+// already received would be.
+func (c *scriptedConn) Abort() error {
+	c.abortOnce.Do(func() { close(c.aborted) })
+	return nil
+}
+
+func (c *scriptedConn) Close() error {
+	c.closes.Add(1)
+	if c.silent.Load() {
+		<-c.aborted
+	}
+	return c.poolFixtureConn.Close()
+}
+
+func (c *scriptedConn) ReadFrame() (protocol.Frame, error) {
+	if c.silent.Load() {
+		<-c.aborted
+		return protocol.Frame{}, io.EOF
+	}
+	if c.beforeRead != nil {
+		c.beforeRead()
+	}
+	return c.poolFixtureConn.ReadFrame()
 }
 
 func (f *runPoolFixture) counts() (dials, probes int) {
@@ -144,7 +195,7 @@ func TestExchangeRunProbesAConnectionThatSatIdle(t *testing.T) {
 	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
 		t.Fatal(err)
 	}
-	f.advance(runProbeIdle + time.Second)
+	f.passProbeIdle()
 	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
 		t.Fatal(err)
 	}
@@ -153,9 +204,9 @@ func TestExchangeRunProbesAConnectionThatSatIdle(t *testing.T) {
 	}
 	// A connection the host closed while idle is replaced before the run.
 	f.mu.Lock()
-	f.deadConns[f.conns[0]] = true
+	f.deadConns[f.conns[0].poolFixtureConn] = true
 	f.mu.Unlock()
-	f.advance(runProbeIdle + time.Second)
+	f.passProbeIdle()
 	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
 		t.Fatalf("run after a dead idle connection = %v", err)
 	}
@@ -200,7 +251,7 @@ func TestExchangeRunReplacesAConnectionWhoseProbeNamesAnotherHost(t *testing.T) 
 	f.mu.Lock()
 	f.wrongHost = true
 	f.mu.Unlock()
-	f.advance(runProbeIdle + time.Second)
+	f.passProbeIdle()
 	// The fresh connection's own handshake also answers for another host,
 	// so the run fails before anything is sent.
 	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); !isPreDispatchError(err) {
@@ -208,6 +259,72 @@ func TestExchangeRunReplacesAConnectionWhoseProbeNamesAnotherHost(t *testing.T) 
 	}
 	if dials, _ := f.counts(); dials != 2 {
 		t.Fatalf("dials = %d, want the mismatched connection replaced", dials)
+	}
+}
+
+// A reply that arrives as the call is cancelled is still the run's result;
+// only the connection, which the cancellation may be closing, is dropped.
+func TestExchangeRunKeepsAValidReplyWhenTheConnectionIsNotReusable(t *testing.T) {
+	f, pool, host := newRunPoolFixture(t)
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	conn := f.conns[0]
+	conn.beforeRead = func() {
+		cancel()
+		<-conn.aborted
+	}
+	resp, _, err := pool.ExchangeRun(ctx, host, runPoolRequest())
+	if err != nil || resp.ExecutionRun == nil {
+		t.Fatalf("reply racing a cancellation = %+v, %v", resp, err)
+	}
+	conn.beforeRead = nil
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if dials, _ := f.counts(); dials != 2 {
+		t.Fatalf("dials = %d, want the cancelled call's connection dropped", dials)
+	}
+}
+
+// A probe on a silent connection gives up on its own deadline without
+// waiting for a close handshake, and the run goes out on a fresh one.
+func TestExchangeRunAbortsASilentProbe(t *testing.T) {
+	saved := runProbeTimeout
+	runProbeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { runProbeTimeout = saved })
+	f, pool, host := newRunPoolFixture(t)
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.conns[0].silent.Store(true)
+	f.passProbeIdle()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run after a silent probe = %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the run waited on the silent connection's close handshake")
+	}
+	if dials, _ := f.counts(); dials != 2 {
+		t.Fatalf("dials = %d, want a fresh connection", dials)
+	}
+}
+
+// A refusal without a code is not a reply this client accepts.
+func TestExchangeRunRejectsAnUncodedRefusal(t *testing.T) {
+	f, pool, host := newRunPoolFixture(t)
+	f.uncodedRefusal = true
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); !errors.Is(err, errInvalidRunReply) {
+		t.Fatalf("uncoded refusal = %v", err)
 	}
 }
 

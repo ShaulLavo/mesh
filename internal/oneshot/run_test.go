@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -139,14 +140,25 @@ func TestCancelDuringTheDrainHangsUpTheGroup(t *testing.T) {
 	dir := t.TempDir()
 	marker, leaderDone := filepath.Join(dir, "hup"), filepath.Join(dir, "leader-done")
 	member := `(trap 'echo hup > ` + marker + `; exit' HUP; while :; do echo x; sleep 0.05; done) &`
+	draining := make(chan struct{}, 1)
+	drainStarting = func() {
+		select {
+		case draining <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { drainStarting = func() {} })
 	run, err := Start(shellSpec(t, member+" touch "+leaderDone, 1024, hangCap))
 	if err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return fileExists(leaderDone) })
-	// Let the leader finish exiting; the member keeps the drain open for
-	// its full two seconds.
-	time.Sleep(100 * time.Millisecond)
+	// The leader has exited and the drain began; the member keeps writing.
+	select {
+	case <-draining:
+	case <-time.After(hangCap):
+		t.Fatal("the drain never started")
+	}
 	run.Cancel()
 	result := waitRun(t, run)
 	if result.TimedOut || exitCode(t, result) != 0 {
@@ -218,6 +230,30 @@ func TestLookPathUsesTheRunEnvironment(t *testing.T) {
 	}
 	if got, err := LookPath("only-here", []string{"PATH=" + denied + ":" + dir}); err != nil || got != tool {
 		t.Fatalf("LookPath past a denied candidate = %q, %v", got, err)
+	}
+}
+
+// A deadline due at the same moment the drain ends is still reported. The
+// loop sees both ready at once, many times over.
+func TestADeadlineDueAtTheEndOfTheDrainIsReported(t *testing.T) {
+	grace = time.Millisecond
+	t.Cleanup(func() { grace = Grace })
+	for range 50 {
+		member := exec.Command("sleep", "30")
+		member.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := member.Start(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := make(chan time.Time, 1)
+		deadline <- time.Now()
+		drained := make(chan struct{})
+		close(drained)
+		c := &cleanup{group: member.Process.Pid, deadline: deadline, drained: drained, leaderGone: true, stopDrain: make(chan struct{})}
+		c.run()
+		_ = member.Wait()
+		if !c.timedOut || !c.killed {
+			t.Fatalf("a due deadline was dropped: timedOut=%t killed=%t", c.timedOut, c.killed)
+		}
 	}
 }
 
