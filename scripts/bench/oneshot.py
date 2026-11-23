@@ -116,7 +116,10 @@ cleanup_stage() {
   fi
   rm -rf -- "$scratch" && [ ! -e "$scratch" ]
 }
-trap cleanup_stage EXIT INT TERM HUP
+trap cleanup_stage EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 printf 'ONESHOT_STAGE_READY {"scratch":"%s"}\n' "$scratch"
 deadline=$(( $(date +%s) + 120 ))
 while [ ! -f "$scratch/stage.done" ]; do
@@ -131,6 +134,38 @@ exec "$py" "$scratch/oneshot.py" --remote-agent --self-clean \
   --true-path "$tp" --server-warmups "$sw" --server-count "$sc" \
   --owner-token "$tok" --max-idle-seconds "$idle"
 """
+
+MAC_QUEUE_CANCEL_SCRIPT = (
+    "import ctypes, json, os, signal, struct, subprocess, sys, time\n"
+    "task = sys.argv[1]\n"
+    "bun = os.path.expanduser('~/.bun/bin/bun')\n"
+    "q = os.path.expanduser('~/.agents/skills/machine-fleet/scripts/mac-queue.ts')\n"
+    "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)\n"
+    "lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]\n"
+    "lib.proc_pidinfo.restype = ctypes.c_int\n"
+    "def bsd_start(pid):\n"
+    "    buf = ctypes.create_string_buffer(136)\n"
+    "    if lib.proc_pidinfo(int(pid), 3, 0, buf, 136) != 136: return None\n"
+    "    if struct.unpack_from('<I', buf.raw, 12)[0] != int(pid) or struct.unpack_from('<I', buf.raw, 4)[0] == 5: return None\n"
+    "    s, u = struct.unpack_from('<QQ', buf.raw, 120)\n"
+    "    return f'{s}:{u}' if s and u < 1_000_000 else None\n"
+    "def matching():\n"
+    "    r = subprocess.run([bun, q, 'status'], capture_output=True, text=True, timeout=10)\n"
+    "    if r.returncode != 0: raise RuntimeError(r.stderr or r.stdout)\n"
+    "    st = json.loads(r.stdout)\n"
+    "    return [t for t in (st.get('holders') or []) + (st.get('waiting') or []) if t.get('task') == task]\n"
+    "for t in matching():\n"
+    "    pid, start = int(t['pid']), str(t['start'])\n"
+    "    if bsd_start(pid) == start:\n"
+    "        try: os.kill(pid, signal.SIGTERM)\n"
+    "        except ProcessLookupError: pass\n"
+    "deadline = time.monotonic() + 5.0\n"
+    "while matching() and time.monotonic() < deadline:\n"
+    "    time.sleep(0.1)\n"
+    "rem = [t['id'] for t in matching()]\n"
+    "print(json.dumps({'cancelled': not rem, 'remaining_tickets': rem}))\n"
+    "sys.exit(0 if not rem else 1)\n"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -365,14 +400,20 @@ def expand_owned_descendants(rows, owned, exclude_pids):
     return added
 
 
-def build_mac_queue_command(remote_argv, lane, thread, expected_seconds, wait_seconds, timeout_seconds):
+def mac_queue_task_label(owner_token):
+    return f"Mesh oneshot benchmark ({owner_token})"
+
+
+def build_mac_queue_command(
+    remote_argv, lane, thread, expected_seconds, wait_seconds, timeout_seconds, task="Mesh oneshot benchmark"
+):
     queue_argv = [
         "$HOME/.bun/bin/bun",
         "$HOME/.agents/skills/machine-fleet/scripts/mac-queue.ts",
         "run",
         "--lane", shlex.quote(lane),
         "--thread", shlex.quote(thread),
-        "--task", shlex.quote("Mesh oneshot benchmark"),
+        "--task", shlex.quote(task),
         "--expected-seconds", str(expected_seconds),
         "--wait-seconds", str(wait_seconds),
         "--timeout-seconds", str(timeout_seconds),
@@ -604,8 +645,22 @@ def darwin_libproc():
         lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
         lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
         lib.proc_pidinfo.restype = ctypes.c_int
+        lib.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.proc_listallpids.restype = ctypes.c_int
         _DARWIN_LIBPROC = lib
     return _DARWIN_LIBPROC
+
+
+def darwin_all_pids():
+    lib = darwin_libproc()
+    count = lib.proc_listallpids(None, 0)
+    if count <= 0:
+        raise RuntimeError(f"proc_listallpids failed ({count})")
+    buf = (ctypes.c_int * (count + 128))()
+    actual = lib.proc_listallpids(buf, ctypes.sizeof(buf))
+    if actual < 0:
+        raise RuntimeError(f"proc_listallpids read failed ({actual})")
+    return [buf[idx] for idx in range(actual) if buf[idx] > 0]
 
 
 def darwin_start_id(pid):
@@ -692,21 +747,25 @@ def list_linux_process_rows():
 
 
 def read_linux_process_row(entry):
+    pid = int(entry.name)
+    start_before = linux_start_id(pid)
+    if start_before is None:
+        return None
     try:
         fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        if fields[0] == "Z":
-            return None
         raw_cmd = (entry / "cmdline").read_bytes()
         argv = [part.decode(errors="replace") for part in raw_cmd.split(b"\x00") if part]
         exe = os.readlink(entry / "exe")
     except OSError:
         return None
     token = read_linux_owner_token(entry)
+    if linux_start_id(pid) != start_before:
+        return None
     return {
-        "pid": int(entry.name),
+        "pid": pid,
         "ppid": int(fields[1]),
         "pgid": int(fields[2]),
-        "start": f"{linux_boot_id()}:{fields[19]}",
+        "start": start_before,
         "exe": exe,
         "argv": argv,
         "owner_token": token,
@@ -726,32 +785,52 @@ def read_linux_owner_token(entry):
 
 
 def list_posix_process_rows():
-    fmt = "pid=,ppid=,pgid=,state=,command=" if sys.platform == "darwin" else "pid=,ppid=,pgid=,state=,lstart=,command="
-    result = subprocess.run(["ps", "-ax", "-o", fmt], capture_output=True, text=True)
+    if sys.platform == "darwin":
+        return list_darwin_process_rows()
+    result = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], capture_output=True, text=True)
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
     rows = []
     for line in result.stdout.splitlines():
-        row = parse_darwin_ps_row(line) if sys.platform == "darwin" else parse_posix_ps_row(line)
+        row = parse_posix_ps_row(line)
         if row is not None:
             rows.append(row)
     return rows
 
 
-def parse_darwin_ps_row(line):
+def list_darwin_process_rows():
+    # Bracket the ps snapshot with libproc birth times before and after so a PID
+    # reused during ps cannot pair old arguments with a new process identity.
+    starts_before = {pid: start for pid in darwin_all_pids() if (start := darwin_start_id(pid)) is not None}
+    result = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,command="], capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
+    return bracket_darwin_ps_rows(result.stdout.splitlines(), starts_before, darwin_start_id)
+
+
+def bracket_darwin_ps_rows(lines, starts_before, start_lookup):
+    rows = []
+    for line in lines:
+        row = parse_bracketed_darwin_row(line, starts_before, start_lookup)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def parse_bracketed_darwin_row(line, starts_before, start_lookup):
     parts = line.strip().split(None, 4)
     if len(parts) < 5 or not parts[0].isdigit() or parts[3].startswith("Z"):
         return None
     pid = int(parts[0])
-    start = darwin_start_id(pid)
-    if start is None:
+    before = starts_before.get(pid)
+    if before is None or start_lookup(pid) != before:
         return None
     argv = split_command_safe(parts[4])
     return {
         "pid": pid,
         "ppid": int(parts[1]),
         "pgid": int(parts[2]),
-        "start": start,
+        "start": before,
         "exe": argv[0] if argv else "",
         "argv": argv,
         "owner_token": None,
@@ -932,25 +1011,35 @@ def worker_kill_request(socket_path):
 
 
 class CleanupDeadline:
-    """Single monotonic deadline shared across cleanup phases; clampable on late signals."""
+    """Lock-free monotonic deadline safe to tighten from signal handlers."""
 
     def __init__(self, seconds):
-        self._lock = threading.Lock()
         self._at = time.monotonic() + max(0.1, float(seconds))
+        self._signal_at = None
 
     @property
     def at(self):
-        with self._lock:
-            return self._at
+        sig_at = self._signal_at
+        if sig_at is not None and sig_at < self._at:
+            return sig_at
+        return self._at
 
     def clamp(self, seconds_from_now):
         target = time.monotonic() + max(0.05, float(seconds_from_now))
-        with self._lock:
-            if target < self._at:
-                self._at = target
+        cur = self._signal_at
+        if cur is None or target < cur:
+            self._signal_at = target
 
     def remaining(self):
         return max(0.0, self.at - time.monotonic())
+
+
+def install_deadline_signal_handlers(deadline, clamp_seconds=1.35):
+    def tighten(_signum, _frame):
+        deadline.clamp(clamp_seconds)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, tighten)
 
 
 def kill_worker_socket(socket_path, rpc_timeout=0.25):
@@ -1009,8 +1098,7 @@ def cleanup_owned_tree(
     sessions_dir = Path(state_dir) / "s"
     snapshot_error = try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude)
     shutdown_workers_gracefully(state_dir, deadline)
-    daemon_grace = min(2.5, max(0.15, deadline.remaining() - 0.55))
-    stop_popen(daemon_proc, grace=daemon_grace, kill_wait=min(0.4, max(0.1, deadline.remaining())))
+    stop_popen(daemon_proc, deadline=deadline, grace=2.5, kill_wait=0.5)
     reap_children()
     remaining = terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
     if snapshot_error is not None:
@@ -1027,14 +1115,15 @@ def try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclud
 
 
 def terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, exclude, deadline):
-    term_wait = min(2.0, max(0.1, deadline.remaining() * 0.45))
-    for sig, phase_budget in ((signal.SIGTERM, term_wait), (signal.SIGKILL, max(0.1, deadline.remaining()))):
+    term_cap = time.monotonic() + 2.0
+    for sig, reserve in ((signal.SIGTERM, 0.35), (signal.SIGKILL, 0.0)):
         targets = find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)
         if not targets:
             return []
         for pid, start in targets:
             signal_verified_process(pid, start, sig)
-        wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, min(phase_budget, deadline.remaining()))
+        phase_cap = term_cap if sig == signal.SIGTERM else float("inf")
+        wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap)
     return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)]
 
 
@@ -1045,23 +1134,37 @@ def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
     return discover_owned_processes(rows, roots, exact_binary, sessions_dir, owner_token, exclude)
 
 
-def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, timeout):
-    end = time.monotonic() + max(0.0, timeout)
-    while time.monotonic() < end:
+def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap):
+    while time.monotonic() < min(phase_cap, deadline.at - reserve):
         if not find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
             return
         time.sleep(0.05)
 
 
-def stop_popen(proc, grace=5.0, kill_wait=2.0):
+def poll_proc_until(proc, stop_at):
+    while proc.poll() is None and time.monotonic() < stop_at():
+        time.sleep(0.05)
+    return proc.poll() is not None
+
+
+def stop_popen(proc, grace=5.0, kill_wait=2.0, deadline=None):
     if proc is None or proc.poll() is not None:
         return
     proc.terminate()
-    try:
-        proc.wait(timeout=max(0.05, grace))
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=max(0.05, kill_wait))
+    term_cap = time.monotonic() + max(0.05, grace)
+
+    def term_limit():
+        return min(term_cap, deadline.at - 0.55) if deadline is not None else term_cap
+
+    if poll_proc_until(proc, term_limit):
+        return
+    proc.kill()
+    kill_cap = time.monotonic() + max(0.05, kill_wait)
+
+    def kill_limit():
+        return min(kill_cap, deadline.at - 0.15) if deadline is not None else kill_cap
+
+    poll_proc_until(proc, kill_limit)
 
 
 def pick_free_port(bind_ip):
@@ -1346,12 +1449,14 @@ def run_cleanup_scratch(args):
     scratch = Path(args.scratch).resolve()
     if not scratch.name.startswith("mesh-oneshot-bench-"):
         raise SystemExit(f"refusing to clean unexpected scratch path: {scratch}")
+    deadline = CleanupDeadline(8.0)
+    install_deadline_signal_handlers(deadline)
     try:
         state = verify_owner_token(scratch, args.owner_token)
         if state == "absent":
             result = {"clean": True, "remaining_pids": [], "scratch_removed": True, "remote_scratch": str(scratch)}
         else:
-            remaining = cleanup_owned_tree(scratch, owner_token=args.owner_token)
+            remaining = cleanup_owned_tree(scratch, owner_token=args.owner_token, deadline=deadline)
             removed = remove_scratch_if_clean(scratch, remaining)
             result = {
                 "clean": not remaining and removed,
@@ -1408,12 +1513,7 @@ def run_remote_agent(args):
 
 def finish_remote_agent(daemon, scratch, self_clean, fast=False):
     deadline = CleanupDeadline(1.35 if fast else 8.0)
-
-    def tighten(_signum, _frame):
-        deadline.clamp(1.35)
-
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, tighten)
+    install_deadline_signal_handlers(deadline)
     try:
         remaining = daemon.stop(deadline=deadline)
         removed = remove_scratch_if_clean(scratch, remaining) if self_clean else (not scratch.exists())
@@ -2167,6 +2267,7 @@ def build_remote_launcher_command(host_name, spec, probe, remote_scratch, client
             expected_seconds=MAC_QUEUE_EXPECTED_SECONDS,
             wait_seconds=MAC_QUEUE_WAIT_SECONDS,
             timeout_seconds=MAC_QUEUE_TIMEOUT_SECONDS,
+            task=mac_queue_task_label(owner_token),
         )
         return f"zsh -lc {shlex.quote(queue_cmd)}"
     return " ".join(shlex.quote(part) for part in wrapper_argv)
@@ -2185,18 +2286,7 @@ def stage_files_into_remote(orch_master, target_ip, binary_path, remote_scratch,
         raise RuntimeError(f"failed to finalize staging on {orch_master.target}: {finish_stage.stderr}")
 
 
-def run_recovery_command(orch_master, target_ip, ssh_alias, cmd, timeout):
-    if orch_master is not None and orch_master.check() == orch_master.master_pid:
-        try:
-            res = orch_master.run(cmd, timeout=timeout)
-        except (subprocess.TimeoutExpired, OSError):
-            res = None
-        if res is not None and res.returncode != 255:
-            return res
-    return run_fresh_verified_ssh(target_ip, ssh_alias, cmd, timeout=timeout)
-
-
-def remote_recovery_cleanup(orch_master, target_ip, spec, remote_python, remote_scratch, owner_token, args):
+def remote_recovery_cleanup(target_ip, spec, remote_python, remote_scratch, owner_token, args):
     script = (
         "scratch=$1; py=$2; tok=$3\n"
         "if [ ! -e \"$scratch\" ]; then\n"
@@ -2219,6 +2309,11 @@ def remote_recovery_cleanup(orch_master, target_ip, spec, remote_python, remote_
     )
     shell_argv = ["/bin/sh", "-c", script, "oneshot-recover", remote_scratch, remote_python, owner_token]
     if spec.get("use_mac_queue"):
+        exists = run_fresh_verified_ssh(
+            target_ip, spec["ssh_alias"], f"test -e {shlex.quote(remote_scratch)}", timeout=15
+        )
+        if exists.returncode == 1:
+            return {"clean": True, "remaining_pids": [], "scratch_removed": True, "remote_scratch": remote_scratch}
         queue_cmd = build_mac_queue_command(
             shell_argv,
             lane=args.mac_lane,
@@ -2232,7 +2327,9 @@ def remote_recovery_cleanup(orch_master, target_ip, spec, remote_python, remote_
     else:
         cmd = " ".join(shlex.quote(part) for part in shell_argv)
         timeout = 60
-    result = run_recovery_command(orch_master, target_ip, spec["ssh_alias"], cmd, timeout)
+    # Always recover over a fresh verified SSH connection so a dead or stalled
+    # orchestration master can never block cleanup.
+    result = run_fresh_verified_ssh(target_ip, spec["ssh_alias"], cmd, timeout=timeout)
     return parse_recovery_result(result, remote_scratch)
 
 
@@ -2321,7 +2418,7 @@ def run_remote_session(
     finally:
         with helpers.isolation.protected_cleanup():
             teardown_remote(
-                host_name, spec, target_ip, orch_master, probe["python3"], remote_scratch,
+                host_name, spec, target_ip, probe["python3"], remote_scratch,
                 remote_proc, marker_stream, stopped_payload, owner_token, stage_ready, args, cleanup_report,
             )
 
@@ -2393,34 +2490,56 @@ def execute_remote_measurements(
     return stopped_payload
 
 
+def cancel_mac_queue_ticket(target_ip, ssh_alias, remote_python, task_label):
+    cmd = " ".join(shlex.quote(part) for part in (remote_python, "-c", MAC_QUEUE_CANCEL_SCRIPT, task_label))
+    result = run_fresh_verified_ssh(target_ip, ssh_alias, cmd, timeout=20)
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    payload = parse_last_json_line(lines)
+    if result.returncode == 0 and isinstance(payload, dict) and payload.get("cancelled") is True:
+        return payload
+    detail = (result.stderr or result.stdout or f"exit {result.returncode}").strip()[:500]
+    return {"cancelled": False, "error": f"mac-queue cancel failed: {detail}"}
+
+
 def teardown_remote(
-    host_name, spec, target_ip, orch_master, remote_python, remote_scratch,
+    host_name, spec, target_ip, remote_python, remote_scratch,
     remote_proc, marker_stream, stopped_payload, owner_token, stage_ready, args, cleanup_report,
 ):
     try:
         if remote_proc is not None and remote_proc.poll() is None:
             stopped_payload = request_remote_stop(
-                orch_master, target_ip, spec["ssh_alias"], remote_scratch, owner_token, stage_ready, remote_proc, marker_stream
+                target_ip, spec["ssh_alias"], remote_scratch, owner_token, stage_ready, remote_proc, marker_stream
             )
         if isinstance(stopped_payload, dict) and stopped_payload.get("clean") is True:
             cleanup_report[host_name] = stopped_payload
             return
-        cleanup_report[host_name] = remote_recovery_cleanup(
-            orch_master, target_ip, spec, remote_python, remote_scratch, owner_token, args
+        ticket_cancel = None
+        if spec.get("use_mac_queue"):
+            ticket_cancel = cancel_mac_queue_ticket(
+                target_ip, spec["ssh_alias"], remote_python, mac_queue_task_label(owner_token)
+            )
+        recovery = remote_recovery_cleanup(
+            target_ip, spec, remote_python, remote_scratch, owner_token, args
         )
+        if ticket_cancel is not None and not ticket_cancel.get("cancelled"):
+            recovery["clean"] = False
+            recovery["ticket_cancel_error"] = ticket_cancel.get("error") or "mac-queue ticket still active"
+        cleanup_report[host_name] = recovery
     except Exception as error:
         cleanup_report[host_name] = {"clean": False, "error": str(error), "remote_scratch": remote_scratch}
 
 
-def request_remote_stop(orch_master, target_ip, ssh_alias, remote_scratch, owner_token, stage_ready, remote_proc, marker_stream):
-    if stage_ready:
-        try:
-            stop_cmd = token_guarded_command(remote_scratch, owner_token, 'touch "$scratch/stop"')
-            run_recovery_command(orch_master, target_ip, ssh_alias, stop_cmd, timeout=10)
-        except Exception:
-            pass
+def request_remote_stop(target_ip, ssh_alias, remote_scratch, owner_token, stage_ready, remote_proc, marker_stream):
+    if not stage_ready:
+        stop_popen(remote_proc, grace=2.0)
+        return None
     try:
-        payload = marker_stream.read_marker(STOPPED_PREFIX, 20) if (stage_ready and marker_stream) else None
+        stop_cmd = token_guarded_command(remote_scratch, owner_token, 'touch "$scratch/stop"')
+        run_fresh_verified_ssh(target_ip, ssh_alias, stop_cmd, timeout=10)
+    except Exception:
+        pass
+    try:
+        payload = marker_stream.read_marker(STOPPED_PREFIX, 20) if marker_stream else None
         remote_proc.wait(timeout=15)
         return payload
     except Exception:

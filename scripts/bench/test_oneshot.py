@@ -372,25 +372,66 @@ class OneshotPureLogicTests(unittest.TestCase):
             self.assertEqual(res_ok.returncode, 0)
             self.assertTrue((scratch / "stop").exists())
 
-    def test_run_recovery_command_falls_back_on_mux_timeout_and_exit_255(self):
-        fresh_ok = subprocess.CompletedProcess([], 0, stdout='{"clean":true}\n', stderr="")
-        mux_255 = SimpleNamespace(
-            master_pid=10, check=lambda: 10,
-            run=lambda _cmd, timeout=60: subprocess.CompletedProcess([], 255, "", "mux dead"),
+    def test_bracket_darwin_ps_rows_rejects_reused_pid(self):
+        ps_lines = [
+            "100 1 100 S /Users/shaul/mesh-oneshot-bench-1/mesh daemon",
+            "200 1 200 S /Users/shaul/mesh-oneshot-bench-1/mesh session-worker --dir /Users/shaul/mesh-oneshot-bench-1/state/s/A",
+            "300 1 300 S /bin/sleep 60",
+        ]
+        starts_before = {100: "1795417000:100", 200: "1795417000:200"}
+        # PID 200 changed hands mid-ps (new birth time), PID 300 wasn't in starts_before -> both rejected!
+        starts_after = {100: "1795417000:100", 200: "1795417005:999", 300: "1795417006:111"}
+        rows = oneshot.bracket_darwin_ps_rows(ps_lines, starts_before, starts_after.get)
+        self.assertEqual([row["pid"] for row in rows], [100])
+        self.assertEqual(rows[0]["start"], "1795417000:100")
+
+    def test_late_signal_clamps_daemon_wait_and_escalates_to_sigkill(self):
+        stubborn = subprocess.Popen(
+            [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fresh_ok) as fresh:
-            res = oneshot.run_recovery_command(mux_255, "100.84.25.68", "vps", "true", 10)
-        self.assertEqual(res.returncode, 0)
-        fresh.assert_called_once()
+        deadline = oneshot.CleanupDeadline(8.0)
+        threading.Timer(0.15, lambda: deadline.clamp(1.0)).start()
+        started = time.monotonic()
+        try:
+            oneshot.stop_popen(stubborn, grace=5.0, kill_wait=1.0, deadline=deadline)
+            elapsed = time.monotonic() - started
+        finally:
+            if stubborn.poll() is None:
+                stubborn.kill()
+                stubborn.wait(timeout=2)
+        self.assertIsNotNone(stubborn.poll())
+        # Must escalate to SIGKILL well inside the clamped 1.0s deadline (never wait the 5s grace).
+        self.assertLess(elapsed, 1.5)
 
-        def raise_timeout(_cmd, timeout=60):
-            raise subprocess.TimeoutExpired("ssh", timeout)
-
-        mux_timeout = SimpleNamespace(master_pid=10, check=lambda: 10, run=raise_timeout)
-        with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fresh_ok) as fresh2:
-            res2 = oneshot.run_recovery_command(mux_timeout, "100.84.25.68", "vps", "true", 10)
-        self.assertEqual(res2.returncode, 0)
-        fresh2.assert_called_once()
+    def test_stage_wrapper_exits_and_cleans_on_sigterm(self):
+        with tempfile.TemporaryDirectory(prefix="oneshot-stage-parent-", dir="/work/tmp") as parent:
+            scratch = Path(parent) / "mesh-oneshot-bench-stage-test"
+            proc = subprocess.Popen(
+                [
+                    "/bin/sh", "-c", oneshot.REMOTE_STAGE_WRAPPER, "oneshot-stage",
+                    str(scratch), sys.executable, "vps", "127.0.0.1", "cid", "10", "/bin/true", "0", "1", "tok-stage", "30",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                stream = oneshot.MarkerStream(proc.stdout)
+                ready = stream.read_marker(oneshot.STAGE_READY_PREFIX, timeout=5.0)
+                self.assertEqual(ready["scratch"], str(scratch))
+                self.assertTrue(scratch.is_dir())
+                proc.terminate()
+                rc = proc.wait(timeout=3.0)
+            finally:
+                oneshot.stop_popen(proc, grace=1.0)
+                proc.stdout.close()
+                proc.stderr.close()
+            self.assertEqual(rc, 143)
+            self.assertFalse(scratch.exists())
 
     def test_parse_recovery_result_rejects_clean_true_on_nonzero_exit(self):
         bad = subprocess.CompletedProcess([], 1, stdout='{"clean":true,"scratch_removed":true}\n', stderr="rm failed")
@@ -410,14 +451,13 @@ class OneshotPureLogicTests(unittest.TestCase):
                 oneshot.cleanup_owned_tree(scratch, daemon_proc="owned-daemon")
         return stopped
 
-    def test_recovery_uses_fresh_verified_ssh_when_orch_master_is_dead(self):
-        dead_master = SimpleNamespace(master_pid=123, check=lambda: None)
+    def test_recovery_always_uses_fresh_verified_ssh(self):
         fake_res = subprocess.CompletedProcess([], 0, stdout='{"clean":true,"remaining_pids":[],"scratch_removed":true}\n', stderr="")
         spec = oneshot.HOST_SPECS["vps"]
         args = SimpleNamespace(mac_lane="lane", mac_thread="thread")
         with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fake_res) as fresh:
             result = oneshot.remote_recovery_cleanup(
-                dead_master, "100.84.25.68", spec, "/usr/bin/python3", "/root/mesh-oneshot-bench-1-vps", "tok-1", args
+                "100.84.25.68", spec, "/usr/bin/python3", "/root/mesh-oneshot-bench-1-vps", "tok-1", args
             )
         self.assertTrue(result["clean"])
         fresh.assert_called_once()
@@ -565,10 +605,46 @@ class OneshotPureLogicTests(unittest.TestCase):
             expected_seconds=300,
             wait_seconds=600,
             timeout_seconds=600,
+            task=oneshot.mac_queue_task_label("tok-abc"),
         )
         self.assertIn("mac-queue.ts run", cmd)
         self.assertIn("--lane mesh-oneshot-bench", cmd)
+        self.assertIn("Mesh oneshot benchmark (tok-abc)", cmd)
         self.assertIn("-- /usr/bin/python3 /Users/shaul/mesh-oneshot-bench-1/oneshot.py --remote-agent", cmd)
+
+    def test_teardown_remote_cancels_mac_queue_ticket_before_recovery(self):
+        spec = oneshot.HOST_SPECS["mac"]
+        args = SimpleNamespace(mac_lane="lane", mac_thread="thread")
+        report = {}
+        calls = []
+
+        def fake_cancel(ip, alias, py, task_label):
+            calls.append(("cancel", ip, alias, task_label))
+            return {"cancelled": True, "remaining_tickets": []}
+
+        def fake_recover(ip, _spec, _py, scratch, _tok, _args):
+            calls.append(("recover", ip, scratch))
+            return {"clean": True, "remaining_pids": [], "scratch_removed": True, "remote_scratch": scratch}
+
+        with patch.object(oneshot, "cancel_mac_queue_ticket", side_effect=fake_cancel), \
+             patch.object(oneshot, "remote_recovery_cleanup", side_effect=fake_recover):
+            oneshot.teardown_remote(
+                "mac", spec, "100.92.135.44", "/usr/bin/python3", "/Users/shaul/mesh-oneshot-bench-1-mac",
+                None, None, None, "tok-xyz", False, args, report,
+            )
+        self.assertTrue(report["mac"]["clean"])
+        self.assertEqual(calls[0], ("cancel", "100.92.135.44", "shaul-mac", "Mesh oneshot benchmark (tok-xyz)"))
+        self.assertEqual(calls[1][0], "recover")
+
+        report_failed = {}
+        with patch.object(oneshot, "cancel_mac_queue_ticket", return_value={"cancelled": False, "error": "still waiting"}), \
+             patch.object(oneshot, "remote_recovery_cleanup", side_effect=fake_recover):
+            oneshot.teardown_remote(
+                "mac", spec, "100.92.135.44", "/usr/bin/python3", "/Users/shaul/mesh-oneshot-bench-1-mac",
+                None, None, None, "tok-xyz", False, args, report_failed,
+            )
+        self.assertFalse(report_failed["mac"]["clean"])
+        self.assertIn("still waiting", report_failed["mac"]["ticket_cancel_error"])
 
     def test_isolated_env_sets_private_permissions(self):
         with tempfile.TemporaryDirectory(prefix="oneshot-env-test-") as directory:
