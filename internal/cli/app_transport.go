@@ -160,6 +160,9 @@ func dialMeshSSHWithKey(ctx context.Context, host HostRecord, key ed25519.Privat
 	address := net.JoinHostPort(endpoint.Hostname(), strconv.Itoa(int(port)))
 	raw, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", address)
 	if err != nil {
+		if connectErr := classifyConnectError(host, address, err); connectErr != nil {
+			return nil, connectErr
+		}
 		return nil, fmt.Errorf("connect SSH host %s: %w", HostLabel(host), err)
 	}
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })

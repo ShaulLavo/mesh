@@ -38,6 +38,9 @@ func openVerifiedHost(ctx context.Context, host HostRecord, dial HostDialer) (tr
 func openVerifiedHostInfo(ctx context.Context, host HostRecord, dial HostDialer) (transport.Conn, protocol.HostInfo, error) {
 	conn, err := dial(ctx, host)
 	if err != nil {
+		if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
+			return nil, protocol.HostInfo{}, connectErr
+		}
 		return nil, protocol.HostInfo{}, presentError("connect to host "+HostLabel(host), err)
 	}
 	requestID, err := newDaemonRequestID()

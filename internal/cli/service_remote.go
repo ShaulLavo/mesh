@@ -21,10 +21,16 @@ const (
 
 func dialControlHost(ctx context.Context, host HostRecord) (transport.Conn, error) {
 	conn, err := transport.DialPinned(ctx, host.Endpoint, host.MeshIdentity)
-	if err != nil {
+	if err == nil {
+		return conn, nil
+	}
+	if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
+		return nil, connectErr
+	}
+	if controlAuthenticationFailure(err) {
 		return nil, fmt.Errorf("authenticate control host: %w", err)
 	}
-	return conn, nil
+	return nil, fmt.Errorf("open control connection: %w", err)
 }
 
 // serviceExchange sends one service control to its owning host. The CLI
