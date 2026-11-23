@@ -2,8 +2,6 @@
 package execution
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -171,14 +169,7 @@ func (f *Files) ReadBounded(name string, out any, limit int) error {
 }
 func (f *Files) syncDirs(name string) error {
 	for dir := filepath.Dir(name); ; dir = filepath.Dir(dir) {
-		if err := f.step("directory_sync"); err != nil {
-			return err
-		}
-		file, err := f.root.Open(dir)
-		if err != nil {
-			return executionBoundaryError("files.go syncDirs", err)
-		}
-		if err := errors.Join(file.Sync(), file.Close()); err != nil {
+		if err := f.syncDir(dir); err != nil {
 			return err
 		}
 		if dir == "." {
@@ -186,33 +177,21 @@ func (f *Files) syncDirs(name string) error {
 		}
 	}
 }
-func (f *Files) Confirm(name string) error {
-	file, err := f.open(name, os.O_RDONLY)
-	if err != nil {
+func (f *Files) syncDir(dir string) error {
+	if err := f.step("directory_sync"); err != nil {
 		return err
 	}
-	return errors.Join(f.confirmOpen(name, file), f.closeFile(file))
+	file, err := f.root.Open(dir)
+	if err != nil {
+		return executionBoundaryError("files.go syncDirs", err)
+	}
+	return errors.Join(file.Sync(), file.Close())
 }
 
-// confirmOpen makes an opened record and its namespace durable. Only the file's
+// Confirm makes an existing record and its namespace durable. Only the file's
 // own fsync is skipped, and only for a JSON record this process already synced
 // and has not seen change; every directory and device barrier still runs.
-func (f *Files) confirmOpen(name string, file *os.File) error {
-	stamp, ok := f.stampOf(name, file)
-	remembered := ok && f.wasConfirmed(name, stamp)
-	var err error
-	if !remembered {
-		err = f.dataSync(file)
-	}
-	err = errors.Join(err, f.syncDirs(name))
-	if err == nil {
-		err = f.flushDevice(file)
-	}
-	if err == nil && ok && !remembered {
-		f.remember(name, stamp)
-	}
-	return err
-}
+func (f *Files) Confirm(name string) error { return f.ConfirmAll(name) }
 
 // stampOf identifies the current bytes of a JSON record. Records are written
 // once to a fresh file and replaced by rename, never rewritten in place, so
@@ -275,46 +254,20 @@ func (f *Files) PublishBounded(name string, value any, exclusive bool, limit int
 	return f.publishBytes(name, data, exclusive)
 }
 func (f *Files) publishBytes(name string, data []byte, exclusive bool) (Stage, error) {
-	if err := f.check(name, true); err != nil {
-		return BeforePublish, err
-	}
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return BeforePublish, executionBoundaryError("files.go Publish", err)
-	}
-	temp := filepath.Join(filepath.Dir(name), ".tmp-"+hex.EncodeToString(random[:]))
-	file, err := f.open(temp, os.O_CREATE|os.O_EXCL|os.O_RDWR)
-	if err != nil {
-		return BeforePublish, err
-	}
-	defer func() { _ = f.root.Remove(temp) }()
-	n, err := file.Write(data)
-	if n != len(data) && err == nil {
-		err = io.ErrShortWrite
-	}
-	if err = errors.Join(err, f.dataSync(file)); err != nil {
-		return BeforePublish, errors.Join(err, f.closeFile(file))
-	}
-	stage := BeforePublish
-	err = f.step("publish")
+	r := f.newRound()
+	err := r.stage(name, data, exclusive)
 	if err == nil {
-		stage, err = f.publishName(temp, name, exclusive)
+		err = r.syncData()
 	}
 	if err != nil {
-		return stage, &PersistenceError{Stage: stage, Err: errors.Join(err, f.closeFile(file))}
+		return BeforePublish, errors.Join(err, r.close())
 	}
-	// Sampled right after the data sync and the rename, before the slower
-	// directory syncs, so it describes the bytes that were just made durable.
-	stamp, stamped := f.stampOf(name, file)
-	err = f.syncDirs(name)
-	if err == nil {
-		err = f.flushDevice(file)
-	}
-	if err = errors.Join(err, f.closeFile(file)); err != nil {
-		return Unconfirmed, &PersistenceError{Unconfirmed, err}
-	}
-	if stamped {
-		f.remember(name, stamp)
+	_, stage, err := r.complete()
+	if err = errors.Join(err, r.close()); err != nil {
+		if stage == Durable {
+			stage = Unconfirmed
+		}
+		return stage, &PersistenceError{Stage: stage, Err: err}
 	}
 	return Durable, nil
 }
@@ -343,35 +296,10 @@ func (f *Files) publishName(temp, name string, exclusive bool) (Stage, error) {
 	}
 	return Unconfirmed, nil
 }
-func (f *Files) Ensure(dir string) error {
-	if !validPath(dir) {
-		return fmt.Errorf("execution: invalid directory")
-	}
-	parts := strings.Split(dir, string(filepath.Separator))
-	for i := range parts {
-		name := filepath.Join(parts[:i+1]...)
-		if err := f.ensureOne(name); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func (f *Files) ensureOne(name string) error {
-	err := f.root.Mkdir(name, 0700)
-	if err != nil && !errors.Is(err, os.ErrExist) {
-		return executionBoundaryError("files.go ensureOne", err)
-	}
-	if err := f.check(name, false); err != nil {
-		return err
-	}
-	// A regular anchor keeps Darwin's final device barrier after every namespace sync.
-	anchor := filepath.Join(name, ".barrier")
-	file, err := f.open(anchor, os.O_CREATE|os.O_RDWR)
-	if err != nil {
-		return err
-	}
-	return errors.Join(f.confirmOpen(anchor, file), f.closeFile(file))
-}
+
+// Ensure creates dir and every missing parent, each with its anchor, and makes
+// the whole chain durable in one round.
+func (f *Files) Ensure(dir string) error { return f.EnsureWith(dir) }
 func (f *Files) Names(dir string) ([]os.DirEntry, error) {
 	if err := f.check(dir, false); err != nil {
 		return nil, err
@@ -409,7 +337,7 @@ func (f *Files) step(operation string) error {
 	if f.observe == nil && f.fault == nil {
 		return nil
 	}
-	// Streams are confirmed side by side, so test hooks see one step at a time.
+	// A round syncs files side by side, so test hooks see one step at a time.
 	f.hookMu.Lock()
 	defer f.hookMu.Unlock()
 	if f.observe != nil {

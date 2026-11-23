@@ -107,6 +107,9 @@ func (j *Journal) save(r Receipt) (Receipt, error) {
 	return r, err
 }
 func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (Binding, error)) (Receipt, bool, error) {
+	return j.reserveWith(ctx, k, i, reserve, acceptHooks{})
+}
+func (j *Journal) reserveWith(ctx context.Context, k Key, i Intent, reserve func() (Binding, error), hooks acceptHooks) (Receipt, bool, error) {
 	if err := k.Validate(); err != nil {
 		return Receipt{}, false, err
 	}
@@ -117,7 +120,7 @@ func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (
 	if err := j.prepareOutputAdmission(ctx, k); err != nil {
 		return Receipt{}, false, err
 	}
-	r, owner, err := j.reserve(ctx, k, normalized, reserve)
+	r, owner, err := j.reserve(ctx, k, normalized, reserve, hooks)
 	if err != nil || owner {
 		return r, owner, err
 	}
@@ -127,7 +130,7 @@ func (j *Journal) Reserve(ctx context.Context, k Key, i Intent, reserve func() (
 	}
 	return r, false, err
 }
-func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve func() (Binding, error)) (Receipt, bool, error) {
+func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve func() (Binding, error), hooks acceptHooks) (Receipt, bool, error) {
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return Receipt{}, false, err
@@ -143,15 +146,19 @@ func (j *Journal) reserve(ctx context.Context, k Key, normalized Intent, reserve
 	if !errors.Is(err, os.ErrNotExist) {
 		return r, false, err
 	}
-	return j.acceptNew(ctx, k, normalized, reserve, acceptHooks{})
+	return j.acceptNew(ctx, k, normalized, reserve, hooks)
 }
 
 // acceptHooks extend a reservation before its receipt becomes durable:
-// decorate adds receipt evidence, and prepare stores files that must exist
-// whenever the receipt does.
+// decorate adds receipt evidence, and prepare adds files that must exist
+// whenever the receipt does to the attempt's sync round, so they must not
+// depend on one another. With dispatch, the new reservation is also
+// dispatched in the same journal lock hold, once its reserved receipt is
+// durable.
 type acceptHooks struct {
 	decorate func(*Receipt)
-	prepare  func(Binding) error
+	prepare  func(Binding, *round) error
+	dispatch bool
 }
 
 // acceptNew publishes a fresh reservation under the journal lock.
@@ -180,7 +187,7 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	if binding.RequestHash != k.Hash() || binding.Mode() != i.Kind || binding.Stdin != i.Stdin {
 		return r, false, fmt.Errorf("execution: reservation namespace mismatch")
 	}
-	if err := j.prepareAttempt(ctx, binding, hooks); err != nil {
+	if err := j.prepareAttempt(binding, hooks); err != nil {
 		return r, false, err
 	}
 	if err := admitted(ctx); err != nil {
@@ -188,29 +195,33 @@ func (j *Journal) acceptNew(ctx context.Context, k Key, i Intent, reserve func()
 	}
 	r.Acceptance = string(Durable)
 	r, err = j.save(r)
-	return r, err == nil, err
+	if err != nil || !hooks.dispatch {
+		return r, err == nil, err
+	}
+	// The reserved receipt is durable on its own first, so a coordinator
+	// that dies before the dispatch below still settles as not_started.
+	// Holding the lock throughout means nothing changed the receipt since,
+	// so it is neither read nor confirmed again.
+	r, err = j.dispatchReserved(r, i)
+	return r, true, err
 }
 
-// prepareAttempt stores the files a durable receipt relies on.
-func (j *Journal) prepareAttempt(ctx context.Context, binding Binding, hooks acceptHooks) error {
-	if err := j.files.Ensure(filepath.Dir(attempt(binding, "reference.json"))); err != nil {
-		return err
+// prepareAttempt stores the files a durable receipt relies on, in one sync
+// round: none of them depends on another, and the receipt comes after. The
+// attempt directory is new, so its own files are reachable only through it.
+// The lifetime inode exists before acceptance and survives until receipt
+// purge.
+func (j *Journal) prepareAttempt(binding Binding, hooks acceptHooks) error {
+	reference := attempt(binding, "reference.json")
+	r := j.files.newRound()
+	err := r.add(filepath.Dir(reference), []string{"lifetime.lock"}, []Record{{Name: reference, Value: binding, Exclusive: true}})
+	if err == nil && hooks.prepare != nil {
+		err = hooks.prepare(binding, r)
 	}
-	if _, err := j.files.Publish(attempt(binding, "reference.json"), binding, true); err != nil {
-		return err
+	if err == nil {
+		err = r.run()
 	}
-	// The lifetime inode exists before acceptance and survives until receipt purge.
-	fence, err := j.files.Lock(ctx, attempt(binding, "lifetime.lock"))
-	if err != nil {
-		return err
-	}
-	if err := errors.Join(j.files.Confirm(attempt(binding, "lifetime.lock")), fence.Close()); err != nil {
-		return err
-	}
-	if hooks.prepare == nil {
-		return nil
-	}
-	return hooks.prepare(binding)
+	return errors.Join(err, r.close())
 }
 func (j *Journal) capacity() error {
 	entries, err := j.files.Names("execution/requests")
@@ -281,14 +292,31 @@ func (j *Journal) Dispatch(ctx context.Context, b Binding, i Intent) error {
 	if r.Binding != b || r.Owner != j.owner || r.Phase != phaseReserved || r.launchIntentDigest() != digest(i) {
 		return ErrUnknown
 	}
-	d := dispatch{Binding: b, Key: r.Key, Intent: i}
-	if _, err := j.files.Publish(attempt(b, "dispatch.json"), d, true); err != nil {
-		return err
+	_, err = j.dispatchReserved(r, i)
+	return err
+}
+
+// dispatchReserved records the launch intent for a reserved receipt that is
+// durable, then saves the receipt as dispatched. The caller holds the lock.
+func (j *Journal) dispatchReserved(r Receipt, i Intent) (Receipt, error) {
+	if r.launchIntentDigest() != digest(i) {
+		return r, ErrUnknown
+	}
+	d := dispatch{Binding: r.Binding, Key: r.Key, Intent: i}
+	if _, err := j.files.Publish(attempt(r.Binding, "dispatch.json"), d, true); err != nil {
+		return r, err
 	}
 	r.Phase = phaseDispatched
 	r.LaunchOutcome = outcomeUnknown
-	_, err = j.save(r)
-	return err
+	return j.save(r)
+}
+
+// ReserveAndDispatch is Reserve for a caller that launches the job at once:
+// a new reservation is also dispatched in the same journal lock hold, once
+// its reserved receipt is durable. An existing key is returned as Reserve
+// returns it, never dispatched.
+func (j *Journal) ReserveAndDispatch(ctx context.Context, k Key, i Intent, reserve func() (Binding, error)) (Receipt, bool, error) {
+	return j.reserveWith(ctx, k, i, reserve, acceptHooks{dispatch: true})
 }
 
 // Published records that the exact worker published the job and returns the

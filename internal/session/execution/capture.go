@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -32,54 +33,130 @@ type Capture struct {
 }
 
 func OpenCapture(state string, b Binding, stream string) (*Capture, error) {
+	captures, err := OpenCaptures(state, b, []string{stream})
+	if err != nil {
+		return nil, err
+	}
+	return captures[0], nil
+}
+
+// OpenCaptures opens one capture per stream, in stream order. However many
+// streams there are, setup takes two sync rounds: one for every stream
+// directory with its three locks, which are reachable only through the
+// directory that round creates, and then one for every initial manifest,
+// which names its stream for readers and so waits for the first.
+func OpenCaptures(state string, b Binding, streams []string) ([]*Capture, error) {
 	if err := b.Validate(); err != nil {
 		return nil, executionBoundaryError("capture", err)
 	}
-	if !slices.Contains(b.Streams(), stream) {
-		return nil, fmt.Errorf("execution: invalid capture stream")
+	for i, stream := range streams {
+		if !slices.Contains(b.Streams(), stream) || slices.Contains(streams[:i], stream) {
+			return nil, fmt.Errorf("execution: invalid capture stream")
+		}
 	}
-	f, err := OpenFiles(state)
+	stores := make([]*streamStore, 0, len(streams))
+	err := openStreamStores(state, b, streams, &stores)
+	if err == nil {
+		err = initializeStreams(stores)
+	}
 	if err != nil {
+		for _, s := range stores {
+			err = errors.Join(err, s.files.Close())
+		}
 		return nil, executionBoundaryError("capture", err)
 	}
-	s := newStreamStore(f, b, stream)
-	writeCtx, cancel := context.WithCancel(context.Background())
-	c := &Capture{store: s, writeCtx: writeCtx, cancelWrite: cancel, wake: make(chan struct{}, 1), space: make(chan struct{}, 1), done: make(chan struct{})}
-	if err := c.initialize(); err != nil {
-		cancel()
-		return nil, errors.Join(err, f.Close())
+	captures := make([]*Capture, 0, len(stores))
+	for _, s := range stores {
+		writeCtx, cancel := context.WithCancel(context.Background())
+		c := &Capture{store: s, writeCtx: writeCtx, cancelWrite: cancel, wake: make(chan struct{}, 1), space: make(chan struct{}, 1), done: make(chan struct{})}
+		go c.writeLoop()
+		captures = append(captures, c)
 	}
-	go c.writeLoop()
-	return c, nil
+	return captures, nil
 }
-func (c *Capture) initialize() error {
-	s := c.store
-	if err := s.files.Ensure(s.path(".")); err != nil {
-		return executionBoundaryError("capture", err)
+
+// openStreamStores gives each capture its own Files, which its write loop
+// closes when it ends.
+func openStreamStores(state string, b Binding, streams []string, stores *[]*streamStore) error {
+	for _, stream := range streams {
+		f, err := OpenFiles(state)
+		if err != nil {
+			return err
+		}
+		*stores = append(*stores, newStreamStore(f, b, stream))
 	}
-	gate, err := s.files.Lock(context.Background(), s.path("stream.lock"))
-	if err != nil {
-		return executionBoundaryError("capture", err)
+	return nil
+}
+
+func initializeStreams(stores []*streamStore) error {
+	f := stores[0].files
+	r := f.newRound()
+	err := addStreamDirectories(r, stores)
+	if err == nil {
+		err = r.syncData()
 	}
-	defer func() { _ = gate.Close() }()
-	if err := s.files.Confirm(s.path("stream.lock")); err != nil {
-		return executionBoundaryError("capture", err)
+	if err == nil {
+		_, _, err = r.complete()
 	}
-	if err := s.createTurnLocks(); err != nil {
+	if err = errors.Join(err, r.close()); err != nil {
 		return err
 	}
-	generation, err := freshToken()
-	if err != nil {
-		return executionBoundaryError("capture", err)
+	gates := make([]*Fence, 0, len(stores))
+	defer func() {
+		for _, gate := range gates {
+			_ = gate.Close()
+		}
+	}()
+	for _, s := range stores {
+		gate, err := s.files.LockExisting(context.Background(), s.path("stream.lock"))
+		if err != nil {
+			return err
+		}
+		gates = append(gates, gate)
 	}
-	m := manifest{Binding: s.binding, Generation: generation, Segments: []segment{}}
-	if s.stream != KindPTY {
-		m.Stream = s.stream
+	return publishInitialManifests(f, stores)
+}
+
+func addStreamDirectories(r *round, stores []*streamStore) error {
+	for _, s := range stores {
+		if err := r.ensure(s.path(".")); err != nil {
+			return err
+		}
+		for _, name := range []string{"stream.lock", readerLockName, writerLockName} {
+			if err := r.open(roundCreated, s.path(name), os.O_CREATE|os.O_RDWR); err != nil {
+				return err
+			}
+		}
 	}
-	if _, err := s.files.Publish(s.path("manifest.json"), m, true); err != nil {
-		return executionBoundaryError("capture", err)
+	return nil
+}
+
+// publishInitialManifests publishes every stream's empty manifest in one
+// round while the caller holds each stream lock.
+func publishInitialManifests(f *Files, stores []*streamStore) error {
+	manifests := make([]manifest, len(stores))
+	records := make([]Record, len(stores))
+	for i, s := range stores {
+		generation, err := freshToken()
+		if err != nil {
+			return err
+		}
+		manifests[i] = manifest{Binding: s.binding, Generation: generation, Segments: []segment{}}
+		if s.stream != KindPTY {
+			manifests[i].Stream = s.stream
+		}
+		records[i] = Record{Name: s.path("manifest.json"), Value: manifests[i], Exclusive: true}
 	}
-	return s.settle(context.Background(), m)
+	if _, err := f.PublishAll(records...); err != nil {
+		return err
+	}
+	for i, s := range stores {
+		s.rememberPublished(s.path("manifest.json"))
+		if err := s.settle(context.Background(), manifests[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Offer owns a bounded copy, never a filesystem operation or a consumer wait.

@@ -43,7 +43,7 @@ func TestCaptureReaderProgressesWhileWriterIsSaturated(t *testing.T) {
 	}
 	defer func() { _ = files.Close() }()
 	writer := &Capture{store: newStreamStore(files, b, "stdout")}
-	if err := writer.initialize(); err != nil {
+	if err := initializeStreams([]*streamStore{writer.store}); err != nil {
 		t.Fatal(err)
 	}
 	// A loaded disk makes each commit long compared with the gap between commits.

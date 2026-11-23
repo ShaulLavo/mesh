@@ -195,7 +195,12 @@ func TestCaptureStreamWithoutReaderLockStaysUsable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = reader.Close() }()
-	if err := reader.confirmFinal(t.Context(), b, summary); err != nil {
+	held, err := reader.holdFinal(t.Context(), b, summary)
+	if err != nil {
+		t.Fatalf("final confirmation without reader.lock: %v", err)
+	}
+	defer held.release()
+	if err := reader.files.ConfirmAll(held.plan.unconfirmed...); err != nil {
 		t.Fatalf("final confirmation without reader.lock: %v", err)
 	}
 }

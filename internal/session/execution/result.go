@@ -63,9 +63,6 @@ func (a *Attempt) claim(i Intent, env []string) error {
 	if r.Binding != b || r.Removal != removalPresent || r.Phase != phaseDispatched {
 		return ErrProtected
 	}
-	if err := a.files.Confirm(requestName(b.RequestHash)); err != nil {
-		return err
-	}
 	var d dispatch
 	if err := a.files.Read(attempt(b, "dispatch.json"), &d); err != nil {
 		return err
@@ -73,7 +70,10 @@ func (a *Attempt) claim(i Intent, env []string) error {
 	if d.Binding != b || d.Key != r.Key || digest(d.Intent) != digest(i) || NewBinding(d.Key, i, b.Reservation, env) != b {
 		return fmt.Errorf("execution: dispatch intent mismatch")
 	}
-	if err := a.files.Confirm(attempt(b, "dispatch.json")); err != nil {
+	// Everything the claim relies on is already published, so the four
+	// records are proved durable together, and the claim only after them.
+	session := "s/" + b.Reservation.ID + "/"
+	if err := a.files.ConfirmAll(session+".reservation", session+".launching", requestName(b.RequestHash), attempt(b, "dispatch.json")); err != nil {
 		return err
 	}
 	_, err := a.files.Publish(attempt(b, "claim.json"), b, true)
@@ -121,6 +121,7 @@ func ProtectedSession(sessions, id string) bool {
 	return err != nil || r.Validate() != nil || r.ID != id || r.Purpose.IsExecution()
 }
 
+// currentReservation checks the session allocation; claim confirms it durable.
 func (a *Attempt) currentReservation() error {
 	b := a.binding
 	for _, name := range []string{".reservation", ".launching"} {
@@ -131,9 +132,6 @@ func (a *Attempt) currentReservation() error {
 		}
 		if ref != b.Reservation {
 			return fmt.Errorf("execution: session allocation changed")
-		}
-		if err := a.files.Confirm(path); err != nil {
-			return err
 		}
 	}
 	return nil

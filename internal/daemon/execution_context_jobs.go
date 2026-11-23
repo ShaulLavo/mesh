@@ -67,7 +67,7 @@ func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol
 	}
 	reserve := func() (execution.Receipt, bool, []string, execution.Intent, error) {
 		var allocated string
-		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key, &allocated))
+		r, owner, err := journal.ReserveInContextAndDispatch(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key, &allocated))
 		if err != nil || !owner {
 			// Allocated but not accepted: nothing will launch it.
 			l.standbys.drop(allocated)

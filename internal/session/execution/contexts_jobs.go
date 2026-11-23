@@ -30,6 +30,16 @@ func launchSnapshotName(b Binding) string { return attempt(b, "launch.json") }
 // returned before the context is read, so replays survive later edits and
 // closure. callerDigest covers the caller-supplied request.
 func (j *Journal) ReserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, bool, error) {
+	return j.reserveContextJob(ctx, k, callerDigest, resolve, reserve, false)
+}
+
+// ReserveInContextAndDispatch is ReserveInContext for a caller that launches
+// the job at once, as ReserveAndDispatch is for Reserve.
+func (j *Journal) ReserveInContextAndDispatch(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, bool, error) {
+	return j.reserveContextJob(ctx, k, callerDigest, resolve, reserve, true)
+}
+
+func (j *Journal) reserveContextJob(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error), dispatch bool) (Receipt, bool, error) {
 	if err := k.Validate(); err != nil || k.Operation != OperationExec || !validDigest(callerDigest) {
 		return Receipt{}, false, errors.Join(fmt.Errorf("execution: invalid context job key"), err)
 	}
@@ -43,7 +53,7 @@ func (j *Journal) ReserveInContext(ctx context.Context, k Key, callerDigest stri
 	if err := j.prepareOutputAdmission(ctx, k); err != nil {
 		return Receipt{}, false, err
 	}
-	r, owner, err := j.reserveInContext(ctx, k, callerDigest, resolve, reserve)
+	r, owner, err := j.reserveInContext(ctx, k, callerDigest, resolve, reserve, dispatch)
 	if err != nil || owner {
 		return r, owner, err
 	}
@@ -112,7 +122,7 @@ func (j *Journal) resolveOpenContext(k Key, resolve ResolveContextJob) (Context,
 	return c, LaunchSnapshot{Context: ContextUse{ID: c.ID, Revision: c.Revision}, Intent: normalized, Env: env}, nil
 }
 
-func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, bool, error) {
+func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error), dispatch bool) (Receipt, bool, error) {
 	gate, err := j.lockAdmitted(ctx)
 	if err != nil {
 		return Receipt{}, false, err
@@ -131,7 +141,8 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 			use := snapshot.Context
 			r.IntentDigest, r.LaunchIntentDigest, r.Context = callerDigest, digest(snapshot.Intent), &use
 		},
-		prepare: func(b Binding) error { return j.prepareContextJob(b, k, snapshot) },
+		prepare:  func(b Binding, r *round) error { return prepareContextJob(r, b, k, snapshot) },
+		dispatch: dispatch,
 	}
 	r, owner, err := j.acceptNew(ctx, k, snapshot.Intent, func() (Binding, error) { return reserve(snapshot) }, hooks)
 	if err != nil || !owner {
@@ -143,17 +154,17 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 	return r, true, nil
 }
 
-// prepareContextJob stores the launch snapshot and the membership marker
-// before the receipt is durable.
-func (j *Journal) prepareContextJob(b Binding, k Key, snapshot LaunchSnapshot) error {
-	if _, err := j.files.PublishBounded(launchSnapshotName(b), snapshot, true, contextRecordLimit); err != nil {
+// prepareContextJob adds the launch snapshot and the membership marker to the
+// attempt's sync round, so both are durable before the receipt. Neither
+// depends on the other or on the attempt reference.
+func prepareContextJob(r *round, b Binding, k Key, snapshot LaunchSnapshot) error {
+	if err := r.record(launchSnapshotName(b), snapshot, true, contextRecordLimit); err != nil {
 		return err
 	}
-	if err := j.files.Ensure(contextMembers(k.Context)); err != nil {
+	if err := r.ensure(contextMembers(k.Context)); err != nil {
 		return err
 	}
-	_, err := j.files.Publish(contextMember(k.Context, b.RequestHash), k, true)
-	return err
+	return r.record(contextMember(k.Context, b.RequestHash), k, true, MaxRecord)
 }
 
 // ReadLaunchSnapshot returns the snapshot a context job was reserved with.

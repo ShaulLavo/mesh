@@ -138,11 +138,15 @@ func prepareQueuedExecution(t *testing.T, l *lifecycle, host, device, cwd string
 	if r.Binding.Reservation.BootID != worker.BootID() {
 		t.Fatal("unexpected boot in receipt fixture")
 	}
+	// The reservation is already dispatched, which a lookup reports as a
+	// partial receipt with an unknown outcome.
+	if r.Phase != "dispatched" {
+		t.Fatalf("reserve reply fixture phase = %s", r.Phase)
+	}
 	if partial {
-		if err := j.Dispatch(t.Context(), r.Binding, intent); err != nil {
-			t.Fatal(err)
-		}
-	} else if _, err := j.NotStarted(t.Context(), r.Binding, "fixture"); err != nil {
+		return key
+	}
+	if _, err := j.NotStarted(t.Context(), r.Binding, "fixture"); err != nil {
 		t.Fatal(err)
 	}
 	return key
