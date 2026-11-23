@@ -181,7 +181,7 @@ func TestContextCoordinatorExitBeforeDispatchSettlesNotStarted(t *testing.T) {
 	}
 	j.now = func() time.Time { return c.LastUsedAt.Add(time.Hour) }
 	exited := runUntilExit(func() {
-		_, _, _ = j.ReserveInContextAndDispatch(t.Context(), k, Digest("job"), resolve, func(s LaunchSnapshot) (Binding, error) {
+		_, _, _, _ = j.ReserveInContextAndDispatch(t.Context(), k, Digest("job"), resolve, func(s LaunchSnapshot) (Binding, error) {
 			b, err := newTestBinding(t, j, k, s.Intent, []string{"PATH=/bin"})
 			// After the allocation: the attempt round's reference, snapshot
 			// and membership marker, the reserved receipt, the context's use,
@@ -226,16 +226,7 @@ func testFailedDispatchSave(t *testing.T, failed string) {
 		b, err := newTestBinding(t, j, k, i, env)
 		// The attempt round, the reserved receipt and the dispatch record
 		// succeed; the dispatched receipt fails at the given step.
-		publishes := 0
-		j.files.fault = func(step string) error {
-			if step == "publish" {
-				publishes++
-			}
-			if publishes == 4 && step == failed {
-				return boom
-			}
-			return nil
-		}
+		j.files.fault = failAfterPublishes(4, failed, boom)
 		return b, err
 	})
 	j.files.fault = nil
@@ -244,6 +235,21 @@ func testFailedDispatchSave(t *testing.T, failed string) {
 	}
 	if r.Phase != phaseReserved || r.Acceptance != string(Durable) || r.LaunchOutcome != notStarted {
 		t.Fatalf("reported phase=%s acceptance=%s outcome=%s", r.Phase, r.Acceptance, r.LaunchOutcome)
+	}
+}
+
+// failAfterPublishes fails the given step once the nth publication since it
+// was installed has started.
+func failAfterPublishes(n int, failed string, err error) func(string) error {
+	publishes := 0
+	return func(step string) error {
+		if step == "publish" {
+			publishes++
+		}
+		if publishes == n && step == failed {
+			return err
+		}
+		return nil
 	}
 }
 
@@ -261,7 +267,11 @@ func TestReserveAndDispatchReplaysAnExistingKey(t *testing.T) {
 }
 
 // A context job's launch snapshot and membership marker share the attempt's
-// round, and a dispatching reservation is ready for its worker to claim.
+// round, and a dispatching reservation is ready for its worker to claim. The
+// caller launches from the snapshot the journal read back before dispatch,
+// so it has no read of its own after the receipt is dispatched; once the
+// stored snapshot is gone, the returned one is still what the receipt
+// accepted.
 func TestContextJobDispatchesWithItsSnapshotAndMembership(t *testing.T) {
 	j := contextJournal(t)
 	c := openTestContext(t, j, ownerA, "ctx-dispatch", j.files.root.Name())
@@ -270,15 +280,21 @@ func TestContextJobDispatchesWithItsSnapshotAndMembership(t *testing.T) {
 		return Intent{Kind: KindPipe, Command: []string{"/bin/true"}, Cwd: c.Cwd, Stdin: StdinClosed}, nil, nil
 	}
 	env := []string{"PATH=/bin"}
-	r, owner, err := j.ReserveInContextAndDispatch(t.Context(), k, Digest("job"), resolve, func(s LaunchSnapshot) (Binding, error) {
+	r, snapshot, owner, err := j.ReserveInContextAndDispatch(t.Context(), k, Digest("job"), resolve, func(s LaunchSnapshot) (Binding, error) {
 		return newTestBinding(t, j, k, s.Intent, env)
 	})
 	if err != nil || !owner || r.Phase != phaseDispatched {
 		t.Fatalf("reserve context job: owner=%v phase=%s err=%v", owner, r.Phase, err)
 	}
-	snapshot, err := j.ReadLaunchSnapshot(r)
-	if err != nil {
+	stored, err := j.ReadLaunchSnapshot(r)
+	if err != nil || digest(snapshot.Intent) != digest(stored.Intent) || snapshot.Context != stored.Context {
+		t.Fatalf("returned snapshot %+v, stored %+v, %v", snapshot, stored, err)
+	}
+	if err := os.Remove(filepath.Join(j.files.root.Name(), launchSnapshotName(r.Binding))); err != nil {
 		t.Fatal(err)
+	}
+	if digest(snapshot.Intent) != r.LaunchIntentDigest {
+		t.Fatal("the returned snapshot is not what the receipt accepted")
 	}
 	if err := j.files.Confirm(contextMember(c.ID, r.Binding.RequestHash)); err != nil {
 		t.Fatalf("membership marker: %v", err)
@@ -303,6 +319,29 @@ func TestOpenCapturesSetsUpEveryStreamInTwoRounds(t *testing.T) {
 	if counts["device_sync"] != 2 || counts["publish"] != 2 {
 		t.Fatalf("capture setup steps: %v", counts)
 	}
+	requireStreamFiles(t, j, stores)
+}
+
+// A terminal capture's setup takes the same two rounds: the manifest its
+// setup just published is not confirmed a third time.
+func TestTerminalCaptureSetupTakesTwoRounds(t *testing.T) {
+	j, k, i, env := journalFixture(t)
+	b, _ := claimedAttempt(t, j, k, i, env)
+	stores := []*streamStore{newStreamStore(j.files, b, KindPTY)}
+	counts := syncCounts(j.files, func() {
+		if err := initializeStreams(stores); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if counts["device_sync"] != 2 || counts["publish"] != 1 {
+		t.Fatalf("terminal capture setup steps: %v", counts)
+	}
+	requireStreamFiles(t, j, stores)
+}
+
+// requireStreamFiles checks each stream's locks and manifest exist.
+func requireStreamFiles(t *testing.T, j *Journal, stores []*streamStore) {
+	t.Helper()
 	for _, s := range stores {
 		for _, name := range []string{"stream.lock", readerLockName, writerLockName, "manifest.json"} {
 			if err := j.files.check(s.path(name), false); err != nil {

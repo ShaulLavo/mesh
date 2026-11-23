@@ -161,11 +161,16 @@ func publishInitialManifests(f *Files, stores []*streamStore) error {
 	if _, err := f.PublishAll(records...); err != nil {
 		return err
 	}
-	for i, s := range stores {
-		s.rememberPublished(s.path("manifest.json"))
-		if err := s.settle(context.Background(), manifests[i]); err != nil {
+	// The round that published each empty manifest made it durable, so
+	// settling it now would only confirm it again, which a terminal capture
+	// does on every settle. Its store starts from that publication instead.
+	for _, s := range stores {
+		name := s.path("manifest.json")
+		info, err := s.identity(name)
+		if err != nil {
 			return err
 		}
+		s.confirmed = map[string]fileIdentity{name: {info}}
 	}
 	return nil
 }

@@ -200,23 +200,27 @@ func TestRoundFlushesEachDeviceOnce(t *testing.T) {
 		return dev, ok
 	}
 	t.Cleanup(func() { fileDevice = saved })
-	confirm := func(names ...string) map[string]int {
-		return syncCounts(f, func() {
-			if err := f.ConfirmAll(names...); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
 	for _, name := range []string{"a.json", "b.json", "c.json", "u.json", "v.json"} {
 		publishRecord(t, f, name)
 	}
-	if got := confirm("a.json", "b.json", "c.json")["device_sync"]; got != 2 {
+	if got := deviceBarriers(t, f, "a.json", "b.json", "c.json"); got != 2 {
 		t.Fatalf("two devices took %d barriers", got)
 	}
 	// u.json and v.json have no known device, so neither shares a barrier.
-	if got := confirm("a.json", "u.json", "v.json")["device_sync"]; got != 3 {
+	if got := deviceBarriers(t, f, "a.json", "u.json", "v.json"); got != 3 {
 		t.Fatalf("one known and two unknown devices took %d barriers", got)
 	}
+}
+
+// deviceBarriers confirms names together and counts their device barriers.
+func deviceBarriers(t *testing.T, f *Files, names ...string) int {
+	t.Helper()
+	var err error
+	counts := syncCounts(f, func() { err = f.ConfirmAll(names...) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counts["device_sync"]
 }
 
 // A dependent group is not confirmed when its prerequisite's barrier fails.

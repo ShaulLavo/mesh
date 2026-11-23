@@ -67,17 +67,15 @@ func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol
 	}
 	reserve := func() (execution.Receipt, bool, []string, execution.Intent, error) {
 		var allocated string
-		r, owner, err := journal.ReserveInContextAndDispatch(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key, &allocated))
+		r, snapshot, owner, err := journal.ReserveInContextAndDispatch(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key, &allocated))
 		if err != nil || !owner {
 			// Allocated but not accepted: nothing will launch it.
 			l.standbys.drop(allocated)
 			return r, owner, nil, execution.Intent{}, executionBoundaryError("reserve context job", err)
 		}
-		r, owner, env, intent, err := l.persistedContextLaunch(ctx, journal, r)
-		if err != nil || !owner {
-			l.standbys.drop(allocated)
-		}
-		return r, owner, env, intent, err
+		// The journal read the stored snapshot back before dispatching, so
+		// what runs is exactly what the receipt accepted.
+		return r, true, l.contextJobEnvironment(snapshot, r.Binding.Reservation), snapshot.Intent, nil
 	}
 	return l.createExecution(ctx, request, journal, key, reserve)
 }
@@ -99,18 +97,6 @@ func (l *lifecycle) allocateContextJob(key execution.Key, allocated *string) fun
 
 func (l *lifecycle) contextJobEnvironment(s execution.LaunchSnapshot, ref session.Reservation) []string {
 	return worker.ExecutionEnvironment(withEnvOverlay(l.environment(), s.Env), string(l.host.ID), ref, s.Intent.Term)
-}
-
-// persistedContextLaunch launches from the snapshot stored with the
-// reservation, so what runs is exactly what the receipt accepted. A snapshot
-// that cannot be read means the job is never started.
-func (l *lifecycle) persistedContextLaunch(ctx context.Context, journal *execution.Journal, r execution.Receipt) (execution.Receipt, bool, []string, execution.Intent, error) {
-	snapshot, err := journal.ReadLaunchSnapshot(r)
-	if err != nil {
-		next, saveErr := journal.NotStarted(ctx, r.Binding, "launch_snapshot_unreadable")
-		return next, false, nil, execution.Intent{}, errors.Join(executionBoundaryError("read context launch", err), saveErr)
-	}
-	return r, true, l.contextJobEnvironment(snapshot, r.Binding.Reservation), snapshot.Intent, nil
 }
 
 func (l *lifecycle) environment() []string {
