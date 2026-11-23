@@ -356,10 +356,14 @@ func executionRequestContext(ctx context.Context, lookahead *frameLookahead, req
 	if lookahead == nil {
 		return ctx, func() {}
 	}
-	// A create that waits inline stops waiting when its client leaves. Work it
-	// accepted is not affected: launch runs without the caller's cancellation.
-	if request.Type == protocol.TypeExecutionLogs || (request.Type == protocol.TypeExecutionCreate && request.WaitMillis > 0) {
+	if request.Type == protocol.TypeExecutionLogs {
 		return lookahead.watch(ctx)
+	}
+	if request.Type == protocol.TypeExecutionCreate && request.WaitMillis > 0 {
+		// Only the inline observation stops when the client leaves; the
+		// create keeps the connection's own cancellation rules.
+		watched, cancel := lookahead.watch(ctx)
+		return context.WithValue(ctx, inlineDisconnectKey{}, watched.Done()), cancel
 	}
 	return ctx, func() {}
 }

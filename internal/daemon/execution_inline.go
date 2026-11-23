@@ -28,11 +28,14 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 	// The budget starts at the create's own reply point, not after the reads
 	// that resolve the binding.
 	deadline := time.Now().Add(time.Duration(request.WaitMillis) * time.Millisecond)
+	ctx, stop := observeUntilDisconnect(ctx)
+	defer stop()
 	bound := inlineBound(request, response.ExecutionReceipt)
 	waited, ok := l.inlineWait(ctx, bound, deadline)
 	if !ok {
 		return response, nil
 	}
+	inlineAfterWait()
 	if err := workerExecutionAdmission(ctx); err != nil {
 		return response, err
 	}
@@ -51,6 +54,30 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 	return waited, nil
 }
 
+// inlineAfterWait lets a test act between the inline wait and the grant check.
+var inlineAfterWait = func() {}
+
+// inlineDisconnectKey carries a channel that closes when the client of a
+// waiting create disconnects. Only the observation listens to it: the create
+// itself, before and after its acceptance barrier, keeps its own rules.
+type inlineDisconnectKey struct{}
+
+func observeUntilDisconnect(ctx context.Context) (context.Context, context.CancelFunc) {
+	observed, cancel := context.WithCancel(ctx)
+	gone, ok := ctx.Value(inlineDisconnectKey{}).(<-chan struct{})
+	if !ok {
+		return observed, cancel
+	}
+	go func() {
+		select {
+		case <-gone:
+			cancel()
+		case <-observed.Done():
+		}
+	}()
+	return observed, cancel
+}
+
 // inlineBound addresses the created job exactly, with the create's caller.
 func inlineBound(request protocol.Control, receipt *protocol.ExecutionReceipt) protocol.Control {
 	bound := protocol.Control{RequestID: request.RequestID, Caller: request.Caller, Administration: request.Administration, SessionID: receipt.SessionID, Instance: receipt.Instance}
@@ -61,14 +88,13 @@ func inlineBound(request protocol.Control, receipt *protocol.ExecutionReceipt) p
 }
 
 func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, deadline time.Time) (protocol.Control, bool) {
-	remaining := time.Until(deadline)
-	if remaining < time.Millisecond {
-		return protocol.Control{}, false
-	}
-	bound.Type, bound.TimeoutMillis = protocol.TypeExecutionWait, int(remaining/time.Millisecond)
-	waitCtx, cancel := context.WithDeadline(ctx, deadline)
-	defer cancel()
-	waited, err := l.boundExecutionControl(waitCtx, bound)
+	// Always look at least once, rounding up: even a 1 ms budget, or one the
+	// create's own work used up, still observes a job that has finished.
+	millis := max(1, int((time.Until(deadline)+time.Millisecond-1)/time.Millisecond))
+	// The wait bounds itself by TimeoutMillis; the reads around it keep their
+	// own lock budgets rather than failing on a deadline meant for the wait.
+	bound.Type, bound.TimeoutMillis = protocol.TypeExecutionWait, millis
+	waited, err := l.boundExecutionControl(ctx, bound)
 	receipt := waited.ExecutionReceipt
 	return waited, err == nil && receipt != nil && receipt.SessionID == bound.SessionID && receipt.Instance == bound.Instance
 }

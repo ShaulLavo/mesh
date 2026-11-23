@@ -34,49 +34,54 @@ func TestInlineExecStreamsTakesOnlyConsistentObservations(t *testing.T) {
 	ref := inlineTestRef()
 	both := []protocol.ExecutionPage{inlineTestPage(execution.StreamStdout, "out"), inlineTestPage(execution.StreamStderr, "err")}
 	for _, ok := range []protocol.Control{inlineTestReply("completed", "terminal", both...), inlineTestReply(execWaitTimedOut, "live", both...)} {
-		if got := inlineExecStreams(ok, inlineTestHost, ref, 16); len(got) != 2 {
+		observed := inlineObservation(ok)
+		if observed != ok.ExecutionWait {
+			t.Fatalf("consistent %s/%s observed as %q", ok.ExecutionWait, ok.ExecutionReceipt.Phase, observed)
+		}
+		if got := inlineExecStreams(ok, observed, inlineTestHost, ref, 16); len(got) != 2 {
 			t.Fatalf("%s/%s pages = %+v", ok.ExecutionWait, ok.ExecutionReceipt.Phase, got)
 		}
 	}
-	for _, bad := range []protocol.Control{
-		inlineTestReply("completed", "live", both...),
-		inlineTestReply(execWaitTimedOut, "terminal", both...),
-		inlineTestReply("", "live", both...),
-		inlineTestReply("completed", "terminal", inlineTestPage(execution.StreamStdout, "a"), inlineTestPage(execution.StreamStdout, "b")),
+	// An inconsistent status is no observation for every use of it.
+	for _, bad := range []protocol.Control{inlineTestReply("completed", "live", both...), inlineTestReply(execWaitTimedOut, "terminal", both...), inlineTestReply("", "live", both...), {ExecutionWait: "completed"}} {
+		if observed := inlineObservation(bad); observed != "" {
+			t.Fatalf("inconsistent observation %q was accepted as %q", bad.ExecutionWait, observed)
+		}
+	}
+	// A repeated stream discards every page, even after an invalid copy.
+	invalid := inlineTestPage(execution.StreamStdout, "x")
+	invalid.Instance = "other"
+	for _, pages := range [][]protocol.ExecutionPage{
+		{inlineTestPage(execution.StreamStdout, "a"), inlineTestPage(execution.StreamStdout, "b")},
+		{invalid, inlineTestPage(execution.StreamStdout, "b"), inlineTestPage(execution.StreamStderr, "e")},
 	} {
-		if got := inlineExecStreams(bad, inlineTestHost, ref, 16); len(got) != 0 {
-			t.Fatalf("inconsistent observation %q/%s was used: %+v", bad.ExecutionWait, bad.ExecutionReceipt.Phase, got)
+		if got := inlineExecStreams(inlineTestReply("completed", "terminal", pages...), "completed", inlineTestHost, ref, 16); len(got) != 0 {
+			t.Fatalf("repeated stream pages were used: %+v", got)
 		}
 	}
 	// A page for another instance, or larger than asked, is read again instead.
 	foreign := inlineTestPage(execution.StreamStderr, "err")
 	foreign.Instance = "other"
 	mixed := inlineTestReply("completed", "terminal", inlineTestPage(execution.StreamStdout, "too long"), foreign)
-	if got := inlineExecStreams(mixed, inlineTestHost, ref, 4); len(got) != 0 {
+	if got := inlineExecStreams(mixed, "completed", inlineTestHost, ref, 4); len(got) != 0 {
 		t.Fatalf("invalid pages were used: %+v", got)
 	}
 }
 
 func TestRemainingExecWaitChargesTheInlineWait(t *testing.T) {
 	req := mcpnative.ExecRequest{WaitMS: 5000}
-	if got := remainingExecWait(req, 0, time.Hour, protocol.Control{}); got.WaitMS != 5000 {
+	for _, observed := range []string{"", "completed"} {
+		if got := remainingExecWait(req, 1000, observed); got.WaitMS != 5000 {
+			t.Fatalf("observation %q changed the budget: %d", observed, got.WaitMS)
+		}
+	}
+	if got := remainingExecWait(req, 0, execWaitTimedOut); got.WaitMS != 5000 {
 		t.Fatalf("a plain create changed the budget: %d", got.WaitMS)
 	}
-	if got := remainingExecWait(req, 1000, time.Hour, protocol.Control{ExecutionWait: "completed"}); got.WaitMS != 5000 {
-		t.Fatalf("a completed create changed the budget: %d", got.WaitMS)
-	}
-	// The create's own time is not charged when the host reports its wait.
-	if got := remainingExecWait(req, 1000, 3*time.Second, protocol.Control{ExecutionWait: execWaitTimedOut}); got.WaitMS != 4000 {
+	if got := remainingExecWait(req, 1000, execWaitTimedOut); got.WaitMS != 4000 {
 		t.Fatalf("remaining wait = %d, want 4000", got.WaitMS)
 	}
-	// A failed observation is charged its time, up to the inline budget.
-	if got := remainingExecWait(req, 1000, 300*time.Millisecond, protocol.Control{}); got.WaitMS != 4700 {
-		t.Fatalf("remaining wait after a quick failed observation = %d, want 4700", got.WaitMS)
-	}
-	if got := remainingExecWait(req, 1000, 9*time.Second, protocol.Control{}); got.WaitMS != 4000 {
-		t.Fatalf("remaining wait after a slow failed observation = %d, want 4000", got.WaitMS)
-	}
-	if got := remainingExecWait(mcpnative.ExecRequest{WaitMS: 600}, 1000, 0, protocol.Control{ExecutionWait: execWaitTimedOut}); got.WaitMS != 0 {
+	if got := remainingExecWait(mcpnative.ExecRequest{WaitMS: 600}, 1000, execWaitTimedOut); got.WaitMS != 0 {
 		t.Fatalf("an exhausted budget = %d, want 0", got.WaitMS)
 	}
 }

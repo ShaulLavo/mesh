@@ -25,6 +25,10 @@ func TestInlineCreateReturnsResultAndOutputOnce(t *testing.T) {
 	if replay.ExecutionReceipt.Instance != first.ExecutionReceipt.Instance {
 		t.Fatalf("replay changed instance: %s then %s", first.ExecutionReceipt.Instance, replay.ExecutionReceipt.Instance)
 	}
+	// The smallest budget still observes a job that has finished.
+	brief := req
+	brief.WaitMillis = 1
+	assertInlineCompletion(t, f.request(t, brief), 3, "out", "err")
 	conflict := req
 	conflict.Command = []string{"/bin/true"}
 	reply, err := f.exchange(conflict)
@@ -53,12 +57,13 @@ func TestInlineCreateTimesOutWithTheLiveReceipt(t *testing.T) {
 	}
 }
 
-// A client that disconnects after sending an inline create never causes a
-// second launch: a retry of its key finds the one job and its result.
-func TestInlineCreateDisconnectThenRetryRunsOnce(t *testing.T) {
+// A client that disconnects while its accepted job runs loses only the
+// observation: the job finishes, and a retry of its key returns that same
+// instance and its result without a second launch.
+func TestInlineCreateDisconnectAfterAcceptanceKeepsTheJob(t *testing.T) {
 	f := newNativePipeDaemon(t)
 	marker := filepath.Join(f.root, "launches")
-	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "gone", RequestKey: "gone", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "echo x >> " + marker + "; sleep 0.2; printf done"}, WaitMillis: 10000, OutputBytes: 64}
+	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "gone", RequestKey: "gone", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "echo x >> " + marker + "; sleep 1; printf done"}, WaitMillis: 10000, OutputBytes: 64}
 	conn, err := net.DialTimeout("unix", SocketPath(f.state), time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -66,9 +71,25 @@ func TestInlineCreateDisconnectThenRetryRunsOnce(t *testing.T) {
 	if err := protocol.NewWriter(conn).WriteControlMsg(req); err != nil {
 		t.Fatal(err)
 	}
+	var accepted *protocol.ExecutionReceipt
+	pipeEventually(t, func() bool {
+		reply, err := f.exchange(protocol.Control{Type: protocol.TypeExecutionRequest, RequestID: "probe", RequestKey: req.RequestKey})
+		accepted = reply.ExecutionReceipt
+		return err == nil && reply.Type != protocol.TypeError && accepted != nil
+	})
 	_ = conn.Close()
+	// A retry while the first create is still launching may come back without
+	// an observation; either way it names the accepted instance.
 	retry := f.request(t, req)
-	assertInlineCompletion(t, retry, 0, "done", "")
+	if retry.ExecutionReceipt == nil || retry.ExecutionReceipt.Instance != accepted.Instance {
+		t.Fatalf("retry returned %+v, accepted instance %s", retry.ExecutionReceipt, accepted.Instance)
+	}
+	wait := boundPipeRequest(protocol.TypeExecutionWait, accepted)
+	wait.TimeoutMillis = 10000
+	if done := f.request(t, wait); done.ExecutionWait != "completed" {
+		t.Fatalf("accepted job did not finish after its client left: %+v", done)
+	}
+	assertPipeBytes(t, f, accepted, execution.StreamStdout, []byte("done"))
 	launches, err := os.ReadFile(marker) //nolint:gosec // the fixture's marker under its own temporary root
 	if err != nil || string(launches) != "x\n" {
 		t.Fatalf("launches = %q, %v; want exactly one", launches, err)
@@ -100,10 +121,18 @@ func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
 	if observed, err := l.withInlineResult(grantCtx, request, created, nil); err != nil || observed.ExecutionWait != "completed" {
 		t.Fatalf("current grant observation = %+v, %v", observed, err)
 	}
-	if err := identity.RevokeDevice(t.Context(), state, device); err != nil {
-		t.Fatal(err)
+	// Revoked while the wait is in flight: the check after the wait stops it.
+	revoked := false
+	inlineAfterWait = func() {
+		revoked = identity.RevokeDevice(t.Context(), state, device) == nil
 	}
-	observed, _ := l.withInlineResult(grantCtx, request, created, nil)
+	t.Cleanup(func() { inlineAfterWait = func() {} })
+	observed, err := l.withInlineResult(grantCtx, request, created, nil)
+	if !revoked || err == nil || observed.ExecutionWait != "" || observed.ExecutionOutput != nil {
+		t.Fatalf("grant revoked during the wait: observation %+v, %v", observed, err)
+	}
+	// Revoked before: nothing is observed at all.
+	observed, _ = l.withInlineResult(grantCtx, request, created, nil)
 	if observed.ExecutionWait != "" || observed.ExecutionOutput != nil {
 		t.Fatalf("revoked grant received an observation: %+v", observed)
 	}
