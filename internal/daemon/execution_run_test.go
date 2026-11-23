@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -468,6 +469,50 @@ func TestRunInvalidFrameEndsTheConnectionWithAnError(t *testing.T) {
 		t.Fatal("the client loop never ended")
 	}
 	assertRunGone(t, pid)
+	assertRunsReleased(t, f.l.runs)
+}
+
+// An invalid frame whose interruption the watcher claims just as the reply is
+// committed still ends the connection with the read's error: the reply side
+// waits for the watcher to record its cause instead of reading it as a caller
+// that left.
+func TestRunInvalidFrameRacingTheCommitKeepsItsError(t *testing.T) {
+	f := newRunFixture(t)
+	claimed := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	interruptClaimed := func(err error) {
+		if !errors.Is(err, transport.ErrInvalidFrame) {
+			return
+		}
+		once.Do(func() { close(claimed) })
+		<-release
+	}
+	var client *serverTestConn
+	beforeCommit := func() {
+		client.pushReadError(transport.ErrInvalidFrame)
+		waitSignal(t, claimed, "the watcher's claim")
+	}
+	commitLost := func() { close(release) }
+	lookaheadInterruptClaimedHook.Store(&interruptClaimed)
+	runBeforeCommitHook.Store(&beforeCommit)
+	runCommitLostHook.Store(&commitLost)
+	t.Cleanup(func() {
+		lookaheadInterruptClaimedHook.Store(nil)
+		runBeforeCommitHook.Store(nil)
+		runCommitLostHook.Store(nil)
+	})
+	client, done := f.serve()
+	client.pushRead(serverControlFrame(t, f.request("true")))
+	select {
+	case err := <-done:
+		if !errors.Is(err, transport.ErrInvalidFrame) {
+			t.Fatalf("client loop after an invalid frame racing the commit = %v", err)
+		}
+	case <-time.After(runHangCap):
+		t.Fatal("the client loop never ended")
+	}
+	assertNoRunReply(t, client)
 	assertRunsReleased(t, f.l.runs)
 }
 

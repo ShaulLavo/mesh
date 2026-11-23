@@ -323,9 +323,24 @@ func runBeforeCommit() {
 func commitRunReply(ctx, watched context.Context, relay *clientRelay, commit func() bool, reply protocol.Control) error {
 	runBeforeCommit()
 	if !commit() {
+		// The watcher claimed the interruption first and records its cause
+		// right after; waiting for it keeps a broken stream from reading as
+		// a caller that left.
+		runCommitLost()
+		<-watched.Done()
 		return runEndCause(watched)
 	}
 	return writeRunReply(ctx, relay, reply)
+}
+
+// runCommitLostHook runs when a run's reply loses its commit to the watcher;
+// tests install it to order the watcher's next step.
+var runCommitLostHook atomic.Pointer[func()]
+
+func runCommitLost() {
+	if hook := runCommitLostHook.Load(); hook != nil {
+		(*hook)()
+	}
 }
 
 func writeRunReply(ctx context.Context, relay *clientRelay, reply protocol.Control) error {

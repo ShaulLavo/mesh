@@ -56,7 +56,11 @@ func TestExecutionRunResultValidate(t *testing.T) {
 		"short prefix": runResultWith(func(r *ExecutionRunResult) {
 			r.Stdout = ExecutionRunStream{Bytes: []byte("abc"), Total: 10, Truncated: true, CloseReason: "eof"}
 		}),
-		"short complete stream": runResultWith(func(r *ExecutionRunResult) { r.Stdout.Bytes, r.Stdout.Total = []byte("a"), 2 }),
+		// Truncated agrees with the totals, so only the kept-length check
+		// can reject it.
+		"short complete stream": runResultWith(func(r *ExecutionRunResult) {
+			r.Stdout.Bytes, r.Stdout.Total, r.Stdout.Truncated = []byte("a"), 2, true
+		}),
 		"truncation disagrees": runResultWith(func(r *ExecutionRunResult) {
 			r.Stdout.Bytes, r.Stdout.Total, r.Stdout.Truncated = []byte("ab"), 2, true
 		}),

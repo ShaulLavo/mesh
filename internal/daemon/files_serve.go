@@ -68,6 +68,16 @@ const (
 // while a test installs it.
 var lookaheadFrameClaimedHook atomic.Pointer[func(pending chan lookaheadRead, err error)]
 
+// lookaheadInterruptClaimedHook runs right after the watcher claims the
+// interruption and before it records why; tests pause there.
+var lookaheadInterruptClaimedHook atomic.Pointer[func(error)]
+
+func lookaheadInterruptClaimed(err error) {
+	if hook := lookaheadInterruptClaimedHook.Load(); hook != nil {
+		(*hook)(err)
+	}
+}
+
 func lookaheadFrameClaimed(pending chan lookaheadRead, err error) {
 	if hook := lookaheadFrameClaimedHook.Load(); hook != nil {
 		(*hook)(pending, err)
@@ -92,6 +102,7 @@ func (l *frameLookahead) watchAny(ctx context.Context) (watched context.Context,
 		// Claim the interruption before the read becomes visible, so a reply
 		// can never be committed with this frame already pending.
 		interrupted := state.CompareAndSwap(watchRunning, watchInterrupted)
+		lookaheadInterruptClaimed(err)
 		if err != nil {
 			cancelCause(err)
 		} else if interrupted {
