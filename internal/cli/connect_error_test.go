@@ -128,6 +128,32 @@ func TestWakeJoinKeepsEveryDialCause(t *testing.T) {
 	}
 }
 
+var errWakeSenderRefused = errors.New("wake sender refused")
+
+func TestWakeJoinSanitizesRemoteWakeMessage(t *testing.T) {
+	remote := fmt.Errorf("wake through vps: spoofed\r\x1b[31mline: %w", errWakeSenderRefused)
+	app := &application{dependencies: Dependencies{
+		DialHost: failingDialer(wrappedDialError("100.64.0.2:7337", syscall.ECONNREFUSED)),
+		Wake:     func(context.Context, HostRecord) error { return remote },
+	}}
+	host := connectErrorTestHost("ws://100.64.0.2:7337/mesh")
+	_, _, err := openVerifiedHostInfo(context.Background(), host, app.intentDialer(io.Discard))
+	if !errors.Is(err, syscall.ECONNREFUSED) || !errors.Is(err, errWakeSenderRefused) {
+		t.Fatalf("joined error %q lost a cause", err)
+	}
+	if strings.ContainsAny(err.Error(), "\r\x1b") {
+		t.Fatalf("remote control characters reached the error: %q", err)
+	}
+	for _, want := range []string{
+		"Cannot connect to pc: nothing accepted the TCP connection to 100.64.0.2:7337 (connection refused).",
+		"wake through vps: spoofed [31mline: wake sender refused",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q is missing %q", err, want)
+		}
+	}
+}
+
 func closedLoopbackAddress(t *testing.T) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -179,8 +205,9 @@ func TestControlDialDeadlineBeforeUpgradeReportsTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close() //nolint:errcheck // test listener
-	go holdSilentConnections(listener)
+	held := make(chan struct{})
+	go func() { defer close(held); holdSilentConnections(listener) }()
+	defer func() { _ = listener.Close(); <-held }()
 	host := connectErrorTestHost("ws://" + listener.Addr().String() + "/mesh")
 	host.MeshIdentity = hostID
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)

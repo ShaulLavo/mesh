@@ -58,14 +58,23 @@ func classifyConnectError(host HostRecord, fallbackAddress string, err error) er
 	return &hostConnectError{host: HostLabel(host), connect: connect, cause: err}
 }
 
-// presentConnectError is classifyConnectError for callers that keep any other
-// failure as it was.
-func presentConnectError(host HostRecord, err error) error {
+// presentJoinPart prepares one failure for errors.Join. A joined error skips
+// openVerifiedHostInfo's sanitizing prefix, and a wake failure can carry a
+// remote sender's message, so every part gets terminal-safe text.
+func presentJoinPart(host HostRecord, err error) error {
 	if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
-		return connectErr
+		err = connectErr
 	}
-	return err
+	return sanitizedError{cause: err}
 }
+
+// sanitizedError shows its cause as terminal-safe text and keeps the cause for
+// errors.Is and errors.As.
+type sanitizedError struct{ cause error }
+
+func (e sanitizedError) Error() string { return safeRemoteText(e.cause.Error()) }
+
+func (e sanitizedError) Unwrap() error { return e.cause }
 
 // endpointAddress names the host:port a control endpoint dials.
 func endpointAddress(host HostRecord) string {

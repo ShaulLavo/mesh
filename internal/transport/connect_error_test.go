@@ -54,19 +54,20 @@ func TestDialOnceToSilentListenerReportsControlTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close() //nolint:errcheck // test listener
+	// The goroutine sends exactly once, nil when Accept fails after Close, so
+	// cleanup can wait for it and close whatever it accepted.
 	accepted := make(chan net.Conn, 1)
 	go func() {
 		conn, err := listener.Accept()
-		if err == nil {
-			accepted <- conn
+		if err != nil {
+			conn = nil
 		}
+		accepted <- conn
 	}()
 	defer func() {
-		select {
-		case conn := <-accepted:
+		_ = listener.Close()
+		if conn := <-accepted; conn != nil {
 			_ = conn.Close()
-		default:
 		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
