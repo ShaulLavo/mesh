@@ -72,10 +72,25 @@ func (p *standbyPool) preferredID() string {
 		return ""
 	}
 	if _, err := os.Lstat(s.Dir); !errors.Is(err, os.ErrNotExist) {
-		p.drop(s.ID)
+		p.dropWaiting(s)
 		return ""
 	}
 	return s.ID
+}
+
+// dropWaiting discards s if it is still the waiting standby, and never a
+// claimed one that happens to share its ID.
+func (p *standbyPool) dropWaiting(s *worker.Standby) {
+	p.mu.Lock()
+	owned := p.current == s
+	if owned {
+		p.current = nil
+	}
+	p.mu.Unlock()
+	if owned {
+		s.Discard()
+		p.refillSoon()
+	}
 }
 
 // reserved reports a reservation that asked for preferred and got id. Getting
@@ -95,6 +110,7 @@ func (p *standbyPool) reserved(preferred, id string) {
 	if id == preferred {
 		p.claimed[id] = standbyClaim{standby: s, at: time.Now()}
 		s = nil
+		time.AfterFunc(standbyClaimExpiry+time.Second, p.expireClaims)
 	}
 	p.mu.Unlock()
 	if s != nil {
@@ -115,16 +131,15 @@ func (p *standbyPool) take(id string) *worker.Standby {
 	return claim.standby
 }
 
-// drop discards a standby still waiting or claimed under id. After a launch
-// took it, drop does nothing.
+// drop releases the claim under id: its request ended without launching,
+// so the claimed standby is discarded. After a launch took it, drop does
+// nothing.
 func (p *standbyPool) drop(id string) {
 	p.mu.Lock()
 	var gone *worker.Standby
 	if claim, ok := p.claimed[id]; ok {
 		delete(p.claimed, id)
 		gone = claim.standby
-	} else if p.current != nil && p.current.ID == id {
-		gone, p.current = p.current, nil
 	}
 	p.mu.Unlock()
 	if gone == nil {
@@ -138,11 +153,10 @@ func (p *standbyPool) drop(id string) {
 // had time to finish.
 func (p *standbyPool) refillSoon() { time.AfterFunc(standbyRefillDelay, p.refill) }
 
-// refill starts a standby when none is waiting, and discards expired claims.
+// refill starts a standby when none is waiting.
 // A standby that dies on its own is replaced only at the next refill, so a
 // binary that cannot start one is not restarted in a loop.
 func (p *standbyPool) refill() {
-	p.expireClaims()
 	p.mu.Lock()
 	if !p.active || p.closed || p.starting || p.current != nil || p.executable == "" {
 		p.mu.Unlock()
@@ -165,6 +179,8 @@ func (p *standbyPool) refill() {
 	go p.forgetWhenExited(s)
 }
 
+// expireClaims discards claims older than standbyClaimExpiry. Each claim
+// schedules a call, so an idle daemon still cleans up.
 func (p *standbyPool) expireClaims() {
 	p.mu.Lock()
 	var expired []*worker.Standby

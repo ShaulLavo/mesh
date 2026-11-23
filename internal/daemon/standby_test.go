@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -10,8 +11,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/storage"
 	"github.com/shaul/mesh/internal/worker"
 )
 
@@ -153,5 +156,99 @@ func TestStandbyPoolHandsOutOnlyByID(t *testing.T) {
 	pool.refill()
 	if started != 5 || pool.preferredID() != "" {
 		t.Fatalf("after close: started %d, preferred %q", started, pool.preferredID())
+	}
+}
+
+// fixtureStandbyPool is an activated pool of real fixture standbys.
+func fixtureStandbyPool(t *testing.T, sessions, root string) *standbyPool {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := newStandbyPool(sessions, executable, func() []string { return []string{pipeNativeFixture + "=" + root} })
+	pool.start = func(sessionsDir, executable string, env []string) (*worker.Standby, error) {
+		s, err := worker.StartStandby(sessionsDir, executable, env)
+		if err != nil {
+			return nil, fmt.Errorf("fixture standby: %w", err)
+		}
+		t.Cleanup(func() { s.Discard(); <-s.Exited() })
+		return s, nil
+	}
+	t.Cleanup(pool.close)
+	pool.activate()
+	return pool
+}
+
+// A reservation that allocates the standby's ID and is then rejected
+// releases the claim at once, so the standby exits instead of waiting.
+func TestRejectedReservationReleasesItsStandby(t *testing.T) {
+	state := compactSocketTempDir(t)
+	host, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := mustLifecycle(t, lifecycleConfig{Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: storage.HostID(host.ID), MeshIdentity: host.ID}, SessionsDir: filepath.Join(state, "s")})
+	t.Cleanup(l.closeExecution)
+	l.standbys = fixtureStandbyPool(t, filepath.Join(state, "s"), state)
+	id := l.standbys.preferredID()
+	if id == "" {
+		t.Fatal("no standby started")
+	}
+	j, err := l.executionJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, err := execution.Normalize(execution.Intent{Kind: execution.KindPipe, Cwd: state, Command: []string{"/bin/true"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Admission holds when the journal lock is taken and fails afterwards,
+	// once the reservation has allocated the standby's ID.
+	checks := 0
+	refused := execution.WithAdmission(context.WithValue(t.Context(), localClientKey{}, true), func() error {
+		checks++
+		if checks > 1 {
+			return errors.New("revoked")
+		}
+		return nil
+	})
+	key := execution.Key{Host: host.ID, Class: executionLocalAccountClass, Principal: "daemon-account", Opaque: "refused"}
+	if _, owner, _, err := l.reserveExecution(refused, j, key, intent); err == nil || owner {
+		t.Fatalf("rejected reservation = owner %v, %v", owner, err)
+	}
+	if _, err := os.Lstat(filepath.Join(state, "s", id)); err != nil {
+		t.Fatalf("the reservation did not allocate the standby's ID: %v", err)
+	}
+	if l.standbys.take(id) != nil {
+		t.Fatal("a rejected reservation kept its standby claimed")
+	}
+}
+
+// A waiting standby whose ID collides with a claimed one is dropped on its
+// own; the earlier request keeps its claim.
+func TestOccupiedWaitingStandbyLeavesTheClaimAlone(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "s")
+	pool := fixtureStandbyPool(t, sessions, root)
+	id := pool.preferredID()
+	pool.reserved(id, id)
+	if err := os.MkdirAll(filepath.Join(sessions, id), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pipeEventually(t, func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return pool.current != nil
+	})
+	pool.mu.Lock()
+	pool.current.ID, pool.current.Dir = id, filepath.Join(sessions, id)
+	pool.mu.Unlock()
+	if pool.preferredID() != "" {
+		t.Fatal("a colliding waiting standby was offered")
+	}
+	if pool.take(id) == nil {
+		t.Fatal("the earlier request lost its claimed standby")
 	}
 }

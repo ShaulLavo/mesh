@@ -147,10 +147,12 @@ var executionDaemonBoundary = func(string, string, execution.Receipt) {}
 
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
+	var allocated string
 	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
 		preferred := l.standbys.preferredID()
 		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), preferred)
 		l.standbys.reserved(preferred, ref.ID)
+		allocated = ref.ID
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
 		}
@@ -161,6 +163,10 @@ func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Jou
 		env = worker.ExecutionEnvironment(snapshot, string(l.host.ID), ref, intent.Term)
 		return execution.NewBinding(key, intent, ref, env), nil
 	})
+	if err != nil || !owner {
+		// Allocated but not accepted: nothing will launch it.
+		l.standbys.drop(allocated)
+	}
 	return r, owner, env, executionBoundaryError("reserve detached execution", err)
 }
 func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.Key, error) {
