@@ -1202,7 +1202,7 @@ def terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, ex
         for pid, start in targets:
             signal_verified_process(pid, start, sig)
         wait_err = wait_owned_gone(
-            registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap
+            registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap, known_targets
         )
         if wait_err is not None:
             scan_error = scan_error or wait_err
@@ -1228,7 +1228,10 @@ def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, 
     return discover_owned_processes(rows, roots, exact_binary, sessions_dir, owner_token, exclude)
 
 
-def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap):
+def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap, known_targets):
+    """Waits for owned processes to exit. Every (pid, start) it discovers joins
+    known_targets, so a later escalation still reaches a child that appeared
+    while waiting even if the next scan fails; each is verified before signalling."""
     limit = scan_limit_at(deadline, reserve, phase_cap)
     while limit is not None and time.monotonic() < limit:
         targets, err = try_find_live_owned(
@@ -1236,6 +1239,7 @@ def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, 
         )
         if err is not None:
             return err
+        known_targets.update(targets)
         if not targets:
             return None
         time.sleep(0.05)

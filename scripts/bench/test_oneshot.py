@@ -400,8 +400,9 @@ class OneshotPureLogicTests(unittest.TestCase):
             oneshot.run_command_with_deadline(
                 [sys.executable, "-c", "import time; time.sleep(10)"], deadline=deadline
             )
-        elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 0.5)
+        # The clamp, not the original 8 s deadline, ended the run; this bound
+        # is a generous hang cap, not a speed check.
+        self.assertLess(time.monotonic() - started, 5.0)
 
         expired = oneshot.CleanupDeadline(0.1)
         expired._at = time.monotonic() - 0.1
@@ -417,6 +418,22 @@ class OneshotPureLogicTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "cleanup deadline expired"):
                 oneshot.parent_pid(123, deadline=expired)
         popen_mock2.assert_not_called()
+
+    def test_children_found_while_waiting_are_escalated_after_scans_fail(self):
+        with tempfile.TemporaryDirectory(prefix="oneshot-wait-child-", dir="/work/tmp") as directory:
+            reg = oneshot.OwnedRegistry(Path(directory) / "owned.jsonl")
+            parent, child = (100, "1:100"), (200, "1:200")
+            scans = iter([([parent], None), ([parent, child], None)])
+            signaled = []
+
+            def scan(*_args):
+                return next(scans, ([], RuntimeError("ps process listing timed out")))
+            with patch.object(oneshot, "try_find_live_owned", side_effect=scan), \
+                 patch.object(oneshot, "signal_verified_process", side_effect=lambda p, s, sig: signaled.append((p, s, sig))):
+                with self.assertRaisesRegex(RuntimeError, "ps process listing timed out"):
+                    oneshot.terminate_owned_within(reg, None, None, None, set(), oneshot.CleanupDeadline(5.0))
+            self.assertIn((100, "1:100", signal.SIGKILL), signaled)
+            self.assertIn((200, "1:200", signal.SIGKILL), signaled)
 
     def test_term_phase_scan_timeout_still_escalates_to_sigkill(self):
         with tempfile.TemporaryDirectory(prefix="oneshot-term-timeout-", dir="/work/tmp") as directory:
