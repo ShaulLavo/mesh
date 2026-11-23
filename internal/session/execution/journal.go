@@ -24,10 +24,11 @@ type Journal struct {
 	maintenanceMu    sync.Mutex
 	// Context quotas: open contexts per owner and per host, retained in all.
 	contextOwnerLimit, contextHostLimit, contextRetainLimit int
-	// contextDirsReady records that this journal made the context directories
-	// durable. Nothing removes them, so later calls skip three sync rounds
+	// contextDirsSettled is one more than the files' failure count when this
+	// journal last made the context directories durable, and zero before.
+	// While no write has failed since, later calls skip three sync rounds
 	// that every context create and receipt lookup paid.
-	contextDirsReady atomic.Bool
+	contextDirsSettled atomic.Uint64
 }
 
 func Open(state, boot, owner string) (*Journal, error) {

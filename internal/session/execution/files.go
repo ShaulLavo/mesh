@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -60,6 +61,7 @@ type Files struct {
 	// forgets a path when the path is removed.
 	confirmMu sync.Mutex
 	confirmed map[string]fileStamp
+	failures  atomic.Uint64
 }
 
 func OpenFiles(path string) (*Files, error) {
@@ -186,10 +188,24 @@ func (f *Files) syncDir(dir string) error {
 	}
 	file, err := f.root.Open(dir)
 	if err != nil {
-		return executionBoundaryError("files.go syncDirs", err)
+		return f.failed(executionBoundaryError("files.go syncDirs", err))
 	}
-	return errors.Join(file.Sync(), file.Close())
+	return f.failed(errors.Join(file.Sync(), file.Close()))
 }
+
+// failed counts a write or sync that did not finish. A rename it followed may
+// be visible without being durable, and only a later sync of its directory
+// settles it, so a caller that skips such syncs after one success must look
+// here first.
+func (f *Files) failed(err error) error {
+	if err != nil {
+		f.failures.Add(1)
+	}
+	return err
+}
+
+// Failures is how many writes or syncs on these files have failed so far.
+func (f *Files) Failures() uint64 { return f.failures.Load() }
 
 // Confirm makes an existing record and its namespace durable. Only the file's
 // own fsync is skipped, and only for a JSON record this process already synced
@@ -292,7 +308,7 @@ func (f *Files) publishName(temp, name string, exclusive bool) (Stage, error) {
 		return BeforePublish, executionBoundaryError("exclusively publish record", errors.Join(err, closeErr))
 	}
 	if closeErr != nil {
-		return Unconfirmed, executionBoundaryError("close publication directory", closeErr)
+		return Unconfirmed, f.failed(executionBoundaryError("close publication directory", closeErr))
 	}
 	if err := f.step("publication_visible"); err != nil {
 		return Unconfirmed, err
@@ -347,7 +363,7 @@ func (f *Files) step(operation string) error {
 		f.observe(operation)
 	}
 	if f.fault != nil {
-		return f.fault(operation)
+		return f.failed(f.fault(operation))
 	}
 	return nil
 }
@@ -355,13 +371,13 @@ func (f *Files) dataSync(file *os.File) error {
 	if err := f.step("data_sync"); err != nil {
 		return err
 	}
-	return executionBoundaryError("files.go dataSync", file.Sync())
+	return f.failed(executionBoundaryError("files.go dataSync", file.Sync()))
 }
 func (f *Files) flushDevice(file *os.File) error {
 	if err := f.step("device_sync"); err != nil {
 		return err
 	}
-	return deviceSync(file)
+	return f.failed(deviceSync(file))
 }
 func (f *Files) closeFile(file *os.File) error { return errors.Join(file.Close(), f.step("close")) }
 

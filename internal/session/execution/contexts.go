@@ -127,15 +127,30 @@ func contextMember(id, hash string) string {
 	return filepath.Join(contextMembers(id), hash+recordExtension)
 }
 
+// ensureContextDirs makes the shared context directories and every rename
+// inside them durable. After one success it is skipped until a write or sync
+// on these files fails, since only a later directory sync settles a rename
+// whose own sync failed, or until a directory goes missing. Concurrent first
+// callers may each run the syncs.
 func (j *Journal) ensureContextDirs() error {
-	if j.contextDirsReady.Load() {
+	failures := j.files.Failures()
+	if j.contextDirsSettled.Load() == failures+1 && j.contextDirsPresent() {
 		return nil
 	}
 	err := errors.Join(j.files.Ensure(contextDir), j.files.Ensure(contextRequestDir), j.files.Ensure(contextMemberDir))
 	if err == nil {
-		j.contextDirsReady.Store(true)
+		j.contextDirsSettled.Store(failures + 1)
 	}
 	return err
+}
+
+func (j *Journal) contextDirsPresent() bool {
+	for _, dir := range []string{contextDir, contextRequestDir, contextMemberDir} {
+		if _, err := j.files.root.Lstat(dir); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func cutJSON(name string) (string, bool) {
