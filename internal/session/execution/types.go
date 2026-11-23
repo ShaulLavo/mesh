@@ -362,6 +362,7 @@ const (
 	phaseUncertain       = "uncertain"
 	phaseTerminal        = "terminal"
 	CaptureNotRecorded   = "not_recorded"
+	captureIncomplete    = "incomplete"
 	notStarted           = "not_started"
 	interrupted          = "interrupted"
 	outcomeUnknown       = "unknown"
@@ -438,7 +439,7 @@ func (r Result) validateCapture() error {
 	if r.Capture == CaptureNotRecorded && len(r.Streams) == 0 {
 		return nil
 	}
-	if r.Capture != "complete" && r.Capture != "incomplete" {
+	if r.Capture != "complete" && r.Capture != captureIncomplete {
 		return fmt.Errorf("execution: invalid capture result")
 	}
 	streams := r.Binding.Streams()

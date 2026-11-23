@@ -13,7 +13,14 @@ type Fence struct{ file *os.File }
 
 var lockWaitLimit = 1500 * time.Millisecond
 
-func (g *Fence) Close() error { return executionBoundaryError("lock.go Close", g.file.Close()) }
+// Close releases the fence. A nil fence stands for a lock file an earlier
+// boot lost, which there is nothing to release for.
+func (g *Fence) Close() error {
+	if g == nil {
+		return nil
+	}
+	return executionBoundaryError("lock.go Close", g.file.Close())
+}
 func (f *Files) Lock(ctx context.Context, name string) (*Fence, error) {
 	return f.lockFile(ctx, name, os.O_CREATE|os.O_RDWR, unix.LOCK_EX)
 }

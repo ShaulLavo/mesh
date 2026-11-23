@@ -104,6 +104,7 @@ func (j *Journal) deleteOutputBytes(ctx context.Context, b Binding) error {
 
 func (j *Journal) deleteStreamBytes(ctx context.Context, b Binding, stream string) error {
 	s := newStreamStore(j.files, b, stream)
+	s.earlier = earlierBoot(j.boot, b)
 	gate, err := j.files.LockExisting(ctx, s.path("stream.lock"))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -112,11 +113,8 @@ func (j *Journal) deleteStreamBytes(ctx context.Context, b Binding, stream strin
 		return err
 	}
 	defer func() { _ = gate.Close() }()
-	m, err := s.load()
+	m, err := s.reclaimable(ctx)
 	if err != nil {
-		return err
-	}
-	if err := s.settle(ctx, m); err != nil {
 		return err
 	}
 	if !m.Closed {
@@ -133,6 +131,21 @@ func (j *Journal) deleteStreamBytes(ctx context.Context, b Binding, stream strin
 	}
 	return s.prune(ctx, m)
 }
+
+// reclaimable loads the manifest whose bytes reclamation deletes. An
+// earlier-boot stream is salvaged, which verifies what it keeps; any other
+// is settled first, as before.
+func (s *streamStore) reclaimable(ctx context.Context) (manifest, error) {
+	if s.earlier {
+		return s.salvage(ctx)
+	}
+	m, err := s.load()
+	if err != nil {
+		return manifest{}, err
+	}
+	return m, s.settle(ctx, m)
+}
+
 func (j *Journal) retireOutputPayload(ctx context.Context, b Binding) error {
 	if err := j.deleteOutputBytes(ctx, b); err != nil {
 		return err
@@ -143,10 +156,14 @@ func outputDue(r Receipt, now time.Time) bool {
 	return r.Phase == phaseTerminal && r.OutputRetainUntil != nil && (r.OutputExpired || !now.Before(*r.OutputRetainUntil))
 }
 
-func (j *Journal) interruptedPipe(ctx context.Context, b Binding) (Result, error) {
-	r := Result{Binding: b, Termination: Termination{Kind: interrupted, Reason: "host_reboot"}, Capture: "incomplete"}
+// interruptedAttempt settles an attempt from an earlier boot that started
+// but recorded no result: its streams close as interrupted, holding the
+// bytes that survived the reboot.
+func (j *Journal) interruptedAttempt(ctx context.Context, b Binding) (Result, error) {
+	r := Result{Binding: b, Termination: Termination{Kind: interrupted, Reason: captureHostReboot}, Capture: captureIncomplete}
 	for _, stream := range b.Streams() {
 		s := newStreamStore(j.files, b, stream)
+		s.earlier = true
 		summary, err := s.interrupted(ctx)
 		if err != nil {
 			return Result{}, err
@@ -158,16 +175,29 @@ func (j *Journal) interruptedPipe(ctx context.Context, b Binding) (Result, error
 
 func (s *streamStore) interrupted(ctx context.Context) (StreamResult, error) {
 	gate, err := s.files.LockExisting(ctx, s.path("stream.lock"))
+	if errors.Is(err, os.ErrNotExist) {
+		// The stream lost its lock file, and with it the directory's other
+		// records may be gone; report the salvage without writing to it.
+		m, err := s.salvage(ctx)
+		if !m.Closed {
+			m.Closed, m.CloseReason = true, interrupted
+		}
+		return m.summary(), err
+	}
 	if err != nil {
 		return StreamResult{}, err
 	}
 	defer func() { _ = gate.Close() }()
-	m, err := s.load()
+	stored, loadErr := s.load()
+	m, err := s.salvage(ctx)
 	if err != nil {
 		return StreamResult{}, err
 	}
+	changed := loadErr != nil || len(m.Segments) != len(stored.Segments) || m.End != stored.End
 	if !m.Closed {
-		m.Closed, m.CloseReason = true, interrupted
+		m.Closed, m.CloseReason, changed = true, interrupted, true
+	}
+	if changed {
 		if _, err := s.files.Publish(s.path("manifest.json"), m, false); err != nil {
 			return StreamResult{}, err
 		}

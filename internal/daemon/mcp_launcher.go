@@ -275,7 +275,12 @@ func (m mcpLauncher) Stderr(ctx context.Context, ref mcphost.WorkerRef, limit in
 	if err != nil {
 		return nil, fmt.Errorf("read MCP worker %s stderr: %w", ref.SessionID, err)
 	}
-	return tail, nil
+	if tail.Loss == execution.LossHostReboot {
+		// Diagnostics are read by people; say why the stream may be short.
+		note := []byte("[mesh: stderr incomplete: output lost at a host reboot]\n")
+		return append(note, tail.Bytes...), nil
+	}
+	return tail.Bytes, nil
 }
 
 func (m mcpLauncher) Dial(ctx context.Context, ref mcphost.WorkerRef) (mcphost.LineConn, error) {

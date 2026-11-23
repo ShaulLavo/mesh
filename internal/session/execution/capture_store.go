@@ -112,7 +112,7 @@ func validStreamClosure(closed, eof bool, reason, loss string) error {
 	if closed && reason != captureEOF && reason != "drain_timeout" && reason != "read_error" && reason != interrupted {
 		return fmt.Errorf("execution: invalid capture closure")
 	}
-	if loss != "" && loss != "queue_overflow" && loss != captureStorageLoss && loss != captureRetention {
+	if loss != "" && loss != "queue_overflow" && loss != captureStorageLoss && loss != captureRetention && loss != captureHostReboot {
 		return fmt.Errorf("execution: invalid capture loss")
 	}
 	return nil
@@ -139,9 +139,12 @@ func (i fileIdentity) matches(info os.FileInfo) bool {
 }
 
 type streamStore struct {
-	files     *Files
-	binding   Binding
-	stream    string
+	files   *Files
+	binding Binding
+	stream  string
+	// earlier marks an attempt from another boot: its reads salvage the
+	// verified bytes instead of failing on records a power cut lost.
+	earlier   bool
 	gate      chan struct{}
 	confirmed map[string]fileIdentity
 }
@@ -158,9 +161,9 @@ func (s *streamStore) load() (manifest, error) {
 		return m, err
 	}
 	if m.streamName() != s.stream {
-		return m, fmt.Errorf("execution: capture stream mismatch")
+		return m, damaged(fmt.Errorf("execution: capture stream mismatch"))
 	}
-	return m, m.validate(s.binding)
+	return m, damaged(m.validate(s.binding))
 }
 func (s *streamStore) identity(name string) (os.FileInfo, error) {
 	file, err := s.files.open(name, os.O_RDONLY)
@@ -300,7 +303,11 @@ func (s *streamStore) readSegment(seg segment, consume func(uint64, []byte)) (er
 		n := min(uint32(32<<10), seg.Size-offset)
 		chunk := buffer[:n]
 		if _, err := io.ReadFull(file, chunk); err != nil {
-			return executionBoundaryError("read immutable segment", err)
+			err = executionBoundaryError("read immutable segment", err)
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				err = damaged(err)
+			}
+			return err
 		}
 		_, _ = hash.Write(chunk)
 		if consume != nil {
@@ -310,7 +317,7 @@ func (s *streamStore) readSegment(seg segment, consume func(uint64, []byte)) (er
 	}
 	n, readErr := file.Read(buffer[:1])
 	if n != 0 || readErr != io.EOF || hex.EncodeToString(hash.Sum(nil)) != seg.Hash {
-		return fmt.Errorf("execution: damaged capture segment")
+		return damaged(fmt.Errorf("execution: damaged capture segment"))
 	}
 	return nil
 }

@@ -422,8 +422,11 @@ func (j *Journal) FinalResult(ctx context.Context, b Binding) (Result, error) {
 
 // result reads and confirms the exact attempt's result and final captures.
 func (j *Journal) result(ctx context.Context, b Binding) (Result, error) {
-	output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
-	return output.Result(ctx, b)
+	return j.output().Result(ctx, b)
+}
+
+func (j *Journal) output() *Output {
+	return &Output{files: j.files, boot: j.boot, streams: make(map[streamKey]*streamStore)}
 }
 func (j *Journal) NotStarted(ctx context.Context, b Binding, reason string) (Receipt, error) {
 	gate, err := j.lock(ctx)
@@ -457,6 +460,30 @@ func (j *Journal) observe(ctx context.Context, hash string) (Receipt, error) {
 	return j.refresh(ctx, r)
 }
 func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error) {
+	r, err := j.refreshReceipt(ctx, snapshot)
+	if err != nil {
+		return r, err
+	}
+	return j.rebootView(ctx, r)
+}
+
+// rebootView reports an earlier-boot terminal receipt's output as the bytes
+// that survived the reboot. Its termination stands; only stream summaries
+// that lost bytes change, and the capture becomes incomplete. It runs after
+// the journal lock is released, because salvage takes stream fences.
+func (j *Journal) rebootView(ctx context.Context, r Receipt) (Receipt, error) {
+	if r.Phase != phaseTerminal || r.Result == nil || r.OutputExpired || r.Removal != removalPresent || len(r.Result.Streams) == 0 || !earlierBoot(j.boot, r.Binding) {
+		return r, nil
+	}
+	result, err := j.output().rebootSummaries(ctx, *r.Result)
+	if err != nil {
+		return r, err
+	}
+	r.Result = &result
+	return r, nil
+}
+
+func (j *Journal) refreshReceipt(ctx context.Context, snapshot Receipt) (Receipt, error) {
 	var result Result
 	resultErr := errResultPending
 	if snapshot.Phase != phaseTerminal {
@@ -465,8 +492,10 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 			return snapshot, resultErr
 		}
 	}
-	if IsResultPending(resultErr) && snapshot.Binding.Mode() != KindPTY && snapshot.Binding.Reservation.BootID != j.boot && j.startedBeforeReboot(snapshot) {
-		result, resultErr = j.interruptedPipe(ctx, snapshot.Binding)
+	// Start evidence is started.json for pipe jobs and the recorded publication
+	// for PTY jobs, whose worker never writes started.json.
+	if IsResultPending(resultErr) && earlierBoot(j.boot, snapshot.Binding) && j.startedBeforeReboot(snapshot) {
+		result, resultErr = j.interruptedAttempt(ctx, snapshot.Binding)
 		if resultErr != nil {
 			return snapshot, resultErr
 		}

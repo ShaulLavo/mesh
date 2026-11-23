@@ -14,7 +14,10 @@ import (
 
 // Output retains confirmations only for this reader lifetime and anchored file identities.
 type Output struct {
-	files   *Files
+	files *Files
+	// boot is the current boot ID. Attempts reserved on another boot read
+	// through the earlier-boot salvage; an empty boot disables it.
+	boot    string
 	mu      sync.Mutex
 	streams map[streamKey]*streamStore
 }
@@ -24,12 +27,21 @@ type streamKey struct {
 	name    string
 }
 
+// OpenOutput opens a reader that does not know the current boot, so it reads
+// every attempt strictly, as one from this boot, until WithBoot names it.
 func OpenOutput(state string) (*Output, error) {
 	f, err := OpenFiles(state)
 	if err != nil {
 		return nil, err
 	}
 	return &Output{files: f, streams: make(map[streamKey]*streamStore)}, nil
+}
+
+// WithBoot names the current boot, before the reader's first use. Output of
+// an attempt reserved on another boot then reads as the bytes that survived.
+func (o *Output) WithBoot(boot string) *Output {
+	o.boot = boot
+	return o
 }
 func (o *Output) Close() error { return o.files.Close() }
 func (o *Output) stream(b Binding, stream string) (*streamStore, error) {
@@ -45,6 +57,7 @@ func (o *Output) stream(b Binding, stream string) (*streamStore, error) {
 			clear(o.streams)
 		}
 		s = newStreamStore(o.files, b, stream)
+		s.earlier = earlierBoot(o.boot, b)
 		o.streams[key] = s
 	}
 	return s, nil
@@ -68,45 +81,78 @@ func (o *Output) Page(ctx context.Context, b Binding, stream, value string, size
 	return s.readPage(ctx, value, size)
 }
 
+// TailBytes is the newest retained output of a stream, and the loss its
+// manifest reports, such as host_reboot for bytes a power cut lost.
+type TailBytes struct {
+	Bytes []byte
+	Loss  string
+}
+
 // Tail reads up to size bytes from the retained end of stream directly, so
 // small limits always return the newest captured bytes rather than paging from
 // the oldest retained offset.
-func (o *Output) Tail(ctx context.Context, b Binding, stream string, size int) ([]byte, error) {
+func (o *Output) Tail(ctx context.Context, b Binding, stream string, size int) (TailBytes, error) {
 	size, err := validatePageSize(size)
 	if err != nil {
-		return nil, err
+		return TailBytes{}, err
 	}
 	if !slices.Contains(b.Streams(), stream) {
-		return nil, fmt.Errorf("execution: stream unavailable for this kind")
+		return TailBytes{}, fmt.Errorf("execution: stream unavailable for this kind")
 	}
 	s, err := o.stream(b, stream)
 	if err != nil {
-		return nil, err
+		return TailBytes{}, err
 	}
 	if err := s.enter(ctx); err != nil {
-		return nil, err
+		return TailBytes{}, err
 	}
 	defer s.leave()
 	return s.readTail(ctx, size)
 }
 
-func (s *streamStore) readTail(ctx context.Context, size int) ([]byte, error) {
-	gate, err := s.readerFence(ctx, unix.LOCK_SH)
+func (s *streamStore) readTail(ctx context.Context, size int) (TailBytes, error) {
+	m, gate, err := s.tailManifest(ctx)
 	if err != nil {
-		return nil, err
+		return TailBytes{}, err
 	}
 	defer func() { _ = gate.Close() }()
+	data, err := s.tailBytes(m, size)
+	return TailBytes{Bytes: data, Loss: m.Loss}, err
+}
+
+// tailManifest loads the manifest a tail reads under the stream's shared
+// fence, salvaging an earlier-boot stream.
+func (s *streamStore) tailManifest(ctx context.Context) (manifest, *Fence, error) {
+	if s.earlier {
+		gate, err := s.rebootFence(ctx, unix.LOCK_SH)
+		if err != nil {
+			return manifest{}, nil, err
+		}
+		m, err := s.salvage(ctx)
+		if err != nil {
+			return manifest{}, nil, errors.Join(err, gate.Close())
+		}
+		return m, gate, nil
+	}
+	gate, err := s.readerFence(ctx, unix.LOCK_SH)
+	if err != nil {
+		return manifest{}, nil, err
+	}
 	m, err := s.load()
 	if err != nil {
-		return nil, err
+		return manifest{}, nil, errors.Join(err, gate.Close())
 	}
 	if s.binding.Mode() != KindPTY {
 		identity, err := s.confirmManifest(s.path("manifest.json"))
 		if err != nil {
-			return nil, err
+			return manifest{}, nil, errors.Join(err, gate.Close())
 		}
 		s.confirmed[s.path("manifest.json")] = identity
 	}
+	return m, gate, nil
+}
+
+func (s *streamStore) tailBytes(m manifest, size int) ([]byte, error) {
 	if m.Expired || m.End <= m.Earliest {
 		return nil, nil
 	}
@@ -131,6 +177,9 @@ func (s *streamStore) readTail(ctx context.Context, size int) ([]byte, error) {
 	return out, nil
 }
 func (s *streamStore) readPage(ctx context.Context, value string, size int) (Page, error) {
+	if s.earlier {
+		return s.readRebootPage(ctx, value, size)
+	}
 	gate, err := s.readerFence(ctx, unix.LOCK_SH)
 	if err != nil {
 		return Page{}, err
@@ -199,17 +248,27 @@ func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	if err := b.Validate(); err != nil {
 		return r, err
 	}
-	if err := o.files.Read(attempt(b, "result.json"), &r); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			if parentErr := o.files.check(filepath.Dir(attempt(b, "result.json")), false); parentErr != nil {
-				return r, parentErr
-			}
-			return r, errResultPending
-		}
-		return r, err
+	err := o.files.Read(attempt(b, "result.json"), &r)
+	if err == nil {
+		err = damaged(r.validate(b))
 	}
-	if err := r.validate(b); err != nil {
+	earlier := earlierBoot(o.boot, b)
+	if err != nil && earlier && lostRecord(err) {
+		// A power cut lost or tore the result: as far as anyone can prove,
+		// the job never recorded one.
+		return Result{}, errResultPending
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		if parentErr := o.files.check(filepath.Dir(attempt(b, "result.json")), false); parentErr != nil {
+			return r, parentErr
+		}
+		return r, errResultPending
+	}
+	if err != nil {
 		return Result{}, err
+	}
+	if earlier {
+		return o.rebootSummaries(ctx, r)
 	}
 	if err := o.confirmFinals(ctx, b, r.Streams); err != nil {
 		return Result{}, err

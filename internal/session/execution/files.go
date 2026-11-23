@@ -158,15 +158,15 @@ func (f *Files) ReadBounded(name string, out any, limit int) error {
 		return err
 	}
 	if len(bytes) > limit {
-		return fmt.Errorf("execution: record exceeds size bound")
+		return damaged(fmt.Errorf("execution: record exceeds size bound"))
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(bytes)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
-		return fmt.Errorf("execution: damaged record: %w", err)
+		return damaged(fmt.Errorf("execution: damaged record: %w", err))
 	}
 	if decoder.Decode(new(any)) != io.EOF {
-		return fmt.Errorf("execution: trailing record data")
+		return damaged(fmt.Errorf("execution: trailing record data"))
 	}
 	return nil
 }

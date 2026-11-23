@@ -158,10 +158,11 @@ func TestOutputTailReturnsNewestBytesWithSmallLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = output.Close() }()
-	tail, err := output.Tail(t.Context(), r.Binding, StreamStderr, 32)
+	newest, err := output.Tail(t.Context(), r.Binding, StreamStderr, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
+	tail := newest.Bytes
 	if len(tail) != 32 || string(tail[16:]) != "TAIL-SENTINEL-99" {
 		t.Fatalf("tail = %q (len=%d), want newest 32 bytes ending in TAIL-SENTINEL-99", tail, len(tail))
 	}

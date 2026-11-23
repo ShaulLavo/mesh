@@ -42,6 +42,9 @@ func (l *lifecycle) executionJournal() (*execution.Journal, error) {
 		l.execution, l.executionErr = execution.Open(filepath.Dir(l.sessionsDir), worker.BootID(), hex.EncodeToString(token[:]))
 		if l.executionErr == nil {
 			l.executionOutput, l.executionErr = execution.OpenOutput(filepath.Dir(l.sessionsDir))
+			if l.executionErr == nil {
+				l.executionOutput.WithBoot(worker.BootID())
+			}
 		}
 	})
 	return l.execution, l.executionErr
