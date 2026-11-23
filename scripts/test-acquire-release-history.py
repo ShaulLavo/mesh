@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("history", Path(__file__).with_name("acquire-release-history.py"))
@@ -67,20 +68,87 @@ class HistoryTests(unittest.TestCase):
         return HISTORY.subprocess.CalledProcessError(1, ["gh", "api"], stderr=f"gh: HTTP {status}: Server Error".encode())
 
     def test_api_reads_pages_until_a_partial_page(self):
-        pages = [self.page([{"id": 1}, {"id": 2}]), self.page([{"id": 3}, {"id": 4}]), self.page([{"id": 5}])]
-        with mock.patch.object(HISTORY.subprocess, "run", side_effect=pages) as command:
+        first = [self.page([{"id": 1}, {"id": 2}]), self.page([{"id": 3}, {"id": 4}]), self.page([{"id": 5}])]
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=first + first) as command:
             self.assertEqual(HISTORY.api("endpoint", 2), [{"id": number} for number in range(1, 6)])
+        # A second full read confirms that no page boundary moved during the first.
         self.assertEqual([call.args[0] for call in command.call_args_list],
-                         [["gh", "api", f"endpoint?per_page=2&page={page}"] for page in (1, 2, 3)])
+                         [["gh", "api", f"endpoint?per_page=2&page={page}"] for page in (1, 2, 3, 1, 2, 3)])
+
+    def test_api_answers_a_single_page_with_one_request(self):
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=[self.page([{"id": 1}])]) as command:
+            self.assertEqual(HISTORY.api("endpoint", 2), [{"id": 1}])
+        command.assert_called_once()
 
     def test_api_retries_server_errors_on_the_failed_page_only(self):
-        outcomes = [self.page([{"id": 1}]), self.server_error(502), self.server_error(503), self.page([])]
+        outcomes = [self.page([{"id": 1}]), self.server_error(502), self.server_error(503), self.page([]),
+                    self.page([{"id": 1}]), self.page([])]
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=outcomes) as command, \
                 mock.patch.object(HISTORY.time, "sleep") as sleep:
             self.assertEqual(HISTORY.api("endpoint", 1), [{"id": 1}])
         self.assertEqual([call.args[0][2] for call in command.call_args_list],
-                         ["endpoint?per_page=1&page=1"] + ["endpoint?per_page=1&page=2"] * 3)
+                         ["endpoint?per_page=1&page=1"] + ["endpoint?per_page=1&page=2"] * 3
+                         + ["endpoint?per_page=1&page=1", "endpoint?per_page=1&page=2"])
         self.assertEqual([call.args[0] for call in sleep.call_args_list], list(HISTORY.SERVER_ERROR_RETRIES[:2]))
+
+    def listing(self, items, mutations):
+        """Serve items newest first by offset, like the GitHub list API, applying
+        mutations[n](items) right after the n-th request has been answered, or
+        mutations[(page, k)](items) right after page is requested for the k-th time."""
+        requests = []
+
+        def run(command, **_):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(command[2]).query)
+            size, page = int(query["per_page"][0]), int(query["page"][0])
+            batch = items[(page - 1) * size:page * size]
+            requests.append(page)
+            for mutate in [mutations[key] for key in (len(requests), (page, requests.count(page))) if key in mutations]:
+                mutate(items)
+            return mock.Mock(stdout=json.dumps(batch).encode())
+        return run, requests
+
+    def test_api_does_not_skip_a_release_deleted_between_pages(self):
+        releases = [{"id": number} for number in range(10, 0, -1)]
+        run, _ = self.listing(releases, {1: lambda items: items.pop(1)})
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            found = HISTORY.api("endpoint", 4)
+        # Release 9 was deleted after the first page; release 6 still exists and
+        # slides into the first page's range, so a single pass would miss it.
+        self.assertEqual([item["id"] for item in found], [10, 8, 7, 6, 5, 4, 3, 2, 1])
+
+    def test_api_rereads_when_a_release_is_published_between_pages(self):
+        releases = [{"id": number} for number in range(10, 0, -1)]
+        run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 11})})
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            found = HISTORY.api("endpoint", 4)
+        self.assertEqual([item["id"] for item in found], list(range(11, 0, -1)))
+
+    def test_api_does_not_accept_a_read_where_a_published_release_came_and_went(self):
+        releases = [{"id": number} for number in range(6, 0, -1)]
+        # A release appears before page 2 (so page 2 repeats id 5) and is gone
+        # before page 3, which would hide release 3 from a read that only deduplicated.
+        # It happens in both of the first two reads, so they would otherwise agree.
+        publish = lambda number: lambda items: items.insert(0, {"id": number})  # noqa: E731
+        remove = lambda items: items.pop(0)  # noqa: E731
+        run, _ = self.listing(releases, {(1, 1): publish(100), (2, 1): remove, (1, 2): publish(101), (2, 2): remove})
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            found = HISTORY.api("endpoint", 2)
+        self.assertEqual([item["id"] for item in found], [6, 5, 4, 3, 2, 1])
+
+    def test_api_refuses_a_page_that_repeats_an_id(self):
+        repeated = self.page([{"id": 1}, {"id": 1}])
+        with mock.patch.object(HISTORY.subprocess, "run", return_value=repeated) as command:
+            with self.assertRaisesRegex(RuntimeError, "did not hold still"):
+                HISTORY.api("endpoint", 2)
+        self.assertEqual(command.call_count, HISTORY.LISTING_READS)
+
+    def test_api_refuses_a_listing_that_never_holds_still(self):
+        releases = [{"id": number} for number in range(1000, 0, -1)]
+        churn = {number: (lambda items: items.pop(1)) for number in range(1, 200, 2)}
+        run, _ = self.listing(releases, churn)
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, "did not hold still"):
+                HISTORY.api("endpoint", 30)
 
     def test_api_gives_up_after_bounded_server_error_retries(self):
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=self.server_error(502)) as command, \
