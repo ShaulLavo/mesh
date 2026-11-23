@@ -2,7 +2,7 @@ name: Publish tested release
 
 on:
   # Releases happen only when the owner asks for one (2026-11-23): manual
-  # dispatch only, no schedule.
+  # dispatch only, with no automatic trigger.
   workflow_dispatch:
     inputs:
       source_sha:

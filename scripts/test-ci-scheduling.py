@@ -55,12 +55,10 @@ def check_release_cadence(ci, release):
     assert "\n  publish:\n" not in ci and "uses: ./.github/workflows/release.yml" not in ci, \
         "CI must not trigger release publication on every push to main"
     triggers = release[:release.index("\nconcurrency:\n")]
-    assert "\n  workflow_dispatch:\n" in triggers, \
-        "release.yml must trigger on workflow_dispatch"
-    assert "\n  schedule:" not in triggers and "cron:" not in triggers, \
-        "release.yml must not run on a schedule; releases happen only when the owner asks"
-    assert "\n  push:" not in triggers and "\n  workflow_call:" not in triggers, \
-        "release.yml must not trigger on push or workflow_call"
+    events = re.findall(r"^  (?:\"([\w-]+)\"|'([\w-]+)'|([\w-]+)):", triggers, re.M)
+    assert [a or b or c for a, b, c in events] == ["workflow_dispatch"], \
+        "release.yml must trigger only on workflow_dispatch; releases happen only when the owner asks"
+    assert "cron:" not in triggers, "release.yml must not carry a cron schedule"
     assert "\nconcurrency:\n  group: mesh-stable-publication\n  queue: max\n" in release, \
         "release.yml must queue publications so a second manual release cannot cancel a queued one"
     reserve = JOB(release, "reserve")
@@ -108,6 +106,9 @@ def check_mutations(ci, release):
         release.replace("  workflow_dispatch:\n", "  push:\n    branches: [main]\n  workflow_dispatch:\n", 1),
         release.replace("  workflow_dispatch:\n", "  workflow_call:\n  workflow_dispatch:\n", 1),
         release.replace("  workflow_dispatch:\n", "  schedule:\n    - cron: '0 2,10,18 * * *'\n  workflow_dispatch:\n", 1),
+        release.replace("  workflow_dispatch:\n", "  'schedule':\n    - 'cron': '0 2,10,18 * * *'\n  workflow_dispatch:\n", 1),
+        release.replace("  workflow_dispatch:\n", "  \"schedule\":\n    - cron: '0 2,10,18 * * *'\n  workflow_dispatch:\n", 1),
+        release.replace("  workflow_dispatch:\n", "  repository_dispatch:\n  workflow_dispatch:\n", 1),
         release.replace("  queue: max\n", "  cancel-in-progress: false\n", 1),
         release.replace("    if: github.ref == 'refs/heads/main'\n", "", 1),
         release.replace("          ref: ${{ github.sha }}\n", "          ref: ${{ inputs.source_sha }}\n", 1),
