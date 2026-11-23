@@ -197,7 +197,7 @@ func (s *Store) lockAdoptionPass(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	defer func() { _ = dir.Close() }()
-	fd, err := openLockAt(int(dir.Fd()), "adoption.lock")
+	fd, err := openLockAt(dir, "adoption.lock")
 	if err != nil {
 		return nil, fmt.Errorf("update: open adoption pass lock: %w", err)
 	}

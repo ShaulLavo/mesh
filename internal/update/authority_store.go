@@ -155,7 +155,7 @@ func (s *Store) openAuthorityLock() (*os.File, error) {
 	if err = privateAuthority(dir); err != nil {
 		return nil, err
 	}
-	fd, err = openLockAt(int(dir.Fd()), ".lock")
+	fd, err = openLockAt(dir, ".lock")
 	if err != nil {
 		return nil, fmt.Errorf("update: open authority lock: %w", err)
 	}

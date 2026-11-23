@@ -273,6 +273,9 @@ func exchangeScope(ctx context.Context, target, directory string, payload []byte
 	}
 	conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: target, Admission: transport.ScopedAdmission}})
 	if err != nil {
+		if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
+			return protocol.Frame{}, "", connectErr
+		}
 		return protocol.Frame{}, "", fmt.Errorf("scoped TLS connection: %w", err)
 	}
 	defer func() { _ = conn.Close() }()

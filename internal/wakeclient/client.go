@@ -11,6 +11,7 @@ import (
 	"sort"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
@@ -241,7 +242,7 @@ func (c *Client) wake(ctx context.Context, target Target) (Result, error) {
 			return result, sendErr
 		}
 		if sendErr == nil && response.Type == protocol.TypeError {
-			return result, fmt.Errorf("wake through %s: %s", sender.name, response.Message)
+			return result, fmt.Errorf("wake through %s: %s", sender.name, boundedRemoteMessage(response.Message))
 		}
 		if sendErr == nil && response.Type != protocol.TypeWakeSent {
 			return result, errors.New("wake sender returned an unexpected response")
@@ -419,4 +420,21 @@ func (c *Client) request(ctx context.Context, endpoint, id string, request proto
 	bounded, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	return c.exchange(bounded, endpoint, id, request)
+}
+
+// maxRemoteMessage bounds a wake sender's error text. The frame may be up to
+// 4 MiB, and the message ends up on the user's terminal.
+const maxRemoteMessage = 512
+
+// boundedRemoteMessage cuts a remote sender's message at maxRemoteMessage
+// bytes, on a UTF-8 boundary.
+func boundedRemoteMessage(message string) string {
+	if len(message) <= maxRemoteMessage {
+		return message
+	}
+	limit := maxRemoteMessage
+	for limit > 0 && !utf8.RuneStart(message[limit]) {
+		limit--
+	}
+	return message[:limit] + "…"
 }

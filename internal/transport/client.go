@@ -162,6 +162,9 @@ func dialSocket(ctx context.Context, url string, opts websocket.DialOptions, kee
 
 func dialFailure(url string, response *http.Response, err error) error {
 	if response == nil {
+		if connect := classifyWebSocketDial(url, err); connect != nil {
+			return connect
+		}
 		return fmt.Errorf("transport: dial %s: %w", url, err)
 	}
 	if response.StatusCode == http.StatusUpgradeRequired && response.Header.Get(ControlAuthenticationHeader) == AuthProtocol {
