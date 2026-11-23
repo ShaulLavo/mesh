@@ -142,17 +142,28 @@ bun "$heavy" --class bench mesh-pi-profile -- scripts/bench/profile-pi.sh "$scra
 
 ## Fleet one-shot vs warm OpenSSH
 
-`oneshot.py` compares one-off `true` execution across the fleet (`local`, `vps`,
+`oneshot.py` compares one-off command execution across the fleet (`local`, `vps`,
 `pi`, `mac`) through a persistent `mesh mcp --identity bench` stdio client
-(`mesh_exec` with `wait_ms=10000`) against warm multiplexed OpenSSH
-(`ControlMaster=auto`, `ControlPersist=60`). For each target host it starts an
-isolated scratch Mesh daemon listening on that host's tailnet IPv4 address (or
-`127.0.0.1` locally) with `--ssh-port 0`, records `tailscale ping` RTT, runs
-paired interleaved Mesh MCP and warm SSH samples (3 warm-up pairs dropped, 30
-measured pairs by default), and measures server-side `execution.create` +
-`execution.wait` over the isolated daemon's Unix socket. On the Mac, the remote
-daemon and server-side phase run under `mac-queue.ts run`. Speed is reported,
-never asserted.
+(`mesh_exec` with `wait_ms=10000`, timed as a black box including initial output
+retrieval) against an explicitly owned warm OpenSSH ControlMaster (`-N -M`,
+`-O check`, and `-o ProxyCommand=false` so clients cannot fall back to a fresh
+connection). Both arms execute the exact same absolute `true` binary
+(`/bin/true` on Linux, `/usr/bin/true` on macOS) from the same scratch working
+directory over the same Tailscale IPv4 address (`-o HostName=<tailscale-ip>` on
+remote hosts). Orchestration uses benchmark-owned OpenSSH control sockets and
+`scp`, without touching canonical Mesh state or daemons.
+
+For each target host, `oneshot.py` starts an isolated scratch Mesh daemon
+(`--tailnet-port <free> --ssh-port 0`, `0700` state/config/home), records
+`tailscale ping` RTT, runs paired interleaved Mesh MCP and warm SSH samples (3
+warm-up pairs dropped, 30 measured pairs by default), and measures server-side
+`execution.create` + `execution.wait` over the isolated daemon's Unix socket
+(two fresh Unix-socket RPCs; `execution.wait` is always sent even when
+`execution.create` already returned a terminal receipt). On the Mac, staging,
+execution, teardown, and any recovery all run inside `mac-queue.ts run`.
+Promise verdicts follow `ssh_command.py` (`slowdown`, `no clear slowdown`, or
+`inconclusive` when too few pairs are collected to reach `p < 0.01`). Speed is
+reported, never asserted; failed or unverified cleanup exits nonzero.
 
 ```sh
 python3 scripts/bench/oneshot.py --build \
@@ -163,5 +174,5 @@ python3 scripts/bench/oneshot.py --build \
 
 Pass prebuilt `go build -trimpath ./cmd/mesh` binaries with
 `--binary-linux-amd64`, `--binary-linux-arm64`, and `--binary-darwin-arm64` to
-skip building. Unit tests for pure logic live in `scripts/bench/test_oneshot.py`.
+skip building. Unit tests live in `scripts/bench/test_oneshot.py`.
 
