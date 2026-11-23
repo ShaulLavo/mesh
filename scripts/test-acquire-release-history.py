@@ -93,7 +93,8 @@ class HistoryTests(unittest.TestCase):
 
     def listing(self, items, mutations):
         """Serve items newest first by offset, like the GitHub list API, applying
-        mutations[n](items) right after the n-th request has been answered."""
+        mutations[n](items) right after the n-th request has been answered, or
+        mutations[(page, k)](items) right after page is requested for the k-th time."""
         requests = []
 
         def run(command, **_):
@@ -101,8 +102,9 @@ class HistoryTests(unittest.TestCase):
             size, page = int(query["per_page"][0]), int(query["page"][0])
             batch = items[(page - 1) * size:page * size]
             requests.append(page)
-            if len(requests) in mutations:
-                mutations[len(requests)](items)
+            for key in (len(requests), (page, requests.count(page))):
+                if key in mutations:
+                    mutations[key](items)
             return mock.Mock(stdout=json.dumps(batch).encode())
         return run, requests
 
@@ -127,8 +129,9 @@ class HistoryTests(unittest.TestCase):
         # A release appears before page 2 (so page 2 repeats id 5) and is gone
         # before page 3, which would hide release 3 from a read that only deduplicated.
         # It happens in both of the first two reads, so they would otherwise agree.
-        run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 100}), 2: lambda items: items.pop(0),
-                                         3: lambda items: items.insert(0, {"id": 101}), 4: lambda items: items.pop(0)})
+        publish = lambda number: lambda items: items.insert(0, {"id": number})  # noqa: E731
+        remove = lambda items: items.pop(0)  # noqa: E731
+        run, _ = self.listing(releases, {(1, 1): publish(100), (2, 1): remove, (1, 2): publish(101), (2, 2): remove})
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
             found = HISTORY.api("endpoint", 2)
         self.assertEqual([item["id"] for item in found], [6, 5, 4, 3, 2, 1])
