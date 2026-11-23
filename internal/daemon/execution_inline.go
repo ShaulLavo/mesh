@@ -17,14 +17,18 @@ const inlinePageBudget = 2 * time.Second
 const inlineObservationGrace = time.Second
 
 // withInlineResult finishes a create that asked to wait. It waits for the job
-// exactly as execution.wait would and attaches the first page of each output
-// stream as execution.logs without a cursor would, so a short command costs
+// exactly as execution.wait would and, once the job has finished, attaches the
+// first page of each output stream as execution.logs without a cursor would,
+// so a short command costs
 // the caller one round trip instead of three or four. Every check of those
 // controls applies (the exact binding, the caller, the device grant), and the
-// grant is checked again once the wait ends. The create is already decided
-// here, so a failed observation leaves the create reply unchanged and the
-// caller continues with separate wait and logs requests. A replay of the same
-// key reaches this point through the receipt lookup and observes the same job.
+// grant is checked again once the wait ends. The page reads reuse the wait's
+// admission of this caller to this exact job instead of repeating it for each
+// stream, which cost about 10 ms a page on a Raspberry Pi. The create is
+// already decided here, so a failed observation leaves the create reply
+// unchanged and the caller continues with separate wait and logs requests. A
+// replay of the same key reaches this point through the receipt lookup and
+// observes the same job.
 func (l *lifecycle) withInlineResult(ctx context.Context, request, response protocol.Control, err error) (protocol.Control, error) {
 	if err != nil || request.Type != protocol.TypeExecutionCreate || request.WaitMillis == 0 || response.ExecutionReceipt == nil {
 		return response, err
@@ -40,7 +44,7 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 	waitCtx, cancel := context.WithDeadline(ctx, deadline.Add(inlineObservationGrace))
 	defer cancel()
 	bound := inlineBound(request, response.ExecutionReceipt)
-	waited, ok := l.inlineWait(waitCtx, bound, deadline)
+	waited, job, ok := l.inlineWait(waitCtx, bound, deadline)
 	if !ok && time.Now().After(deadline) {
 		// The wait's budget is spent even though no answer came back, so the
 		// caller charges it as a timeout instead of waiting the whole time again.
@@ -62,18 +66,16 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 	}
 	pageCtx, cancelPages := context.WithTimeout(ctx, inlinePageBudget)
 	defer cancelPages()
-	// A stream whose page cannot be read is left out; each page names its
-	// stream, so the caller reads only the missing one itself.
-	for _, stream := range inlineStreams(response.ExecutionReceipt.Kind) {
-		if page, ok := l.inlinePage(pageCtx, bound, stream, request.OutputBytes); ok {
-			waited.ExecutionOutput = append(waited.ExecutionOutput, page)
-		}
-	}
+	waited.ExecutionOutput = l.inlinePages(pageCtx, bound, job, inlineStreams(response.ExecutionReceipt.Kind), request.OutputBytes)
 	return waited, nil
 }
 
 // inlineAfterWait lets a test act between the inline wait and the grant check.
 var inlineAfterWait = func() {}
+
+// inlineBetweenPages lets a test act after one inline page is read and
+// before the next.
+var inlineBetweenPages = func() {}
 
 // inlineDisconnectKey carries a channel that closes when the client of a
 // waiting create disconnects. Only the observation listens to it: the create
@@ -105,25 +107,55 @@ func inlineBound(request protocol.Control, receipt *protocol.ExecutionReceipt) p
 	return bound
 }
 
-func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, deadline time.Time) (protocol.Control, bool) {
+// inlineWait returns the wait's reply and the job it admitted the caller to;
+// ok reports a reply for exactly the created job.
+func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, deadline time.Time) (protocol.Control, boundJob, bool) {
 	// Always look at least once, rounding up: even a 1 ms budget, or one the
 	// create's own work used up, still observes a job that has finished.
 	millis := max(1, int((time.Until(deadline)+time.Millisecond-1)/time.Millisecond))
 	// The wait bounds itself by TimeoutMillis; the reads around it keep their
 	// own lock budgets rather than failing on a deadline meant for the wait.
 	bound.Type, bound.TimeoutMillis = protocol.TypeExecutionWait, millis
-	waited, err := l.boundExecutionControl(ctx, bound)
+	job, answer, _ := l.admitBoundExecution(ctx, bound)
+	if job.journal == nil {
+		return answer, job, false
+	}
+	waited, err := l.actOnBoundExecution(ctx, bound, job)
 	receipt := waited.ExecutionReceipt
-	return waited, err == nil && receipt != nil && receipt.SessionID == bound.SessionID && receipt.Instance == bound.Instance
+	return waited, job, err == nil && receipt != nil && receipt.SessionID == bound.SessionID && receipt.Instance == bound.Instance
 }
 
-func (l *lifecycle) inlinePage(ctx context.Context, bound protocol.Control, stream string, size int) (protocol.ExecutionPage, bool) {
-	bound.Type, bound.Stream, bound.MaxBytes = protocol.TypeExecutionLogs, stream, size
-	reply, err := l.boundExecutionControl(ctx, bound)
-	if err != nil || reply.ExecutionPage == nil {
-		return protocol.ExecutionPage{}, false
+// inlinePages reads the first page of each stream as execution.logs without
+// a cursor would. A stream whose page cannot be read is left out; each page
+// names its stream, so the caller reads only the missing one itself.
+func (l *lifecycle) inlinePages(ctx context.Context, bound protocol.Control, job boundJob, streams []string, size int) []protocol.ExecutionPage {
+	var pages []protocol.ExecutionPage
+	for i, stream := range streams {
+		if i > 0 {
+			inlineBetweenPages()
+		}
+		// Each page rereads the exact receipt, as a separate execution.logs
+		// would: retirement and eviction mark it before they delete stream
+		// bytes, so a page read after that reports the output as expired.
+		r, err := job.journal.Peek(ctx, job.receipt.Binding)
+		if err != nil {
+			return pages
+		}
+		// A live receipt may lag a result published after the wait ended,
+		// which changes how a page reports its stream; only a separate read
+		// refreshes it, so the caller reads a live job's pages itself.
+		if r.Phase != executionTerminalPhase {
+			return nil
+		}
+		req := bound
+		req.Type, req.Stream, req.MaxBytes = protocol.TypeExecutionLogs, stream, size
+		response, _ := executionResponse(req, r, nil)
+		reply, err := l.executionLogs(ctx, req, r, response)
+		if err == nil && reply.ExecutionPage != nil {
+			pages = append(pages, *reply.ExecutionPage)
+		}
 	}
-	return *reply.ExecutionPage, true
+	return pages
 }
 
 func inlineStreams(kind string) []string {

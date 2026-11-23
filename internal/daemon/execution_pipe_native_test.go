@@ -28,6 +28,21 @@ const pipeNativeFixture = "MESH_PIPE_NATIVE_FIXTURE"
 // inlineAfterWaitFixture makes the fixture daemon pause after each inline wait.
 const inlineAfterWaitFixture = "MESH_PIPE_NATIVE_INLINE_PAUSE"
 
+// inlinePageGateFixture names a directory: between two inline pages the
+// fixture daemon creates "paused" in it and waits for "resume".
+const inlinePageGateFixture = "MESH_PIPE_NATIVE_INLINE_PAGE_GATE"
+
+func holdInlinePageGate(dir string) {
+	_ = os.WriteFile(filepath.Join(dir, "paused"), nil, 0o600) //nolint:gosec // dir is the test's own temporary directory, passed to its fixture daemon
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(dir, "resume")); err == nil { //nolint:gosec // dir is the test's own temporary directory, passed to its fixture daemon
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func runNativePipeDaemon(role string, args []string) error {
 	if len(args) == 6 && args[0] == "session-worker" && args[1] == worker.StandbyFlag {
 		return runNativeStandbyWorker(args[3], args[5])
@@ -43,6 +58,9 @@ func runNativePipeDaemon(role string, args []string) error {
 	}
 	if pause, err := time.ParseDuration(os.Getenv(inlineAfterWaitFixture)); err == nil {
 		inlineAfterWait = func() { time.Sleep(pause) }
+	}
+	if gate := os.Getenv(inlinePageGateFixture); gate != "" {
+		inlineBetweenPages = func() { holdInlinePageGate(gate) }
 	}
 	// The fixture's own workers handle the standby handoff, so it keeps one.
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config"), StandbyWorkers: true})
