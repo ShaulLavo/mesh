@@ -65,10 +65,13 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 		}
 		return executionResponse(request, r, err)
 	}
+	var response protocol.Control
 	if key.Class == execution.ApplicationClass {
-		return l.contextExecutionCreate(ctx, request, journal, key)
+		response, err = l.contextExecutionCreate(ctx, request, journal, key)
+	} else {
+		response, err = l.executionCreateControl(ctx, request, journal, key)
 	}
-	return l.executionCreateControl(ctx, request, journal, key)
+	return l.withInlineResult(ctx, request, response, err)
 }
 func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key) (protocol.Control, error) {
 	if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
@@ -92,6 +95,7 @@ func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol
 type executionReservation func() (execution.Receipt, bool, []string, execution.Intent, error)
 
 func (l *lifecycle) createExecution(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key, reserve executionReservation) (protocol.Control, error) {
+	executionBeforeReserve(ctx)
 	r, owner, env, intent, err := reserve()
 	if !owner && (err == nil || errors.Is(err, execution.ErrProgress) || errors.Is(err, execution.ErrUnknown)) {
 		r, err = l.lookupExecution(ctx, journal, key)
@@ -144,6 +148,9 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 }
 
 var executionDaemonBoundary = func(string, string, execution.Receipt) {}
+
+// executionBeforeReserve lets a test act on a create before its acceptance.
+var executionBeforeReserve = func(context.Context) {}
 
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
@@ -362,10 +369,19 @@ func wireExecutionStreams(streams []execution.StreamResult) []protocol.Execution
 // client loop's context lives as long as the daemon, so a reader that left
 // would otherwise keep waiting and announced until its timer ran out.
 func executionRequestContext(ctx context.Context, lookahead *frameLookahead, request protocol.Control) (context.Context, context.CancelFunc) {
-	if request.Type != protocol.TypeExecutionLogs || lookahead == nil {
+	if lookahead == nil {
 		return ctx, func() {}
 	}
-	return lookahead.watch(ctx)
+	if request.Type == protocol.TypeExecutionLogs {
+		return lookahead.watch(ctx)
+	}
+	if request.Type == protocol.TypeExecutionCreate && request.WaitMillis > 0 {
+		// Only the inline observation stops when the client leaves; the
+		// create keeps the connection's own cancellation rules.
+		watched, cancel := lookahead.watch(ctx)
+		return context.WithValue(ctx, inlineDisconnectKey{}, watched.Done()), cancel
+	}
+	return ctx, func() {}
 }
 
 func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {

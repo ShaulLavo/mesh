@@ -25,6 +25,9 @@ import (
 
 const pipeNativeFixture = "MESH_PIPE_NATIVE_FIXTURE"
 
+// inlineAfterWaitFixture makes the fixture daemon pause after each inline wait.
+const inlineAfterWaitFixture = "MESH_PIPE_NATIVE_INLINE_PAUSE"
+
 func runNativePipeDaemon(role string, args []string) error {
 	if len(args) == 6 && args[0] == "session-worker" && args[1] == worker.StandbyFlag {
 		return runNativeStandbyWorker(args[3], args[5])
@@ -37,6 +40,9 @@ func runNativePipeDaemon(role string, args []string) error {
 	}
 	if len(args) != 0 && args[0] == mcpHTTPFixtureRole {
 		return executionBoundaryError("run MCP HTTP fixture", runMCPHTTPFixture(args[1:]))
+	}
+	if pause, err := time.ParseDuration(os.Getenv(inlineAfterWaitFixture)); err == nil {
+		inlineAfterWait = func() { time.Sleep(pause) }
 	}
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
 }
@@ -100,9 +106,10 @@ type nativePipeDaemon struct {
 	root, state, sessions, executable string
 	cmd                               *exec.Cmd
 	log                               *os.File
+	extraEnv                          []string
 }
 
-func newNativePipeDaemon(t *testing.T) *nativePipeDaemon {
+func newNativePipeDaemon(t *testing.T, extraEnv ...string) *nativePipeDaemon {
 	t.Helper()
 	root := compactSocketTempDir(t)
 	bin, err := os.Executable()
@@ -113,7 +120,7 @@ func newNativePipeDaemon(t *testing.T) *nativePipeDaemon {
 	if err := os.MkdirAll(filepath.Join(state, "s"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	f := &nativePipeDaemon{root: root, state: state, sessions: filepath.Join(state, "s"), executable: bin}
+	f := &nativePipeDaemon{root: root, state: state, sessions: filepath.Join(state, "s"), executable: bin, extraEnv: extraEnv}
 	t.Cleanup(func() {
 		f.stop(t)
 		f.stopWorkers(t)
@@ -123,7 +130,7 @@ func newNativePipeDaemon(t *testing.T) *nativePipeDaemon {
 }
 
 func (f *nativePipeDaemon) env() []string {
-	return []string{"PATH=/usr/bin:/bin", "HOME=" + f.root, "TMPDIR=" + f.root, "MESH_STATE_DIR=" + f.state, "MESH_CONFIG_DIR=" + filepath.Join(f.root, "config"), pipeNativeFixture + "=" + f.root}
+	return append([]string{"PATH=/usr/bin:/bin", "HOME=" + f.root, "TMPDIR=" + f.root, "MESH_STATE_DIR=" + f.state, "MESH_CONFIG_DIR=" + filepath.Join(f.root, "config"), pipeNativeFixture + "=" + f.root}, f.extraEnv...)
 }
 
 func (f *nativePipeDaemon) start(t *testing.T) {

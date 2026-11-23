@@ -431,6 +431,13 @@ type Control struct {
 	InputReceipt       *session.InputReceipt `json:"inputReceipt,omitempty"`
 	LaunchDigest       string                `json:"launchDigest,omitempty"`
 
+	// WaitMillis and OutputBytes let execution.create also wait for the job
+	// and return its first output pages, so a short command costs one round
+	// trip. The pages come back in ExecutionOutput, one per stream.
+	WaitMillis      int             `json:"waitMillis,omitempty"`
+	OutputBytes     int             `json:"outputBytes,omitempty"`
+	ExecutionOutput []ExecutionPage `json:"executionOutput,omitempty"`
+
 	// Application callers (see internal/appcaller) and execution contexts.
 	// Caller is the encoded credential; it travels only inside this
 	// authenticated control and is never echoed. Administration marks an

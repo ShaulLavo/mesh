@@ -264,8 +264,6 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 	if c.caller == "" {
 		return c.identityRequiredOutcome("sessions.create", req.Context.HostID), nil
 	}
-	createCtx, cancelCreate := context.WithTimeout(ctx, 15*time.Second)
-	defer cancelCreate()
 	host, err := c.resolveExactHostID(req.Context.HostID)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
@@ -288,7 +286,7 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 		target := &mcpnative.TargetMeta{HostID: host.ID, HostName: HostLabel(host), ContextID: req.Context.String()}
 		return failOutcome("sessions.create", target, agentapi.Usage("sessions.create", valErr.Error()).Err), nil
 	}
-	resp, info, err := c.pool.ExchangeShort(createCtx, host, createCtrl, false)
+	resp, info, inlineWait, err := c.sendExecCreate(ctx, host, createCtrl, req)
 	target := c.targetMeta(host, info)
 	target.ContextID = req.Context.String()
 	if err != nil {
@@ -299,18 +297,128 @@ func (c *mcpControls) Exec(ctx context.Context, req mcpnative.ExecRequest, notif
 		return failOut, nil
 	}
 	ref := mcpnative.JobRef{HostID: receipt.HostID, SessionID: receipt.SessionID, Instance: receipt.Instance}
-	receipt, waitStatus, waitFail, err := c.finishExecWait(ctx, host, req, ref, receipt, target, notify)
+	observed := inlineObservation(resp)
+	inline := inlineExecStreams(resp, observed, host.ID, ref, req.OutputBytes)
+	waitReq := remainingExecWait(req, inlineWait, observed)
+	if observed == execWaitTimedOut && waitReq.WaitMS > 0 {
+		// The wait that follows makes these snapshots stale.
+		inline = nil
+	}
+	if observed == execWaitTimedOut && waitReq.WaitMS == 0 && notify != nil {
+		notify(mcpnative.ProgressUpdate{Progress: 0, Message: "running " + ref.String() + " (stdout=0B stderr=0B)"})
+	}
+	receipt, waitStatus, waitFail, err := c.finishExecWait(ctx, host, waitReq, ref, receipt, target, notify)
 	if err != nil {
 		return mcpnative.CallOutcome{}, err
 	}
 	if waitFail != nil {
 		return *waitFail, nil
 	}
-	stdoutData, stderrData, streamFail := c.fetchExecInitialStreams(ctx, host, req, ref, receipt, waitStatus, target)
+	if waitStatus == "" && observed != "" {
+		waitStatus = observed
+	}
+	stdoutData, stderrData, streamFail := c.fetchExecInitialStreams(ctx, host, req, ref, receipt, waitStatus, target, inline)
 	if streamFail != nil {
 		return *streamFail, nil
 	}
 	return okOutcome("sessions.create", target, execResultData(ref, target, receipt, waitStatus, stdoutData, stderrData)), nil
+}
+
+// execInlineWaitMS is how long mesh_exec's create waits for the job before
+// answering. A short command finishes inside it and costs one round trip; a
+// longer one continues with the progress-reporting wait.
+const execInlineWaitMS = 1000
+
+// execWaitTimedOut is the wait outcome of a job still running at its deadline.
+const execWaitTimedOut = "timed_out"
+
+// execWaitCompleted is the wait outcome of a job whose result is durable.
+const execWaitCompleted = "completed"
+
+// execInlineCreateBudget is the create's own deadline on top of its inline
+// wait: a plain create's 15 seconds plus what the host may add after the
+// wait, one second of grace and two seconds of page reads.
+const execInlineCreateBudget = 18 * time.Second
+
+// sendExecCreate sends the create with a short inline wait when the inline
+// budget has room and the extra fields still fit the request limit, and a
+// plain create otherwise. inlineWait is the wait it asked for, zero when it
+// sent a plain create.
+func (c *mcpControls) sendExecCreate(ctx context.Context, host HostRecord, plain protocol.Control, req mcpnative.ExecRequest) (protocol.Control, protocol.HostInfo, int, error) {
+	if resp, info, inlineWait, sent, err := c.sendInlineExecCreate(ctx, host, plain, req); sent {
+		return resp, info, inlineWait, err
+	}
+	createCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	resp, info, err := c.pool.ExchangeShort(createCtx, host, plain, false)
+	return resp, info, 0, err
+}
+
+// sendInlineExecCreate reports sent false, having sent nothing, when the
+// caller does not wait, the inline fields would exceed the request limit, or
+// every inline slot is busy.
+func (c *mcpControls) sendInlineExecCreate(ctx context.Context, host HostRecord, plain protocol.Control, req mcpnative.ExecRequest) (protocol.Control, protocol.HostInfo, int, bool, error) {
+	inlineWait := min(req.WaitMS, execInlineWaitMS)
+	inline := plain
+	inline.WaitMillis, inline.OutputBytes = inlineWait, req.OutputBytes
+	if inlineWait <= 0 || validateControlBeforeSend(&inline) != nil {
+		return protocol.Control{}, protocol.HostInfo{}, 0, false, nil
+	}
+	createCtx, cancel := context.WithTimeout(ctx, execInlineCreateBudget+time.Duration(inlineWait)*time.Millisecond)
+	defer cancel()
+	resp, info, admitted, err := c.pool.ExchangeInline(createCtx, host, inline)
+	return resp, info, inlineWait, admitted, err
+}
+
+// inlineObservation is the create's wait outcome when it is consistent with
+// its receipt: completed with a terminal receipt, or timed out with a live
+// one. Anything else counts as no observation, for every use of it.
+func inlineObservation(resp protocol.Control) string {
+	if resp.ExecutionReceipt == nil {
+		return ""
+	}
+	terminal := resp.ExecutionReceipt.Phase == "terminal"
+	if (resp.ExecutionWait == execWaitCompleted && terminal) || (resp.ExecutionWait == execWaitTimedOut && !terminal) {
+		return resp.ExecutionWait
+	}
+	return ""
+}
+
+// inlineExecStreams takes the output pages of an observed create by stream.
+// A repeated stream discards every page, whether or not the copies are
+// valid; an invalid page is left out and read separately.
+func inlineExecStreams(resp protocol.Control, observed, hostID string, ref mcpnative.JobRef, outputBytes int) map[string]*mcpnative.ExecStreamData {
+	if observed == "" {
+		return nil
+	}
+	seen := make(map[string]bool, len(resp.ExecutionOutput))
+	pages := make(map[string]*mcpnative.ExecStreamData, len(resp.ExecutionOutput))
+	for i := range resp.ExecutionOutput {
+		stream := resp.ExecutionOutput[i].Stream
+		if seen[stream] {
+			return nil
+		}
+		seen[stream] = true
+		if stream != execution.StreamStdout && stream != execution.StreamStderr {
+			continue
+		}
+		request := protocol.Control{SessionID: ref.SessionID, Instance: ref.Instance, Stream: stream, MaxBytes: outputBytes}
+		if page, err := agentExecutionPage(&resp.ExecutionOutput[i], hostID, request); err == nil {
+			pages[stream] = mcpnative.BuildExecStreamData(page)
+		}
+	}
+	return pages
+}
+
+// remainingExecWait charges a create's inline wait against the caller's wait
+// budget. As before, the time the create itself takes is not charged: a
+// create that timed out waited exactly its inline budget, and one without an
+// observation is charged nothing, since the host bounds that part.
+func remainingExecWait(req mcpnative.ExecRequest, inlineWait int, observed string) mcpnative.ExecRequest {
+	if inlineWait > 0 && observed == execWaitTimedOut {
+		req.WaitMS = max(0, req.WaitMS-inlineWait)
+	}
+	return req
 }
 
 func execResultData(ref mcpnative.JobRef, target *mcpnative.TargetMeta, receipt *agentapi.ExecutionReceipt, waitStatus string, stdoutData, stderrData *mcpnative.ExecStreamData) mcpnative.ExecResultData {
@@ -386,12 +494,12 @@ func (c *mcpControls) finishExecWait(ctx context.Context, host HostRecord, req m
 		return receipt, "", nil, nil
 	}
 	if receipt.Phase == "terminal" {
-		return receipt, "completed", nil, nil
+		return receipt, execWaitCompleted, nil, nil
 	}
 	resp, waitErr := c.waitExecJob(ctx, host, req, ref, notify)
 	if waitErr != nil {
 		if errors.Is(waitErr, errWaitBudgetExpired) {
-			return receipt, "timed_out", nil, nil
+			return receipt, execWaitTimedOut, nil, nil
 		}
 		if ctx.Err() != nil {
 			return nil, "", nil, fmt.Errorf("wait for exec job cancelled: %w", ctx.Err())
@@ -517,20 +625,29 @@ func (c *mcpControls) probeObservedBytes(ctx context.Context, host HostRecord, c
 	return n, true
 }
 
-func (c *mcpControls) fetchExecInitialStreams(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, waitStatus string, target *mcpnative.TargetMeta) (*mcpnative.ExecStreamData, *mcpnative.ExecStreamData, *mcpnative.CallOutcome) {
+func (c *mcpControls) fetchExecInitialStreams(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, receipt *agentapi.ExecutionReceipt, waitStatus string, target *mcpnative.TargetMeta, inline map[string]*mcpnative.ExecStreamData) (*mcpnative.ExecStreamData, *mcpnative.ExecStreamData, *mcpnative.CallOutcome) {
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	stdoutData, errOut := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStdout, req.OutputBytes)
+	stdoutData, errOut := c.execStream(readCtx, host, req, ref, execution.StreamStdout, inline)
 	if errOut != nil {
-		outcome := execFollowupErrorOutcome("sessions.logs", *errOut, target, execResultData(ref, target, receipt, waitStatus, nil, nil))
+		// A stderr page the create already carried is still returned.
+		outcome := execFollowupErrorOutcome("sessions.logs", *errOut, target, execResultData(ref, target, receipt, waitStatus, nil, inline[execution.StreamStderr]))
 		return nil, nil, &outcome
 	}
-	stderrData, errErr := c.fetchOneExecStream(readCtx, host, req.Context, ref, execution.StreamStderr, req.OutputBytes)
+	stderrData, errErr := c.execStream(readCtx, host, req, ref, execution.StreamStderr, inline)
 	if errErr != nil {
 		outcome := execFollowupErrorOutcome("sessions.logs", *errErr, target, execResultData(ref, target, receipt, waitStatus, stdoutData, nil))
 		return nil, nil, &outcome
 	}
 	return stdoutData, stderrData, nil
+}
+
+// execStream uses the page the create carried for a stream, or reads it.
+func (c *mcpControls) execStream(ctx context.Context, host HostRecord, req mcpnative.ExecRequest, ref mcpnative.JobRef, stream string, inline map[string]*mcpnative.ExecStreamData) (*mcpnative.ExecStreamData, *agentapi.Error) {
+	if data, ok := inline[stream]; ok {
+		return data, nil
+	}
+	return c.fetchOneExecStream(ctx, host, req.Context, ref, stream, req.OutputBytes)
 }
 
 func (c *mcpControls) fetchOneExecStream(ctx context.Context, host HostRecord, ctxRef mcpnative.ContextRef, ref mcpnative.JobRef, stream string, maxBytes int) (*mcpnative.ExecStreamData, *agentapi.Error) {
