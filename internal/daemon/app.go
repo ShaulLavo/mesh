@@ -456,6 +456,7 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	defer lifecycle.closeExecution()
 	defer lifecycle.standbys.close()
+	defer lifecycle.runs.shutdown(runShutdownBudget)
 	if cfg.StandbyWorkers {
 		go lifecycle.standbys.activate()
 	}

@@ -359,6 +359,48 @@ func (c *socketConn) terminalError() error {
 	return c.cause
 }
 
+// Stopped reports whether conn already knows it is dead: its reader saw the
+// peer close, the link failed, the grant ended, or a close began. A caller
+// that must not write onto a dead connection (a request that can never be
+// retried) checks it first. Connections without a reader of their own
+// report false.
+func Stopped(conn Conn) bool {
+	stoppable, ok := conn.(interface{ ending() bool })
+	return ok && stoppable.ending()
+}
+
+// Abort drops conn at once. Close waits for the peer's half of the close
+// handshake, which a silent peer never sends; a caller giving up on a
+// connection it will discard uses Abort instead.
+func Abort(conn Conn) error {
+	if abortable, ok := conn.(interface{ Abort() error }); ok {
+		if err := abortable.Abort(); err != nil {
+			return fmt.Errorf("transport: abort connection: %w", err)
+		}
+		return nil
+	}
+	return conn.Close() //nolint:wrapcheck // the connection's own close error
+}
+
+// Abort closes the socket without the close handshake.
+func (c *socketConn) Abort() error {
+	if !c.setCause(ErrClosed) {
+		return nil
+	}
+	c.cancelWrite()
+	c.cancel()
+	_ = c.ws.CloseNow()
+	return nil
+}
+
+// ending reports a recorded terminal cause, which fail and Close set before
+// the reader finishes.
+func (c *socketConn) ending() bool {
+	c.causeMu.Lock()
+	defer c.causeMu.Unlock()
+	return c.cause != nil || c.stopped()
+}
+
 func (c *socketConn) stopped() bool {
 	select {
 	case <-c.done:

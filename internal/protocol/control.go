@@ -437,6 +437,8 @@ type Control struct {
 	WaitMillis      int             `json:"waitMillis,omitempty"`
 	OutputBytes     int             `json:"outputBytes,omitempty"`
 	ExecutionOutput []ExecutionPage `json:"executionOutput,omitempty"`
+	// ExecutionRun is the one reply to an execution.run.
+	ExecutionRun *ExecutionRunResult `json:"executionRun,omitempty"`
 
 	// Application callers (see internal/appcaller) and execution contexts.
 	// Caller is the encoded credential; it travels only inside this

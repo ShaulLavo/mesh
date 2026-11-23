@@ -33,6 +33,7 @@ Generated from the native MCP tool registry (`internal/mcpnative`). Regenerate w
 | `mesh_jobs_list` | `jobs.list` | read-only, idempotent | List keyed execution jobs on a host |
 | `mesh_profile_get` | `profile.show` | read-only, idempotent | Read this machine's host or fleet notes |
 | `mesh_profile_set` | `profile.set` | destructive | Replace this machine's host or fleet notes |
+| `mesh_run` | `commands.run` | destructive, open-world | Run a quick command with no receipt |
 | `mesh_service_inspect` | `services.inspect` | read-only, idempotent | Inspect one Mesh serve route |
 | `mesh_service_lease` | `mcp.lease` | idempotent | Hold a hosted MCP server instance running |
 | `mesh_service_publish` | `services.publish` | destructive, open-world | Publish or replace a private route |
@@ -409,6 +410,21 @@ Replace the notes of this machine (scope host) or publish the signed fleet notes
   - `expected_revision` (`integer`, required): Revision read from mesh_profile_get; 0 for an absent profile.
   - `profile` (`object`, required): The whole notes document; it replaces the current one.
   - `scope` (`string`, optional) (host, fleet): host (default) or fleet.
+
+## mesh_run
+
+Run one quick command in an execution context and return its exit status and output in one round trip, with no request key, receipt or job handle (requires mesh mcp --identity NAME). Use it for commands that finish within timeout_ms and whose lost reply you can live with; use mesh_exec when you must know whether a command ran, it may outlast the call, or it needs stdin. Pass exactly one of command (shell string, refused for shell=none) or argv. At timeout_ms (default 10000, max 60000) the command's process group gets SIGTERM, then SIGKILL after 500 ms, and the result says timed_out. Cancelling the call, a lost connection or a daemon stop hangs it up the same way; when it ends, the rest of its process group is killed. Returns the first output_bytes (default 16384, max 262144) of stdout and stderr with each stream's total byte count. Stdin is /dev/null. Child cd/export never modifies the context.
+
+- Linked operation: `commands.run`
+- Hints: destructive, open-world
+- Arguments:
+  - `argv` (`array`, optional): Direct executable and arguments, resolved in the run's PATH (mutually exclusive with command).
+  - `command` (`string`, optional): Shell command string (mutually exclusive with argv; refused when context shell is none).
+  - `context` (`string`, required): Opaque context handle (mc1.<hostId>.<contextId>).
+  - `cwd` (`string`, optional): Optional absolute or context-relative working directory for this run only.
+  - `env` (`object`, optional): Optional per-run environment overlay.
+  - `output_bytes` (`integer`, optional): Maximum stdout and stderr bytes each to include in the result (1 to 262144, default 16384).
+  - `timeout_ms` (`integer`, optional): Deadline in milliseconds after which the command is stopped (100 to 60000, default 10000).
 
 ## mesh_service_inspect
 

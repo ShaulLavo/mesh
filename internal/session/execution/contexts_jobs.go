@@ -108,6 +108,32 @@ func (j *Journal) existingContextJob(k Key, callerDigest string) (Receipt, bool,
 	return r, true, nil
 }
 
+// ResolveRun is the acceptance point of a request-scoped run in an owner's
+// context: the same ownership, closure, damage and intent checks a keyed
+// context job passes, under the admitted lock, with no record of the run.
+// Only the context's use is recorded, at most once per granularity, so a
+// context used only this way does not look idle.
+func (j *Journal) ResolveRun(ctx context.Context, owner, contextID string, resolve ResolveContextJob) (LaunchSnapshot, error) {
+	gate, err := j.lockAdmitted(ctx)
+	if err != nil {
+		return LaunchSnapshot{}, err
+	}
+	defer func() { _ = gate.Close() }()
+	c, snapshot, err := j.resolveOpenContext(Key{Principal: owner, Context: contextID}, resolve)
+	if err != nil {
+		return LaunchSnapshot{}, err
+	}
+	// The grant is checked again at the write, so a caller revoked while its
+	// context was read records no use.
+	if err := admitted(ctx); err != nil {
+		return LaunchSnapshot{}, err
+	}
+	// A failed use update costs only an earlier expiry candidate, which still
+	// needs a full idle period; it must not refuse the run.
+	_, _ = j.touch(c, false)
+	return snapshot, nil
+}
+
 func (j *Journal) resolveOpenContext(k Key, resolve ResolveContextJob) (Context, LaunchSnapshot, error) {
 	c, err := j.ownedContext(k.Principal, k.Context)
 	if err != nil {

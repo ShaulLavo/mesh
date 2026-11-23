@@ -89,6 +89,7 @@ type stubControls struct {
 	updateCtxFn   func(ctx context.Context, req UpdateContextRequest) (CallOutcome, error)
 	execFn        func(ctx context.Context, req ExecRequest, notify func(ProgressUpdate)) (CallOutcome, error)
 	fileStub
+	runStub
 }
 
 func (s *stubControls) ListHosts(ctx context.Context, req ListHostsRequest) (CallOutcome, error) {

@@ -21,6 +21,10 @@ Use `mesh session list --host HOST_ID --json` and `mesh session inspect --host H
 
 Start a session only when the user asks. `mesh --host HOST_ID -- CMD` opens a persistent terminal session with terminal control codes in its output. Disconnecting leaves the command running. Never use raw SSH to get around Mesh. Never remove a session you did not start.
 
+## Run commands through MCP
+
+In an execution context, use `mesh_run` for a quick command (seconds, not minutes) whose rerun is harmless or whose lost reply you can live with. It answers in one round trip and keeps no receipt. Use `mesh_exec` with a `request_key` when you must know whether the command ran, when it may outlast the call, or when it needs stdin.
+
 ## Read services and edit notes
 
 List services with `mesh serve ls --json`. Do not open a service URL to check it, because that can start an on-demand service.

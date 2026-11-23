@@ -66,6 +66,7 @@ type Controls interface {
 	JobRemove(ctx context.Context, req JobRefRequest) (CallOutcome, error)
 	TerminalControls
 	ServiceControls
+	RunControls
 }
 
 type ListHostsRequest struct {

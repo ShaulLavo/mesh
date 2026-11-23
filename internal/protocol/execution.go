@@ -27,14 +27,18 @@ const (
 	// TypeExecutionResize sets the size of a terminal job's PTY, and
 	// TypeExecutionScreen reads its rendered screen without changing it. The
 	// worker refuses a resize while a person is attached.
-	TypeExecutionResize  = "execution.resize"
-	TypeExecutionScreen  = "execution.screen"
-	TypeExecutionList    = "execution.list"
-	TypeExecutionListed  = "execution.listed"
-	TypeWorkerPipeProbe  = "worker.pipe.probe"
-	TypeWorkerLineAttach = "worker.line.attach"
-	TypeWorkerLineInput  = "worker.line.input"
-	TypeWorkerLineRetire = "worker.line.retire"
+	TypeExecutionResize = "execution.resize"
+	TypeExecutionScreen = "execution.screen"
+	TypeExecutionList   = "execution.list"
+	TypeExecutionListed = "execution.listed"
+	// TypeExecutionRun runs one request-scoped command and answers once with
+	// its result in TypeExecutionRunResult. It keeps no receipt.
+	TypeExecutionRun       = "execution.run"
+	TypeExecutionRunResult = "execution.run.result"
+	TypeWorkerPipeProbe    = "worker.pipe.probe"
+	TypeWorkerLineAttach   = "worker.line.attach"
+	TypeWorkerLineInput    = "worker.line.input"
+	TypeWorkerLineRetire   = "worker.line.retire"
 )
 
 type ExecutionTermination struct {
@@ -100,7 +104,7 @@ func validateExecutionRaw(payload []byte) error {
 			return err
 		}
 	}
-	if scan.fields["outputBytes"] != nil && scan.fields["waitMillis"] == nil {
+	if kind != TypeExecutionRun && scan.fields["outputBytes"] != nil && scan.fields["waitMillis"] == nil {
 		return fmt.Errorf("execution: outputBytes requires waitMillis")
 	}
 	return validateExecutionRequired(kind, scan.fields)
@@ -182,6 +186,9 @@ func validateExecutionField(kind, name string, raw json.RawMessage) error {
 	// application-caller authorization.
 	if kind == TypeExecutionList {
 		return validateExecutionListField(name, raw)
+	}
+	if kind == TypeExecutionRun {
+		return validateExecutionRunField(name, raw)
 	}
 	switch name {
 	case executionTypeField, requestIDField:
@@ -368,7 +375,7 @@ type ExecutionPage struct {
 // controls are admitted by the worker socket.
 func IsExecutionControl(kind string) bool {
 	switch kind {
-	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionResize, TypeExecutionScreen, TypeExecutionList:
+	case TypeExecutionCreate, TypeExecutionRequest, TypeExecutionWait, TypeExecutionLogs, TypeExecutionSignal, TypeExecutionKill, TypeExecutionRemove, TypeExecutionInput, TypeExecutionInspect, TypeExecutionResize, TypeExecutionScreen, TypeExecutionList, TypeExecutionRun:
 		return true
 	default:
 		return false
@@ -435,6 +442,8 @@ func validateExecutionRequired(kind string, fields map[string]json.RawMessage) e
 	required := []string{executionTypeField, "requestId"}
 	switch kind {
 	case TypeExecutionList:
+	case TypeExecutionRun:
+		required = append(required, callerField, executionContextField, timeoutMillisField, outputBytesField)
 	case TypeExecutionCreate, TypeExecutionRequest:
 		required = append(required, "requestKey")
 	default:

@@ -398,6 +398,9 @@ func executionRequestContext(ctx context.Context, lookahead *frameLookahead, req
 }
 
 func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {
+	if request.Type == protocol.TypeExecutionRun {
+		return s.replyRun(ctx, relay, lookahead, request)
+	}
 	requestCtx, cancel := executionRequestContext(ctx, lookahead, request)
 	reply, _, err := s.lifecycle.HandleControl(requestCtx, request)
 	cancel()

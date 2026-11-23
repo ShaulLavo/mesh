@@ -294,6 +294,16 @@ func nativeToolSpecs() []ToolSpec {
 			Handler:     handleExec,
 		},
 		{
+			Name:        "mesh_run",
+			Title:       "Run a quick command with no receipt",
+			Operation:   RunOperation,
+			Group:       groupExec,
+			Description: "Run one quick command in an execution context and return its exit status and output in one round trip, with no request key, receipt or job handle (requires mesh mcp --identity NAME). Use it for commands that finish within timeout_ms and whose lost reply you can live with; use mesh_exec when you must know whether a command ran, it may outlast the call, or it needs stdin. Pass exactly one of command (shell string, refused for shell=none) or argv. At timeout_ms (default 10000, max 60000) the command's process group gets SIGTERM, then SIGKILL after 500 ms, and the result says timed_out. Cancelling the call, a lost connection or a daemon stop hangs it up the same way; when it ends, the rest of its process group is killed. Returns the first output_bytes (default 16384, max 262144) of stdout and stderr with each stream's total byte count. Stdin is /dev/null. Child cd/export never modifies the context.",
+			InputSchema: json.RawMessage(`{"type":"object","additionalProperties":false,"required":["context"],"oneOf":[{"required":["command"],"not":{"required":["argv"]}},{"required":["argv"],"not":{"required":["command"]}}],"properties":{"context":{"type":"string","description":"Opaque context handle (mc1.<hostId>.<contextId>)."},"command":{"type":"string","minLength":1,"description":"Shell command string (mutually exclusive with argv; refused when context shell is none)."},"argv":{"type":"array","items":{"type":"string"},"minItems":1,"description":"Direct executable and arguments, resolved in the run's PATH (mutually exclusive with command)."},"cwd":{"type":"string","description":"Optional absolute or context-relative working directory for this run only."},"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Optional per-run environment overlay."},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000,"description":"Deadline in milliseconds after which the command is stopped (100 to 60000, default 10000)."},"output_bytes":{"type":"integer","minimum":1,"maximum":262144,"description":"Maximum stdout and stderr bytes each to include in the result (1 to 262144, default 16384)."}}}`),
+			Annotations: openWorldDestructiveAnnotations(),
+			Handler:     handleRun,
+		},
+		{
 			Name:        "mesh_job_status",
 			Title:       "Read durable status of a job",
 			Operation:   "sessions.inspect",
