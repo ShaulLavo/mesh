@@ -270,12 +270,15 @@ func TestContextReadDuringAClockRollbackStillCountsAsUse(t *testing.T) {
 	}
 }
 
-// A full record quota reclaims closed contexts with no active job, the
-// longest closed first; a closed context with a running job is kept, and a
-// reclaimed context's open key then opens a new context.
-func TestClosedContextsMakeRoomWhenTheRecordQuotaIsFull(t *testing.T) {
-	j := contextJournal(t)
-	j.contextRetainLimit = 2
+// A closed context expires 30 days after its close on the wall clock alone,
+// even on a new boot whose uptime is short; a closed context with a running
+// job is kept, and an expired one's open key then opens a new context.
+func TestClosedContextsExpireThirtyDaysAfterTheirClose(t *testing.T) {
+	dir := t.TempDir()
+	j, err := Open(dir, "boot", "coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
 	idle := openTestContext(t, j, ownerA, "idle", "/work")
 	busy := openTestContext(t, j, ownerA, "busy", "/work")
 	if _, _, err := reserveJob(t, j, jobKey(ownerA, busy.ID, "run"), "x", nil); err != nil {
@@ -286,16 +289,99 @@ func TestClosedContextsMakeRoomWhenTheRecordQuotaIsFull(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	openTestContext(t, j, ownerB, "fresh", "/work")
-	if contextRecordKept(j, idle.ID) || !contextRecordKept(j, busy.ID) {
-		t.Fatalf("reclaim kept idle %t, busy %t; want only the busy one", contextRecordKept(j, idle.ID), contextRecordKept(j, busy.ID))
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, err := j.OpenContext(t.Context(), openKey(ownerA, "idle"), Digest("x"), fixedSpec(ContextSpec{Cwd: "/work", Shell: "none"})); !errors.Is(err, ErrContextLimit) {
-		t.Fatalf("open with only active or open records = %v", err)
+	rebooted, err := Open(dir, "boot-2", "coordinator-2")
+	if err != nil {
+		t.Fatal(err)
 	}
-	j.contextRetainLimit = 3
-	if again := openTestContext(t, j, ownerA, "idle", "/work"); again.ID == idle.ID {
-		t.Fatal("a reclaimed context's open key replayed the purged context")
+	t.Cleanup(func() { _ = rebooted.Close() })
+	closedAt := time.Now()
+	rebooted.now = func() time.Time { return closedAt.Add(contextIdleExpiry - time.Hour) }
+	if err := rebooted.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !contextRecordKept(rebooted, idle.ID) {
+		t.Fatal("closed context expired before 30 days after its close")
+	}
+	rebooted.now = func() time.Time { return closedAt.Add(contextIdleExpiry + time.Hour) }
+	if err := rebooted.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if contextRecordKept(rebooted, idle.ID) || !contextRecordKept(rebooted, busy.ID) {
+		t.Fatalf("after 30 days closed: idle kept %t, busy kept %t; want only the busy one", contextRecordKept(rebooted, idle.ID), contextRecordKept(rebooted, busy.ID))
+	}
+	if again := openTestContext(t, rebooted, ownerA, "idle", "/work"); again.ID == idle.ID {
+		t.Fatal("an expired context's open key replayed the purged context")
+	}
+}
+
+// Every open creates its membership directory, so one moved aside is damage
+// that may hide a running job: the overdue context is kept.
+func TestContextExpiryWaitsWhenMembershipIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	j, err := Open(dir, "boot", "coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	c := openTestContext(t, j, ownerA, "busy", "/work")
+	if _, _, err := reserveJob(t, j, jobKey(ownerA, c.ID, "run"), "x", nil); err != nil {
+		t.Fatal(err)
+	}
+	members := filepath.Join(dir, contextMembers(c.ID))
+	if err := os.Rename(members, members+".aside"); err != nil {
+		t.Fatal(err)
+	}
+	passIdlePeriod(j)
+	if err := j.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !contextRecordKept(j, c.ID) {
+		t.Fatal("context with a missing membership directory expired")
+	}
+	empty := openTestContext(t, j, ownerA, "empty", "/work")
+	if _, err := os.Stat(filepath.Join(dir, contextMembers(empty.ID))); err != nil {
+		t.Fatalf("open left no membership directory: %v", err)
+	}
+}
+
+// An expiry re-anchor is not a use: a read 59 minutes after one still records
+// its use, so the context lasts 30 days from that read.
+func TestContextReadAfterAnExpiryReanchorIsRecorded(t *testing.T) {
+	dir := t.TempDir()
+	j, err := Open(dir, "boot", "coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rebooted, err := Open(dir, "boot-2", "coordinator-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rebooted.Close() })
+	start := rebooted.clock()
+	at := func(wall time.Time, uptime time.Duration) {
+		rebooted.now = func() time.Time { return wall }
+		rebooted.clock = func() ClockAnchor { return clockEvidence(start.Boot, start.Elapsed+int64(uptime)) }
+	}
+	overdue := c.LastUsedAt.Add(contextIdleExpiry + time.Minute)
+	at(overdue, 0)
+	if err := rebooted.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	read := overdue.Add(59 * time.Minute)
+	at(read, 59*time.Minute)
+	if _, err := rebooted.GetContext(t.Context(), ownerA, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	record, err := rebooted.readContext(c.ID)
+	if err != nil || !record.LastUsedAt.Equal(read.UTC()) {
+		t.Fatalf("read after a re-anchor left last use at %+v, %v", record.LastUsedAt, err)
 	}
 }
 

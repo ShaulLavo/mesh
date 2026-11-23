@@ -60,10 +60,14 @@ type Context struct {
 	Revision     uint64            `json:"revision"`
 	CreatedAt    time.Time         `json:"createdAt"`
 	LastUsedAt   time.Time         `json:"lastUsedAt"`
+	// UseClock is this boot's monotonic clock at the last recorded use. Reads
+	// record use at most once per granularity of it, so a wall-clock
+	// correction cannot make an old use look recent.
+	UseClock *ClockAnchor `json:"useClock,omitempty"`
 	// IdleAnchor is this boot's monotonic clock at the last use, or when an
-	// expiry deadline was found passed under another boot's anchor. Expiry
-	// needs a full idle period of it as well as the wall-clock deadline, so
-	// a forward clock correction cannot purge a context in use.
+	// open context's deadline was found passed under another boot's anchor.
+	// An open context's expiry needs a full idle period of it as well as the
+	// wall-clock deadline, so a forward clock correction cannot purge it.
 	IdleAnchor *ClockAnchor `json:"idleAnchor,omitempty"`
 	ClosedAt   *time.Time   `json:"closedAt,omitempty"`
 	// Members are the keys of jobs whose receipts are not terminal yet. Any
@@ -71,8 +75,16 @@ type Context struct {
 	Members []Key `json:"-"`
 }
 
-// ExpiresAt is when an unused context with no active job is purged.
-func (c Context) ExpiresAt() time.Time { return c.LastUsedAt.Add(contextIdleExpiry) }
+// ExpiresAt is the wall-clock date from which a context with no active job
+// may expire: 30 days after its last use while open, 30 days after its close
+// once closed. An open context also needs that idle period on the uptime
+// clock (Journal.idle), so it can go later, never earlier.
+func (c Context) ExpiresAt() time.Time {
+	if c.ClosedAt != nil {
+		return c.ClosedAt.Add(contextIdleExpiry)
+	}
+	return c.LastUsedAt.Add(contextIdleExpiry)
+}
 
 // contextRequest is the caller-keyed open receipt. It holds the accepted
 // result, so a retry returns exactly what the first open created, and a crash
@@ -198,6 +210,9 @@ func (j *Journal) settleRequest(request contextRequest) (Context, error) {
 	}
 	c, err := j.readContext(request.ContextID)
 	if errors.Is(err, os.ErrNotExist) {
+		if err := j.files.Ensure(contextMembers(request.ContextID)); err != nil {
+			return Context{}, err
+		}
 		return j.saveContext(j.anchorUse(newRecord(request, j.now())))
 	}
 	if err != nil {
@@ -215,14 +230,14 @@ func (j *Journal) settleRequest(request contextRequest) (Context, error) {
 	return c, nil
 }
 
-// anchorUse records this boot's monotonic clock as the time of c's last use.
-// Without a monotonic clock the context keeps no anchor and does not expire
-// until one is available.
+// anchorUse records this boot's monotonic clock as the time of c's last use,
+// for the read throttle and for expiry. Without a monotonic clock an open
+// context keeps no anchor and does not expire until one is available.
 func (j *Journal) anchorUse(c Context) Context {
 	anchor := j.clock()
-	c.IdleAnchor = nil
+	c.UseClock, c.IdleAnchor = nil, nil
 	if anchor.valid() {
-		c.IdleAnchor = &anchor
+		c.UseClock, c.IdleAnchor = &anchor, &anchor
 	}
 	return c
 }
@@ -255,6 +270,11 @@ func (j *Journal) acceptContext(k Key, callerDigest string, resolve func() (Cont
 	if _, err := j.files.PublishBounded(contextRequestName(k.Hash()), request, true, contextRecordLimit); err != nil {
 		return Context{}, false, err
 	}
+	// The membership directory exists before the record, so a record whose
+	// directory is missing is damage rather than a context without jobs.
+	if err := j.files.Ensure(contextMembers(request.ContextID)); err != nil {
+		return Context{}, false, err
+	}
 	if _, err := j.saveContext(j.anchorUse(newRecord(request, request.AcceptedAt))); err != nil {
 		return Context{}, false, err
 	}
@@ -284,70 +304,10 @@ func (j *Journal) contextCapacity(owner string) error {
 			mine++
 		}
 	}
-	if total >= j.contextRetainLimit {
-		total -= j.reclaimClosed(total - j.contextRetainLimit + 1)
-	}
 	if total >= j.contextRetainLimit || host >= j.contextHostLimit || mine >= j.contextOwnerLimit {
 		return ErrContextLimit
 	}
 	return nil
-}
-
-// closedContext is a closed context that reclaimClosed may purge.
-type closedContext struct {
-	request  contextRequest
-	closedAt time.Time
-}
-
-// reclaimClosed purges up to need closed contexts with no active job, the
-// longest closed first, so closed records cannot fill the host's record
-// quota on a host that never stays up a whole idle period. A closed context
-// takes no new jobs, so only its open receipt is lost: the same open key
-// then opens a new context, as after expiry. It returns how many it purged.
-func (j *Journal) reclaimClosed(need int) int {
-	entries, err := j.files.Names(contextRequestDir)
-	if err != nil {
-		return 0
-	}
-	var closed []closedContext
-	for _, entry := range entries {
-		if candidate, ok := j.closedCandidate(entry.Name()); ok {
-			closed = append(closed, candidate)
-		}
-	}
-	sort.Slice(closed, func(a, b int) bool { return closed[a].closedAt.Before(closed[b].closedAt) })
-	reclaimed := 0
-	for _, candidate := range closed {
-		if reclaimed == need {
-			break
-		}
-		if j.expire(candidate.request) == nil {
-			reclaimed++
-		}
-	}
-	return reclaimed
-}
-
-// closedCandidate reports a closed context whose membership is readable and
-// holds no active job.
-func (j *Journal) closedCandidate(name string) (closedContext, bool) {
-	hash, ok := cutJSON(name)
-	if !ok || !validDigest(hash) {
-		return closedContext{}, false
-	}
-	request, found, err := j.readRequest(hash)
-	if err != nil || !found || request.Expired {
-		return closedContext{}, false
-	}
-	c, err := j.readContext(request.ContextID)
-	if err != nil || c.ClosedAt == nil {
-		return closedContext{}, false
-	}
-	c, known := j.withMembers(c)
-	if !known || len(c.Members) != 0 {
-		return closedContext{}, false
-	}
-	return closedContext{request: request, closedAt: *c.ClosedAt}, true
 }
 
 // requestSlot reports whether a receipt still holds a slot and whether that
@@ -423,14 +383,12 @@ func (j *Journal) ownedContext(owner, id string) (Context, error) {
 // Markers are written before a job receipt becomes durable, so a failed
 // context write never hides a running job. Markers for terminal or never
 // accepted jobs are pruned. known is false when the markers could not be
-// listed, so callers never take an unreadable directory for an empty one; a
-// missing directory is a context that never had a job.
+// listed, so callers never take an unreadable directory for an empty one. A
+// missing directory counts as unreadable too: every open creates it before
+// the record, so its absence is damage that could hide a running job.
 func (j *Journal) withMembers(c Context) (Context, bool) {
 	c.Members = nil
 	entries, err := j.files.Names(contextMembers(c.ID))
-	if errors.Is(err, os.ErrNotExist) {
-		return c, true
-	}
 	if err != nil {
 		return c, false
 	}
@@ -450,15 +408,20 @@ func (j *Journal) withMembers(c Context) (Context, bool) {
 	return c, true
 }
 
-// idle reports whether c may expire now: no active job, its wall-clock
-// deadline has passed, and this boot's monotonic clock has run a whole idle
-// period since its anchor, as receipt retention requires (elapsedFloor). A
-// passed deadline with an anchor from another boot, or none, is anchored to
-// this boot first, so the purge waits for an idle period this boot observed
-// itself.
+// idle reports whether c may expire now: no active job and its wall-clock
+// deadline has passed. A closed context takes no new jobs, so the wall clock
+// alone decides: a clock jump can at worst let a replay of its open key open
+// a new context. An open context also needs this boot's monotonic clock to
+// have run a whole idle period since its anchor, as receipt retention
+// requires (elapsedFloor). A passed deadline with an anchor from another
+// boot, or none, is anchored to this boot first, so that purge waits for an
+// idle period this boot observed itself.
 func (j *Journal) idle(c Context) (Context, bool) {
 	if len(c.Members) != 0 || j.now().Before(c.ExpiresAt()) {
 		return c, false
+	}
+	if c.ClosedAt != nil {
+		return c, true
 	}
 	now := j.clock()
 	if c.IdleAnchor != nil && c.IdleAnchor.valid() && c.IdleAnchor.Boot == now.Boot {
@@ -508,12 +471,13 @@ func (j *Journal) touch(c Context, force bool) (Context, error) {
 	return j.saveContext(c)
 }
 
-// usedRecently reports a use anchored less than the granularity ago on this
+// usedRecently reports a use recorded less than the granularity ago on this
 // boot's monotonic clock. A wall-clock correction cannot make an old use look
-// recent, and an anchor from another boot, or none, cannot be compared, so
-// that use is recorded again.
+// recent, and a reading from another boot, or none, cannot be compared, so
+// that use is recorded again. An expiry re-anchor is not a use and never
+// counts here.
 func (j *Journal) usedRecently(c Context) bool {
-	now, anchor := j.clock(), c.IdleAnchor
+	now, anchor := j.clock(), c.UseClock
 	if anchor == nil || !anchor.valid() || !now.valid() || anchor.Boot != now.Boot {
 		return false
 	}
