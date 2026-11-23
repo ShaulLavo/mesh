@@ -41,14 +41,15 @@ def api(endpoint, page_size):
     them is never returned. A published item shifts later items the other way and
     shows up twice. A listing that took more than one request is therefore
     accepted only when no id repeated and two consecutive reads name the same
-    items in the same draft state (publishing a draft changes what callers keep).
-    A read that saw a repeated id was disturbed and is discarded. This
+    items. A read that saw a repeated id was disturbed and is discarded. A draft
+    published during the final read stays a draft in the result: that is a valid
+    earlier snapshot, not a skipped release. This
     catches every single deletion or publication; it does not prove a snapshot
     against several overlapping changes that cancel out between two reads."""
     previous = None
     for _ in range(LISTING_READS):
         items, paged = read_listing(endpoint, page_size)
-        state = None if items is None else [(item["id"], item.get("draft")) for item in items]
+        state = None if items is None else [item["id"] for item in items]
         if items is not None and (not paged or previous == state):
             return items
         previous = state

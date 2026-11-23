@@ -133,13 +133,6 @@ class HistoryTests(unittest.TestCase):
             found = HISTORY.api("endpoint", 2)
         self.assertEqual([item["id"] for item in found], [6, 5, 4, 3, 2, 1])
 
-    def test_api_rereads_when_a_draft_is_published_between_reads(self):
-        releases = [{"id": 2, "draft": True}, {"id": 1, "draft": False}]
-        run, _ = self.listing(releases, {5: lambda items: items[0].update(draft=False)})
-        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
-            found = HISTORY.api("endpoint", 1)
-        self.assertEqual([(item["id"], item["draft"]) for item in found], [(2, False), (1, False)])
-
     def test_api_refuses_a_page_that_repeats_an_id(self):
         repeated = self.page([{"id": 1}, {"id": 1}])
         with mock.patch.object(HISTORY.subprocess, "run", return_value=repeated) as command:
