@@ -493,7 +493,11 @@ func TestRunInvalidFrameRacingTheCommitKeepsItsError(t *testing.T) {
 		client.pushReadError(transport.ErrInvalidFrame)
 		waitSignal(t, claimed, "the watcher's claim")
 	}
-	commitLost := func() { close(release) }
+	// Releasing twice is harmless, so cleanup also frees a watcher left
+	// paused by a test that failed before the commit was lost.
+	var released sync.Once
+	commitLost := func() { released.Do(func() { close(release) }) }
+	t.Cleanup(commitLost)
 	lookaheadInterruptClaimedHook.Store(&interruptClaimed)
 	runBeforeCommitHook.Store(&beforeCommit)
 	runCommitLostHook.Store(&commitLost)
