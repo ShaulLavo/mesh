@@ -13,7 +13,7 @@ import tempfile
 import time
 import os
 
-from fixtures import published_releases, release_documents, release_tool, release_worker_groups, release_worker_index
+from fixtures import paged_listing, published_releases, release_documents, release_tool, release_worker_groups, release_worker_index
 
 REPOSITORY = "ShaulLavo/mesh"
 TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
@@ -30,45 +30,15 @@ LIMITS["mesh-worker-groups.json"] = 1 << 20
 # objects are small, so asset pages stay at the API maximum.
 RELEASE_PAGE_SIZE = 30
 ASSET_PAGE_SIZE = 100
-LISTING_READS = 5
+LISTING_READS = paged_listing.LISTING_READS
 SERVER_ERROR_RETRIES = (2, 5, 10)
 SERVER_ERROR = re.compile(rb"HTTP 5[0-9][0-9]\b")
 
 
 def api(endpoint, page_size):
-    """List every item. The API pages by offset, so deleting an item between two
-    page reads moves later items into a page that was already read and one of
-    them is never returned. A published item shifts later items the other way and
-    shows up twice. A listing that took more than one request is therefore
-    accepted only when no id repeated and two consecutive reads name the same
-    items. A read that saw a repeated id was disturbed and is discarded. A draft
-    published during the final read stays a draft in the result: that is a valid
-    earlier snapshot, not a skipped release. This
-    catches every single deletion or publication; it does not prove a snapshot
-    against several overlapping changes that cancel out between two reads."""
-    previous = None
-    for _ in range(LISTING_READS):
-        items, paged = read_listing(endpoint, page_size)
-        state = None if items is None else [item["id"] for item in items]
-        if items is not None and (not paged or previous == state):
-            return items
-        previous = state
-    raise RuntimeError(f"release API listing did not hold still across {LISTING_READS} reads: {endpoint}")
-
-
-def read_listing(endpoint, page_size):
-    """Return (items, whether it took several requests); items is None when an id repeated."""
-    items, seen, page = [], set(), 1
-    while True:
-        batch = api_page(f"{endpoint}?per_page={page_size}&page={page}")
-        ids = [item["id"] for item in batch]
-        if len(set(ids)) != len(ids) or not seen.isdisjoint(ids):
-            return None, page > 1
-        items.extend(batch)
-        seen.update(ids)
-        if len(batch) < page_size:
-            return items, page > 1
-        page += 1
+    """List every item of an offset-paged listing; see paged_listing.read_stable."""
+    return paged_listing.read_stable(
+        lambda page: api_page(f"{endpoint}?per_page={page_size}&page={page}"), page_size, endpoint, LISTING_READS)
 
 
 def api_page(endpoint):

@@ -230,13 +230,13 @@ class CompleteCorpusTests(unittest.TestCase):
 
     def test_final_live_comparison_binds_every_physical_asset_and_declines_mutation(self):
         physical, release, _aliases = self.snapshot()
-        responses = [json.dumps(release).encode(), json.dumps([release["assets"]]).encode()]
+        responses = [json.dumps(release).encode(), json.dumps(release["assets"]).encode()]
         with patch.object(draft_intake.subprocess, "check_output", side_effect=responses) as api:
             draft_intake.compare_live(physical, VERSION, groups.SOURCE, 42)
         self.assertEqual(api.call_count, 2)
         changed = json.loads(json.dumps(release))
         changed["assets"][0]["id"] += 100
-        with patch.object(draft_intake.subprocess, "check_output", side_effect=[json.dumps(changed).encode(), json.dumps([changed["assets"]]).encode()]):
+        with patch.object(draft_intake.subprocess, "check_output", side_effect=[json.dumps(changed).encode(), json.dumps(changed["assets"]).encode()]):
             with self.assertRaisesRegex(ValueError, "physical inventory"):
                 draft_intake.compare_live(physical, VERSION, groups.SOURCE, 42)
 

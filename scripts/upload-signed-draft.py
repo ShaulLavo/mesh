@@ -14,7 +14,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fixtures import draft_intake as intake
-from fixtures import release_documents
+from fixtures import paged_listing, release_documents
 
 MAX_SECONDS = 1800
 MAX_RETRIES = 12
@@ -199,12 +199,9 @@ class Publisher:
 
     def inventory(self):
         self.validate()
-        assets = []
-        for page in range(1, 330):
-            batch = self.api.request("GET", self.release + f"/assets?per_page=100&page={page}")
-            assets.extend(batch)
-            if len(batch) < 100:
-                break
+        assets = paged_listing.read_stable(
+            lambda page: self.api.request("GET", self.release + f"/assets?per_page=100&page={page}"),
+            100, self.release + "/assets", max_pages=329)
         allowed = set(self.assets) | set(intake.NAMES) | set(self.candidate["frozen_baselines"]) | {"mesh.rb"}
         if len(assets) > len(allowed) or len({item["name"] for item in assets}) != len(assets) or any(item["name"] not in allowed for item in assets):
             raise ValueError("draft upload inventory exceeds its bound or repeats names")

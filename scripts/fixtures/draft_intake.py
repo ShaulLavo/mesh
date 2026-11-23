@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-from fixtures import release_documents, release_tool, release_worker_index
+from fixtures import paged_listing, release_documents, release_tool, release_worker_index
 
 REPOSITORY = "repos/ShaulLavo/mesh"
 ARCHIVES = {"linux/amd64": "mesh_linux_amd64.tar.gz", "linux/arm64": "mesh_linux_arm64.tar.gz",
@@ -139,9 +139,7 @@ def capture(directory, version, source, signed=False, candidate=None, baselines=
     release["intake_run"] = int(os.environ["GITHUB_RUN_ID"])
     release["frozen_baselines"] = baseline_names(baselines)
     identity(release, version, source)
-    pages = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp",
-        REPOSITORY + f'/releases/{release["id"]}/assets?per_page=100'], timeout=120))
-    release["assets"] = [item for page in pages for item in page]
+    release["assets"] = paged_listing.gh_listing(REPOSITORY + f'/releases/{release["id"]}/assets')
     assets = inventory(release, version, source, signed)
     if signed:
         same_candidate(candidate, release, version, source)
@@ -158,9 +156,7 @@ def find_release(version, source, candidate):
         original = verify(candidate, version, source, run=int(os.environ["GITHUB_RUN_ID"]))
         return json.loads(subprocess.check_output(["gh", "api", REPOSITORY + f'/releases/{original["id"]}'], timeout=120))
     # The tag endpoint is for published releases; finding the initial draft needs push access.
-    pages = json.loads(subprocess.check_output(
-        ["gh", "api", "--paginate", "--slurp", REPOSITORY + "/releases?per_page=100"], timeout=120))
-    matches = [item for page in pages for item in page if item["tag_name"] == version]
+    matches = [item for item in paged_listing.gh_listing(REPOSITORY + "/releases") if item["tag_name"] == version]
     if len(matches) != 1:
         raise ValueError("reserved draft is missing or unavailable to the release writer")
     return matches[0]
@@ -197,8 +193,7 @@ def compare_live(directory, version, source, run):
     identity(live, version, source)
     if live["id"] != recorded["id"]:
         raise ValueError("live draft has another release ID")
-    pages = json.loads(subprocess.check_output(["gh", "api", "--paginate", "--slurp", endpoint + "/assets?per_page=100"], timeout=120))
-    live["assets"] = [item for page in pages for item in page]
+    live["assets"] = paged_listing.gh_listing(endpoint + "/assets")
     keys = ("id", "name", "size", "state", "digest")
     before = sorted(tuple(item[key] for key in keys) for item in recorded["assets"])
     after = sorted(tuple(item[key] for key in keys) for item in live["assets"])

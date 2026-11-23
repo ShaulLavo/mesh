@@ -105,10 +105,10 @@ class SignedPublicationTests(unittest.TestCase):
         calls = []
         def output(command, **_kwargs):
             calls.append(command)
-            if command[-1].endswith("/releases?per_page=100"):
-                return json.dumps([[release]]).encode()
-            if command[-1].endswith("/assets?per_page=100"):
-                return json.dumps([release["assets"]]).encode()
+            if command[-1].endswith("/releases?per_page=100&page=1"):
+                return json.dumps([release]).encode()
+            if command[-1].endswith("/assets?per_page=100&page=1"):
+                return json.dumps(release["assets"]).encode()
             return json.dumps(release).encode()
         def download(command, **kwargs):
             calls.append(command)
@@ -165,7 +165,7 @@ class SignedPublicationTests(unittest.TestCase):
         completion.aggregate_tasks(logical, native, self.source, inputs, completed / native.replace("/", "-"))
 
     def check_finalizer(self, physical, release, completed):
-        replies = [json.dumps(release).encode(), json.dumps([release["assets"]]).encode()]
+        replies = [json.dumps(release).encode(), json.dumps(release["assets"]).encode()]
         live = draft_intake.subprocess.check_output
         def api(command, **kwargs):
             if command[0] == "gh":
