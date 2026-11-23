@@ -7,13 +7,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// deviceSync is the final device barrier after the namespace sync. On Linux the
-// data fsync and the directory fsyncs that precede it already flush the device
-// cache (ext4, XFS and btrfs force their journal with a flush), so a third
-// fsync of the same file only repeated that round trip. Darwin keeps its own
-// F_FULLFSYNC, which a plain fsync does not provide.
-func deviceSync(*os.File) error { return nil }
-
 func renameExclusive(dir *os.File, from, to string) error {
 	fd := int(dir.Fd())
 	return executionBoundaryError("rename exclusive execution record", unix.Renameat2(fd, from, fd, to, unix.RENAME_NOREPLACE))

@@ -13,6 +13,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/shaul/mesh/internal/durable"
 )
 
 const MaxRecord = 64 << 10
@@ -188,7 +190,7 @@ func (f *Files) syncDir(dir string) error {
 	if err != nil {
 		return executionBoundaryError("files.go syncDirs", err)
 	}
-	return errors.Join(file.Sync(), file.Close())
+	return errors.Join(durable.Sync(file), file.Close())
 }
 
 // Confirm makes an existing record and its namespace durable. Only the file's
@@ -355,13 +357,17 @@ func (f *Files) dataSync(file *os.File) error {
 	if err := f.step("data_sync"); err != nil {
 		return err
 	}
-	return executionBoundaryError("files.go dataSync", file.Sync())
+	return executionBoundaryError("files.go dataSync", durable.Sync(file))
 }
+
+// flushDevice ends a round: the data and directory syncs before it only
+// handed their changes to the device, and this barrier makes them all durable
+// at once (one drive cache flush on Darwin, nothing more on Linux).
 func (f *Files) flushDevice(file *os.File) error {
 	if err := f.step("device_sync"); err != nil {
 		return err
 	}
-	return deviceSync(file)
+	return executionBoundaryError("flush execution namespace device", durable.Barrier(file))
 }
 func (f *Files) closeFile(file *os.File) error { return errors.Join(file.Close(), f.step("close")) }
 
