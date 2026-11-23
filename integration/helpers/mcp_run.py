@@ -1,8 +1,10 @@
 """Drive mesh_run through the real mesh mcp server against a local daemon
 (Unix socket) and a remote daemon (authenticated WebSocket)."""
 import base64
+import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -23,12 +25,48 @@ def call(client, name, arguments, timeout=HANG):
     return read_reply(client, req_id, timeout)
 
 
+class Replies:
+    """Unbuffered line reader for the server's stdout. MCPClient.read_message
+    selects on the descriptor but reads through a buffered file, so replies
+    that arrive together wait in that buffer while select sees nothing."""
+
+    def __init__(self, client):
+        self.fd = client.proc.stdout.fileno()
+        self.buffer = b""
+        # Replies read while waiting for another ID, kept for their caller.
+        self.kept = {}
+
+    def next(self, deadline):
+        while b"\n" not in self.buffer:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0, "timed out waiting for an MCP message")
+            ready, _, _ = select.select([self.fd], [], [], remaining)
+            if ready:
+                chunk = os.read(self.fd, 1 << 16)
+                require(bool(chunk), "MCP server closed stdout unexpectedly")
+                self.buffer += chunk
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        return json.loads(line)
+
+
+def replies(client):
+    if not hasattr(client, "replies"):
+        client.replies = Replies(client)
+    return client.replies
+
+
+def read_message(client, timeout=HANG):
+    return replies(client).next(time.monotonic() + timeout)
+
+
 def read_reply(client, req_id, timeout=HANG):
     deadline = time.monotonic() + timeout
-    while True:
-        msg = client.read_message(timeout=max(0.1, deadline - time.monotonic()))
-        if msg.get("id") == req_id:
-            return msg
+    reader = replies(client)
+    while req_id not in reader.kept:
+        msg = reader.next(deadline)
+        if "id" in msg:
+            reader.kept[msg["id"]] = msg
+    return reader.kept.pop(req_id)
 
 
 def run_data(reply, context):
@@ -87,13 +125,77 @@ def exercise_cancel(client, handle, work, label):
     require(again["stdout"]["data"] == "after", f"{label}: run after cancel {again}")
 
 
-def exercise_short_controls_beside_a_run(client, handle, label):
-    run_id = client.request("tools/call", {"name": "mesh_run", "arguments": {"context": handle, "command": "sleep 1; echo slow"}})
+def gated_command(ready, release):
+    """A command that reports it started, then waits until released."""
+    return f"touch {ready}; while [ ! -e {release} ]; do sleep 0.05; done; echo slow"
+
+
+def exercise_short_controls_beside_a_run(client, handle, work, label):
+    ready, release = work / f"beside-{label}.ready", work / f"beside-{label}.release"
+    run_id = client.request("tools/call", {"name": "mesh_run", "arguments": {"context": handle, "command": gated_command(ready, release)}})
+    eventually(ready.exists, f"{label}: the gated run never started")
     get_id = client.request("tools/call", {"name": "mesh_context_get", "arguments": {"context": handle}})
-    first = client.read_message(timeout=HANG)
+    first = read_message(client)
     require(first.get("id") == get_id and not first["result"]["isError"], f"{label}: a short control waited behind a run: {first}")
+    release.touch()
     slow = run_data(read_reply(client, run_id), label)
     require(slow["stdout"]["data"] == "slow\n", f"{label}: slow run {slow}")
+
+
+def exercise_revocation(fixture, client, handle, work):
+    """Revoking the device mid-run kills the command's group and returns its
+    slot: once re-approved, a full set of concurrent runs is admitted."""
+    pid_file = work / "revoked.pid"
+    req_id = client.request("tools/call", {"name": "mesh_run", "arguments": {"context": handle, "command": f"echo $$ > {pid_file}; exec sleep 30"}})
+    pid = read_pid(pid_file)
+    device = json_field(run_cli(fixture.binary, fixture.environment, "device", "identity", "--json"), "id")
+    remote_env = fixture.environment | {"MESH_STATE_DIR": str(fixture.remote)}
+    revoked = run_cli(fixture.binary, remote_env, "device", "revoke", "--", device)
+    require(revoked.returncode == 0, f"revoke failed: {revoked.stderr!r}")
+    lost = read_reply(client, req_id)
+    require("result" in lost and lost["result"]["isError"], f"a revoked run reported success: {lost}")
+    eventually(lambda: pid_gone(pid), f"a revoked run kept its command {pid}")
+    approved = run_cli(fixture.binary, remote_env, "device", "approve", "--allow-root", "--", device)
+    require(approved.returncode == 0, f"re-approve failed: {approved.stderr!r}")
+    run_full_slot_set(client, handle, work)
+
+
+def run_full_slot_set(client, handle, work, count=8):
+    """Holds count runs at once; one charge still held would refuse the last."""
+    release = work / "slots.release"
+    gates = [work / f"slot-{index}.ready" for index in range(count)]
+    ids = [client.request("tools/call", {"name": "mesh_run", "arguments": {"context": handle, "command": gated_command(gate, release)}}) for gate in gates]
+    eventually(lambda: all(gate.exists() for gate in gates), "not every concurrent run started")
+    release.touch()
+    for req_id in ids:
+        run_data(read_reply(client, req_id), "concurrent run")
+
+
+def exercise_daemon_stop(client, handle, work, local):
+    """Stopping the daemon mid-run cleans up the command's group."""
+    pid_file = work / "stopped.pid"
+    req_id = client.request("tools/call", {"name": "mesh_run", "arguments": {"context": handle, "command": f"echo $$ > {pid_file}; exec sleep 30"}})
+    pid = read_pid(pid_file)
+    stop_local_daemon(local[0], local[1])
+    lost = read_reply(client, req_id)
+    require("result" in lost and lost["result"]["isError"], f"a run cut off by a daemon stop reported success: {lost}")
+    eventually(lambda: pid_gone(pid), f"a daemon stop left the command {pid}")
+
+
+def json_field(result, name):
+    require(result.returncode == 0, f"command failed: {result.stderr!r}")
+    return json.loads(result.stdout)[name]
+
+
+def exercise_host(fixture, client, host_id, label):
+    work = fixture.root / f"work-{label}"
+    work.mkdir()
+    handle = open_context(client, host_id, work, f"run-{label}")
+    exercise_results(client, handle, label)
+    exercise_cancel(client, handle, work, label)
+    exercise_short_controls_beside_a_run(client, handle, work, label)
+    exercise_refusals(fixture, client, handle, host_id, label)
+    return handle, work
 
 
 def exercise_refusals(fixture, client, handle, host_id, label):
@@ -141,21 +243,18 @@ def main():
                 require(res.returncode == 0, f"identity create {name} failed: {res.stdout!r} {res.stderr!r}")
             client = MCPClient(fixture.binary, fixture.environment, args=("--identity", "runner"))
             try:
-                for label, host_id in (("websocket", fixture.remote_id), ("unix", local[2])):
-                    work = root / f"work-{label}"
-                    work.mkdir()
-                    handle = open_context(client, host_id, work, f"run-{label}")
-                    exercise_results(client, handle, label)
-                    exercise_cancel(client, handle, work, label)
-                    exercise_short_controls_beside_a_run(client, handle, label)
-                    exercise_refusals(fixture, client, handle, host_id, label)
+                remote_handle, remote_work = exercise_host(fixture, client, fixture.remote_id, "websocket")
+                local_handle, local_work = exercise_host(fixture, client, local[2], "unix")
+                exercise_revocation(fixture, client, remote_handle, remote_work)
+                exercise_daemon_stop(client, local_handle, local_work, local)
+                local = None
             finally:
                 client.terminate()
         finally:
             if local is not None:
                 stop_local_daemon(local[0], local[1])
             fixture.close()
-    print("PASS: mesh_run over Unix and WebSocket: results, binary and control output, deadline, cancel kills the command, short controls beside a run, refusals")
+    print("PASS: mesh_run over Unix and WebSocket: results, binary and control output, deadline, cancel, short controls beside a run, refusals, revocation and daemon stop clean up the group")
 
 
 if __name__ == "__main__":

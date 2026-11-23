@@ -96,20 +96,11 @@ func (r *Run) supervise(streams []*stream, timeout time.Duration) {
 	for _, s := range streams {
 		go s.read()
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	var observeErr error
-	select {
-	case observeErr = <-exited:
-	case <-timer.C:
-		r.result.TimedOut = true
-		observeErr = escalate(group, syscall.SIGTERM, exited, streams)
-	case <-r.cancel:
-		observeErr = escalate(group, syscall.SIGHUP, exited, streams)
-	}
-	if observeErr == nil {
-		drain(streams, r.cancel)
-	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	c := &cleanup{group: group, streams: streams, exited: exited, deadline: deadline.C, cancel: r.cancel, stopDrain: make(chan struct{})}
+	c.run()
+	r.result.TimedOut = c.timedOut
 	// The unreaped leader still fences its group ID, so this reaches only the
 	// command's own group: members left behind by a normal exit included.
 	signalGroup(group, syscall.SIGKILL)
@@ -129,49 +120,6 @@ func (r *Run) finish(streams []*stream) {
 	r.result.State, r.result.WaitErr = r.cmd.ProcessState, err
 	r.result.Stdout, r.result.Stderr = streams[0].result(), streams[1].result()
 	r.result.Duration = time.Since(r.started)
-}
-
-// escalate sends first to the group and SIGKILL after Grace, unless the
-// leader exited and both pipes closed before then. A leader that exits on
-// the first signal does not end the escalation: members that ignore it may
-// still hold the group.
-func escalate(group int, first syscall.Signal, exited <-chan error, streams []*stream) error {
-	signalGroup(group, first)
-	grace := time.NewTimer(Grace)
-	defer grace.Stop()
-	closed := allClosed(streams)
-	var observeErr error
-	gone := false
-	for !gone || closed != nil {
-		select {
-		case observeErr = <-exited:
-			gone, exited = true, nil
-		case <-closed:
-			closed = nil
-		case <-grace.C:
-			signalGroup(group, syscall.SIGKILL)
-			return awaitLeader(gone, observeErr, exited)
-		}
-	}
-	return observeErr
-}
-
-func awaitLeader(gone bool, observeErr error, exited <-chan error) error {
-	if gone {
-		return observeErr
-	}
-	return <-exited
-}
-
-func allClosed(streams []*stream) <-chan struct{} {
-	closed := make(chan struct{})
-	go func() {
-		for _, s := range streams {
-			<-s.done
-		}
-		close(closed)
-	}()
-	return closed
 }
 
 func signalGroup(group int, sig syscall.Signal) { _ = syscall.Kill(-group, sig) }

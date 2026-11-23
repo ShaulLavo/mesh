@@ -359,6 +359,15 @@ func (c *socketConn) terminalError() error {
 	return c.cause
 }
 
+// Stopped reports whether conn already knows it is dead: its reader saw the
+// peer close, the link fail or the grant end. A caller that must not write
+// onto a dead connection (a request that can never be retried) checks it
+// first. Connections without a reader of their own report false.
+func Stopped(conn Conn) bool {
+	stoppable, ok := conn.(interface{ stopped() bool })
+	return ok && stoppable.stopped()
+}
+
 func (c *socketConn) stopped() bool {
 	select {
 	case <-c.done:

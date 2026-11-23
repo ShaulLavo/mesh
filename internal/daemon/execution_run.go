@@ -60,6 +60,7 @@ type runSupervisor struct {
 	limiters    map[string]*list.Element
 	order       list.List
 	runs        map[*oneshot.Run]struct{}
+	launches    map[*runLaunch]struct{}
 }
 
 type runLimiter struct {
@@ -68,7 +69,7 @@ type runLimiter struct {
 }
 
 func newRunSupervisor() *runSupervisor {
-	return &runSupervisor{byPrincipal: make(map[string]int), limiters: make(map[string]*list.Element), runs: make(map[*oneshot.Run]struct{})}
+	return &runSupervisor{byPrincipal: make(map[string]int), limiters: make(map[string]*list.Element), runs: make(map[*oneshot.Run]struct{}), launches: make(map[*runLaunch]struct{})}
 }
 
 // admit charges one run to principal. The charge is returned by calling
@@ -121,16 +122,46 @@ func (s *runSupervisor) limiterLocked(principal string) *rate.Limiter {
 	return entry.limiter
 }
 
-// track records a started run so shutdown can cancel it. A run started while
-// shutdown began is cancelled at once.
-func (s *runSupervisor) track(run *oneshot.Run) {
+// runLaunch is one run from its admission to its start. It runs off the
+// connection's loop, so a caller that leaves is not held by a slow journal
+// lock or PATH search, and shutdown can wait for it.
+type runLaunch struct {
+	ready   chan struct{}
+	started startedRun
+	err     error
+}
+
+// beginLaunch registers a launch before any of its work, so shutdown sees
+// it.
+func (s *runSupervisor) beginLaunch() (*runLaunch, error) {
+	if s == nil {
+		return nil, errRunsClosed
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		run.Cancel()
-		return
+		return nil, errRunsClosed
 	}
-	s.runs[run] = struct{}{}
+	launch := &runLaunch{ready: make(chan struct{})}
+	s.launches[launch] = struct{}{}
+	return launch, nil
+}
+
+// finishLaunch records what the launch produced. A run that started after
+// shutdown began goes straight to cleanup.
+func (s *runSupervisor) finishLaunch(launch *runLaunch, started startedRun, err error) {
+	launch.started, launch.err = started, err
+	s.mu.Lock()
+	delete(s.launches, launch)
+	closed := s.closed
+	if started.run != nil {
+		s.runs[started.run] = struct{}{}
+	}
+	s.mu.Unlock()
+	if closed && started.run != nil {
+		started.run.Cancel()
+	}
+	close(launch.ready)
 }
 
 func (s *runSupervisor) forget(run *oneshot.Run) {
@@ -139,19 +170,31 @@ func (s *runSupervisor) forget(run *oneshot.Run) {
 	delete(s.runs, run)
 }
 
-// abandon cancels a run nobody will hear about. Its charge is returned once
-// its cleanup ended, not when its connection went away.
-func (s *runSupervisor) abandon(run *oneshot.Run, release func()) {
-	run.Cancel()
+// abandonLaunch settles a launch nobody will hear about: whatever it
+// started is cancelled, and its charge is returned once its cleanup ended,
+// not when its connection went away.
+func (s *runSupervisor) abandonLaunch(launch *runLaunch) {
 	go func() {
-		<-run.Done()
-		s.forget(run)
-		release()
+		<-launch.ready
+		s.settleAbandoned(launch)
 	}()
 }
 
-// shutdown stops admission, cancels every run and waits for their cleanup
-// up to budget.
+func (s *runSupervisor) settleAbandoned(launch *runLaunch) {
+	if launch.err != nil {
+		return
+	}
+	if run := launch.started.run; run != nil {
+		run.Cancel()
+		<-run.Done()
+		s.forget(run)
+	}
+	launch.started.release()
+}
+
+// shutdown stops admission, cancels every run, lets pending launches finish
+// (their runs are cancelled as they start) and waits for all cleanup up to
+// budget.
 func (s *runSupervisor) shutdown(budget time.Duration) {
 	s.mu.Lock()
 	s.closed = true
@@ -159,19 +202,39 @@ func (s *runSupervisor) shutdown(budget time.Duration) {
 	for run := range s.runs {
 		runs = append(runs, run)
 	}
+	launches := make([]*runLaunch, 0, len(s.launches))
+	for launch := range s.launches {
+		launches = append(launches, launch)
+	}
 	s.mu.Unlock()
 	for _, run := range runs {
 		run.Cancel()
 	}
 	deadline := time.NewTimer(budget)
 	defer deadline.Stop()
-	for _, run := range runs {
-		select {
-		case <-run.Done():
-		case <-deadline.C:
-			log.Printf("daemon: %d request-scoped runs still cleaning up after %s", len(runs), budget)
+	for _, launch := range launches {
+		if !awaitClosed(launch.ready, deadline.C) {
+			log.Printf("daemon: request-scoped runs still launching after %s", budget)
 			return
 		}
+		if launch.started.run != nil {
+			runs = append(runs, launch.started.run)
+		}
+	}
+	for _, run := range runs {
+		if !awaitClosed(run.Done(), deadline.C) {
+			log.Printf("daemon: request-scoped runs still cleaning up after %s", budget)
+			return
+		}
+	}
+}
+
+func awaitClosed(done <-chan struct{}, deadline <-chan time.Time) bool {
+	select {
+	case <-done:
+		return true
+	case <-deadline:
+		return false
 	}
 }
 
@@ -189,28 +252,58 @@ type startedRun struct {
 // request in flight: a disconnect or any further frame cancels it and ends
 // the connection, and nothing is replied.
 func (s *clientServer) replyRun(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {
-	watched, stop := lookahead.watchAny(ctx)
+	watched, stop, commit := lookahead.watchAny(ctx)
 	defer stop()
-	started, err := s.lifecycle.startRun(watched, request)
-	if err != nil && watched.Err() != nil {
-		return errRunEnded
-	}
+	runs := s.lifecycle.runs
+	launch, err := runs.beginLaunch()
 	if err != nil {
-		return writeRunReply(ctx, relay, runErrorReply(request, err))
+		return commitRunReply(ctx, relay, commit, runErrorReply(request, err))
 	}
-	if started.run == nil {
-		defer started.release()
-		return writeRunReply(ctx, relay, runReply(request, started))
-	}
-	select {
-	case <-started.run.Done():
-	case <-watched.Done():
-		s.lifecycle.runs.abandon(started.run, started.release)
+	go func() {
+		started, err := s.lifecycle.startRun(watched, request)
+		runs.finishLaunch(launch, started, err)
+	}()
+	if !awaitRunEvent(watched, launch.ready) {
+		runs.abandonLaunch(launch)
 		return errRunEnded
 	}
-	s.lifecycle.runs.forget(started.run)
-	defer started.release()
-	return writeRunReply(ctx, relay, runReply(request, started))
+	if launch.err != nil {
+		return commitRunReply(ctx, relay, commit, runErrorReply(request, launch.err))
+	}
+	if run := launch.started.run; run != nil && !awaitRunEvent(watched, run.Done()) {
+		runs.abandonLaunch(launch)
+		return errRunEnded
+	}
+	if run := launch.started.run; run != nil {
+		runs.forget(run)
+	}
+	defer launch.started.release()
+	return commitRunReply(ctx, relay, commit, runReply(request, launch.started))
+}
+
+// awaitRunEvent reports whether done closed before the run's caller left or
+// sent another frame.
+func awaitRunEvent(watched context.Context, done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-watched.Done():
+		return false
+	}
+}
+
+// runBeforeCommit runs just before a run's reply is committed; tests use it
+// to queue a frame at that moment.
+var runBeforeCommit = func() {}
+
+// commitRunReply sends the reply only if no other frame arrived first; the
+// two are mutually exclusive, and a frame that won ends the connection.
+func commitRunReply(ctx context.Context, relay *clientRelay, commit func() bool, reply protocol.Control) error {
+	runBeforeCommit()
+	if !commit() {
+		return errRunEnded
+	}
+	return writeRunReply(ctx, relay, reply)
 }
 
 // runConnectionError ends the client loop after a run: quietly when the
@@ -296,27 +389,35 @@ func (l *lifecycle) launchRun(ctx context.Context, caller appcaller.Caller, requ
 	if err != nil {
 		return startedRun{}, executionBoundaryError("resolve run context", err)
 	}
-	// The lock may have waited, so the caller, its grant and the update gate
-	// are checked again right before anything starts.
+	env := worker.RunEnvironment(withEnvOverlay(l.environment(), snapshot.Env), string(l.host.ID))
+	started := startedRun{snapshot: snapshot, startedAt: time.Now()}
+	path, reason := lookupRunCommand(snapshot.Intent, env)
+	if reason != "" {
+		started.notStarted = reason
+		return started, nil
+	}
+	// The journal lock and the PATH search may both have waited, so
+	// cancellation, the grant and the update gate are checked again right
+	// before the spawn.
 	if err := l.runAdmission(ctx); err != nil {
 		return startedRun{}, err
 	}
-	env := worker.RunEnvironment(withEnvOverlay(l.environment(), snapshot.Env), string(l.host.ID))
-	started := startedRun{snapshot: snapshot, startedAt: time.Now()}
-	started.run, started.notStarted = startRunCommand(snapshot.Intent, env, request)
-	if started.run != nil {
-		l.runs.track(started.run)
-	}
+	started.run, started.notStarted = startRunCommand(path, snapshot.Intent, env, request)
 	return started, nil
 }
 
-// startRunCommand starts the resolved command, or says why it could not:
-// a start failure is the run's result, not a failed request.
-func startRunCommand(intent execution.Intent, env []string, request protocol.Control) (*oneshot.Run, string) {
+// lookupRunCommand resolves the executable, or says why it cannot be: a
+// command that is not there is the run's result, not a failed request.
+func lookupRunCommand(intent execution.Intent, env []string) (path, reason string) {
 	path, err := oneshot.LookPath(intent.Command[0], env)
 	if err != nil {
-		return nil, err.Error()
+		return "", err.Error()
 	}
+	return path, ""
+}
+
+// startRunCommand starts the resolved command, or says why it could not.
+func startRunCommand(path string, intent execution.Intent, env []string, request protocol.Control) (*oneshot.Run, string) {
 	run, err := oneshot.Start(oneshot.Spec{Path: path, Args: intent.Command, Dir: intent.Cwd, Env: env, OutputBytes: request.OutputBytes, Timeout: time.Duration(request.TimeoutMillis) * time.Millisecond})
 	if err != nil {
 		return nil, err.Error()

@@ -101,15 +101,58 @@ func TestDeadlineTerminatesAndReportsTheLeaderSeparately(t *testing.T) {
 
 func TestDeadlineKeepsEscalatingAfterTheLeaderExits(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "member")
-	// The member ignores TERM and HUP and leaves stdout open; the leader
-	// exits on the first signal.
-	script := "(trap '' TERM HUP; echo $$ > " + pidFile + "; exec sleep 30) & sleep 30"
+	// The member ignores TERM and HUP (exec keeps ignored signals) and holds
+	// stdout; the leader exits on the first signal.
+	script := `sh -c "trap '' TERM HUP; exec sleep 30" & echo $! > ` + pidFile + `; sleep 30`
 	spec := shellSpec(t, script, 1024, 300*time.Millisecond)
-	result := runToEnd(t, spec)
+	run, err := Start(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := readPID(t, pidFile)
+	result := waitRun(t, run)
 	if !result.TimedOut || signalOf(t, result) != syscall.SIGTERM {
 		t.Fatalf("leader result = %+v", result)
 	}
-	assertGone(t, readPID(t, pidFile))
+	assertGone(t, member)
+}
+
+// The deadline still applies after the leader exits, while a member holds
+// stdout open; the leader's own status is kept.
+func TestDeadlineAppliesDuringTheDrain(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "member")
+	script := "sleep 30 & echo $! > " + pidFile + "; echo hi"
+	run, err := Start(shellSpec(t, script, 1024, 100*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := readPID(t, pidFile)
+	result := waitRun(t, run)
+	if !result.TimedOut || exitCode(t, result) != 0 || string(result.Stdout.Bytes) != "hi\n" {
+		t.Fatalf("result = %+v", result)
+	}
+	assertGone(t, member)
+}
+
+// Cancelling during the drain hangs the group up before killing it.
+func TestCancelDuringTheDrainHangsUpTheGroup(t *testing.T) {
+	dir := t.TempDir()
+	marker, leaderDone := filepath.Join(dir, "hup"), filepath.Join(dir, "leader-done")
+	member := `(trap 'echo hup > ` + marker + `; exit' HUP; while :; do echo x; sleep 0.05; done) &`
+	run, err := Start(shellSpec(t, member+" touch "+leaderDone, 1024, hangCap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return fileExists(leaderDone) })
+	// Let the leader finish exiting; the member keeps the drain open for
+	// its full two seconds.
+	time.Sleep(100 * time.Millisecond)
+	run.Cancel()
+	result := waitRun(t, run)
+	if result.TimedOut || exitCode(t, result) != 0 {
+		t.Fatalf("result = %+v", result)
+	}
+	eventually(t, func() bool { return fileExists(marker) })
 }
 
 func TestNormalExitCleansUpTheGroup(t *testing.T) {
@@ -168,6 +211,31 @@ func TestLookPathUsesTheRunEnvironment(t *testing.T) {
 	if got, _ := LookPath("./x", nil); got != "./x" {
 		t.Fatalf("a path with a slash was searched: %q", got)
 	}
+	// A candidate this process may not execute is passed over.
+	denied := t.TempDir()
+	if err := os.WriteFile(filepath.Join(denied, "only-here"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := LookPath("only-here", []string{"PATH=" + denied + ":" + dir}); err != nil || got != tool {
+		t.Fatalf("LookPath past a denied candidate = %q, %v", got, err)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func eventually(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(hangCap)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition never held")
 }
 
 func readPID(t *testing.T, path string) int {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/transport"
@@ -53,20 +54,38 @@ func (l *frameLookahead) watch(ctx context.Context) (context.Context, context.Ca
 	return watched, cancel
 }
 
+// Exclusive watch states: the request runs until either its reply is
+// committed or another frame interrupts it, never both.
+const (
+	watchRunning int32 = iota
+	watchCommitted
+	watchInterrupted
+)
+
+// lookaheadFrameRead runs after watchAny settles a read; tests use it to
+// order a frame against a reply.
+var lookaheadFrameRead = func() {}
+
 // watchAny is watch for a request that must be its connection's only one in
-// flight: the next frame ends ctx as well as a failure does. The frame still
-// reaches the loop in order if the request finished first.
-func (l *frameLookahead) watchAny(ctx context.Context) (context.Context, context.CancelFunc) {
-	watched, cancel := context.WithCancel(ctx)
+// flight: a frame that arrives before the reply is committed interrupts the
+// request and ends ctx, as a failure does. commit reports whether the reply
+// may still be sent; once it returns true, the next frame is simply the
+// loop's next request.
+func (l *frameLookahead) watchAny(ctx context.Context) (watched context.Context, cancel context.CancelFunc, commit func() bool) {
+	watched, cancel = context.WithCancel(ctx)
 	l.pending = make(chan lookaheadRead, 1)
 	l.armed = true
 	pending := l.pending
+	var state atomic.Int32
 	go func() {
 		frame, err := l.conn.ReadFrame()
 		pending <- lookaheadRead{frame: frame, err: err}
-		cancel()
+		if state.CompareAndSwap(watchRunning, watchInterrupted) || err != nil {
+			cancel()
+		}
+		lookaheadFrameRead()
 	}()
-	return watched, cancel
+	return watched, cancel, func() bool { return state.CompareAndSwap(watchRunning, watchCommitted) }
 }
 
 // replyFiles runs one file request and queues its reply with the grant check

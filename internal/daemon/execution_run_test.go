@@ -313,7 +313,11 @@ func TestRunShutdownCancelsRunsAndStopsAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.track(run)
+	launch, err := s.beginLaunch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.finishLaunch(launch, startedRun{run: run, release: func() {}}, nil)
 	s.shutdown(runHangCap)
 	select {
 	case <-run.Done():
@@ -323,6 +327,104 @@ func TestRunShutdownCancelsRunsAndStopsAdmission(t *testing.T) {
 	if _, err := s.admit("a"); !errors.Is(err, errRunsClosed) {
 		t.Fatalf("admission after shutdown = %v", err)
 	}
+	if _, err := s.beginLaunch(); !errors.Is(err, errRunsClosed) {
+		t.Fatalf("launch after shutdown = %v", err)
+	}
+}
+
+// A launch still resolving when shutdown begins is waited for, and the run
+// it then starts goes straight to cleanup.
+func TestRunShutdownWaitsForAPendingLaunch(t *testing.T) {
+	s := newRunSupervisor()
+	launch, err := s.beginLaunch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() {
+		s.shutdown(runHangCap)
+		close(stopped)
+	}()
+	eventuallyClosed(t, s)
+	run, err := oneshot.Start(oneshot.Spec{Path: "/bin/sh", Args: []string{"/bin/sh", "-c", "exec sleep 30"}, Dir: t.TempDir(), OutputBytes: 16, Timeout: runHangCap})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.finishLaunch(launch, startedRun{run: run, release: func() {}}, nil)
+	select {
+	case <-stopped:
+	case <-time.After(runHangCap):
+		t.Fatal("shutdown never returned")
+	}
+	select {
+	case <-run.Done():
+	default:
+		t.Fatal("shutdown returned before the late run was cleaned up")
+	}
+}
+
+func eventuallyClosed(t *testing.T, s *runSupervisor) {
+	t.Helper()
+	deadline := time.Now().Add(runHangCap)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if closed {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("shutdown never closed admission")
+}
+
+// A daemon stop during a run cancels the connection and the run: the
+// command's group is cleaned up and its charge returned.
+func TestRunDaemonStopCleansUpTheGroup(t *testing.T) {
+	f := newRunFixture(t)
+	ctx, cancel := context.WithCancel(f.ctx)
+	f.ctx = ctx
+	client, done := f.serve()
+	client.pushRead(serverControlFrame(t, f.request("echo $$ > pid; exec sleep 30")))
+	pid := readRunPID(t, filepath.Join(f.root, "pid"))
+	cancel()
+	f.l.runs.shutdown(runHangCap)
+	if err := waitServerResult(t, done, "run server"); err != nil {
+		t.Logf("server after daemon stop: %v", err)
+	}
+	assertRunGone(t, pid)
+	assertRunsReleased(t, f.l.runs)
+}
+
+// A frame queued while the reply is about to be committed wins: the run's
+// reply is not sent and the connection ends, never both.
+func TestRunFrameBeforeCommitEndsTheConnection(t *testing.T) {
+	f := newRunFixture(t)
+	read := make(chan struct{}, 1)
+	committing := make(chan struct{})
+	proceed := make(chan struct{})
+	lookaheadFrameRead = func() {
+		select {
+		case read <- struct{}{}:
+		default:
+		}
+	}
+	runBeforeCommit = func() {
+		close(committing)
+		<-proceed
+	}
+	t.Cleanup(func() { lookaheadFrameRead, runBeforeCommit = func() {}, func() {} })
+	client, done := f.serve()
+	client.pushRead(serverControlFrame(t, f.request("true")))
+	waitSignal(t, committing, "the reply commit")
+	client.pushRead(serverControlFrame(t, f.request("true")))
+	waitSignal(t, read, "the queued frame")
+	close(proceed)
+	if err := waitServerResult(t, done, "run server"); err != nil {
+		t.Fatal(err)
+	}
+	assertNoRunReply(t, client)
+	assertRunsReleased(t, f.l.runs)
 }
 
 func TestRunValidationRejectsOtherFields(t *testing.T) {
@@ -332,6 +434,10 @@ func TestRunValidationRejectsOtherFields(t *testing.T) {
 		"request key":   func(c *protocol.Control) { c.RequestKey = "k" },
 		"short timeout": func(c *protocol.Control) { c.TimeoutMillis = 99 },
 		"large output":  func(c *protocol.Control) { c.OutputBytes = protocol.MaxExecutionRunOutput + 1 },
+		"context revision": func(c *protocol.Control) {
+			revision := uint64(1)
+			c.ExecutionContext.ExpectedRevision = &revision
+		},
 	} {
 		request := f.request("true")
 		mutate(&request)

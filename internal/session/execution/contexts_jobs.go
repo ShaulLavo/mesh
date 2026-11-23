@@ -123,6 +123,11 @@ func (j *Journal) ResolveRun(ctx context.Context, owner, contextID string, resol
 	if err != nil {
 		return LaunchSnapshot{}, err
 	}
+	// The grant is checked again at the write, so a caller revoked while its
+	// context was read records no use.
+	if err := admitted(ctx); err != nil {
+		return LaunchSnapshot{}, err
+	}
 	// A failed use update costs only an earlier expiry candidate, which still
 	// needs a full idle period; it must not refuse the run.
 	_, _ = j.touch(c, false)

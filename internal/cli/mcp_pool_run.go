@@ -18,9 +18,17 @@ var errRunPoolFull = errors.New("every mesh_run slot for this host is busy")
 // sent. The run may have happened.
 var errInvalidRunReply = errors.New("host sent an invalid execution.run reply")
 
+const (
+	// runProbeIdle is how long a pooled connection may sit idle before a run
+	// checks it is still alive.
+	runProbeIdle = 10 * time.Second
+	// runProbeTimeout bounds that check on its own.
+	runProbeTimeout = 2 * time.Second
+)
+
 // ExchangeRun sends one execution.run on a pooled connection from the host's
 // run budget and waits for its single reply. It never retries: once the
-// frame may have left, a failure leaves the outcome unknown. A connection
+// write was attempted, a failure leaves the outcome unknown. A connection
 // goes back to the pool only after a valid reply, and only if the call's
 // cancellation could no longer close it.
 func (p *mcpHostPool) ExchangeRun(ctx context.Context, host HostRecord, req protocol.Control) (protocol.Control, protocol.HostInfo, error) {
@@ -39,26 +47,34 @@ func (p *mcpHostPool) ExchangeRun(ctx context.Context, host HostRecord, req prot
 			return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 		}
 	}
-	payload, err := req.Encode()
-	if err != nil {
-		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: fmt.Errorf("encode execution.run: %w", err)}
-	}
 	entry, err := p.runConnection(ctx, bucket, host)
 	if err != nil {
 		return protocol.Control{}, protocol.HostInfo{}, &preDispatchError{err: err}
 	}
-	resp, reusable, err := exchangeRunFrame(ctx, entry.conn, req.RequestID, payload)
+	resp, reusable, err := exchangeOneFrame(ctx, entry.conn, req)
+	if err == nil {
+		err = validRunReply(resp, req.OutputBytes)
+	}
 	if err != nil || !reusable {
 		p.discard(entry.conn)
-		return resp, entry.info, err
+		return protocol.Control{}, entry.info, err
 	}
 	p.checkin(bucket, entry)
 	return resp, entry.info, nil
 }
 
-// runProbeIdle is how long a pooled connection may sit idle before a run
-// checks it is still alive.
-const runProbeIdle = 10 * time.Second
+func validRunReply(resp protocol.Control, outputBytes int) error {
+	if resp.Type == protocol.TypeError && resp.ErrorCode != "" {
+		return nil
+	}
+	if resp.Type != protocol.TypeExecutionRunResult {
+		return errInvalidRunReply
+	}
+	if err := resp.ExecutionRun.Validate(outputBytes); err != nil {
+		return fmt.Errorf("%w: %w", errInvalidRunReply, err)
+	}
+	return nil
+}
 
 // runConnection is a connection a run may use. A run can never be retried,
 // so it must not be the request that finds out the host closed a
@@ -66,10 +82,10 @@ const runProbeIdle = 10 * time.Second
 // idle for a while answers a host.info first, or a fresh one is dialled.
 func (p *mcpHostPool) runConnection(ctx context.Context, bucket *mcpHostBucket, host HostRecord) (*mcpPooledConn, error) {
 	entry, reused, err := p.checkout(ctx, bucket, host)
-	if err != nil || !reused || p.now().Sub(entry.idleAt) < runProbeIdle {
+	if err != nil || !reused {
 		return entry, err
 	}
-	if probeRunConnection(ctx, entry.conn) == nil {
+	if p.usableForRun(ctx, host, entry) {
 		return entry, nil
 	}
 	p.discard(entry.conn)
@@ -77,44 +93,77 @@ func (p *mcpHostPool) runConnection(ctx context.Context, bucket *mcpHostBucket, 
 	return fresh, err
 }
 
-func probeRunConnection(ctx context.Context, conn transport.Conn) error {
-	requestID, err := newDaemonRequestID()
-	if err != nil {
-		return err
+// usableForRun rejects a pooled connection its transport already knows is
+// dead (the host revoked the device or restarted), and checks one that sat
+// idle for a while with a host.info.
+func (p *mcpHostPool) usableForRun(ctx context.Context, host HostRecord, entry *mcpPooledConn) bool {
+	if transport.Stopped(entry.conn) {
+		return false
 	}
-	resp, err := controlRequest(ctx, conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: requestID})
-	if err == nil && resp.Type != protocol.TypeHostInfoResult {
-		err = fmt.Errorf("probe pooled connection: unexpected %s reply", resp.Type)
+	if p.now().Sub(entry.idleAt) < runProbeIdle {
+		return true
 	}
-	return err
+	info, ok := probeRunConnection(ctx, host, entry.conn)
+	if ok {
+		entry.info = info
+	}
+	return ok
 }
 
-// exchangeRunFrame writes one run and reads its reply. reusable is false when
-// the cancellation callback already ran or is running, since it closes the
-// connection.
-func exchangeRunFrame(ctx context.Context, conn transport.Conn, requestID string, payload []byte) (protocol.Control, bool, error) {
+// probeRunConnection reports whether conn answered a host.info that
+// validates like a fresh connection's, on its own short deadline, with its
+// cancellation never having fired.
+func probeRunConnection(ctx context.Context, host HostRecord, conn transport.Conn) (protocol.HostInfo, bool) {
+	requestID, err := newDaemonRequestID()
+	if err != nil {
+		return protocol.HostInfo{}, false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, runProbeTimeout)
+	defer cancel()
+	resp, reusable, err := exchangeOneFrame(probeCtx, conn, protocol.Control{Type: protocol.TypeHostInfo, RequestID: requestID})
+	if err != nil || !reusable || validateAgentHostInfo(host, resp) != nil {
+		return protocol.HostInfo{}, false
+	}
+	return *resp.Host, true
+}
+
+// exchangeOneFrame writes one control and reads exactly one control frame
+// back. A context already done is refused before the write, as nothing was
+// sent; after the write is attempted every failure is the caller's to
+// classify. reusable is false when the cancellation callback ran or is
+// running, since it closes the connection.
+func exchangeOneFrame(ctx context.Context, conn transport.Conn, req protocol.Control) (protocol.Control, bool, error) {
+	payload, err := req.Encode()
+	if err != nil {
+		return protocol.Control{}, false, &preDispatchError{err: fmt.Errorf("encode %s: %w", req.Type, err)}
+	}
+	if err := ctx.Err(); err != nil {
+		return protocol.Control{}, false, &preDispatchError{err: err}
+	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	if err := conn.WriteFrame(protocol.Frame{Kind: protocol.KindControl, Payload: payload}); err != nil {
 		stop()
-		return protocol.Control{}, false, daemonOperationError(ctx, "write execution.run request", err)
+		return protocol.Control{}, false, daemonOperationError(ctx, "write "+req.Type+" request", err)
 	}
-	resp, err := protocol.ReadControl(conn.ReadFrame, conn.WriteFrame)
+	frame, err := conn.ReadFrame()
 	stopped := stop()
 	if err != nil {
-		return protocol.Control{}, false, daemonOperationError(ctx, "read execution.run reply", err)
+		return protocol.Control{}, false, daemonOperationError(ctx, "read "+req.Type+" reply", err)
 	}
-	if !validRunReply(resp, requestID) {
-		return protocol.Control{}, false, errInvalidRunReply
-	}
-	return resp, stopped, nil
+	resp, err := decodeOneReply(frame, req.RequestID)
+	return resp, stopped && err == nil, err
 }
 
-func validRunReply(resp protocol.Control, requestID string) bool {
+func decodeOneReply(frame protocol.Frame, requestID string) (protocol.Control, error) {
+	if frame.Kind != protocol.KindControl {
+		return protocol.Control{}, errInvalidRunReply
+	}
+	resp, err := protocol.DecodeControl(frame.Payload)
+	if err != nil {
+		return protocol.Control{}, fmt.Errorf("%w: %w", errInvalidRunReply, err)
+	}
 	if resp.RequestID != requestID {
-		return false
+		return protocol.Control{}, errInvalidRunReply
 	}
-	if resp.Type == protocol.TypeError {
-		return true
-	}
-	return resp.Type == protocol.TypeExecutionRunResult && resp.ExecutionRun != nil
+	return resp, nil
 }

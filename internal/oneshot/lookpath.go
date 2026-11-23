@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // LookPath resolves file the way a worker started with env resolves it: a
@@ -37,7 +39,13 @@ func pathOf(env []string) string {
 	return path
 }
 
+// executable asks the kernel whether this process may execute path with
+// its effective IDs, so a candidate it may not run is skipped like a
+// missing one.
 func executable(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return unix.Faccessat(unix.AT_FDCWD, path, unix.X_OK, unix.AT_EACCESS) == nil
 }

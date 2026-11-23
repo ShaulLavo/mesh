@@ -116,13 +116,16 @@ func drain(streams []*stream, stop <-chan struct{}) {
 	start := monotonic()
 	var group sync.WaitGroup
 	for _, s := range streams {
-		group.Go(func() {
-			if !s.awaitQuiet(hard, stop, start) {
-				s.cut()
-			}
-		})
+		group.Go(func() { s.drain(hard, stop, start) })
 	}
 	group.Wait()
+}
+
+// drain cuts the stream off unless it ends by itself first.
+func (s *stream) drain(hard, stop <-chan struct{}, start int64) {
+	if !s.awaitQuiet(hard, stop, start) {
+		s.cut()
+	}
 }
 
 // awaitQuiet reports whether the stream ended by itself before it was

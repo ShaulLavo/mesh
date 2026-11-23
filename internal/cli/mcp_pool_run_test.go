@@ -14,13 +14,16 @@ import (
 // runPoolFixture dials fixture connections that answer host.info and
 // execution.run, counting dials and probes.
 type runPoolFixture struct {
-	mu        sync.Mutex
-	dials     int
-	probes    int
-	badReply  bool
-	deadConns map[*poolFixtureConn]bool
-	conns     []*poolFixtureConn
-	clock     time.Time
+	mu               sync.Mutex
+	dials            int
+	probes           int
+	runs             int
+	badReply         bool
+	emptyTermination bool
+	wrongHost        bool
+	deadConns        map[*poolFixtureConn]bool
+	conns            []*poolFixtureConn
+	clock            time.Time
 }
 
 func newRunPoolFixture(t *testing.T) (*runPoolFixture, *mcpHostPool, HostRecord) {
@@ -62,10 +65,18 @@ func (f *runPoolFixture) answer(conn *poolFixtureConn, req protocol.Control) (pr
 	}
 	if req.Type == protocol.TypeHostInfo {
 		f.probes++
-		return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: inlineTestHost, MeshIdentity: inlineTestHost, MachineName: "pc", NameRevision: 1}}, nil
+		id := inlineTestHost
+		if f.wrongHost && f.probes > 1 {
+			id = "someone-else"
+		}
+		return protocol.Control{Type: protocol.TypeHostInfoResult, Host: &protocol.HostInfo{ID: id, MeshIdentity: id, MachineName: "pc", NameRevision: 1}}, nil
 	}
+	f.runs++
 	if f.badReply {
 		return protocol.Control{Type: protocol.TypeExecutionReceipt}, nil
+	}
+	if f.emptyTermination {
+		return protocol.Control{Type: protocol.TypeExecutionRunResult, ExecutionRun: &protocol.ExecutionRunResult{}}, nil
 	}
 	code := 0
 	return protocol.Control{Type: protocol.TypeExecutionRunResult, ExecutionRun: &protocol.ExecutionRunResult{Termination: protocol.ExecutionTermination{Kind: "exit", Code: &code}}}, nil
@@ -150,6 +161,53 @@ func TestExchangeRunProbesAConnectionThatSatIdle(t *testing.T) {
 	}
 	if dials, _ := f.counts(); dials != 2 {
 		t.Fatalf("dials = %d, want a fresh connection", dials)
+	}
+}
+
+func TestExchangeRunRejectsAMalformedResult(t *testing.T) {
+	f, pool, host := newRunPoolFixture(t)
+	f.emptyTermination = true
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); !errors.Is(err, errInvalidRunReply) || isPreDispatchError(err) {
+		t.Fatalf("empty termination = %v", err)
+	}
+}
+
+func TestExchangeRunSendsNothingOnceCancelled(t *testing.T) {
+	f, pool, host := newRunPoolFixture(t)
+	// A pooled connection is reused without touching the context, so the
+	// cancelled call reaches the exchange itself.
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, _, err := pool.ExchangeRun(ctx, host, runPoolRequest())
+	if !isPreDispatchError(err) {
+		t.Fatalf("cancelled run = %v, want a pre-dispatch failure", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.runs != 1 {
+		t.Fatalf("the host saw %d runs, want only the first", f.runs)
+	}
+}
+
+func TestExchangeRunReplacesAConnectionWhoseProbeNamesAnotherHost(t *testing.T) {
+	f, pool, host := newRunPoolFixture(t)
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.wrongHost = true
+	f.mu.Unlock()
+	f.advance(runProbeIdle + time.Second)
+	// The fresh connection's own handshake also answers for another host,
+	// so the run fails before anything is sent.
+	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); !isPreDispatchError(err) {
+		t.Fatalf("run after a mismatched probe = %v", err)
+	}
+	if dials, _ := f.counts(); dials != 2 {
+		t.Fatalf("dials = %d, want the mismatched connection replaced", dials)
 	}
 }
 
