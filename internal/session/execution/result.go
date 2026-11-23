@@ -98,10 +98,7 @@ func (a *Attempt) Published() error {
 }
 func (a *Attempt) Close() error {
 	// Every caller defer, including Unix socket cleanup, has already finished.
-	err := a.files.syncDirs("s/" + a.binding.Reservation.ID + "/sock")
-	if err == nil {
-		err = a.files.Confirm(attempt(a.binding, "reference.json"))
-	}
+	err := a.files.confirmAfter("s/"+a.binding.Reservation.ID+"/sock", attempt(a.binding, "reference.json"))
 	return errors.Join(err, a.files.Close(), a.fence.Close())
 }
 

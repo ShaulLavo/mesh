@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/shaul/mesh/internal/durable"
 )
 
 // Record is one JSON record for PublishAll and Prepare.
@@ -37,6 +39,9 @@ type Record struct {
 type round struct {
 	f       *Files
 	entries []roundEntry
+	// synced holds directories the caller synced before the round, whose
+	// devices the round's barrier must cover too.
+	synced []syncedDir
 }
 
 type roundKind int
@@ -197,9 +202,9 @@ func (r *round) complete() (int, Stage, error) {
 	for i, e := range r.entries {
 		names[i], files[i] = e.name, e.file
 	}
-	err = r.f.syncDirsOf(names)
+	dirs, err := r.f.syncDirsOf(names)
 	if err == nil {
-		err = r.f.flushDevices(files)
+		err = r.f.flushDevices(files, slices.Concat(r.synced, dirs))
 	}
 	if err != nil {
 		return visible, Unconfirmed, err
@@ -214,7 +219,7 @@ func (r *round) complete() (int, Stage, error) {
 
 // syncDirsOf syncs every directory from each name's parent up to the state
 // root, each distinct one once, deeper directories before their parents.
-func (f *Files) syncDirsOf(names []string) error {
+func (f *Files) syncDirsOf(names []string) ([]syncedDir, error) {
 	if len(names) == 1 {
 		return f.syncDirs(names[0])
 	}
@@ -223,12 +228,15 @@ func (f *Files) syncDirsOf(names []string) error {
 		dirs = appendChain(dirs, name)
 	}
 	slices.SortStableFunc(dirs, func(a, b string) int { return pathDepth(b) - pathDepth(a) })
+	synced := make([]syncedDir, 0, len(dirs))
 	for _, dir := range dirs {
-		if err := f.syncDir(dir); err != nil {
-			return err
+		d, err := f.syncDir(dir)
+		if err != nil {
+			return synced, err
 		}
+		synced = append(synced, d)
 	}
-	return nil
+	return synced, nil
 }
 
 // appendChain adds every directory from name's parent up to the state root
@@ -251,23 +259,54 @@ func pathDepth(dir string) int {
 	return strings.Count(dir, string(filepath.Separator)) + 1
 }
 
-// flushDevices issues one device barrier per device among files. A file
-// whose device cannot be read gets its own barrier.
-func (f *Files) flushDevices(files []*os.File) error {
+// flushDevices issues one device barrier per device among files and, where
+// the platform has a separate barrier, among the synced directories too, so a
+// device the round reached only through a directory is flushed as well. A
+// file or directory whose device cannot be read gets its own barrier.
+func (f *Files) flushDevices(files []*os.File, dirs []syncedDir) error {
 	seen := make(map[uint64]bool, 1)
 	for _, file := range files {
 		dev, ok := fileDevice(file)
-		if ok && seen[dev] {
+		if !firstOnDevice(seen, dev, ok) {
 			continue
-		}
-		if ok {
-			seen[dev] = true
 		}
 		if err := f.flushDevice(file); err != nil {
 			return err
 		}
 	}
+	if !durable.HasBarrier {
+		return nil
+	}
+	for _, dir := range dirs {
+		if !firstOnDevice(seen, dir.dev, dir.known) {
+			continue
+		}
+		if err := f.flushDir(dir.name); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// firstOnDevice reports whether dev still needs a barrier and marks it
+// covered. An unknown device always needs one.
+func firstOnDevice(seen map[uint64]bool, dev uint64, known bool) bool {
+	if !known {
+		return true
+	}
+	if seen[dev] {
+		return false
+	}
+	seen[dev] = true
+	return true
+}
+
+func (f *Files) flushDir(dir string) error {
+	file, err := f.root.Open(dir)
+	if err != nil {
+		return executionBoundaryError("open directory for device flush", err)
+	}
+	return errors.Join(f.flushDevice(file), file.Close())
 }
 
 // fileDevice is deviceOf, a variable so tests can give files distinct or
@@ -288,8 +327,21 @@ func deviceOf(file *os.File) (uint64, bool) {
 
 // ConfirmAll proves several existing records durable in one round. The names
 // must not depend on one another's durability order.
-func (f *Files) ConfirmAll(names ...string) error {
+func (f *Files) ConfirmAll(names ...string) error { return f.confirmAll(nil, names...) }
+
+// confirmAfter syncs every directory above synced, then confirms names in one
+// round whose barrier also covers those directories' devices.
+func (f *Files) confirmAfter(synced string, names ...string) error {
+	dirs, err := f.syncDirs(synced)
+	if err != nil {
+		return err
+	}
+	return f.confirmAll(dirs, names...)
+}
+
+func (f *Files) confirmAll(synced []syncedDir, names ...string) error {
 	r := f.newRound()
+	r.synced = synced
 	var err error
 	for _, name := range names {
 		if err = r.open(roundExisting, name, os.O_RDONLY); err != nil {
