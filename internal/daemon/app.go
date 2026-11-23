@@ -451,6 +451,8 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 		reporter.report(err)
 	}
 	defer lifecycle.closeExecution()
+	defer lifecycle.standbys.close()
+	go lifecycle.standbys.activate()
 	state.hostChanged(lifecycle.declaredHostInfo())
 	var appLocal *apps.Origin
 	if appClient != nil {

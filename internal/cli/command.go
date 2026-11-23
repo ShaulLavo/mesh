@@ -1839,18 +1839,19 @@ func (a *application) daemonCommand() *cobra.Command {
 func (a *application) workerCommand() *cobra.Command {
 	var recoveredFrom, label, instance, boot, purpose, requestHash, launchDigest, requestCwd, executionKind, executionStdin, imageHint string
 	var (
-		id   string
-		dir  string
-		cols int
-		rows int
+		id      string
+		dir     string
+		cols    int
+		rows    int
+		standby bool
 	)
 	command := &cobra.Command{
 		Use:    "session-worker [-- command...]",
 		Hidden: true,
 		Args:   cobra.ArbitraryArgs,
 		RunE: func(_ *cobra.Command, command []string) error {
-			if id == "" || dir == "" {
-				return errors.New("session-worker requires --id and --dir")
+			if handled, err := a.workerEntry(id, dir, standby); handled {
+				return err
 			}
 			ref := session.Reservation{ID: id, Instance: instance, BootID: boot, Purpose: session.Purpose(purpose)}
 			if err := ref.Validate(); err != nil {
@@ -1901,6 +1902,7 @@ func (a *application) workerCommand() *cobra.Command {
 	command.Flags().StringVar(&dir, "dir", "", "session state directory")
 	command.Flags().IntVar(&cols, "cols", 80, "initial terminal width")
 	command.Flags().IntVar(&rows, "rows", 24, "initial terminal height")
+	command.Flags().BoolVar(&standby, strings.TrimPrefix(worker.StandbyFlag, "--"), false, "start now and wait for the launch on descriptor 3")
 	return command
 }
 

@@ -117,7 +117,8 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	}
 	executionDaemonBoundary(l.sessionsDir, "before_worker_launch", r)
 	ref := r.Binding.Reservation
-	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance})
+	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance, Standby: l.standbys.take(ref.ID)})
+	l.standbys.refillSoon()
 	if err != nil {
 		return l.executionLaunchFailure(request, journal, r, err)
 	}
@@ -144,7 +145,7 @@ var executionDaemonBoundary = func(string, string, execution.Receipt) {}
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
 	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
-		ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(intent.Kind))
+		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), l.standbys.preferredID())
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
 		}

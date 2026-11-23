@@ -45,6 +45,10 @@ type LaunchConfig struct {
 	ownerPublisher func(string, string) error
 	Owner          string
 	Label          string
+	// Standby, when set, is a waiting worker whose ID the reservation took.
+	// The launch uses it if it can run the session exactly as a fresh worker
+	// would, and discards it otherwise.
+	Standby *Standby
 }
 
 // Launched is a worker that has published its metadata and is accepting local
@@ -68,6 +72,11 @@ func (e *StartedError) Unwrap() error { return e.Err }
 // LaunchDetached starts a worker in its own process session and waits only for
 // readiness. The worker is deliberately not supervised by the caller.
 func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
+	if cfg.Standby != nil {
+		// Its ID belongs to this launch now, so it never serves another one;
+		// after a complete handoff this close changes nothing.
+		defer cfg.Standby.Discard()
+	}
 	if err := updategate.Check(filepath.Dir(cfg.SessionsDir)); err != nil {
 		return Launched{}, workerExecutionError("launch.go LaunchDetached", err)
 	}
@@ -146,7 +155,13 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := cmd.Start(); err != nil {
+	process, notice, err := startWorker(cfg, id, cmd)
+	var startedErr *StartedError
+	if errors.As(err, &startedErr) {
+		started, cleanupReserved = true, false
+		return Launched{}, err
+	}
+	if err != nil {
 		return Launched{}, fmt.Errorf("launch worker %s: start: %w", id, err)
 	}
 	started = true
@@ -154,11 +169,8 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 	// the launching marker keeps incomplete state out of catalog scans, and the
 	// worker removes it only after metadata and the socket are both ready.
 	cleanupReserved = false
-	// Waiting only reaps the worker. Setsid keeps the session independent when
-	// the launcher exits, and meta.json remains authoritative for its outcome.
-	go func() { _ = cmd.Wait() }()
 
-	if err := waitForWorker(dir, workerReadyTimeout, cmd.Process); err != nil {
+	if err := waitForWorker(dir, workerReadyTimeout, process, notice); err != nil {
 		return Launched{}, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: readiness (see %s): %w", id, logPath, err)}
 	}
 	meta, err := ReadMeta(dir)
@@ -166,6 +178,43 @@ func LaunchDetached(cfg LaunchConfig) (launched Launched, launchErr error) {
 		return Launched{}, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: read metadata: %w", id, err)}
 	}
 	return Launched{Meta: meta, Dir: dir}, nil
+}
+
+// startWorker starts the worker for session id: a standby reserved for it
+// when one can run exactly what cmd would, otherwise cmd itself. A launch
+// handed completely to a standby counts as started even if the handoff then
+// reports an error, so it is never started a second time.
+func startWorker(cfg LaunchConfig, id string, cmd *exec.Cmd) (*os.Process, <-chan struct{}, error) {
+	if process, notice, handed, err := handToStandby(cfg, id, cmd); handed {
+		return process, notice, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err //nolint:wrapcheck // LaunchDetached names the session
+	}
+	// Waiting only reaps the worker. Setsid keeps the session independent when
+	// the launcher exits, and meta.json remains authoritative for its outcome.
+	go func() { _ = cmd.Wait() }()
+	return cmd.Process, nil, nil
+}
+
+func handToStandby(cfg LaunchConfig, id string, cmd *exec.Cmd) (*os.Process, <-chan struct{}, bool, error) {
+	s := cfg.Standby
+	if s == nil {
+		return nil, nil, false, nil
+	}
+	launch := StandbyLaunch{Args: cmd.Args[1:], Env: cmd.Environ(), Cwd: cmd.Dir}
+	if s.ID != id || !s.usableFor(cmd.Path, launch) {
+		return nil, nil, false, nil
+	}
+	accepted, err := s.give(launch)
+	if !accepted {
+		// The standby never acknowledged the launch, so it started nothing.
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, true, &StartedError{ID: id, Err: fmt.Errorf("launch worker %s: standby handoff: %w", id, err)}
+	}
+	return s.process, s.published(), true, nil
 }
 
 func normalizeLaunchTerminal(cfg *LaunchConfig) error {
@@ -211,7 +260,9 @@ func launchSessionDir(cfg LaunchConfig) (string, string, error) {
 	return ref.ID, dir, nil
 }
 
-func waitForWorker(dir string, timeout time.Duration, process *os.Process) error {
+// waitForWorker polls until the worker has published itself, and checks at
+// once when notice closes, as a standby's publication notice does.
+func waitForWorker(dir string, timeout time.Duration, process *os.Process, notice <-chan struct{}) error {
 	started := time.Now()
 	deadline := started.Add(timeout)
 	// A worker that publishes quickly is ready within milliseconds, so poll
@@ -241,8 +292,21 @@ func waitForWorker(dir string, timeout time.Duration, process *os.Process) error
 		if time.Now().After(deadline) {
 			return readinessTimeout(dir, process, started, deadline, phase, markerErr)
 		}
-		time.Sleep(pause)
+		notice = sleepOrNotice(pause, notice)
 		pause = min(pause*2, 20*time.Millisecond)
+	}
+}
+
+// sleepOrNotice waits pause or until notice closes, and returns the notice
+// still worth waiting on: none once it has fired.
+func sleepOrNotice(pause time.Duration, notice <-chan struct{}) <-chan struct{} {
+	timer := time.NewTimer(pause)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return notice
+	case <-notice:
+		return nil
 	}
 }
 

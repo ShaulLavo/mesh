@@ -27,7 +27,7 @@ func TestReadinessTimeoutCarriesSafePendingFacts(t *testing.T) {
 	if err := os.WriteFile(paths.Log(dir), []byte(log), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := waitForWorker(dir, 20*time.Millisecond, nil)
+	err := waitForWorker(dir, 20*time.Millisecond, nil, nil)
 	if err == nil {
 		t.Fatal("unpublished worker counted as ready")
 	}
@@ -54,7 +54,7 @@ func TestReadinessTimeoutNamesOriginalWorkerHandle(t *testing.T) {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 	}()
-	err := waitForWorker(dir, 20*time.Millisecond, command.Process)
+	err := waitForWorker(dir, 20*time.Millisecond, command.Process, nil)
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("workerPID=%d workerAlive=true", command.Process.Pid)) {
 		t.Fatalf("timeout lost the original worker handle: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestReadinessTimeoutNamesOriginalWorkerHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = command.Wait()
-	err = waitForWorker(dir, 20*time.Millisecond, command.Process)
+	err = waitForWorker(dir, 20*time.Millisecond, command.Process, nil)
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("workerPID=%d workerAlive=false", command.Process.Pid)) {
 		t.Fatalf("reaped worker counted as alive: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestReadinessTimeoutPreservesDialCause(t *testing.T) {
 	if err := WriteMeta(dir, Meta{State: StateRunning}); err != nil {
 		t.Fatal(err)
 	}
-	err := waitForWorker(dir, 20*time.Millisecond, nil)
+	err := waitForWorker(dir, 20*time.Millisecond, nil, nil)
 	var dial *net.OpError
 	if !errors.As(err, &dial) {
 		t.Fatalf("timeout lost socket dial cause: %v", err)
@@ -134,7 +134,7 @@ func TestReadinessTimeoutBoundsAndFiltersOwnFiles(t *testing.T) {
 				}
 			}
 			started := time.Now()
-			err := waitForWorker(dir, 20*time.Millisecond, nil)
+			err := waitForWorker(dir, 20*time.Millisecond, nil, nil)
 			if time.Since(started) > time.Second {
 				t.Fatal("timeout diagnostics blocked on a fixture file")
 			}

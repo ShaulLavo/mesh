@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -25,6 +26,9 @@ import (
 const pipeNativeFixture = "MESH_PIPE_NATIVE_FIXTURE"
 
 func runNativePipeDaemon(role string, args []string) error {
+	if len(args) == 6 && args[0] == "session-worker" && args[1] == worker.StandbyFlag {
+		return runNativeStandbyWorker(args[3], args[5])
+	}
 	if len(args) != 0 && args[0] == "session-worker" {
 		return runNativePipeWorker(args[1:])
 	}
@@ -35,6 +39,29 @@ func runNativePipeDaemon(role string, args []string) error {
 		return executionBoundaryError("run MCP HTTP fixture", runMCPHTTPFixture(args[1:]))
 	}
 	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
+}
+
+// runNativeStandbyWorker is the fixture's standby: the same handoff as the
+// real one, then the fixture's own worker.
+func runNativeStandbyWorker(id, dir string) error {
+	launch, err := worker.AwaitStandbyLaunch(os.NewFile(3, "standby-handoff"), id, dir)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	if err := launch.Apply(dir); err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	marker := filepath.Join(os.Getenv(pipeNativeFixture), "standby-"+id)
+	if err := os.WriteFile(marker, nil, 0o600); err != nil { //nolint:gosec // the fixture's own root, from its own environment
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	if err := launch.Accept(); err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	return runNativePipeWorker(launch.Args[1:])
 }
 
 func runNativePipeWorker(args []string) error {

@@ -13,11 +13,19 @@ import (
 
 // Reserve is the only writer of launch allocations, including explicit recovery.
 func Reserve(root string, purpose session.Purpose) (session.Reservation, error) {
+	return ReservePreferring(root, purpose, "")
+}
+
+// ReservePreferring reserves preferred first when it is a free session ID, so
+// a standby worker started under that ID can serve the session, and any
+// fresh ID otherwise. Creating the directory decides who gets an ID, so two
+// reservations never share one.
+func ReservePreferring(root string, purpose session.Purpose, preferred string) (session.Reservation, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return session.Reservation{}, workerExecutionError("reservation.go Reserve", err)
 	}
-	for range sessionIDAttempts {
-		id, err := session.NewID()
+	for attempt := range sessionIDAttempts {
+		id, err := reservationCandidate(attempt, preferred)
 		if err != nil {
 			return session.Reservation{}, workerExecutionError("reservation.go Reserve", err)
 		}
@@ -39,6 +47,13 @@ func Reserve(root string, purpose session.Purpose) (session.Reservation, error) 
 	}
 	return session.Reservation{}, fmt.Errorf("launch worker: exhausted session IDs")
 }
+func reservationCandidate(attempt int, preferred string) (string, error) {
+	if attempt == 0 && preferred != "" {
+		return preferred, nil
+	}
+	return session.NewID() //nolint:wrapcheck // Reserve names the failure
+}
+
 func publishReservation(root string, ref session.Reservation) error {
 	if ref.Purpose == session.Managed || ref.Purpose.IsExecution() || ref.Purpose == session.Recovery {
 		return strictReservation(root, ref)
