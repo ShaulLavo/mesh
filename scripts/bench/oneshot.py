@@ -658,7 +658,7 @@ def darwin_all_pids():
         raise RuntimeError(f"proc_listallpids failed ({count})")
     buf = (ctypes.c_int * (count + 128))()
     actual = lib.proc_listallpids(buf, ctypes.sizeof(buf))
-    if actual < 0:
+    if actual <= 0:
         raise RuntimeError(f"proc_listallpids read failed ({actual})")
     return [buf[idx] for idx in range(actual) if buf[idx] > 0]
 
@@ -729,10 +729,10 @@ def parent_pid(pid):
     return int(text) if text.isdigit() else 0
 
 
-def list_process_rows():
+def list_process_rows(deadline=None, reserve=0.0):
     if sys.platform == "linux":
         return list_linux_process_rows()
-    return list_posix_process_rows()
+    return list_posix_process_rows(deadline=deadline, reserve=reserve)
 
 
 def list_linux_process_rows():
@@ -784,28 +784,39 @@ def read_linux_owner_token(entry):
     return None
 
 
-def list_posix_process_rows():
-    if sys.platform == "darwin":
-        return list_darwin_process_rows()
-    result = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], capture_output=True, text=True)
+def run_ps_snapshot(argv, deadline=None, reserve=0.0):
+    timeout = None
+    if deadline is not None:
+        timeout = deadline.at - reserve - time.monotonic()
+        if timeout <= 0.0:
+            raise RuntimeError("ps process listing timed out: cleanup deadline expired")
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"ps process listing timed out after {timeout:.2f}s") from error
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
+    return result.stdout.splitlines()
+
+
+def list_posix_process_rows(deadline=None, reserve=0.0):
+    if sys.platform == "darwin":
+        return list_darwin_process_rows(deadline=deadline, reserve=reserve)
+    lines = run_ps_snapshot(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], deadline=deadline, reserve=reserve)
     rows = []
-    for line in result.stdout.splitlines():
+    for line in lines:
         row = parse_posix_ps_row(line)
         if row is not None:
             rows.append(row)
     return rows
 
 
-def list_darwin_process_rows():
+def list_darwin_process_rows(deadline=None, reserve=0.0):
     # Bracket the ps snapshot with libproc birth times before and after so a PID
     # reused during ps cannot pair old arguments with a new process identity.
     starts_before = {pid: start for pid in darwin_all_pids() if (start := darwin_start_id(pid)) is not None}
-    result = subprocess.run(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,command="], capture_output=True, text=True)
-    if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
-    return bracket_darwin_ps_rows(result.stdout.splitlines(), starts_before, darwin_start_id)
+    lines = run_ps_snapshot(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,command="], deadline=deadline, reserve=reserve)
+    return bracket_darwin_ps_rows(lines, starts_before, darwin_start_id)
 
 
 def bracket_darwin_ps_rows(lines, starts_before, start_lookup):
@@ -1067,8 +1078,8 @@ def shutdown_workers_gracefully(state_dir, deadline):
         time.sleep(0.05)
 
 
-def snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_token, exclude):
-    rows = list_process_rows()
+def snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_token, exclude, deadline=None, reserve=0.0):
+    rows = list_process_rows(deadline=deadline, reserve=reserve)
     found = discover_owned_processes(rows, registry.load_all(), exact_binary, sessions_dir, owner_token, exclude)
     for pid, start in found:
         registry.record(pid, start)
@@ -1096,7 +1107,7 @@ def cleanup_owned_tree(
         deadline = CleanupDeadline(8.0)
     exclude = ancestor_pids()
     sessions_dir = Path(state_dir) / "s"
-    snapshot_error = try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude)
+    snapshot_error = try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
     shutdown_workers_gracefully(state_dir, deadline)
     stop_popen(daemon_proc, deadline=deadline, grace=2.5, kill_wait=0.5)
     reap_children()
@@ -1106,9 +1117,11 @@ def cleanup_owned_tree(
     return remaining
 
 
-def try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
+def try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline=None):
     try:
-        snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_token, exclude)
+        snapshot_owned_into_registry(
+            registry, exact_binary, sessions_dir, owner_token, exclude, deadline=deadline, reserve=0.55
+        )
         return None
     except Exception as error:
         return error
@@ -1117,26 +1130,26 @@ def try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclud
 def terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, exclude, deadline):
     term_cap = time.monotonic() + 2.0
     for sig, reserve in ((signal.SIGTERM, 0.35), (signal.SIGKILL, 0.0)):
-        targets = find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)
+        targets = find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
         if not targets:
             return []
         for pid, start in targets:
             signal_verified_process(pid, start, sig)
         phase_cap = term_cap if sig == signal.SIGTERM else float("inf")
         wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap)
-    return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)]
+    return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)]
 
 
-def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
+def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline=None, reserve=0.0):
     reap_children()
-    rows = list_process_rows()
+    rows = list_process_rows(deadline=deadline, reserve=reserve)
     roots = registry.load_all()
     return discover_owned_processes(rows, roots, exact_binary, sessions_dir, owner_token, exclude)
 
 
 def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap):
     while time.monotonic() < min(phase_cap, deadline.at - reserve):
-        if not find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
+        if not find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline):
             return
         time.sleep(0.05)
 
@@ -2492,7 +2505,10 @@ def execute_remote_measurements(
 
 def cancel_mac_queue_ticket(target_ip, ssh_alias, remote_python, task_label):
     cmd = " ".join(shlex.quote(part) for part in (remote_python, "-c", MAC_QUEUE_CANCEL_SCRIPT, task_label))
-    result = run_fresh_verified_ssh(target_ip, ssh_alias, cmd, timeout=20)
+    try:
+        result = run_fresh_verified_ssh(target_ip, ssh_alias, cmd, timeout=20)
+    except Exception as error:
+        return {"cancelled": False, "error": f"mac-queue cancel failed: {error}"}
     lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
     payload = parse_last_json_line(lines)
     if result.returncode == 0 and isinstance(payload, dict) and payload.get("cancelled") is True:

@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import subprocess
 import sys
@@ -385,24 +386,62 @@ class OneshotPureLogicTests(unittest.TestCase):
         self.assertEqual([row["pid"] for row in rows], [100])
         self.assertEqual(rows[0]["start"], "1795417000:100")
 
+    def test_darwin_all_pids_rejects_zero_on_second_call(self):
+        fake_lib = SimpleNamespace(proc_listallpids=lambda buf, size: 10 if buf is None else 0)
+        with patch.object(oneshot, "darwin_libproc", return_value=fake_lib):
+            with self.assertRaisesRegex(RuntimeError, "proc_listallpids read failed"):
+                oneshot.darwin_all_pids()
+
+    def test_darwin_process_scan_bounds_ps_by_deadline(self):
+        seen_timeouts = []
+
+        def slow_ps(_argv, **_kw):
+            seen_timeouts.append(_kw.get("timeout"))
+            raise subprocess.TimeoutExpired(["ps"], _kw.get("timeout"))
+
+        deadline = oneshot.CleanupDeadline(1.0)
+        with patch.object(oneshot, "darwin_all_pids", return_value=[100]), \
+             patch.object(oneshot, "darwin_start_id", return_value="1:1"), \
+             patch.object(oneshot.subprocess, "run", side_effect=slow_ps):
+            with self.assertRaisesRegex(RuntimeError, "ps process listing timed out"):
+                oneshot.list_darwin_process_rows(deadline=deadline, reserve=0.35)
+        self.assertEqual(len(seen_timeouts), 1)
+        self.assertGreater(seen_timeouts[0], 0.0)
+        self.assertLessEqual(seen_timeouts[0], 0.66)
+
+        expired = oneshot.CleanupDeadline(0.1)
+        expired._at = time.monotonic() - 0.1
+        with patch.object(oneshot, "darwin_all_pids", return_value=[100]), \
+             patch.object(oneshot, "darwin_start_id", return_value="1:1"), \
+             patch.object(oneshot.subprocess, "run") as run_mock:
+            with self.assertRaisesRegex(RuntimeError, "cleanup deadline expired"):
+                oneshot.list_darwin_process_rows(deadline=expired)
+        run_mock.assert_not_called()
+
     def test_late_signal_clamps_daemon_wait_and_escalates_to_sigkill(self):
         stubborn = subprocess.Popen(
-            [sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"],
+            [
+                sys.executable, "-c",
+                "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('READY', flush=True); time.sleep(60)",
+            ],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            text=True,
         )
-        deadline = oneshot.CleanupDeadline(8.0)
-        threading.Timer(0.15, lambda: deadline.clamp(1.0)).start()
-        started = time.monotonic()
         try:
+            self.assertEqual(stubborn.stdout.readline().strip(), "READY")
+            deadline = oneshot.CleanupDeadline(8.0)
+            threading.Timer(0.15, lambda: deadline.clamp(1.0)).start()
+            started = time.monotonic()
             oneshot.stop_popen(stubborn, grace=5.0, kill_wait=1.0, deadline=deadline)
             elapsed = time.monotonic() - started
         finally:
             if stubborn.poll() is None:
                 stubborn.kill()
                 stubborn.wait(timeout=2)
-        self.assertIsNotNone(stubborn.poll())
+            stubborn.stdout.close()
+        self.assertEqual(stubborn.returncode, -signal.SIGKILL)
         # Must escalate to SIGKILL well inside the clamped 1.0s deadline (never wait the 5s grace).
         self.assertLess(elapsed, 1.5)
 
@@ -645,6 +684,23 @@ class OneshotPureLogicTests(unittest.TestCase):
             )
         self.assertFalse(report_failed["mac"]["clean"])
         self.assertIn("still waiting", report_failed["mac"]["ticket_cancel_error"])
+
+        report_timeout = {}
+        timeout_calls = []
+
+        def fake_recover_after_timeout(ip, _spec, _py, scratch, _tok, _args):
+            timeout_calls.append(("recover", ip, scratch))
+            return {"clean": True, "remaining_pids": [], "scratch_removed": True, "remote_scratch": scratch}
+
+        with patch.object(oneshot, "run_fresh_verified_ssh", side_effect=subprocess.TimeoutExpired("ssh", 20)), \
+             patch.object(oneshot, "remote_recovery_cleanup", side_effect=fake_recover_after_timeout):
+            oneshot.teardown_remote(
+                "mac", spec, "100.92.135.44", "/usr/bin/python3", "/Users/shaul/mesh-oneshot-bench-1-mac",
+                None, None, None, "tok-xyz", False, args, report_timeout,
+            )
+        self.assertEqual(len(timeout_calls), 1)
+        self.assertFalse(report_timeout["mac"]["clean"])
+        self.assertIn("timed out", report_timeout["mac"]["ticket_cancel_error"])
 
     def test_isolated_env_sets_private_permissions(self):
         with tempfile.TemporaryDirectory(prefix="oneshot-env-test-") as directory:
