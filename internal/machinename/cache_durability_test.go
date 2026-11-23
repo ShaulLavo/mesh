@@ -55,10 +55,11 @@ func TestClaimCacheReaderReturnsVisibleFailedPublication(t *testing.T) {
 	claim := cacheFixtureClaim(t, "destination", 7)
 	failure := errors.New("fixture post-rename directory sync failure")
 	failPublished := func(root *os.Root) error {
-		if filepath.Base(root.Name()) == cacheDirectory {
-			if _, err := root.Lstat(claim.ID + ".json"); err == nil {
-				return failure
-			}
+		if filepath.Base(root.Name()) != cacheDirectory {
+			return syncCacheRoot(root)
+		}
+		if _, err := root.Lstat(claim.ID + ".json"); err == nil {
+			return failure
 		}
 		return syncCacheRoot(root)
 	}
