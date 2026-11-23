@@ -12,7 +12,9 @@ func TestBoundedRemoteMessage(t *testing.T) {
 	if got := boundedRemoteMessage("sender busy"); got != "sender busy" {
 		t.Fatalf("short message = %q", got)
 	}
-	long := strings.Repeat("é", maxRemoteMessage)
+	// The leading ASCII byte puts the cut inside a two-byte "é", so the cut
+	// has to back up to the start of that character.
+	long := "a" + strings.Repeat("é", maxRemoteMessage)
 	got := boundedRemoteMessage(long)
 	if !utf8.ValidString(got) || !strings.HasSuffix(got, "…") || len(got) > maxRemoteMessage+len("…") {
 		t.Fatalf("long message cut to %d bytes, valid %t", len(got), utf8.ValidString(got))
