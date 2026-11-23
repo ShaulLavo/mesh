@@ -5,6 +5,9 @@ import importlib
 import io
 import json
 import os
+import pathlib
+import shutil
+import tempfile
 import unittest
 import urllib.parse
 from unittest import mock
@@ -131,6 +134,34 @@ class GhListingTests(unittest.TestCase):
         with mock.patch.object(draft_intake, "verify", return_value=recorded), \
                 mock.patch.object(paged_listing.subprocess, "check_output", side_effect=get):
             self.assertEqual(draft_intake.compare_live("directory", "v0.1.9", "b" * 40, 1)["id"], 7)
+
+    def test_capture_keeps_every_asset_when_one_is_deleted_between_pages(self):
+        fields = dict(size=1, state="uploaded", digest="sha256:" + "0" * 64)
+        assets = [dict(id=number, name=f"asset{number}", **fields) for number in range(10, 0, -1)]
+        api = PagedApi([dict(id=99, name="transient", **fields)] + assets, {1: delete_first})
+        seen = []
+        release = dict(id=7)
+
+        def inventory(captured, *_):
+            seen.append(sorted(item["id"] for item in captured["assets"]))
+            return captured["assets"]
+        directory = pathlib.Path(tempfile.mkdtemp(prefix="paged-capture-")) / "draft"
+        self.addCleanup(shutil.rmtree, directory.parent)
+        with mock.patch.dict(os.environ, GITHUB_RUN_ID="42"), \
+                mock.patch.object(draft_intake, "find_release", return_value=release), \
+                mock.patch.object(draft_intake, "identity"), mock.patch.object(draft_intake, "acquire_asset"), \
+                mock.patch.object(draft_intake, "inventory", side_effect=inventory), \
+                mock.patch.object(draft_intake, "verify", return_value=release), \
+                mock.patch.object(paged_listing.subprocess, "check_output", side_effect=api.check_output):
+            draft_intake.capture(directory, "v0.1.9", "b" * 40)
+        self.assertEqual(seen, [list(range(1, 11))])
+
+    def test_a_listing_that_runs_past_its_timeout_is_stopped(self):
+        with mock.patch.object(paged_listing.time, "monotonic", side_effect=[0, 301]), \
+                mock.patch.object(paged_listing.subprocess, "check_output") as command:
+            with self.assertRaises(paged_listing.subprocess.TimeoutExpired):
+                paged_listing.gh_listing("endpoint")
+        command.assert_not_called()
 
     def test_draft_listing_for_the_reservation_survives_a_release_deleted_between_pages(self):
         releases = [dict(id=number, draft=number % 2 == 0, tag_name=f"v0.1.{number}", target_commitish=f"{number:040d}")

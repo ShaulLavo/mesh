@@ -1,6 +1,7 @@
 """Read a whole GitHub list that is paged by offset without skipping or repeating an item."""
 import json
 import subprocess
+import time
 
 LISTING_READS = 5
 GH_PAGE_SIZE = 100
@@ -48,11 +49,16 @@ def read_once(read_page, page_size, max_pages=None):
         page += 1
 
 
-def gh_listing(endpoint, timeout=120):
-    """Read endpoint (which has no query string yet) through the gh CLI."""
+def gh_listing(endpoint, timeout=300):
+    """Read endpoint (which has no query string yet) through the gh CLI. The
+    timeout covers the whole listing, including repeated reads."""
     page_size = GH_PAGE_SIZE
+    deadline = time.monotonic() + timeout
 
     def read_page(page):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(["gh", "api", endpoint], timeout)
         return json.loads(subprocess.check_output(
-            ["gh", "api", f"{endpoint}?per_page={page_size}&page={page}"], timeout=timeout))
+            ["gh", "api", f"{endpoint}?per_page={page_size}&page={page}"], timeout=remaining))
     return read_stable(read_page, page_size, endpoint)
