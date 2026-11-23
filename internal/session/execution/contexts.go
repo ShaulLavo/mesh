@@ -60,7 +60,12 @@ type Context struct {
 	Revision     uint64            `json:"revision"`
 	CreatedAt    time.Time         `json:"createdAt"`
 	LastUsedAt   time.Time         `json:"lastUsedAt"`
-	ClosedAt     *time.Time        `json:"closedAt,omitempty"`
+	// IdleAnchor is this boot's monotonic clock at the last use, or when an
+	// expiry deadline was found passed under another boot's anchor. Expiry
+	// needs a full idle period of it as well as the wall-clock deadline, so
+	// a forward clock correction cannot purge a context in use.
+	IdleAnchor *ClockAnchor `json:"idleAnchor,omitempty"`
+	ClosedAt   *time.Time   `json:"closedAt,omitempty"`
 	// Members are the keys of jobs whose receipts are not terminal yet. Any
 	// of them, running or uncertain, keeps the context from expiring.
 	Members []Key `json:"-"`
@@ -193,16 +198,33 @@ func (j *Journal) settleRequest(request contextRequest) (Context, error) {
 	}
 	c, err := j.readContext(request.ContextID)
 	if errors.Is(err, os.ErrNotExist) {
-		return j.saveContext(newRecord(request, j.now()))
+		return j.saveContext(j.anchorUse(newRecord(request, j.now())))
 	}
 	if err != nil {
 		return Context{}, err
 	}
-	c = j.withMembers(c)
-	if j.idle(c) {
+	c, known := j.withMembers(c)
+	if !known {
+		// Without its membership a context may still have a running job.
+		return c, nil
+	}
+	c, idle := j.idle(c)
+	if idle {
 		return Context{}, errors.Join(ErrContextNotFound, j.expire(request))
 	}
 	return c, nil
+}
+
+// anchorUse records this boot's monotonic clock as the time of c's last use.
+// Without a monotonic clock the context keeps no anchor and does not expire
+// until one is available.
+func (j *Journal) anchorUse(c Context) Context {
+	anchor := j.clock()
+	c.IdleAnchor = nil
+	if anchor.valid() {
+		c.IdleAnchor = &anchor
+	}
+	return c
 }
 
 // openResult is the result the first open returned.
@@ -233,7 +255,7 @@ func (j *Journal) acceptContext(k Key, callerDigest string, resolve func() (Cont
 	if _, err := j.files.PublishBounded(contextRequestName(k.Hash()), request, true, contextRecordLimit); err != nil {
 		return Context{}, false, err
 	}
-	if _, err := j.saveContext(newRecord(request, request.AcceptedAt)); err != nil {
+	if _, err := j.saveContext(j.anchorUse(newRecord(request, request.AcceptedAt))); err != nil {
 		return Context{}, false, err
 	}
 	return openResult(request), true, nil
@@ -340,12 +362,17 @@ func (j *Journal) ownedContext(owner, id string) (Context, error) {
 // withMembers lists the context's jobs whose receipts are not terminal.
 // Markers are written before a job receipt becomes durable, so a failed
 // context write never hides a running job. Markers for terminal or never
-// accepted jobs are pruned.
-func (j *Journal) withMembers(c Context) Context {
+// accepted jobs are pruned. known is false when the markers could not be
+// listed, so callers never take an unreadable directory for an empty one; a
+// missing directory is a context that never had a job.
+func (j *Journal) withMembers(c Context) (Context, bool) {
 	c.Members = nil
 	entries, err := j.files.Names(contextMembers(c.ID))
+	if errors.Is(err, os.ErrNotExist) {
+		return c, true
+	}
 	if err != nil {
-		return c
+		return c, false
 	}
 	for _, entry := range entries {
 		hash, ok := cutJSON(entry.Name())
@@ -360,11 +387,33 @@ func (j *Journal) withMembers(c Context) Context {
 		// A damaged receipt counts as active, so damage never expires a context.
 		c.Members = append(c.Members, r.Key)
 	}
-	return c
+	return c, true
 }
 
-func (j *Journal) idle(c Context) bool {
-	return len(c.Members) == 0 && !j.now().Before(c.ExpiresAt())
+// idle reports whether c may expire now: no active job, its wall-clock
+// deadline has passed, and this boot's monotonic clock has run a whole idle
+// period since its anchor, as receipt retention requires (elapsedFloor). A
+// passed deadline with an anchor from another boot, or none, is anchored to
+// this boot first, so the purge waits for an idle period this boot observed
+// itself.
+func (j *Journal) idle(c Context) (Context, bool) {
+	if len(c.Members) != 0 || j.now().Before(c.ExpiresAt()) {
+		return c, false
+	}
+	now := j.clock()
+	if c.IdleAnchor != nil && c.IdleAnchor.valid() && c.IdleAnchor.Boot == now.Boot {
+		return c, elapsedFloor(*c.IdleAnchor, now)
+	}
+	if !now.valid() {
+		return c, false
+	}
+	anchored := c
+	anchored.IdleAnchor = &now
+	// A failed save leaves the old anchor, which is retried on a later read.
+	if saved, err := j.saveContext(anchored); err == nil {
+		c = saved
+	}
+	return c, false
 }
 
 // expire records the decision before removing anything, so an interrupted
@@ -395,6 +444,7 @@ func (j *Journal) touch(c Context, force bool) (Context, error) {
 	if !force && now.Sub(c.LastUsedAt) < contextUseGranularity {
 		return c, nil
 	}
+	c = j.anchorUse(c)
 	c.LastUsedAt = now
 	return j.saveContext(c)
 }
@@ -595,7 +645,9 @@ func (j *Journal) dueMembers(ctx context.Context) ([]Key, error) {
 		if !ok || err != nil || j.now().Before(c.ExpiresAt()) {
 			continue
 		}
-		due = append(due, j.withMembers(c).Members...)
+		// Unlisted members have nothing to observe; settling defers that expiry.
+		members, _ := j.withMembers(c)
+		due = append(due, members.Members...)
 	}
 	return due, nil
 }

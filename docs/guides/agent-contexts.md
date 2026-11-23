@@ -93,8 +93,12 @@ jobs (`context.closed`); running jobs keep going and keep their receipts.
 
 A context expires 30 days after its last use, together with its open
 receipt, once none of its jobs is running or uncertain (`runningJobs` and
-`uncertainJobs`). After a reboot the context remains and its jobs show as
-interrupted. Each identity can hold 64 open contexts per host, and a host
+`uncertainJobs`). The 30 days must also pass on the host's uptime clock, so
+a clock correction never expires a context early. After a reboot the context
+remains and its jobs show as interrupted; a context whose 30 days ran out
+across a reboot expires after 30 days of uptime since then, because the time
+the host spent down cannot be measured. Each identity can hold 64 open
+contexts per host, and a host
 holds at most 1,024; an open whose reply was lost still holds its slot.
 `mesh context ls` follows the host's pages for you.
 
