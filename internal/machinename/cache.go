@@ -17,13 +17,17 @@ const cacheDirectory = "machine-names"
 
 var errCacheFileChanged = errors.New("machine name cache file changed while opening")
 
-// CachedClaims reads durable observations through one anchored directory.
-// Missing owners are omitted; any error discards the entire batch.
+// CachedClaims reads observations through one anchored directory. Missing
+// owners are omitted; any error discards the entire batch.
+//
+// Reads never sync. Every MCP call reads the cache, and syncing each ancestor
+// directory cost up to tens of milliseconds per call on the Mac. Writers still
+// make their own publications durable, and an unchanged retry settles one
+// whose barrier failed. A reader may therefore return a visible claim whose
+// publication was never synced; after a power cut that claim can roll back to
+// the previous revision until the owner reports its name again (owner
+// decision 2026-11-23: speed over strict durability).
 func CachedClaims(directory string, owners []string) (map[string]Claim, error) {
-	return cachedClaimsWithSync(directory, owners, syncCacheRoot)
-}
-
-func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.Root) error) (map[string]Claim, error) {
 	if directory == "" {
 		return nil, errors.New("machine name cache directory is empty")
 	}
@@ -36,7 +40,7 @@ func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.R
 	if len(owners) == 0 {
 		return claims, nil
 	}
-	root, err := openCacheDirectory(directory, false, syncRoot)
+	root, err := openCacheDirectory(directory, false, skipCacheSync)
 	if errors.Is(err, os.ErrNotExist) {
 		return claims, nil
 	}
@@ -45,7 +49,7 @@ func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.R
 	}
 	defer root.Close() //nolint:errcheck // anchored cache descriptor cleanup
 	for _, owner := range owners {
-		claim, err := readCachedClaim(root, owner, func(*os.Root) error { return nil })
+		claim, err := readCachedClaim(root, owner, skipCacheSync)
 		if err != nil {
 			return nil, err
 		}
@@ -53,15 +57,10 @@ func cachedClaimsWithSync(directory string, owners []string, syncRoot func(*os.R
 			claims[owner] = claim
 		}
 	}
-	// Settle after all reads so visible replacements with failed publication syncs are covered.
-	if len(claims) == 0 {
-		return claims, nil
-	}
-	if err := syncRoot(root); err != nil {
-		return nil, err
-	}
 	return claims, nil
 }
+
+func skipCacheSync(*os.Root) error { return nil }
 
 func readCachedClaim(root *os.Root, owner string, syncRoot func(*os.Root) error) (Claim, error) {
 	file, err := openPrivateCacheFile(root, owner+".json", os.O_RDONLY, false)

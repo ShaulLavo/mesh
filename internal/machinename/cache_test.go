@@ -27,11 +27,7 @@ func cacheFixtureClaim(t *testing.T, name string, revision uint64) Claim {
 }
 
 func readCacheFixtureClaim(directory, owner string) (Claim, error) {
-	return readCacheFixtureClaimWithSync(directory, owner, syncCacheRoot)
-}
-
-func readCacheFixtureClaimWithSync(directory, owner string, syncRoot func(*os.Root) error) (Claim, error) {
-	claims, err := cachedClaimsWithSync(directory, []string{owner}, syncRoot)
+	claims, err := CachedClaims(directory, []string{owner})
 	return claims[owner], err
 }
 
