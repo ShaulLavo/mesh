@@ -2084,7 +2084,29 @@ def open_mcp_context(mcp_client, host_id, cwd, run_id, host_name):
     return reply["result"]["structuredContent"]["data"]["handle"]
 
 
+def validate_mcp_run_reply(reply):
+    if "error" in reply:
+        raise RuntimeError(f"MCP mesh_run protocol error: {reply}")
+    result = reply.get("result")
+    if not isinstance(result, dict) or result.get("isError"):
+        raise RuntimeError(f"MCP mesh_run returned tool error: {reply}")
+    data = result.get("structuredContent", {}).get("data", {})
+    termination = data.get("termination") or {}
+    if data.get("state") != "exited" or termination.get("kind") != "exit" or termination.get("code") != 0:
+        raise RuntimeError(f"MCP mesh_run did not exit cleanly: {data}")
+    return data
+
+
+# MESH_TOOL picks the measured tool: "exec" (keyed, durable) or "run" (no
+# receipt). RUN_PACE_SECONDS spaces runs outside the timed region so the
+# daemon's 10-per-second run rate never refuses a sample.
+MESH_TOOL = "exec"
+RUN_PACE_SECONDS = 0.15
+
+
 def time_mcp_exec(mcp_client, ctx_handle, true_path, request_key):
+    if MESH_TOOL == "run":
+        return time_mcp_run(mcp_client, ctx_handle, true_path)
     args = {
         "context": ctx_handle,
         "request_key": request_key,
@@ -2096,6 +2118,16 @@ def time_mcp_exec(mcp_client, ctx_handle, true_path, request_key):
     elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
     data = validate_mcp_exec_reply(reply)
     return {"seconds": elapsed, "exit": 0, "state": data["state"], "wait": data["wait"]}
+
+
+def time_mcp_run(mcp_client, ctx_handle, true_path):
+    time.sleep(RUN_PACE_SECONDS)
+    args = {"context": ctx_handle, "argv": [true_path], "timeout_ms": DEFAULT_WAIT_MS}
+    started = time.perf_counter_ns()
+    reply = mcp_client.call_tool("mesh_run", args, timeout=HANG_CAP)
+    elapsed = (time.perf_counter_ns() - started) / 1_000_000_000
+    data = validate_mcp_run_reply(reply)
+    return {"seconds": elapsed, "exit": 0, "state": data["state"]}
 
 
 def time_warm_ssh(ssh_master, remote_cmd, expected_tcp_inodes):
@@ -2694,7 +2726,8 @@ def run_coordinator(args):
             "hosts_requested": args.hosts,
             "orchestration_transport": "OpenSSH ControlMaster + scp (no canonical Mesh state or daemon)",
             "server_phase_method": "two fresh Unix-socket RPCs (execution.create then execution.wait, even if create returns terminal)",
-            "mcp_phase_method": "black-box mesh_exec call including initial output retrieval",
+            "mcp_tool": MESH_TOOL,
+            "mcp_phase_method": f"black-box mesh_{MESH_TOOL} call including initial output retrieval",
         },
         "binaries": {},
         "hosts": {},
@@ -2838,6 +2871,7 @@ def parse_args(argv=None):
     parser.add_argument("--mac-thread", default=os.environ.get("T3_THREAD_ID", "oneshot-bench"), help="thread ID for mac-queue.ts")
 
     # Internal flags used on remote hosts (agent and cleanup).
+    parser.add_argument("--tool", choices=("exec", "run"), default="exec", help="MCP tool to measure: exec (keyed, durable) or run (no receipt)")
     parser.add_argument("--remote-agent", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--cleanup-scratch", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-clean", action="store_true", help=argparse.SUPPRESS)
@@ -2870,7 +2904,9 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    global MESH_TOOL
     args = parse_args(argv)
+    MESH_TOOL = args.tool
     if args.cleanup_scratch:
         return run_cleanup_scratch(args)
     if args.remote_agent:

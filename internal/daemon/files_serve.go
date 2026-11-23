@@ -53,6 +53,22 @@ func (l *frameLookahead) watch(ctx context.Context) (context.Context, context.Ca
 	return watched, cancel
 }
 
+// watchAny is watch for a request that must be its connection's only one in
+// flight: the next frame ends ctx as well as a failure does. The frame still
+// reaches the loop in order if the request finished first.
+func (l *frameLookahead) watchAny(ctx context.Context) (context.Context, context.CancelFunc) {
+	watched, cancel := context.WithCancel(ctx)
+	l.pending = make(chan lookaheadRead, 1)
+	l.armed = true
+	pending := l.pending
+	go func() {
+		frame, err := l.conn.ReadFrame()
+		pending <- lookaheadRead{frame: frame, err: err}
+		cancel()
+	}()
+	return watched, cancel
+}
+
 // replyFiles runs one file request and queues its reply with the grant check
 // the relay applies when the frame leaves the queue, so a device revoked while
 // the request ran, or while its reply waited, receives nothing.

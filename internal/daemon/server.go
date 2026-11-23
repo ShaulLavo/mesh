@@ -136,6 +136,12 @@ func (s *clientServer) Handle(ctx context.Context, conn transport.Conn) (resultE
 			}
 			continue
 		}
+		if request.Type == protocol.TypeExecutionRun {
+			if err := s.replyRun(ctx, relay, lookahead, request); err != nil {
+				return runConnectionError(ctx, err)
+			}
+			continue
+		}
 		if protocol.IsExecutionControl(request.Type) || protocol.IsContextControl(request.Type) {
 			if err := s.replyExecution(ctx, relay, lookahead, request); err != nil {
 				return clientOperationError(ctx, "reply to execution request", err)

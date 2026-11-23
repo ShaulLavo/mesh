@@ -154,6 +154,8 @@ func renderSuccessData(b *strings.Builder, data any) {
 		if v != nil {
 			renderExecResult(b, *v)
 		}
+	case RunResultData:
+		renderRunResult(b, v)
 	case JobStateData:
 		renderJobState(b, v)
 	case *JobStateData:

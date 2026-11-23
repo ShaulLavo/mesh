@@ -374,6 +374,32 @@ func (r *clientRelay) enqueueAdmittedResponse(frame protocol.Frame, admit func()
 	return nil
 }
 
+// writeAdmittedResponse is enqueueAdmittedResponse that waits until the frame
+// was written or dropped, so whatever the reply holds stays charged through
+// delivery. A reader that does not take it within budget loses its
+// connection.
+func (r *clientRelay) writeAdmittedResponse(frame protocol.Frame, admit func() error, budget time.Duration) error {
+	written := make(chan error, 1)
+	r.sendMu.Lock()
+	err := r.enqueueReply(relayOutput{frame: frame, admit: admit, written: written})
+	r.sendMu.Unlock()
+	if err != nil {
+		go func() { _ = r.Close() }()
+		return fmt.Errorf("daemon: queue client response: %w", err)
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case err := <-written:
+		return err
+	case <-r.lifetime.Done():
+		return errRelayClosed
+	case <-timer.C:
+		go func() { _ = r.Close() }()
+		return fmt.Errorf("daemon: client did not read its reply within %s", budget)
+	}
+}
+
 func (r *clientRelay) enqueue(id protocol.SessionID, frame protocol.Frame, closeAfter bool) error {
 	lane, err := r.currentLane(id)
 	if err != nil {

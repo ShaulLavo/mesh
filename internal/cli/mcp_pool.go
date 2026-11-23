@@ -21,6 +21,9 @@ const (
 	// Creates that wait on the host get their own budget, so they never hold
 	// the short slots a signal or kill for those same jobs needs.
 	mcpPoolInlineLimit = 4
+	// Request-scoped runs hold their connection until the command ends, so
+	// they get their own budget too.
+	mcpPoolRunLimit    = 8
 	mcpPoolIdleTimeout = 60 * time.Second
 )
 
@@ -64,6 +67,7 @@ type mcpHostBucket struct {
 	shortSlots  chan struct{}
 	streamSlots chan struct{}
 	inlineSlots chan struct{}
+	runSlots    chan struct{}
 
 	mu   sync.Mutex
 	idle []*mcpPooledConn
@@ -74,6 +78,7 @@ func newMCPHostBucket() *mcpHostBucket {
 		shortSlots:  make(chan struct{}, mcpPoolShortLimit),
 		streamSlots: make(chan struct{}, mcpPoolStreamLimit),
 		inlineSlots: make(chan struct{}, mcpPoolInlineLimit),
+		runSlots:    make(chan struct{}, mcpPoolRunLimit),
 	}
 }
 

@@ -43,6 +43,8 @@ func operationHint(operation string, code agentapi.Code) string {
 		return fileHints[code]
 	case strings.HasPrefix(operation, "profile."):
 		return profileHints[code]
+	case operation == RunOperation:
+		return runHints[code]
 	default:
 		return ""
 	}

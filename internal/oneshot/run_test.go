@@ -1,0 +1,199 @@
+package oneshot
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// hangCap only catches a run that never ends; it judges no speed.
+const hangCap = 30 * time.Second
+
+func shellSpec(t *testing.T, script string, limit int, timeout time.Duration) Spec {
+	t.Helper()
+	return Spec{Path: "/bin/sh", Args: []string{"/bin/sh", "-c", script}, Dir: t.TempDir(), Env: os.Environ(), OutputBytes: limit, Timeout: timeout}
+}
+
+func runToEnd(t *testing.T, spec Spec) Result {
+	t.Helper()
+	run, err := Start(spec)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	return waitRun(t, run)
+}
+
+func waitRun(t *testing.T, run *Run) Result {
+	t.Helper()
+	select {
+	case <-run.Done():
+	case <-time.After(hangCap):
+		t.Fatal("run did not finish")
+	}
+	return run.Result()
+}
+
+func exitCode(t *testing.T, result Result) int {
+	t.Helper()
+	if result.WaitErr != nil || result.State == nil {
+		t.Fatalf("wait failed: %v", result.WaitErr)
+	}
+	return result.State.ExitCode()
+}
+
+func signalOf(t *testing.T, result Result) syscall.Signal {
+	t.Helper()
+	status, ok := result.State.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		t.Fatalf("leader was not signalled: %v", result.State)
+	}
+	return status.Signal()
+}
+
+func TestRunReportsExitAndBothStreams(t *testing.T) {
+	result := runToEnd(t, shellSpec(t, "printf out; printf err >&2; exit 7", 1024, hangCap))
+	if code := exitCode(t, result); code != 7 {
+		t.Fatalf("exit code = %d, want 7", code)
+	}
+	if string(result.Stdout.Bytes) != "out" || string(result.Stderr.Bytes) != "err" {
+		t.Fatalf("output = %q / %q", result.Stdout.Bytes, result.Stderr.Bytes)
+	}
+	if result.TimedOut || result.Stdout.CloseReason != CloseEOF || result.Stderr.CloseReason != CloseEOF {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestRunKeepsHeadAndCountsTheRest(t *testing.T) {
+	result := runToEnd(t, shellSpec(t, "head -c 200000 /dev/zero | tr '\\0' x", 1000, hangCap))
+	if len(result.Stdout.Bytes) != 1000 || result.Stdout.Total != 200000 || !result.Stdout.Truncated {
+		t.Fatalf("stdout kept %d of %d, truncated=%t", len(result.Stdout.Bytes), result.Stdout.Total, result.Stdout.Truncated)
+	}
+	if exitCode(t, result) != 0 {
+		t.Fatal("writer blocked or failed on a full pipe")
+	}
+}
+
+func TestRunKeepsBinaryBytesExactly(t *testing.T) {
+	result := runToEnd(t, shellSpec(t, "printf '\\000\\377\\033[2J\\r\\n'", 64, hangCap))
+	if want := []byte{0, 0xff, 0x1b, '[', '2', 'J', '\r', '\n'}; !bytes.Equal(result.Stdout.Bytes, want) {
+		t.Fatalf("stdout = %q, want %q", result.Stdout.Bytes, want)
+	}
+}
+
+func TestDeadlineTerminatesAndReportsTheLeaderSeparately(t *testing.T) {
+	result := runToEnd(t, shellSpec(t, "echo started; exec sleep 30", 1024, 200*time.Millisecond))
+	if !result.TimedOut {
+		t.Fatal("deadline was not reported")
+	}
+	if sig := signalOf(t, result); sig != syscall.SIGTERM {
+		t.Fatalf("leader signal = %v, want SIGTERM", sig)
+	}
+	if string(result.Stdout.Bytes) != "started\n" {
+		t.Fatalf("partial output = %q", result.Stdout.Bytes)
+	}
+}
+
+func TestDeadlineKeepsEscalatingAfterTheLeaderExits(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "member")
+	// The member ignores TERM and HUP and leaves stdout open; the leader
+	// exits on the first signal.
+	script := "(trap '' TERM HUP; echo $$ > " + pidFile + "; exec sleep 30) & sleep 30"
+	spec := shellSpec(t, script, 1024, 300*time.Millisecond)
+	result := runToEnd(t, spec)
+	if !result.TimedOut || signalOf(t, result) != syscall.SIGTERM {
+		t.Fatalf("leader result = %+v", result)
+	}
+	assertGone(t, readPID(t, pidFile))
+}
+
+func TestNormalExitCleansUpTheGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "member")
+	script := "sleep 30 >/dev/null 2>&1 & echo $! > " + pidFile + "; echo done"
+	result := runToEnd(t, shellSpec(t, script, 1024, hangCap))
+	if exitCode(t, result) != 0 || result.TimedOut {
+		t.Fatalf("result = %+v", result)
+	}
+	assertGone(t, readPID(t, pidFile))
+}
+
+func TestDescendantHoldingStdoutIsCutOff(t *testing.T) {
+	result := runToEnd(t, shellSpec(t, "sleep 30 & echo done", 1024, hangCap))
+	if exitCode(t, result) != 0 || string(result.Stdout.Bytes) != "done\n" {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Stdout.CloseReason != CloseDrainTimeout {
+		t.Fatalf("stdout close reason = %q, want %q", result.Stdout.CloseReason, CloseDrainTimeout)
+	}
+}
+
+func TestCancelHangsUpTheGroup(t *testing.T) {
+	run, err := Start(shellSpec(t, "exec sleep 30", 1024, hangCap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Cancel()
+	result := waitRun(t, run)
+	if result.TimedOut || signalOf(t, result) != syscall.SIGHUP {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestStartFailureStartsNothing(t *testing.T) {
+	spec := shellSpec(t, "true", 16, hangCap)
+	spec.Dir = filepath.Join(spec.Dir, "missing")
+	if _, err := Start(spec); err == nil {
+		t.Fatal("start in a missing directory succeeded")
+	}
+}
+
+func TestLookPathUsesTheRunEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "only-here")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o700); err != nil { //nolint:gosec // the fixture tool must be executable
+		t.Fatal(err)
+	}
+	got, err := LookPath("only-here", []string{"PATH=relative:" + dir})
+	if err != nil || got != tool {
+		t.Fatalf("LookPath = %q, %v", got, err)
+	}
+	if _, err := LookPath("only-here", []string{"PATH=/nonexistent"}); err == nil {
+		t.Fatal("found a tool outside the run's PATH")
+	}
+	if got, _ := LookPath("./x", nil); got != "./x" {
+		t.Fatalf("a path with a slash was searched: %q", got)
+	}
+}
+
+func readPID(t *testing.T, path string) int {
+	t.Helper()
+	deadline := time.Now().Add(hangCap)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path) //nolint:gosec // the pid file belongs to this test's temporary directory
+		if pid, convErr := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && convErr == nil {
+			return pid
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no pid in %s", path)
+	return 0
+}
+
+// assertGone waits for the member to disappear; init reaps it once it dies.
+func assertGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(hangCap)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	t.Fatalf("group member %d outlived its run", pid)
+}

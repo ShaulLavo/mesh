@@ -82,6 +82,7 @@ type lifecycle struct {
 	env              []string
 	launch           launchWorker
 	standbys         *standbyPool
+	runs             *runSupervisor
 	publishTimeout   time.Duration
 	operationTimeout time.Duration
 	// observeTerminalSize is a read-only compatibility boundary for workers
@@ -245,6 +246,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		maxCreationBytes:    cfg.MaxCreationBytes,
 	}
 	l.standbys = newStandbyPool(cfg.SessionsDir, standbyExecutable(cfg.Executable), l.environment)
+	l.runs = newRunSupervisor()
 	return l, nil
 }
 
