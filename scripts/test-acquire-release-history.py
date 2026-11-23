@@ -102,9 +102,8 @@ class HistoryTests(unittest.TestCase):
             size, page = int(query["per_page"][0]), int(query["page"][0])
             batch = items[(page - 1) * size:page * size]
             requests.append(page)
-            for key in (len(requests), (page, requests.count(page))):
-                if key in mutations:
-                    mutations[key](items)
+            for mutate in [mutations[key] for key in (len(requests), (page, requests.count(page))) if key in mutations]:
+                mutate(items)
             return mock.Mock(stdout=json.dumps(batch).encode())
         return run, requests
 
