@@ -2,19 +2,19 @@
   "schema": 2,
   "benchmark": "mesh-oneshot-vs-warm-ssh",
   "status": "ok",
-  "run_id": "1d10aa35",
+  "run_id": "44a9d5cc",
   "environment": {
-    "utc": "2026-11-23T06:26:12Z",
+    "utc": "2026-11-23T07:01:48Z",
     "platform": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
     "python": "3.14.8 (main, Oct  2 2026, 10:23:31) [GCC 16.2.1 20260810]",
     "cpu_count": 28,
     "load_average_start": [
-      37.0,
-      34.615234375,
-      35.31005859375
+      19.54736328125,
+      16.1962890625,
+      22.64013671875
     ],
     "git": {
-      "commit": "4a7ed8e5d6e923b290aa5f6d8999ca3ba746fd28",
+      "commit": "0921769243e3e0229367edbd84dbb69a186f2cea",
       "dirty": true
     },
     "warmups": 3,
@@ -30,25 +30,25 @@
     "orchestration_transport": "OpenSSH ControlMaster + scp (no canonical Mesh state or daemon)",
     "server_phase_method": "two fresh Unix-socket RPCs (execution.create then execution.wait, even if create returns terminal)",
     "mcp_phase_method": "black-box mesh_exec call including initial output retrieval",
-    "binary_version": "mesh v0.1.355-0.20261123060147-4a7ed8e5d6e9+dirty 4a7ed8e5d6e923b290aa5f6d8999ca3ba746fd28 linux/amd64",
+    "binary_version": "mesh v0.1.355-0.20261123065048-0921769243e3+dirty 0921769243e3e0229367edbd84dbb69a186f2cea linux/amd64",
     "load_average_end": [
-      19.40234375,
-      27.427734375,
-      32.49169921875
+      7.40478515625,
+      11.53662109375,
+      18.607421875
     ]
   },
   "binaries": {
     "darwin/arm64": {
-      "path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/builds/mesh-darwin-arm64",
-      "sha256": "8288f5bfa14d1811b82a9cf0e4191b95ff4886a2193ab4eba52ee0567fd3ed1b"
+      "path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/builds/mesh-darwin-arm64",
+      "sha256": "3c02e7cb61643139ad79c08b0a31415aebdebefd3fdd2c16d84e1b1a721f68ea"
     },
     "linux/amd64": {
-      "path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/builds/mesh-linux-amd64",
-      "sha256": "2451d40ba3736deb6fd614b5517b28d2dd4e337a6594ef64e948480160a2e638"
+      "path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/builds/mesh-linux-amd64",
+      "sha256": "c8122198a5cfb275b624a7bb9e27df3b47c1cb87b331aec810eb4667ab15c78b"
     },
     "linux/arm64": {
-      "path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/builds/mesh-linux-arm64",
-      "sha256": "868c43d98563b775c1910cf830e10238f7353f81770069eaf86df58b5a610c44"
+      "path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/builds/mesh-linux-arm64",
+      "sha256": "46eed9f1966b74de01d5c579db531ad4d10158e1fe604cb9839b17257d3c0b28"
     }
   },
   "hosts": {
@@ -59,13 +59,13 @@
       "target_ip": "127.0.0.1",
       "ssh_target_ip": "127.0.0.2",
       "network_matched": true,
-      "daemon_port": 53659,
-      "cwd": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/local-daemon/work",
+      "daemon_port": 49691,
+      "cwd": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/local-daemon/work",
       "true_path": "/bin/true",
       "load_average": [
-        25.3544921875,
-        33.2724609375,
-        34.970703125
+        11.025390625,
+        14.1328125,
+        20.57763671875
       ],
       "rtt": {
         "available": false,
@@ -75,28 +75,27 @@
       "ssh": {
         "available": true,
         "alias": "owned-sshd",
-        "detail": "owned sshd on 127.0.0.2:40377",
-        "command": "cd /work/tmp/mesh-oneshot-bench-1g1sc3gn/local-daemon/work && exec /bin/true",
+        "detail": "owned sshd on 127.0.0.2:42749",
+        "command": "cd /work/tmp/mesh-oneshot-bench-e7i1pt_8/local-daemon/work && exec /bin/true",
         "mux_proof": {
-          "master_pid": 1056042,
-          "control_path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/local-ssh/cm/c",
+          "master_pid": 1810430,
+          "control_path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/local-ssh/cm/c",
           "proxy_command_guard": "false",
           "ssh_connection": {
             "client_ip": "127.0.0.1",
-            "client_port": "39276",
+            "client_port": "49964",
             "server_ip": "127.0.0.2",
-            "server_port": "40377"
+            "server_port": "42749"
           },
           "check_before": true,
-          "tcp_socket_inodes_before": [
-            "468596868",
-            "468601969"
+          "tcp_connection_inodes_before": [
+            "469827714"
           ],
           "check_after": true,
-          "tcp_socket_inodes_after": [
-            "468596868",
-            "468601969"
-          ]
+          "tcp_connection_inodes_after": [
+            "469827714"
+          ],
+          "tcp_inode_unchanged": true
         }
       },
       "warmups": [
@@ -106,15 +105,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 6.804751119,
+            "seconds": 2.853337204,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.007211291,
+            "seconds": 0.006211321,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -123,12 +122,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.004789911,
+            "seconds": 0.005090241,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 5.151987109,
+            "seconds": 3.03425145,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -140,15 +139,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 4.574281384,
+            "seconds": 8.834343615,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005501777,
+            "seconds": 0.005037744,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         }
       ],
@@ -159,15 +158,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 5.476064226,
+            "seconds": 1.113320511,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.004980842,
+            "seconds": 0.004899428,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -176,15 +175,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 3.002276083,
+            "seconds": 1.494026656,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.006144091,
+            "seconds": 0.004671584,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -193,15 +192,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 4.349773663,
+            "seconds": 1.154974486,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005226195,
+            "seconds": 0.004871188,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -210,15 +209,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 2.45594178,
+            "seconds": 5.448841542,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005245132,
+            "seconds": 0.006514303,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -227,46 +226,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.005013905,
+            "seconds": 0.004510875,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.938595436,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 4.088540347,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.004660402,
-            "exit": 0,
-            "master_pid": 1056042
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.005610424,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 1.48489441,
+            "seconds": 3.809186549,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -278,83 +243,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 1.942045555,
+            "seconds": 2.849280952,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.006044982,
+            "seconds": 0.006231852,
             "exit": 0,
-            "master_pid": 1056042
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 6.494452219,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.005930407,
-            "exit": 0,
-            "master_pid": 1056042
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 8.566758223,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.021360961,
-            "exit": 0,
-            "master_pid": 1056042
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 2.266284938,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.014676216,
-            "exit": 0,
-            "master_pid": 1056042
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 4.237076615,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.006331662,
-            "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -363,12 +260,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.0064551,
+            "seconds": 0.005451245,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.35222592,
+            "seconds": 3.99242762,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -380,15 +277,83 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 3.175478384,
+            "seconds": 2.011232527,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005376416,
+            "seconds": 0.004682158,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 3.13546689,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.00498086,
+            "exit": 0,
+            "master_pid": 1810430
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 3.364608863,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.004554852,
+            "exit": 0,
+            "master_pid": 1810430
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 1.972529609,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.00513976,
+            "exit": 0,
+            "master_pid": 1810430
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 1.196537448,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.00461357,
+            "exit": 0,
+            "master_pid": 1810430
           }
         },
         {
@@ -397,12 +362,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.004915633,
+            "seconds": 0.004372084,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.829306948,
+            "seconds": 1.144437571,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -414,15 +379,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 2.081313761,
+            "seconds": 1.007199168,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.008253394,
+            "seconds": 0.004359661,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -431,63 +396,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.006619083,
+            "seconds": 0.00380326,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.943498782,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.007191844,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 1.296711012,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.006308384,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 1.23722317,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.009478785,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 3.301521213,
+            "seconds": 1.052104172,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -499,15 +413,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 2.364916252,
+            "seconds": 0.949598245,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005949655,
+            "seconds": 0.00517198,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -516,29 +430,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.005456993,
+            "seconds": 0.004749122,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.109204193,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.005182484,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 1.43437073,
+            "seconds": 0.899119516,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -550,12 +447,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.005874379,
+            "seconds": 0.004696007,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.162935081,
+            "seconds": 0.895977762,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -567,12 +464,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.006468616,
+            "seconds": 0.004519417,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.497173495,
+            "seconds": 0.84665804,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -584,29 +481,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.006429575,
+            "seconds": 0.006163749,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.770296017,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.006732471,
-            "exit": 0,
-            "master_pid": 1056042
-          },
-          "mesh": {
-            "seconds": 1.424763937,
+            "seconds": 1.151764395,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -618,15 +498,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.965891586,
+            "seconds": 2.619736652,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.00585244,
+            "seconds": 0.005530179,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           }
         },
         {
@@ -635,12 +515,97 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.006468567,
+            "seconds": 0.004465009,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
           },
           "mesh": {
-            "seconds": 1.242824888,
+            "seconds": 8.045264446,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.005335475,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 5.379700802,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.005101282,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 3.044837863,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.005008992,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 3.881581443,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.00625698,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 3.891741046,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.006191866,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 3.389490802,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -652,249 +617,283 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 1.837623261,
+            "seconds": 3.45572592,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.005777279,
+            "seconds": 0.005210099,
             "exit": 0,
-            "master_pid": 1056042
+            "master_pid": 1810430
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.005415849,
+            "exit": 0,
+            "master_pid": 1810430
+          },
+          "mesh": {
+            "seconds": 6.781445777,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 5.271204898,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.005539228,
+            "exit": 0,
+            "master_pid": 1810430
           }
         }
       ],
       "server_warmups": [
         {
-          "create_seconds": 0.647364657,
-          "wait_seconds": 0.200649464,
-          "total_seconds": 0.848014121,
+          "create_seconds": 1.638784369,
+          "wait_seconds": 0.925720531,
+          "total_seconds": 2.5645049,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.847835863,
-          "wait_seconds": 0.197999532,
-          "total_seconds": 1.045835395,
+          "create_seconds": 1.555877811,
+          "wait_seconds": 0.790029273,
+          "total_seconds": 2.345907084,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.459360847,
-          "wait_seconds": 0.238207309,
-          "total_seconds": 1.697568156,
+          "create_seconds": 1.913360408,
+          "wait_seconds": 0.344992396,
+          "total_seconds": 2.258352804,
           "create_phase": "live",
           "exit": 0
         }
       ],
       "server_samples": [
         {
-          "create_seconds": 0.826737832,
-          "wait_seconds": 0.226154423,
-          "total_seconds": 1.052892255,
+          "create_seconds": 1.581718506,
+          "wait_seconds": 0.381192924,
+          "total_seconds": 1.96291143,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.709274194,
-          "wait_seconds": 0.168855291,
-          "total_seconds": 0.878129485,
+          "create_seconds": 2.249275259,
+          "wait_seconds": 0.596928339,
+          "total_seconds": 2.846203598,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.660826984,
-          "wait_seconds": 0.16995828,
-          "total_seconds": 0.830785264,
+          "create_seconds": 2.154624185,
+          "wait_seconds": 0.895960586,
+          "total_seconds": 3.050584771,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.572513897,
-          "wait_seconds": 0.186166778,
-          "total_seconds": 0.758680675,
+          "create_seconds": 3.387820246,
+          "wait_seconds": 0.401171037,
+          "total_seconds": 3.788991283,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.920979409,
-          "wait_seconds": 0.185129493,
-          "total_seconds": 1.106108902,
+          "create_seconds": 2.507782335,
+          "wait_seconds": 0.513726889,
+          "total_seconds": 3.021509224,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.677971806,
-          "wait_seconds": 0.280894556,
-          "total_seconds": 0.958866362,
+          "create_seconds": 2.089266858,
+          "wait_seconds": 0.50650792,
+          "total_seconds": 2.595774778,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.951885976,
-          "wait_seconds": 0.169230151,
-          "total_seconds": 1.121116127,
+          "create_seconds": 4.963983865,
+          "wait_seconds": 0.632910278,
+          "total_seconds": 5.596894143,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.608076869,
-          "wait_seconds": 0.154708603,
-          "total_seconds": 0.762785472,
+          "create_seconds": 3.007200257,
+          "wait_seconds": 1.309925115,
+          "total_seconds": 4.317125372,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.800350931,
-          "wait_seconds": 0.143286734,
-          "total_seconds": 0.943637665,
+          "create_seconds": 2.654091903,
+          "wait_seconds": 0.742531326,
+          "total_seconds": 3.396623229,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.594734984,
-          "wait_seconds": 0.216892346,
-          "total_seconds": 0.81162733,
+          "create_seconds": 4.090875949,
+          "wait_seconds": 0.516958918,
+          "total_seconds": 4.607834867,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.688833894,
-          "wait_seconds": 0.221198142,
-          "total_seconds": 0.910032036,
+          "create_seconds": 1.711725778,
+          "wait_seconds": 0.948325725,
+          "total_seconds": 2.660051503,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.837592459,
-          "wait_seconds": 0.188480252,
-          "total_seconds": 1.026072711,
+          "create_seconds": 3.613177924,
+          "wait_seconds": 0.857693711,
+          "total_seconds": 4.470871635,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.695680609,
-          "wait_seconds": 0.241330576,
-          "total_seconds": 0.937011185,
+          "create_seconds": 2.723822255,
+          "wait_seconds": 0.300993223,
+          "total_seconds": 3.024815478,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.207085536,
-          "wait_seconds": 0.395987056,
-          "total_seconds": 1.603072592,
+          "create_seconds": 0.721197019,
+          "wait_seconds": 0.172583364,
+          "total_seconds": 0.893780383,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 2.975699861,
-          "wait_seconds": 0.196542082,
-          "total_seconds": 3.172241943,
+          "create_seconds": 0.736934346,
+          "wait_seconds": 0.227310562,
+          "total_seconds": 0.964244908,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.671991066,
-          "wait_seconds": 0.198329138,
-          "total_seconds": 0.870320204,
+          "create_seconds": 1.234841442,
+          "wait_seconds": 0.355014239,
+          "total_seconds": 1.589855681,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.705049112,
-          "wait_seconds": 0.314747866,
-          "total_seconds": 1.019796978,
+          "create_seconds": 1.475651842,
+          "wait_seconds": 0.562427261,
+          "total_seconds": 2.038079103,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.236844082,
-          "wait_seconds": 0.302385028,
-          "total_seconds": 1.53922911,
+          "create_seconds": 1.881004106,
+          "wait_seconds": 0.324845425,
+          "total_seconds": 2.205849531,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 2.141442097,
-          "wait_seconds": 0.212780367,
-          "total_seconds": 2.354222464,
+          "create_seconds": 2.104519522,
+          "wait_seconds": 0.600591018,
+          "total_seconds": 2.70511054,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.344814447,
-          "wait_seconds": 0.699949269,
-          "total_seconds": 2.044763716,
+          "create_seconds": 1.551855511,
+          "wait_seconds": 0.230632245,
+          "total_seconds": 1.782487756,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.112607888,
-          "wait_seconds": 0.44252139,
-          "total_seconds": 1.555129278,
+          "create_seconds": 0.948370026,
+          "wait_seconds": 0.207544105,
+          "total_seconds": 1.155914131,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 3.033874904,
-          "wait_seconds": 0.691181977,
-          "total_seconds": 3.725056881,
+          "create_seconds": 0.830679875,
+          "wait_seconds": 0.219136874,
+          "total_seconds": 1.049816749,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.662126064,
-          "wait_seconds": 0.340713966,
-          "total_seconds": 2.00284003,
+          "create_seconds": 0.962901236,
+          "wait_seconds": 0.314942322,
+          "total_seconds": 1.277843558,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 4.70433095,
-          "wait_seconds": 1.415850955,
-          "total_seconds": 6.120181905,
+          "create_seconds": 1.430272295,
+          "wait_seconds": 0.490280971,
+          "total_seconds": 1.920553266,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.376747787,
-          "wait_seconds": 0.420213824,
-          "total_seconds": 1.796961611,
+          "create_seconds": 1.213129067,
+          "wait_seconds": 0.218390523,
+          "total_seconds": 1.43151959,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 4.389758284,
-          "wait_seconds": 0.375730397,
-          "total_seconds": 4.765488681,
+          "create_seconds": 1.46253581,
+          "wait_seconds": 1.423835723,
+          "total_seconds": 2.886371533,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.322648589,
-          "wait_seconds": 0.257819338,
-          "total_seconds": 1.580467927,
+          "create_seconds": 1.667157615,
+          "wait_seconds": 0.340817893,
+          "total_seconds": 2.007975508,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.591335502,
-          "wait_seconds": 0.251303131,
-          "total_seconds": 1.842638633,
+          "create_seconds": 1.986422967,
+          "wait_seconds": 0.608711009,
+          "total_seconds": 2.595133976,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 4.435221835,
-          "wait_seconds": 0.728969588,
-          "total_seconds": 5.164191423,
+          "create_seconds": 1.449195081,
+          "wait_seconds": 0.195814879,
+          "total_seconds": 1.64500996,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 1.83721638,
-          "wait_seconds": 0.660045567,
-          "total_seconds": 2.497261947,
+          "create_seconds": 2.486599726,
+          "wait_seconds": 0.47165792,
+          "total_seconds": 2.958257646,
           "create_phase": "live",
           "exit": 0
         }
@@ -902,54 +901,54 @@
       "summary": {
         "count": 30,
         "mesh_mcp_ms": {
-          "min": 965.8915860000001,
-          "p50": 1940.3204955,
-          "p90": 4349.773663,
-          "max": 8566.758223
+          "min": 846.65804,
+          "p50": 2734.5088020000003,
+          "p90": 5379.700802,
+          "max": 8045.264445999999
         },
         "warm_ssh_ms": {
-          "min": 4.660402,
-          "p50": 5.9973185,
-          "p90": 8.253394,
-          "max": 21.360961
+          "min": 3.8032600000000003,
+          "p50": 4.9949259999999995,
+          "p90": 6.191866,
+          "max": 6.514303
         },
         "server_ms": {
           "count": 30,
           "create_ms": {
-            "min": 572.513897,
-            "p50": 1032.246932,
-            "p90": 3033.8749040000002,
-            "max": 4704.3309500000005
+            "min": 721.197019,
+            "p50": 1796.3649420000002,
+            "p90": 3387.8202459999998,
+            "max": 4963.983865
           },
           "wait_ms": {
-            "min": 143.286734,
-            "p50": 246.31685349999998,
-            "p90": 691.181977,
-            "max": 1415.850955
+            "min": 172.583364,
+            "p50": 480.9694455,
+            "p90": 895.9605859999999,
+            "max": 1423.8357230000001
           },
           "total_ms": {
-            "min": 758.6806750000001,
-            "p50": 1330.1726185,
-            "p90": 3725.056881,
-            "max": 6120.181905
+            "min": 893.7803829999999,
+            "p50": 2595.454377,
+            "p90": 4317.1253719999995,
+            "max": 5596.894143
           }
         },
         "comparison": {
-          "p50_ratio": 323.53134079839185,
-          "p50_delta_ms": 1934.323177,
+          "p50_ratio": 547.4573200884256,
+          "p50_delta_ms": 2729.5138759999995,
           "paired_ratio": {
-            "min": 154.41888685748424,
-            "median": 305.849093549642,
-            "p90": 832.302212795351,
-            "p95": 1095.110709770847,
-            "max": 1099.4254035763431
+            "min": 183.60439232170273,
+            "median": 465.46449052726405,
+            "p90": 951.6136360518108,
+            "p95": 1252.1482369615549,
+            "max": 1801.8473078105776
           },
           "paired_delta_ms": {
-            "min": 960.0391460000001,
-            "median": 1934.791052,
-            "p90": 4344.547468,
-            "p95": 6488.521812,
-            "max": 8545.397262000002
+            "min": 842.1386229999999,
+            "median": 2728.6277864999997,
+            "p90": 5374.365327,
+            "p95": 6776.029928,
+            "max": 8040.799436999999
           },
           "pairs_exceeding_both_margins": 30,
           "one_sided_sign_p": 9.313225746154785e-10,
@@ -966,14 +965,14 @@
       "target_ip": "100.84.25.68",
       "ssh_target_ip": "100.84.25.68",
       "network_matched": true,
-      "daemon_port": 48545,
-      "cwd": "/root/mesh-oneshot-bench-1d10aa35-vps/work",
+      "daemon_port": 55823,
+      "cwd": "/root/mesh-oneshot-bench-44a9d5cc-vps/work",
       "true_path": "/bin/true",
       "remote_platform": "Linux-6.12.107+deb13-cloud-amd64-x86_64-with-glibc2.41",
       "load_average": [
-        0.44189453125,
-        0.41845703125,
-        0.43603515625
+        0.4931640625,
+        0.4794921875,
+        0.54833984375
       ],
       "availability": null,
       "rtt": {
@@ -982,41 +981,40 @@
           80.0,
           81.0,
           81.0,
-          82.0,
+          80.0,
           81.0
         ],
         "summary_ms": {
           "min": 80.0,
           "p50": 81.0,
-          "p90": 82.0,
-          "max": 82.0
+          "p90": 81.0,
+          "max": 81.0
         }
       },
       "ssh": {
         "available": true,
         "alias": "vps",
         "effective_hostname": "100.84.25.68",
-        "command": "cd /root/mesh-oneshot-bench-1d10aa35-vps/work && exec /bin/true",
+        "command": "cd /root/mesh-oneshot-bench-44a9d5cc-vps/work && exec /bin/true",
         "mux_proof": {
-          "master_pid": 1155657,
-          "control_path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/ssh-vps/c",
+          "master_pid": 1854662,
+          "control_path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/ssh-vps/c",
           "proxy_command_guard": "false",
           "ssh_connection": {
             "client_ip": "100.77.94.94",
-            "client_port": "41270",
+            "client_port": "50692",
             "server_ip": "100.84.25.68",
             "server_port": "22"
           },
           "check_before": true,
-          "tcp_socket_inodes_before": [
-            "468755272",
-            "468779065"
+          "tcp_connection_inodes_before": [
+            "469908710"
           ],
           "check_after": true,
-          "tcp_socket_inodes_after": [
-            "468755272",
-            "468779065"
-          ]
+          "tcp_connection_inodes_after": [
+            "469908710"
+          ],
+          "tcp_inode_unchanged": true
         }
       },
       "warmups": [
@@ -1026,15 +1024,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.833622368,
+            "seconds": 0.521512699,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.173927609,
+            "seconds": 0.176901627,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1043,12 +1041,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.174820834,
+            "seconds": 0.172470899,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.450719141,
+            "seconds": 0.471778393,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1060,15 +1058,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.463101988,
+            "seconds": 0.469563725,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.17291948,
+            "seconds": 0.173893372,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         }
       ],
@@ -1079,15 +1077,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.558829137,
+            "seconds": 0.517177694,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.174036667,
+            "seconds": 0.173815825,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1096,15 +1094,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.508384879,
+            "seconds": 0.539085641,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.178393607,
+            "seconds": 0.186123924,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1113,15 +1111,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.486250954,
+            "seconds": 0.540545587,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.178928636,
+            "seconds": 0.175315279,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1130,15 +1128,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.486117928,
+            "seconds": 0.476555456,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.179490718,
+            "seconds": 0.17322694,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1147,46 +1145,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.178308575,
+            "seconds": 0.175355168,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.546572867,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.445807342,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.1753214,
-            "exit": 0,
-            "master_pid": 1155657
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.178275256,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.442514071,
+            "seconds": 0.474938444,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1198,83 +1162,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.475895383,
+            "seconds": 0.518166905,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.179050527,
+            "seconds": 0.173972553,
             "exit": 0,
-            "master_pid": 1155657
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.485834736,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.174214332,
-            "exit": 0,
-            "master_pid": 1155657
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.606299911,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.176025205,
-            "exit": 0,
-            "master_pid": 1155657
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.500620578,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.175090831,
-            "exit": 0,
-            "master_pid": 1155657
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 1.051996321,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.173596428,
-            "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1283,12 +1179,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.174852347,
+            "seconds": 0.177595434,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.726029348,
+            "seconds": 0.536246386,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1300,15 +1196,83 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.430802194,
+            "seconds": 0.52329968,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.173745001,
+            "seconds": 0.17461805,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.470495602,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.179663251,
+            "exit": 0,
+            "master_pid": 1854662
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.55023777,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.176099108,
+            "exit": 0,
+            "master_pid": 1854662
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.462247111,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.179704581,
+            "exit": 0,
+            "master_pid": 1854662
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.55602919,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.173388296,
+            "exit": 0,
+            "master_pid": 1854662
           }
         },
         {
@@ -1317,12 +1281,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.21167921,
+            "seconds": 0.177419659,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.463255515,
+            "seconds": 0.490597137,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1334,15 +1298,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.593034588,
+            "seconds": 0.501335784,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.17820523,
+            "seconds": 0.173271073,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1351,63 +1315,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.178505349,
+            "seconds": 0.171906777,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.563066972,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.180541455,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.525351631,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.173290267,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.471446488,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.17991456,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.660303945,
+            "seconds": 0.573716861,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1419,15 +1332,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.516487853,
+            "seconds": 0.521383214,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.173028805,
+            "seconds": 0.17656724,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1436,29 +1349,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.18713065,
+            "seconds": 0.172642641,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.893968109,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.172622697,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.487869906,
+            "seconds": 0.562869853,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1470,12 +1366,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.175700438,
+            "seconds": 0.177956013,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.474564492,
+            "seconds": 0.531192013,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1487,12 +1383,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.175577516,
+            "seconds": 0.17390306,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.488574443,
+            "seconds": 0.464546101,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1504,29 +1400,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.174685065,
+            "seconds": 0.174167054,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.878694067,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.172378632,
-            "exit": 0,
-            "master_pid": 1155657
-          },
-          "mesh": {
-            "seconds": 0.964729529,
+            "seconds": 0.563270842,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1538,15 +1417,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.890523451,
+            "seconds": 0.514167218,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.175629311,
+            "seconds": 0.175780737,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           }
         },
         {
@@ -1555,12 +1434,97 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.176062742,
+            "seconds": 0.180984105,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
           },
           "mesh": {
-            "seconds": 0.508651375,
+            "seconds": 0.713369868,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.20027829,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.479926061,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.180721008,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.448362218,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.173847033,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.560615413,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.1733484,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.488337629,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.174633757,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.569800627,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1572,249 +1536,283 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.482997316,
+            "seconds": 0.569451479,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.175941292,
+            "seconds": 0.176033003,
             "exit": 0,
-            "master_pid": 1155657
+            "master_pid": 1854662
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.182919206,
+            "exit": 0,
+            "master_pid": 1854662
+          },
+          "mesh": {
+            "seconds": 0.467769565,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.521787354,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.179732416,
+            "exit": 0,
+            "master_pid": 1854662
           }
         }
       ],
       "server_warmups": [
         {
-          "create_seconds": 0.142630864,
-          "wait_seconds": 0.003401703,
-          "total_seconds": 0.146032567,
+          "create_seconds": 0.178118647,
+          "wait_seconds": 0.0044815,
+          "total_seconds": 0.182600147,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.152775373,
-          "wait_seconds": 0.015103286,
-          "total_seconds": 0.167878659,
-          "create_phase": "live",
+          "create_seconds": 0.169579508,
+          "wait_seconds": 0.00325605,
+          "total_seconds": 0.172835558,
+          "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.147925778,
-          "wait_seconds": 0.006309696,
-          "total_seconds": 0.154235474,
+          "create_seconds": 0.169080112,
+          "wait_seconds": 0.003650544,
+          "total_seconds": 0.172730656,
           "create_phase": "terminal",
           "exit": 0
         }
       ],
       "server_samples": [
         {
-          "create_seconds": 0.13546976,
-          "wait_seconds": 0.014844772,
-          "total_seconds": 0.150314532,
+          "create_seconds": 0.144392276,
+          "wait_seconds": 0.024790085,
+          "total_seconds": 0.169182361,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.163101951,
-          "wait_seconds": 0.008201905,
-          "total_seconds": 0.171303856,
+          "create_seconds": 0.168218025,
+          "wait_seconds": 0.003785497,
+          "total_seconds": 0.172003522,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.154919376,
-          "wait_seconds": 0.003749957,
-          "total_seconds": 0.158669333,
+          "create_seconds": 0.17297144,
+          "wait_seconds": 0.00397831,
+          "total_seconds": 0.17694975,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.132019716,
-          "wait_seconds": 0.013519617,
-          "total_seconds": 0.145539333,
+          "create_seconds": 0.172816602,
+          "wait_seconds": 0.003314893,
+          "total_seconds": 0.176131495,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.19250859,
+          "wait_seconds": 0.006307982,
+          "total_seconds": 0.198816572,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.167327516,
+          "wait_seconds": 0.018506051,
+          "total_seconds": 0.185833567,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.162319312,
-          "wait_seconds": 0.004096091,
-          "total_seconds": 0.166415403,
+          "create_seconds": 0.188053107,
+          "wait_seconds": 0.003047563,
+          "total_seconds": 0.19110067,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.149298909,
-          "wait_seconds": 0.002871183,
-          "total_seconds": 0.152170092,
+          "create_seconds": 0.160586626,
+          "wait_seconds": 0.003282188,
+          "total_seconds": 0.163868814,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.160767051,
-          "wait_seconds": 0.003427821,
-          "total_seconds": 0.164194872,
+          "create_seconds": 0.200291839,
+          "wait_seconds": 0.003763861,
+          "total_seconds": 0.2040557,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.161849718,
-          "wait_seconds": 0.002819184,
-          "total_seconds": 0.164668902,
+          "create_seconds": 0.172471545,
+          "wait_seconds": 0.003930276,
+          "total_seconds": 0.176401821,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.145672654,
-          "wait_seconds": 0.003840713,
-          "total_seconds": 0.149513367,
+          "create_seconds": 0.134439152,
+          "wait_seconds": 0.023632486,
+          "total_seconds": 0.158071638,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.190582891,
+          "wait_seconds": 0.006034505,
+          "total_seconds": 0.196617396,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.167136058,
-          "wait_seconds": 0.004188711,
-          "total_seconds": 0.171324769,
+          "create_seconds": 0.2974105,
+          "wait_seconds": 0.006883855,
+          "total_seconds": 0.304294355,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.188221123,
-          "wait_seconds": 0.003861731,
-          "total_seconds": 0.192082854,
+          "create_seconds": 0.273126984,
+          "wait_seconds": 0.004944978,
+          "total_seconds": 0.278071962,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.163589452,
-          "wait_seconds": 0.004750463,
-          "total_seconds": 0.168339915,
+          "create_seconds": 0.133009846,
+          "wait_seconds": 0.02389298,
+          "total_seconds": 0.156902826,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.205996693,
+          "wait_seconds": 0.005794024,
+          "total_seconds": 0.211790717,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.182916471,
-          "wait_seconds": 0.003373778,
-          "total_seconds": 0.186290249,
+          "create_seconds": 0.194277698,
+          "wait_seconds": 0.004920948,
+          "total_seconds": 0.199198646,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.191237726,
-          "wait_seconds": 0.003436444,
-          "total_seconds": 0.19467417,
+          "create_seconds": 0.26426155,
+          "wait_seconds": 0.034972574,
+          "total_seconds": 0.299234124,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.243478163,
+          "wait_seconds": 0.005471963,
+          "total_seconds": 0.248950126,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.171658608,
-          "wait_seconds": 0.003382686,
-          "total_seconds": 0.175041294,
+          "create_seconds": 0.322841879,
+          "wait_seconds": 0.036868883,
+          "total_seconds": 0.359710762,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.33014142,
+          "wait_seconds": 0.006243192,
+          "total_seconds": 0.336384612,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.173102447,
-          "wait_seconds": 0.003582039,
-          "total_seconds": 0.176684486,
+          "create_seconds": 0.257045854,
+          "wait_seconds": 0.005371898,
+          "total_seconds": 0.262417752,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.187326065,
-          "wait_seconds": 0.002687202,
-          "total_seconds": 0.190013267,
+          "create_seconds": 0.209678711,
+          "wait_seconds": 0.005081818,
+          "total_seconds": 0.214760529,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.201272579,
-          "wait_seconds": 0.00559194,
-          "total_seconds": 0.206864519,
+          "create_seconds": 0.208609557,
+          "wait_seconds": 0.005431644,
+          "total_seconds": 0.214041201,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.182289706,
-          "wait_seconds": 0.005410203,
-          "total_seconds": 0.187699909,
+          "create_seconds": 0.262782852,
+          "wait_seconds": 0.004701715,
+          "total_seconds": 0.267484567,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.228372979,
-          "wait_seconds": 0.003142106,
-          "total_seconds": 0.231515085,
+          "create_seconds": 0.254100833,
+          "wait_seconds": 0.041025142,
+          "total_seconds": 0.295125975,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.265610252,
+          "wait_seconds": 0.008055548,
+          "total_seconds": 0.2736658,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.168240052,
-          "wait_seconds": 0.009303043,
-          "total_seconds": 0.177543095,
+          "create_seconds": 0.206979224,
+          "wait_seconds": 0.015935937,
+          "total_seconds": 0.222915161,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.215619022,
+          "wait_seconds": 0.003372916,
+          "total_seconds": 0.218991938,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.191881555,
-          "wait_seconds": 0.007957453,
-          "total_seconds": 0.199839008,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.177731834,
-          "wait_seconds": 0.00421503,
-          "total_seconds": 0.181946864,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.25769088,
-          "wait_seconds": 0.002153516,
-          "total_seconds": 0.259844396,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.155177717,
-          "wait_seconds": 0.00352044,
-          "total_seconds": 0.158698157,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.178210457,
-          "wait_seconds": 0.004172614,
-          "total_seconds": 0.182383071,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.189093133,
-          "wait_seconds": 0.010962963,
-          "total_seconds": 0.200056096,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.212141549,
-          "wait_seconds": 0.005169066,
-          "total_seconds": 0.217310615,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.247071647,
-          "wait_seconds": 0.001982842,
-          "total_seconds": 0.249054489,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.203507103,
-          "wait_seconds": 0.003325937,
-          "total_seconds": 0.20683304,
+          "create_seconds": 0.217660977,
+          "wait_seconds": 0.004708758,
+          "total_seconds": 0.222369735,
           "create_phase": "terminal",
           "exit": 0
         }
@@ -1822,54 +1820,54 @@
       "summary": {
         "count": 30,
         "mesh_mcp_ms": {
-          "min": 430.80219400000004,
-          "p50": 508.518127,
-          "p90": 890.523451,
-          "max": 1051.996321
+          "min": 448.362218,
+          "p50": 521.585284,
+          "p90": 569.4514790000001,
+          "max": 713.369868
         },
         "warm_ssh_ms": {
-          "min": 172.378632,
-          "p50": 175.820865,
-          "p90": 179.91456,
-          "max": 211.67921
+          "min": 171.906777,
+          "p50": 175.5679525,
+          "p90": 180.984105,
+          "max": 200.27829
         },
         "server_ms": {
           "count": 30,
           "create_ms": {
-            "min": 132.01971600000002,
-            "p50": 175.4171405,
-            "p90": 212.14154900000003,
-            "max": 257.69088
+            "min": 133.00984599999998,
+            "p50": 206.4879585,
+            "p90": 273.126984,
+            "max": 330.14142000000004
           },
           "wait_ms": {
-            "min": 1.9828419999999998,
-            "p50": 3.851222,
-            "p90": 9.303043,
-            "max": 14.844771999999999
+            "min": 3.0475630000000002,
+            "p50": 5.4518035000000005,
+            "p90": 24.790085,
+            "max": 41.025142
           },
           "total_ms": {
-            "min": 145.539333,
-            "p50": 179.7449795,
-            "p90": 217.310615,
-            "max": 259.84439599999996
+            "min": 156.902826,
+            "p50": 212.915959,
+            "p90": 299.234124,
+            "max": 359.71076200000005
           }
         },
         "comparison": {
-          "p50_ratio": 2.8922513093084827,
-          "p50_delta_ms": 332.69726199999997,
+          "p50_ratio": 2.970845627421667,
+          "p50_delta_ms": 346.0173314999999,
           "paired_ratio": {
-            "min": 2.1884790433599974,
-            "median": 2.874119857177704,
-            "p90": 5.030161376417611,
-            "p95": 5.59657260187562,
-            "max": 6.060011332721662
+            "min": 2.396295978960076,
+            "median": 2.9641613148780444,
+            "p90": 3.260317669723322,
+            "p95": 3.3373719815595164,
+            "max": 3.9416161325327437
           },
           "paired_delta_ms": {
-            "min": 251.576305,
-            "median": 331.28995249999997,
-            "p90": 706.837459,
-            "p95": 792.3508969999999,
-            "max": 878.3998930000001
+            "min": 267.64120999999994,
+            "median": 344.5051629999999,
+            "p90": 393.418476,
+            "p95": 401.81008399999996,
+            "max": 532.385763
           },
           "pairs_exceeding_both_margins": 30,
           "one_sided_sign_p": 9.313225746154785e-10,
@@ -1886,57 +1884,56 @@
       "target_ip": "100.94.222.118",
       "ssh_target_ip": "100.94.222.118",
       "network_matched": true,
-      "daemon_port": 42787,
-      "cwd": "/home/pi/mesh-oneshot-bench-1d10aa35-pi/work",
+      "daemon_port": 52213,
+      "cwd": "/home/pi/mesh-oneshot-bench-44a9d5cc-pi/work",
       "true_path": "/bin/true",
       "remote_platform": "Linux-6.18.39+rpt-rpi-v8-aarch64-with-glibc2.41",
       "load_average": [
-        0.78759765625,
-        1.0380859375,
-        1.13232421875
+        0.94580078125,
+        1.19921875,
+        1.4072265625
       ],
       "availability": null,
       "rtt": {
         "available": true,
         "samples_ms": [
-          1.0,
+          7.0,
+          27.0,
+          31.0,
           5.0,
-          1.0,
-          6.0,
-          3.0
+          5.0
         ],
         "summary_ms": {
-          "min": 1.0,
-          "p50": 3.0,
-          "p90": 6.0,
-          "max": 6.0
+          "min": 5.0,
+          "p50": 7.0,
+          "p90": 31.0,
+          "max": 31.0
         }
       },
       "ssh": {
         "available": true,
         "alias": "raspberry-pi",
         "effective_hostname": "100.94.222.118",
-        "command": "cd /home/pi/mesh-oneshot-bench-1d10aa35-pi/work && exec /bin/true",
+        "command": "cd /home/pi/mesh-oneshot-bench-44a9d5cc-pi/work && exec /bin/true",
         "mux_proof": {
-          "master_pid": 1179974,
-          "control_path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/ssh-pi/c",
+          "master_pid": 1860724,
+          "control_path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/ssh-pi/c",
           "proxy_command_guard": "false",
           "ssh_connection": {
             "client_ip": "100.77.94.94",
-            "client_port": "40940",
+            "client_port": "43086",
             "server_ip": "100.94.222.118",
             "server_port": "22"
           },
           "check_before": true,
-          "tcp_socket_inodes_before": [
-            "468808316",
-            "468811893"
+          "tcp_connection_inodes_before": [
+            "469912936"
           ],
           "check_after": true,
-          "tcp_socket_inodes_after": [
-            "468808316",
-            "468811893"
-          ]
+          "tcp_connection_inodes_after": [
+            "469912936"
+          ],
+          "tcp_inode_unchanged": true
         }
       },
       "warmups": [
@@ -1946,15 +1943,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.403950405,
+            "seconds": 0.82086147,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.055633084,
+            "seconds": 0.033434244,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -1963,12 +1960,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.037797907,
+            "seconds": 0.0501344,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.600829274,
+            "seconds": 0.415909423,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -1980,15 +1977,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.455758499,
+            "seconds": 0.500036878,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.026125939,
+            "seconds": 0.032915919,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         }
       ],
@@ -1999,15 +1996,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.85018793,
+            "seconds": 0.526921061,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.024882887,
+            "seconds": 0.043797419,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2016,15 +2013,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 1.272302372,
+            "seconds": 0.696429699,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.023436973,
+            "seconds": 0.027436072,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2033,15 +2030,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.417543323,
+            "seconds": 0.791066203,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.047650969,
+            "seconds": 0.047546534,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2050,15 +2047,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.589424981,
+            "seconds": 0.786604339,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.017401685,
+            "seconds": 0.018878982,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2067,46 +2064,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.01795448,
+            "seconds": 0.018422101,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.638516436,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.421253262,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.018855939,
-            "exit": 0,
-            "master_pid": 1179974
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.017267177,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.412374516,
+            "seconds": 0.297734282,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2118,83 +2081,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.508618874,
+            "seconds": 0.312173167,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.043302746,
+            "seconds": 0.021041394,
             "exit": 0,
-            "master_pid": 1179974
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.489698869,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.033871957,
-            "exit": 0,
-            "master_pid": 1179974
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.399808814,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.026821386,
-            "exit": 0,
-            "master_pid": 1179974
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.41105753,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.018103504,
-            "exit": 0,
-            "master_pid": 1179974
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.41224913,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.01848798,
-            "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2203,12 +2098,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.016837995,
+            "seconds": 0.016967227,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.374123938,
+            "seconds": 0.354686627,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2220,15 +2115,83 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.4187157,
+            "seconds": 1.939286055,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.018809784,
+            "seconds": 0.017440739,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.516211356,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.053053194,
+            "exit": 0,
+            "master_pid": 1860724
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.49326716,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.019553834,
+            "exit": 0,
+            "master_pid": 1860724
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.487032281,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.027130478,
+            "exit": 0,
+            "master_pid": 1860724
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.585548585,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.046861568,
+            "exit": 0,
+            "master_pid": 1860724
           }
         },
         {
@@ -2237,12 +2200,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.020992819,
+            "seconds": 0.031807255,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.410888598,
+            "seconds": 0.899205591,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2254,15 +2217,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.511753482,
+            "seconds": 0.731735921,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.01659022,
+            "seconds": 0.01882654,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2271,63 +2234,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.017266336,
+            "seconds": 0.019414039,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.390998205,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.016801948,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.378485937,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.017771201,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.40866484,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.017030432,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.469998132,
+            "seconds": 0.488789715,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2339,15 +2251,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.544034587,
+            "seconds": 0.351076195,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.016481622,
+            "seconds": 0.029458671,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2356,29 +2268,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.014840261,
+            "seconds": 0.031592506,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.39796356,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.020493682,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.455991682,
+            "seconds": 0.872540591,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2390,12 +2285,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.015737968,
+            "seconds": 0.016702138,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.632808051,
+            "seconds": 0.463792287,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2407,12 +2302,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.019440168,
+            "seconds": 0.017224569,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.605091241,
+            "seconds": 0.424692273,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2424,29 +2319,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.028945145,
+            "seconds": 0.021706085,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.426142143,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.038649741,
-            "exit": 0,
-            "master_pid": 1179974
-          },
-          "mesh": {
-            "seconds": 0.421308381,
+            "seconds": 0.407690542,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2458,15 +2336,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.400806805,
+            "seconds": 0.797468274,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.028771081,
+            "seconds": 0.027485912,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           }
         },
         {
@@ -2475,12 +2353,97 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.09901155,
+            "seconds": 0.024965206,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
           },
           "mesh": {
-            "seconds": 0.546252624,
+            "seconds": 0.376959676,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.018899,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 0.330220636,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.01731538,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 0.366123245,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.036651249,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 0.696816818,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.061004464,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 1.372532092,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.019865232,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 0.646133337,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2492,249 +2455,283 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.858429903,
+            "seconds": 0.459489287,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.022576354,
+            "seconds": 0.028702294,
             "exit": 0,
-            "master_pid": 1179974
+            "master_pid": 1860724
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.02750855,
+            "exit": 0,
+            "master_pid": 1860724
+          },
+          "mesh": {
+            "seconds": 0.475463954,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.408273239,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.050383489,
+            "exit": 0,
+            "master_pid": 1860724
           }
         }
       ],
       "server_warmups": [
         {
-          "create_seconds": 0.330846523,
-          "wait_seconds": 0.00353917,
-          "total_seconds": 0.334385693,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.403124438,
-          "wait_seconds": 0.004048663,
-          "total_seconds": 0.407173101,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.276842487,
-          "wait_seconds": 0.040043409,
-          "total_seconds": 0.316885896,
+          "create_seconds": 0.243812206,
+          "wait_seconds": 0.034147295,
+          "total_seconds": 0.277959501,
           "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.248919401,
+          "wait_seconds": 0.032118376,
+          "total_seconds": 0.281037777,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.325897177,
+          "wait_seconds": 0.00351803,
+          "total_seconds": 0.329415207,
+          "create_phase": "terminal",
           "exit": 0
         }
       ],
       "server_samples": [
         {
-          "create_seconds": 0.315663637,
-          "wait_seconds": 0.081843958,
-          "total_seconds": 0.397507595,
+          "create_seconds": 0.224312357,
+          "wait_seconds": 0.028720918,
+          "total_seconds": 0.253033275,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.398319416,
-          "wait_seconds": 0.003290859,
-          "total_seconds": 0.401610275,
+          "create_seconds": 0.241191497,
+          "wait_seconds": 0.026854219,
+          "total_seconds": 0.268045716,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.326148079,
+          "wait_seconds": 0.007263613,
+          "total_seconds": 0.333411692,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.279004215,
-          "wait_seconds": 0.035006668,
-          "total_seconds": 0.314010883,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.269264932,
-          "wait_seconds": 0.060472292,
-          "total_seconds": 0.329737224,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.460451702,
-          "wait_seconds": 0.003602724,
-          "total_seconds": 0.464054426,
+          "create_seconds": 0.295913181,
+          "wait_seconds": 0.003591807,
+          "total_seconds": 0.299504988,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.365282292,
-          "wait_seconds": 0.0832979,
-          "total_seconds": 0.448580192,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.415409033,
-          "wait_seconds": 0.003418302,
-          "total_seconds": 0.418827335,
+          "create_seconds": 0.776141458,
+          "wait_seconds": 0.003523271,
+          "total_seconds": 0.779664729,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.291075258,
-          "wait_seconds": 0.056755143,
-          "total_seconds": 0.347830401,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.294095731,
-          "wait_seconds": 0.062732778,
-          "total_seconds": 0.356828509,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.347688328,
-          "wait_seconds": 0.043700059,
-          "total_seconds": 0.391388387,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.271621674,
-          "wait_seconds": 0.049570194,
-          "total_seconds": 0.321191868,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.366026854,
-          "wait_seconds": 0.048070512,
-          "total_seconds": 0.414097366,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.431355574,
-          "wait_seconds": 0.031288612,
-          "total_seconds": 0.462644186,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.299018158,
-          "wait_seconds": 0.55352064,
-          "total_seconds": 0.852538798,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.799143012,
-          "wait_seconds": 0.005770711,
-          "total_seconds": 0.804913723,
+          "create_seconds": 0.410458689,
+          "wait_seconds": 0.00583363,
+          "total_seconds": 0.416292319,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.384821205,
-          "wait_seconds": 0.057711629,
-          "total_seconds": 0.442532834,
+          "create_seconds": 0.269681674,
+          "wait_seconds": 0.027779189,
+          "total_seconds": 0.297460863,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.654624312,
-          "wait_seconds": 0.005865006,
-          "total_seconds": 0.660489318,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.439402676,
-          "wait_seconds": 0.003802499,
-          "total_seconds": 0.443205175,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.511368724,
-          "wait_seconds": 0.007906235,
-          "total_seconds": 0.519274959,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.517274785,
-          "wait_seconds": 0.00429327,
-          "total_seconds": 0.521568055,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.605401167,
-          "wait_seconds": 0.003438653,
-          "total_seconds": 0.60883982,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.416981339,
-          "wait_seconds": 0.053565857,
-          "total_seconds": 0.470547196,
+          "create_seconds": 0.265839871,
+          "wait_seconds": 0.024584506,
+          "total_seconds": 0.290424377,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.616026399,
-          "wait_seconds": 0.011844399,
-          "total_seconds": 0.627870798,
+          "create_seconds": 0.25133333,
+          "wait_seconds": 0.003489401,
+          "total_seconds": 0.254822731,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.488532874,
-          "wait_seconds": 0.091084784,
-          "total_seconds": 0.579617658,
+          "create_seconds": 0.403736585,
+          "wait_seconds": 0.165484388,
+          "total_seconds": 0.569220973,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.488215361,
-          "wait_seconds": 0.008256378,
-          "total_seconds": 0.496471739,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.436609197,
-          "wait_seconds": 0.006446016,
-          "total_seconds": 0.443055213,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.514878003,
-          "wait_seconds": 0.005198275,
-          "total_seconds": 0.520076278,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.385621098,
-          "wait_seconds": 0.047970069,
-          "total_seconds": 0.433591167,
+          "create_seconds": 0.464963557,
+          "wait_seconds": 0.033109344,
+          "total_seconds": 0.498072901,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.568423748,
-          "wait_seconds": 0.005302848,
-          "total_seconds": 0.573726596,
+          "create_seconds": 0.304477274,
+          "wait_seconds": 0.003484586,
+          "total_seconds": 0.30796186,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.324526389,
-          "wait_seconds": 0.044139144,
-          "total_seconds": 0.368665533,
+          "create_seconds": 0.299710907,
+          "wait_seconds": 0.034348476,
+          "total_seconds": 0.334059383,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.266750987,
+          "wait_seconds": 0.003536529,
+          "total_seconds": 0.270287516,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.325434972,
+          "wait_seconds": 0.030876613,
+          "total_seconds": 0.356311585,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.32852784,
+          "wait_seconds": 0.006395568,
+          "total_seconds": 0.334923408,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.263845041,
+          "wait_seconds": 0.003320162,
+          "total_seconds": 0.267165203,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.249610849,
+          "wait_seconds": 0.029680794,
+          "total_seconds": 0.279291643,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.324696999,
+          "wait_seconds": 0.054978588,
+          "total_seconds": 0.379675587,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.433939293,
+          "wait_seconds": 0.003892914,
+          "total_seconds": 0.437832207,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.602139551,
+          "wait_seconds": 0.003539215,
+          "total_seconds": 0.605678766,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.378859095,
+          "wait_seconds": 0.004780236,
+          "total_seconds": 0.383639331,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.297548745,
+          "wait_seconds": 0.003732564,
+          "total_seconds": 0.301281309,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.33985325,
+          "wait_seconds": 0.005498079,
+          "total_seconds": 0.345351329,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.27546791,
+          "wait_seconds": 0.004050393,
+          "total_seconds": 0.279518303,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.514963809,
+          "wait_seconds": 0.114563727,
+          "total_seconds": 0.629527536,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.397686133,
+          "wait_seconds": 0.00404819,
+          "total_seconds": 0.401734323,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.307339139,
+          "wait_seconds": 0.003458808,
+          "total_seconds": 0.310797947,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.389612122,
+          "wait_seconds": 0.004417444,
+          "total_seconds": 0.394029566,
+          "create_phase": "terminal",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.29348433,
+          "wait_seconds": 0.028865452,
+          "total_seconds": 0.322349782,
           "create_phase": "live",
           "exit": 0
         }
@@ -2742,54 +2739,54 @@
       "summary": {
         "count": 30,
         "mesh_mcp_ms": {
-          "min": 374.123938,
-          "p50": 423.725262,
-          "p90": 638.516436,
-          "max": 1272.3023719999999
+          "min": 297.734282,
+          "p50": 491.0284375,
+          "p90": 872.5405910000001,
+          "max": 1939.286055
         },
         "warm_ssh_ms": {
-          "min": 14.840261,
-          "p50": 18.8328615,
-          "p90": 38.649741,
-          "max": 99.01155
+          "min": 16.702137999999998,
+          "p50": 26.047842,
+          "p90": 47.546534,
+          "max": 61.004464
         },
         "server_ms": {
           "count": 30,
           "create_ms": {
-            "min": 269.264932,
-            "p50": 416.195186,
-            "p90": 605.401167,
-            "max": 799.143012
+            "min": 224.312357,
+            "p50": 316.01806899999997,
+            "p90": 464.96355700000004,
+            "max": 776.1414580000001
           },
           "wait_ms": {
-            "min": 3.290859,
-            "p50": 33.147639999999996,
-            "p90": 81.843958,
-            "max": 553.52064
+            "min": 3.3201620000000003,
+            "p50": 5.6658545,
+            "p90": 34.348476000000005,
+            "max": 165.48438800000002
           },
           "total_ms": {
-            "min": 314.01088300000004,
-            "p50": 445.8926835,
-            "p90": 627.870798,
-            "max": 852.538798
+            "min": 253.033275,
+            "p50": 333.73553749999996,
+            "p90": 569.220973,
+            "max": 779.664729
           }
         },
         "comparison": {
-          "p50_ratio": 22.4992501537804,
-          "p50_delta_ms": 404.89240049999995,
+          "p50_ratio": 18.851021804416657,
+          "p50_delta_ms": 464.98059550000005,
           "paired_ratio": {
-            "min": 5.517059615772099,
-            "median": 22.58571509809572,
-            "p90": 35.563070386889514,
-            "p95": 40.20900608007336,
-            "max": 54.28612184687843
+            "min": 8.103314143250381,
+            "median": 19.958154077272333,
+            "p90": 32.5258389632701,
+            "p95": 41.665612001748826,
+            "max": 111.19288322587707
           },
           "paired_delta_ms": {
-            "min": 357.285943,
-            "median": 401.1516195,
-            "p90": 620.561956,
-            "p95": 835.8535489999999,
-            "max": 1248.865399
+            "min": 279.312181,
+            "median": 466.26691900000003,
+            "p90": 840.9480850000001,
+            "p95": 1311.5276279999998,
+            "max": 1921.845316
           },
           "pairs_exceeding_both_margins": 30,
           "one_sided_sign_p": 9.313225746154785e-10,
@@ -2806,14 +2803,14 @@
       "target_ip": "100.92.135.44",
       "ssh_target_ip": "100.92.135.44",
       "network_matched": true,
-      "daemon_port": 61122,
-      "cwd": "/Users/shaul/mesh-oneshot-bench-1d10aa35-mac/work",
+      "daemon_port": 63408,
+      "cwd": "/Users/shaul/mesh-oneshot-bench-44a9d5cc-mac/work",
       "true_path": "/usr/bin/true",
       "remote_platform": "macOS-26.4-arm64-arm-64bit-Mach-O",
       "load_average": [
-        3.060546875,
-        2.87255859375,
-        3.22509765625
+        3.384765625,
+        4.21142578125,
+        3.9873046875
       ],
       "availability": {
         "machine": "Shauls-MacBook-Air-2.local",
@@ -2828,59 +2825,58 @@
         },
         "cpu_count": 8,
         "load_average": [
-          3.060546875,
-          2.87255859375,
-          3.22509765625
+          3.5927734375,
+          4.26611328125,
+          4.00537109375
         ],
-        "home_disk_free_bytes": 23302754304,
+        "home_disk_free_bytes": 22858629120,
         "note": "No explicit reservation does not prove the machine is idle.",
         "mac": {
           "ac_power": true,
           "power_detail": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=22478947)\t100%; charged; 0:00 remaining present: true",
-          "hid_idle_seconds": 86085.72585975
+          "hid_idle_seconds": 88198.510087541
         }
       },
       "rtt": {
         "available": true,
         "samples_ms": [
+          64.0,
+          11.0,
           5.0,
           6.0,
-          11.0,
-          7.0,
-          4.0
+          5.0
         ],
         "summary_ms": {
-          "min": 4.0,
+          "min": 5.0,
           "p50": 6.0,
-          "p90": 11.0,
-          "max": 11.0
+          "p90": 64.0,
+          "max": 64.0
         }
       },
       "ssh": {
         "available": true,
         "alias": "shaul-mac",
         "effective_hostname": "100.92.135.44",
-        "command": "cd /Users/shaul/mesh-oneshot-bench-1d10aa35-mac/work && exec /usr/bin/true",
+        "command": "cd /Users/shaul/mesh-oneshot-bench-44a9d5cc-mac/work && exec /usr/bin/true",
         "mux_proof": {
-          "master_pid": 1189206,
-          "control_path": "/work/tmp/mesh-oneshot-bench-1g1sc3gn/ssh-mac/c",
+          "master_pid": 1869013,
+          "control_path": "/work/tmp/mesh-oneshot-bench-e7i1pt_8/ssh-mac/c",
           "proxy_command_guard": "false",
           "ssh_connection": {
             "client_ip": "100.77.94.94",
-            "client_port": "33018",
+            "client_port": "36906",
             "server_ip": "100.92.135.44",
             "server_port": "22"
           },
           "check_before": true,
-          "tcp_socket_inodes_before": [
-            "468831626",
-            "468832522"
+          "tcp_connection_inodes_before": [
+            "469894050"
           ],
           "check_after": true,
-          "tcp_socket_inodes_after": [
-            "468831626",
-            "468832522"
-          ]
+          "tcp_connection_inodes_after": [
+            "469894050"
+          ],
+          "tcp_inode_unchanged": true
         }
       },
       "warmups": [
@@ -2890,15 +2886,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.650645385,
+            "seconds": 0.538906939,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.033777545,
+            "seconds": 0.038779613,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -2907,12 +2903,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.032290969,
+            "seconds": 0.030158325,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.600499257,
+            "seconds": 0.723841607,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -2924,15 +2920,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.671915592,
+            "seconds": 1.041873011,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.035080932,
+            "seconds": 0.035742672,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         }
       ],
@@ -2943,15 +2939,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.587750424,
+            "seconds": 0.869939778,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.032048637,
+            "seconds": 0.03813277,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -2960,15 +2956,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.957703772,
+            "seconds": 0.584062772,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.031493772,
+            "seconds": 0.038587492,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -2977,15 +2973,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.561800528,
+            "seconds": 0.662810946,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.038982066,
+            "seconds": 0.038162017,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -2994,15 +2990,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.60649551,
+            "seconds": 0.491307771,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.035946573,
+            "seconds": 0.036298837,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -3011,46 +3007,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.031891714,
+            "seconds": 0.029867936,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.854183673,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.58527732,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.040008496,
-            "exit": 0,
-            "master_pid": 1189206
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.036067682,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 0.710268372,
+            "seconds": 0.531605041,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3062,83 +3024,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.72840078,
+            "seconds": 0.536443607,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.036841171,
+            "seconds": 0.042161686,
             "exit": 0,
-            "master_pid": 1189206
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.716543889,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.034452023,
-            "exit": 0,
-            "master_pid": 1189206
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.686584891,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.036981559,
-            "exit": 0,
-            "master_pid": 1189206
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.764783582,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.04091746,
-            "exit": 0,
-            "master_pid": 1189206
-          }
-        },
-        {
-          "order": [
-            "mesh",
-            "ssh"
-          ],
-          "mesh": {
-            "seconds": 0.853783594,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          },
-          "ssh": {
-            "seconds": 0.04098988,
-            "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -3147,12 +3041,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.038886269,
+            "seconds": 0.029625594,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.600449137,
+            "seconds": 0.496420205,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3164,15 +3058,83 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.605713208,
+            "seconds": 0.567669124,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.036905068,
+            "seconds": 0.037425995,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.47546074,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.037086092,
+            "exit": 0,
+            "master_pid": 1869013
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.483868089,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.038770895,
+            "exit": 0,
+            "master_pid": 1869013
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.563638921,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.037360646,
+            "exit": 0,
+            "master_pid": 1869013
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.535308045,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.038276524,
+            "exit": 0,
+            "master_pid": 1869013
           }
         },
         {
@@ -3181,12 +3143,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.032548957,
+            "seconds": 0.030622025,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 1.49858077,
+            "seconds": 0.516229764,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3198,15 +3160,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.64252341,
+            "seconds": 0.564089687,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.03847431,
+            "seconds": 0.039133325,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -3215,63 +3177,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.029999849,
+            "seconds": 0.039758554,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.683811434,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.038324575,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 2.383511786,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.03396392,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 0.893957885,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.035317488,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 0.735400287,
+            "seconds": 0.519188777,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3283,15 +3194,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.683813883,
+            "seconds": 0.492906698,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.040428725,
+            "seconds": 0.047777574,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -3300,29 +3211,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.037501647,
+            "seconds": 0.034270639,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.678450248,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.040430077,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 0.684303178,
+            "seconds": 0.493053001,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3334,12 +3228,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.032130699,
+            "seconds": 0.038741822,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 1.073992322,
+            "seconds": 0.502499205,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3351,12 +3245,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.036064822,
+            "seconds": 0.038636446,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.67197136,
+            "seconds": 0.557167793,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3368,29 +3262,12 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.043916877,
+            "seconds": 0.035863041,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.681767891,
-            "exit": 0,
-            "state": "exited",
-            "wait": "completed"
-          }
-        },
-        {
-          "order": [
-            "ssh",
-            "mesh"
-          ],
-          "ssh": {
-            "seconds": 0.03621587,
-            "exit": 0,
-            "master_pid": 1189206
-          },
-          "mesh": {
-            "seconds": 0.695137343,
+            "seconds": 0.516122126,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3402,15 +3279,15 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.799090806,
+            "seconds": 0.571575916,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.032406307,
+            "seconds": 0.037113761,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           }
         },
         {
@@ -3419,12 +3296,97 @@
             "mesh"
           ],
           "ssh": {
-            "seconds": 0.033852225,
+            "seconds": 0.030507523,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
           },
           "mesh": {
-            "seconds": 0.963540734,
+            "seconds": 0.499185543,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.037842151,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.470179556,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.03701775,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.519237412,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.038890375,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.538170438,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.034779398,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.462942415,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.036652537,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.505369285,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
@@ -3436,304 +3398,338 @@
             "ssh"
           ],
           "mesh": {
-            "seconds": 0.671487672,
+            "seconds": 0.483235756,
             "exit": 0,
             "state": "exited",
             "wait": "completed"
           },
           "ssh": {
-            "seconds": 0.039531458,
+            "seconds": 0.033956124,
             "exit": 0,
-            "master_pid": 1189206
+            "master_pid": 1869013
+          }
+        },
+        {
+          "order": [
+            "ssh",
+            "mesh"
+          ],
+          "ssh": {
+            "seconds": 0.034736896,
+            "exit": 0,
+            "master_pid": 1869013
+          },
+          "mesh": {
+            "seconds": 0.496537329,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          }
+        },
+        {
+          "order": [
+            "mesh",
+            "ssh"
+          ],
+          "mesh": {
+            "seconds": 0.528554764,
+            "exit": 0,
+            "state": "exited",
+            "wait": "completed"
+          },
+          "ssh": {
+            "seconds": 0.035217418,
+            "exit": 0,
+            "master_pid": 1869013
           }
         }
       ],
       "server_warmups": [
         {
-          "create_seconds": 0.399467292,
-          "wait_seconds": 0.051788167,
-          "total_seconds": 0.451255459,
+          "create_seconds": 0.338639333,
+          "wait_seconds": 0.060612584,
+          "total_seconds": 0.399251917,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.408313416,
-          "wait_seconds": 0.054377834,
-          "total_seconds": 0.46269125,
+          "create_seconds": 0.418295875,
+          "wait_seconds": 0.064559791,
+          "total_seconds": 0.482855666,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.4253955,
-          "wait_seconds": 0.0658225,
-          "total_seconds": 0.491218,
+          "create_seconds": 0.370126542,
+          "wait_seconds": 0.090721458,
+          "total_seconds": 0.460848,
           "create_phase": "live",
           "exit": 0
         }
       ],
       "server_samples": [
         {
-          "create_seconds": 0.407900042,
-          "wait_seconds": 0.065537875,
-          "total_seconds": 0.473437917,
+          "create_seconds": 0.330115042,
+          "wait_seconds": 0.094373916,
+          "total_seconds": 0.424488958,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.347894708,
-          "wait_seconds": 0.09571775,
-          "total_seconds": 0.443612458,
+          "create_seconds": 0.339902042,
+          "wait_seconds": 0.058320375,
+          "total_seconds": 0.398222417,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.392225875,
-          "wait_seconds": 0.092581292,
-          "total_seconds": 0.484807167,
+          "create_seconds": 0.312254791,
+          "wait_seconds": 0.078606417,
+          "total_seconds": 0.390861208,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.415452334,
-          "wait_seconds": 0.062529291,
-          "total_seconds": 0.477981625,
+          "create_seconds": 0.324272625,
+          "wait_seconds": 0.070648458,
+          "total_seconds": 0.394921083,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.365581875,
-          "wait_seconds": 0.09262075,
-          "total_seconds": 0.458202625,
+          "create_seconds": 0.350163167,
+          "wait_seconds": 0.064618875,
+          "total_seconds": 0.414782042,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.426025917,
-          "wait_seconds": 0.056977916,
-          "total_seconds": 0.483003833,
+          "create_seconds": 0.331179792,
+          "wait_seconds": 0.06180675,
+          "total_seconds": 0.392986542,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.402219333,
-          "wait_seconds": 0.0691395,
-          "total_seconds": 0.471358833,
+          "create_seconds": 0.381219042,
+          "wait_seconds": 0.108559042,
+          "total_seconds": 0.489778084,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.521158417,
-          "wait_seconds": 0.015810333,
-          "total_seconds": 0.53696875,
+          "create_seconds": 0.314109875,
+          "wait_seconds": 0.068690417,
+          "total_seconds": 0.382800292,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.366112,
+          "wait_seconds": 0.093874458,
+          "total_seconds": 0.459986458,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.322204833,
+          "wait_seconds": 0.066712625,
+          "total_seconds": 0.388917458,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.326042083,
+          "wait_seconds": 0.060751209,
+          "total_seconds": 0.386793292,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.376664875,
+          "wait_seconds": 0.054703,
+          "total_seconds": 0.431367875,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.356721667,
+          "wait_seconds": 0.084620375,
+          "total_seconds": 0.441342042,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.36215775,
+          "wait_seconds": 0.051885875,
+          "total_seconds": 0.414043625,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.316860167,
+          "wait_seconds": 0.07583825,
+          "total_seconds": 0.392698417,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.343490959,
+          "wait_seconds": 0.130106208,
+          "total_seconds": 0.473597167,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.361179417,
+          "wait_seconds": 0.080070208,
+          "total_seconds": 0.441249625,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.33651325,
+          "wait_seconds": 0.063420459,
+          "total_seconds": 0.399933709,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.368739042,
+          "wait_seconds": 0.071174,
+          "total_seconds": 0.439913042,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.303283791,
+          "wait_seconds": 0.119602834,
+          "total_seconds": 0.422886625,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.373864375,
+          "wait_seconds": 0.001702584,
+          "total_seconds": 0.375566959,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.396297084,
-          "wait_seconds": 0.085643833,
-          "total_seconds": 0.481940917,
+          "create_seconds": 0.317169459,
+          "wait_seconds": 0.065113208,
+          "total_seconds": 0.382282667,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.54243425,
-          "wait_seconds": 0.008180834,
-          "total_seconds": 0.550615084,
+          "create_seconds": 0.304599167,
+          "wait_seconds": 0.075444333,
+          "total_seconds": 0.3800435,
+          "create_phase": "live",
+          "exit": 0
+        },
+        {
+          "create_seconds": 0.656826625,
+          "wait_seconds": 0.001603667,
+          "total_seconds": 0.658430292,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.432231958,
-          "wait_seconds": 0.058447833,
-          "total_seconds": 0.490679791,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.373294542,
-          "wait_seconds": 0.066906791,
-          "total_seconds": 0.440201333,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.401854833,
-          "wait_seconds": 0.084498375,
-          "total_seconds": 0.486353208,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.573490375,
-          "wait_seconds": 0.008078584,
-          "total_seconds": 0.581568959,
+          "create_seconds": 0.453078459,
+          "wait_seconds": 0.004898791,
+          "total_seconds": 0.45797725,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.407277583,
-          "wait_seconds": 0.075265792,
-          "total_seconds": 0.482543375,
+          "create_seconds": 0.347383167,
+          "wait_seconds": 0.069732333,
+          "total_seconds": 0.4171155,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.393587917,
-          "wait_seconds": 0.073627417,
-          "total_seconds": 0.467215334,
+          "create_seconds": 0.360071,
+          "wait_seconds": 0.583087959,
+          "total_seconds": 0.943158959,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.417445916,
-          "wait_seconds": 0.072525125,
-          "total_seconds": 0.489971041,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.431769084,
-          "wait_seconds": 0.069966458,
-          "total_seconds": 0.501735542,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.395382125,
-          "wait_seconds": 0.059647292,
-          "total_seconds": 0.455029417,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.52691325,
-          "wait_seconds": 0.001386,
-          "total_seconds": 0.52829925,
+          "create_seconds": 2.465696916,
+          "wait_seconds": 0.062976667,
+          "total_seconds": 2.528673583,
           "create_phase": "terminal",
           "exit": 0
         },
         {
-          "create_seconds": 0.369219416,
-          "wait_seconds": 0.083475417,
-          "total_seconds": 0.452694833,
+          "create_seconds": 0.95360575,
+          "wait_seconds": 1.578225791,
+          "total_seconds": 2.531831541,
           "create_phase": "live",
           "exit": 0
         },
         {
-          "create_seconds": 0.548335,
-          "wait_seconds": 0.007004167,
-          "total_seconds": 0.555339167,
+          "create_seconds": 1.897917542,
+          "wait_seconds": 0.065074583,
+          "total_seconds": 1.962992125,
           "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.368185125,
-          "wait_seconds": 0.06360725,
-          "total_seconds": 0.431792375,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.579972542,
-          "wait_seconds": 0.002234083,
-          "total_seconds": 0.582206625,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.390654917,
-          "wait_seconds": 0.085665583,
-          "total_seconds": 0.4763205,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.489565,
-          "wait_seconds": 0.005835375,
-          "total_seconds": 0.495400375,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.411817709,
-          "wait_seconds": 0.068636166,
-          "total_seconds": 0.480453875,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.511214042,
-          "wait_seconds": 0.001515792,
-          "total_seconds": 0.512729834,
-          "create_phase": "terminal",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.364283916,
-          "wait_seconds": 0.0969155,
-          "total_seconds": 0.461199416,
-          "create_phase": "live",
-          "exit": 0
-        },
-        {
-          "create_seconds": 0.621102,
-          "wait_seconds": 0.064961417,
-          "total_seconds": 0.686063417,
-          "create_phase": "live",
           "exit": 0
         }
       ],
       "summary": {
         "count": 30,
         "mesh_mcp_ms": {
-          "min": 561.800528,
-          "p50": 690.8611169999999,
-          "p90": 963.5407339999999,
-          "max": 2383.511786
+          "min": 462.942415,
+          "p50": 517.7092705,
+          "p90": 571.575916,
+          "max": 869.939778
         },
         "warm_ssh_ms": {
-          "min": 29.999848999999998,
-          "p50": 36.5285205,
-          "p90": 40.430077000000004,
-          "max": 43.916877
+          "min": 29.625594000000003,
+          "p50": 37.2372035,
+          "p90": 39.133325,
+          "max": 47.777574
         },
         "server_ms": {
           "count": 30,
           "create_ms": {
-            "min": 347.894708,
-            "p50": 409.8588755,
-            "p90": 548.335,
-            "max": 621.1020000000001
+            "min": 303.283791,
+            "p50": 348.773167,
+            "p90": 656.826625,
+            "max": 2465.6969160000003
           },
           "wait_ms": {
-            "min": 1.3860000000000001,
-            "p50": 66.22233299999999,
-            "p90": 92.58129199999999,
-            "max": 96.91550000000001
+            "min": 1.603667,
+            "p50": 69.211375,
+            "p90": 119.602834,
+            "max": 1578.2257909999998
           },
           "total_ms": {
-            "min": 431.792375,
-            "p50": 482.773604,
-            "p90": 555.339167,
-            "max": 686.063417
+            "min": 375.566959,
+            "p50": 420.0010625,
+            "p90": 943.158959,
+            "max": 2531.831541
           }
         },
         "comparison": {
-          "p50_ratio": 18.912923588022135,
-          "p50_delta_ms": 654.3325965,
+          "p50_ratio": 13.903011554022846,
+          "p50_delta_ms": 480.4720669999999,
           "paired_ratio": {
-            "min": 14.41176894010697,
-            "median": 18.942580174001414,
-            "p90": 30.409306703560308,
-            "p95": 46.040823059245795,
-            "max": 62.19277802819732
+            "min": 10.31669582051194,
+            "median": 14.3406363566076,
+            "p90": 16.8581197357131,
+            "p95": 17.79851948926099,
+            "max": 22.813443083206383
           },
           "paired_delta_ms": {
-            "min": 522.8184620000001,
-            "median": 656.366529,
-            "p90": 929.688509,
-            "p95": 1466.031813,
-            "max": 2345.1872110000004
+            "min": 428.16301699999997,
+            "median": 481.23937349999994,
+            "p90": 534.462155,
+            "p95": 624.6489290000001,
+            "max": 831.807008
           },
           "pairs_exceeding_both_margins": 30,
           "one_sided_sign_p": 9.313225746154785e-10,
@@ -3749,26 +3745,26 @@
       "clean": true,
       "remaining_pids": [],
       "scratch_removed": true,
-      "remote_scratch": "/root/mesh-oneshot-bench-1d10aa35-vps"
+      "remote_scratch": "/root/mesh-oneshot-bench-44a9d5cc-vps"
     },
     "pi": {
       "clean": true,
       "remaining_pids": [],
       "scratch_removed": true,
-      "remote_scratch": "/home/pi/mesh-oneshot-bench-1d10aa35-pi"
+      "remote_scratch": "/home/pi/mesh-oneshot-bench-44a9d5cc-pi"
     },
     "mac": {
       "clean": true,
       "remaining_pids": [],
       "scratch_removed": true,
-      "remote_scratch": "/Users/shaul/mesh-oneshot-bench-1d10aa35-mac"
+      "remote_scratch": "/Users/shaul/mesh-oneshot-bench-44a9d5cc-mac"
     },
     "pc": {
       "clean": true,
       "remaining_pids": [],
       "scratch_removed": true,
-      "scratch_root": "/work/tmp/mesh-oneshot-bench-1g1sc3gn"
+      "scratch_root": "/work/tmp/mesh-oneshot-bench-e7i1pt_8"
     }
   },
-  "scratch_root": "/work/tmp/mesh-oneshot-bench-1g1sc3gn"
+  "scratch_root": "/work/tmp/mesh-oneshot-bench-e7i1pt_8"
 }

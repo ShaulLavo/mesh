@@ -267,7 +267,7 @@ class OneshotPureLogicTests(unittest.TestCase):
             sock.write_text("")
             stopped = []
             with patch.object(oneshot, "daemon_rpc", side_effect=EOFError("worker closed")), \
-                 patch.object(oneshot, "stop_popen", side_effect=lambda p, grace=5.0: stopped.append(p)), \
+                 patch.object(oneshot, "stop_popen", side_effect=lambda p, **_kw: stopped.append(p)), \
                  patch.object(oneshot, "list_process_rows", return_value=[]):
                 remaining = oneshot.cleanup_owned_tree(scratch, daemon_proc="fake-daemon")
             self.assertEqual(remaining, [])
@@ -308,6 +308,107 @@ class OneshotPureLogicTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "cancelled"):
                 oneshot.daemon_rpc(sock_path, {"type": "host.info"}, timeout=30.0, stop_event=stop_event)
             return time.monotonic() - started
+
+    def test_decode_darwin_bsdinfo_and_linux_boot_id(self):
+        import struct
+        buf = bytearray(136)
+        struct.pack_into("<I", buf, 4, 2)  # live status
+        struct.pack_into("<I", buf, 12, 4242)
+        struct.pack_into("<Q", buf, 120, 1795417082)
+        struct.pack_into("<Q", buf, 128, 537564)
+        self.assertEqual(oneshot.decode_darwin_bsdinfo(4242, bytes(buf)), "1795417082:537564")
+        self.assertIsNone(oneshot.decode_darwin_bsdinfo(9999, bytes(buf)))
+        struct.pack_into("<I", buf, 4, 5)  # zombie
+        self.assertIsNone(oneshot.decode_darwin_bsdinfo(4242, bytes(buf)))
+        if sys.platform == "linux":
+            start = oneshot.linux_start_id(os.getpid())
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            self.assertTrue(start.startswith(boot_id + ":"))
+
+    def test_shutdown_workers_respects_single_overall_deadline(self):
+        with tempfile.TemporaryDirectory(prefix="oneshot-deadline-", dir="/work/tmp") as directory:
+            state = Path(directory) / "state"
+            for idx in range(10):
+                sock = state / "s" / f"S{idx:03d}" / "sock"
+                sock.parent.mkdir(parents=True)
+                sock.write_text("")
+            calls = []
+
+            def slow_rpc(_sock, _req, timeout=0.25):
+                calls.append(timeout)
+                time.sleep(min(timeout, 0.12))
+                raise TimeoutError("unresponsive worker")
+
+            deadline = oneshot.CleanupDeadline(1.25)
+            started = time.monotonic()
+            with patch.object(oneshot, "daemon_rpc", side_effect=slow_rpc):
+                oneshot.shutdown_workers_gracefully(state, deadline)
+            elapsed = time.monotonic() - started
+            # Must reserve >= 0.85s for daemon stop + kills, so graceful loop takes <= ~0.45s even for 10 sockets.
+            self.assertLess(elapsed, 0.65)
+            self.assertLess(len(calls), 10)
+
+    def test_cleanup_deadline_clamp_shortens_remaining(self):
+        deadline = oneshot.CleanupDeadline(10.0)
+        self.assertGreater(deadline.remaining(), 8.0)
+        deadline.clamp(0.5)
+        self.assertLessEqual(deadline.remaining(), 0.55)
+
+    def test_token_guarded_command_blocks_missing_or_mismatched_token(self):
+        with tempfile.TemporaryDirectory(prefix="oneshot-guard-", dir="/work/tmp") as directory:
+            scratch = Path(directory)
+            cmd = oneshot.token_guarded_command(scratch, "tok-good", 'touch "$scratch/stop"')
+            res_missing = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True)
+            self.assertEqual(res_missing.returncode, 42)
+            self.assertFalse((scratch / "stop").exists())
+
+            oneshot.write_owner_token(scratch, "tok-other")
+            res_wrong = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True)
+            self.assertEqual(res_wrong.returncode, 42)
+            self.assertFalse((scratch / "stop").exists())
+
+            oneshot.write_owner_token(scratch, "tok-good")
+            res_ok = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True)
+            self.assertEqual(res_ok.returncode, 0)
+            self.assertTrue((scratch / "stop").exists())
+
+    def test_run_recovery_command_falls_back_on_mux_timeout_and_exit_255(self):
+        fresh_ok = subprocess.CompletedProcess([], 0, stdout='{"clean":true}\n', stderr="")
+        mux_255 = SimpleNamespace(
+            master_pid=10, check=lambda: 10,
+            run=lambda _cmd, timeout=60: subprocess.CompletedProcess([], 255, "", "mux dead"),
+        )
+        with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fresh_ok) as fresh:
+            res = oneshot.run_recovery_command(mux_255, "100.84.25.68", "vps", "true", 10)
+        self.assertEqual(res.returncode, 0)
+        fresh.assert_called_once()
+
+        def raise_timeout(_cmd, timeout=60):
+            raise subprocess.TimeoutExpired("ssh", timeout)
+
+        mux_timeout = SimpleNamespace(master_pid=10, check=lambda: 10, run=raise_timeout)
+        with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fresh_ok) as fresh2:
+            res2 = oneshot.run_recovery_command(mux_timeout, "100.84.25.68", "vps", "true", 10)
+        self.assertEqual(res2.returncode, 0)
+        fresh2.assert_called_once()
+
+    def test_parse_recovery_result_rejects_clean_true_on_nonzero_exit(self):
+        bad = subprocess.CompletedProcess([], 1, stdout='{"clean":true,"scratch_removed":true}\n', stderr="rm failed")
+        parsed = oneshot.parse_recovery_result(bad, "/root/mesh-oneshot-bench-1")
+        self.assertFalse(parsed["clean"])
+
+    def test_cleanup_owned_tree_stops_daemon_even_when_initial_snapshot_raises(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-oneshot-bench-snap-", dir="/work/tmp") as directory:
+            stopped = self._run_failing_snapshot_cleanup(Path(directory))
+            self.assertEqual(stopped, ["owned-daemon"])
+
+    def _run_failing_snapshot_cleanup(self, scratch):
+        stopped = []
+        with patch.object(oneshot, "list_process_rows", side_effect=RuntimeError("ps exploded")), \
+             patch.object(oneshot, "stop_popen", side_effect=lambda p, **_kw: stopped.append(p)):
+            with self.assertRaisesRegex(RuntimeError, "ps exploded"):
+                oneshot.cleanup_owned_tree(scratch, daemon_proc="owned-daemon")
+        return stopped
 
     def test_recovery_uses_fresh_verified_ssh_when_orch_master_is_dead(self):
         dead_master = SimpleNamespace(master_pid=123, check=lambda: None)
@@ -366,7 +467,7 @@ class OneshotPureLogicTests(unittest.TestCase):
                     "vps", oneshot.HOST_SPECS["vps"], "100.84.25.68", fake_orch, probe,
                     {"available": True, "summary_ms": {"p50": 80.0}}, "/root/mesh-oneshot-bench-1-vps",
                     fake_proc, stream, lambda: "eof", ready, Path("/bin/true"),
-                    {}, workdir, workdir, registry, args, fake_helpers, "run1", report_hosts,
+                    {}, workdir, workdir, registry, "tok-1", args, fake_helpers, "run1", report_hosts,
                 )
 
     def test_summarize_host_verdicts_slowdown_no_clear_slowdown_and_inconclusive(self):
