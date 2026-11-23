@@ -155,6 +155,13 @@ func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
 	if observed, err := l.withInlineResult(grantCtx, request, created, nil); err != nil || observed.ExecutionWait != "completed" {
 		t.Fatalf("current grant observation = %+v, %v", observed, err)
 	}
+	// A wait budget that runs out after the wait succeeded keeps the result.
+	late := request
+	late.WaitMillis = 10
+	inlineAfterWait = func() { time.Sleep(10*time.Millisecond + inlineObservationGrace + 100*time.Millisecond) }
+	if observed, err := l.withInlineResult(grantCtx, late, created, nil); err != nil || observed.ExecutionWait != "completed" {
+		t.Fatalf("observation past its budget = %+v, %v", observed, err)
+	}
 	// Revoked while the wait is in flight: the check after the wait stops it.
 	revoked := false
 	inlineAfterWait = func() {

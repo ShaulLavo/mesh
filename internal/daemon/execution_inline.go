@@ -36,10 +36,10 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 	deadline := time.Now().Add(time.Duration(request.WaitMillis) * time.Millisecond)
 	ctx, stop := observeUntilDisconnect(ctx)
 	defer stop()
-	ctx, cancel := context.WithDeadline(ctx, deadline.Add(inlineObservationGrace))
+	waitCtx, cancel := context.WithDeadline(ctx, deadline.Add(inlineObservationGrace))
 	defer cancel()
 	bound := inlineBound(request, response.ExecutionReceipt)
-	waited, ok := l.inlineWait(ctx, bound, deadline)
+	waited, ok := l.inlineWait(waitCtx, bound, deadline)
 	if !ok && time.Now().After(deadline) {
 		// The wait's budget is spent even though no answer came back, so the
 		// caller charges it as a timeout instead of waiting the whole time again.
@@ -50,14 +50,17 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 		return response, nil
 	}
 	inlineAfterWait()
+	// The grant check and the page reads use the request's own context: an
+	// expired wait budget must not turn a valid result into an error, and the
+	// pages have their own budget.
 	if err := workerExecutionAdmission(ctx); err != nil {
 		return response, err
 	}
 	if request.OutputBytes == 0 {
 		return waited, nil
 	}
-	pageCtx, cancel := context.WithTimeout(ctx, inlinePageBudget)
-	defer cancel()
+	pageCtx, cancelPages := context.WithTimeout(ctx, inlinePageBudget)
+	defer cancelPages()
 	// A stream whose page cannot be read is left out; each page names its
 	// stream, so the caller reads only the missing one itself.
 	for _, stream := range inlineStreams(response.ExecutionReceipt.Kind) {
