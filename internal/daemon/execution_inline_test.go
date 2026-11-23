@@ -39,6 +39,27 @@ func TestInlineCreateReturnsResultAndOutputOnce(t *testing.T) {
 	}
 }
 
+// A context job, which is what mesh_exec creates, gets its result and both
+// pages from the one admission its inline wait made for its caller.
+func TestInlineContextJobReturnsResultAndOutput(t *testing.T) {
+	f := newNativePipeDaemon(t)
+	caller, _ := testCaller(t)
+	opened := f.request(t, protocol.Control{Type: protocol.TypeContextOpen, RequestID: "open", RequestKey: "ctx", Caller: caller, ExecutionContext: &protocol.ExecutionContextRequest{Open: &protocol.ContextSpec{Cwd: f.root, Shell: protocol.ContextShellSh}}})
+	if opened.ContextInfo == nil {
+		t.Fatalf("context open = %+v", opened)
+	}
+	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "job", RequestKey: "job", Caller: caller, ExecutionKind: execution.KindPipe, ExecutionContext: &protocol.ExecutionContextRequest{ContextID: opened.ContextInfo.ContextID, ShellCommand: "printf out; printf err >&2; exit 3"}, WaitMillis: 10000, OutputBytes: 4096}
+	assertInlineCompletion(t, f.request(t, req), 3)
+	// Another caller cannot observe the job through a replay of its key.
+	other, _ := testCaller(t)
+	stranger := req
+	stranger.Caller = other
+	reply, err := f.exchange(stranger)
+	if err != nil || reply.Type != protocol.TypeError || reply.ExecutionWait != "" || len(reply.ExecutionOutput) != 0 {
+		t.Fatalf("another caller's replay = %+v, %v", reply, err)
+	}
+}
+
 func TestInlineCreateTimesOutWithTheLiveReceipt(t *testing.T) {
 	f := newNativePipeDaemon(t)
 	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "slow", RequestKey: "slow", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "printf started; exec sleep 30"}, WaitMillis: 200, OutputBytes: 64}

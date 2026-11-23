@@ -16,44 +16,70 @@ import (
 )
 
 func (l *lifecycle) boundExecutionControl(ctx context.Context, req protocol.Control) (protocol.Control, error) {
-	if err := validateRequestID(req); err != nil {
-		return protocol.Control{}, executionBoundaryError("execution control", err)
-	}
 	ctx, cancel := executionReadWait(ctx, req)
 	defer cancel()
+	job, answer, err := l.admitBoundExecution(ctx, req)
+	if job.journal == nil {
+		return answer, err
+	}
+	return l.actOnBoundExecution(ctx, req, job)
+}
+
+// boundJob is the exact job a bound control was admitted to, with the
+// receipt admission refreshed.
+type boundJob struct {
+	journal *execution.Journal
+	receipt execution.Receipt
+}
+
+// admitBoundExecution resolves the exact job req names, applies the owner
+// guard and refreshes its receipt. A job without a journal means the control
+// was answered here, with answer and err.
+func (l *lifecycle) admitBoundExecution(ctx context.Context, req protocol.Control) (boundJob, protocol.Control, error) {
+	if err := validateRequestID(req); err != nil {
+		return boundJob{}, protocol.Control{}, executionBoundaryError("execution control", err)
+	}
 	if _, err := l.executionKey(ctx, "binding-admission"); err != nil {
-		return protocol.Control{}, executionBoundaryError("execution control", err)
+		return boundJob{}, protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	journal, err := l.executionJournal()
 	if err != nil {
-		return protocol.Control{}, executionBoundaryError("execution control", err)
+		return boundJob{}, protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	b, err := l.executionOutput.Binding(req.SessionID, req.Instance, string(l.host.ID))
 	if err != nil {
-		return protocol.Control{}, executionBoundaryError("execution control", err)
+		return boundJob{}, protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	if b.Mode() == execution.KindLine {
-		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
+		return boundAnswer(executionResponse(req, execution.Receipt{}, execution.ErrInstance))
 	}
 	if peeked, _ := journal.Peek(ctx, b); peeked.Key.Class == execution.InternalServiceClass {
-		return executionResponse(req, execution.Receipt{}, execution.ErrInstance)
+		return boundAnswer(executionResponse(req, execution.Receipt{}, execution.ErrInstance))
 	}
 	if err := l.authorizeBoundExecution(ctx, req, journal, b); err != nil {
 		if journalBusy(err) {
 			// A typed execution failure carries state.unavailable, which callers retry.
-			return executionResponse(req, execution.Receipt{}, executionBoundaryError("execution control", err))
+			return boundAnswer(executionResponse(req, execution.Receipt{}, executionBoundaryError("execution control", err)))
 		}
-		return protocol.Control{}, executionBoundaryError("execution control", err)
+		return boundJob{}, protocol.Control{}, executionBoundaryError("execution control", err)
 	}
 	r, err := journal.Exact(admittedContext(ctx), b)
 	if err != nil {
-		return executionResponse(req, r, err)
+		return boundAnswer(executionResponse(req, r, err))
 	}
 	r, err = l.observeBoundExecution(ctx, journal, r)
 	if err != nil {
-		return executionResponse(req, r, err)
+		return boundAnswer(executionResponse(req, r, err))
 	}
-	response, err := l.boundExecution(ctx, req, journal, r)
+	return boundJob{journal: journal, receipt: r}, protocol.Control{}, nil
+}
+
+func boundAnswer(answer protocol.Control, err error) (boundJob, protocol.Control, error) {
+	return boundJob{}, answer, err
+}
+
+func (l *lifecycle) actOnBoundExecution(ctx context.Context, req protocol.Control, job boundJob) (protocol.Control, error) {
+	response, err := l.boundExecution(ctx, req, job.journal, job.receipt)
 	if err != nil {
 		return response, executionFailure(response, err)
 	}
