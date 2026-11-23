@@ -163,6 +163,15 @@ class GhListingTests(unittest.TestCase):
                 paged_listing.gh_listing("endpoint")
         command.assert_not_called()
 
+    def test_the_timeout_is_shared_by_every_read_of_one_listing(self):
+        api = PagedApi(numbered(10))
+        # The first pass takes pages 1 to 3 inside the budget; the second pass starts after it ran out.
+        with mock.patch.object(paged_listing.time, "monotonic", side_effect=[0, 1, 2, 3, 301]), \
+                mock.patch.object(paged_listing.subprocess, "check_output", side_effect=api.check_output):
+            with self.assertRaises(paged_listing.subprocess.TimeoutExpired):
+                paged_listing.gh_listing("endpoint")
+        self.assertEqual(api.pages, [1, 2, 3])
+
     def test_draft_listing_for_the_reservation_survives_a_release_deleted_between_pages(self):
         releases = [dict(id=number, draft=number % 2 == 0, tag_name=f"v0.1.{number}", target_commitish=f"{number:040d}")
                     for number in range(10, 0, -1)]
