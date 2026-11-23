@@ -262,7 +262,8 @@ func pathDepth(dir string) int {
 // flushDevices issues one device barrier per device among files and, where
 // the platform has a separate barrier, among the synced directories too, so a
 // device the round reached only through a directory is flushed as well. A
-// file or directory whose device cannot be read gets its own barrier.
+// file whose device cannot be read gets its own barrier; a directory whose
+// device cannot be read fails the round.
 func (f *Files) flushDevices(files []*os.File, dirs []syncedDir) error {
 	seen := make(map[uint64]bool, 1)
 	for _, file := range files {
