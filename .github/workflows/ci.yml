@@ -18,8 +18,8 @@ permissions:
 
 # Pushes to main share one group and never cancel: the running main CI always
 # finishes, at most one newer main run waits, and GitHub replaces a waiting one
-# with the next push. Releases run separately in release.yml on schedule or
-# manual dispatch. PRs keep one group each and cancel superseded runs; manual
+# with the next push. Releases run separately in release.yml on manual
+# dispatch only. PRs keep one group each and cancel superseded runs; manual
 # runs stay independent.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'main' || github.event.pull_request.number || github.run_id }}

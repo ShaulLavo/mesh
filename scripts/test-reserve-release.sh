@@ -261,7 +261,7 @@ grep -Fqx 'action=publish' <<<"$result"
 grep -Fqx 'version=v0.1.44' <<<"$result"
 [[ $(git --git-dir="$remote" rev-list -n 1 v0.1.44) == "$mixed_source" ]]
 
-# Batched / scheduled auto-selection (empty SOURCE_SHA).
+# Batched auto-selection (empty SOURCE_SHA on a manual dispatch).
 # 1. Already published and Cask matches -> skip (no release jobs).
 cp "$checkout/Casks/mesh.rb" "$test_root/matching-cask.rb"
 result=$(GH_LATEST_TAG=v0.1.44 GH_PUBLISHED_CASK="$test_root/matching-cask.rb" run_reserve "" "")

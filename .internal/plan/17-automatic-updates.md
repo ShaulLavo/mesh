@@ -1563,7 +1563,8 @@ a journal or a record, or running an update command by hand.
 6. **Proof time grows** from 8 sources per platform to the window plus the
    releases since the newest anchor, each with boundary runs. Unit 3 measures
    and shards.
-7. **Restart frequency.** Releases publish two or three times a day. The
+7. **Restart frequency.** Releases publish only when the owner asks for
+   one (2026-11-23; they were scheduled two or three times a day before). The
    30-minute check and the PC's two-hour soak collapse bursts. Unit 8 proves
    reconnection before the default is enabled.
 8. **A release must follow each adoption.** The Mac and the PC wait for one.

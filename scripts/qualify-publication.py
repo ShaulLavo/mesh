@@ -76,7 +76,6 @@ def timestamp(value):
 
 ALLOWED_RUN_SOURCES = {
     (".github/workflows/ci.yml", "push"),
-    (".github/workflows/release.yml", "schedule"),
     (".github/workflows/release.yml", "workflow_dispatch"),
 }
 

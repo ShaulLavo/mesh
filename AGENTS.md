@@ -11,7 +11,7 @@ bypasses, reverse tunnels, or any other public exposure.
 
 ## CI
 
-- Never cancel a main CI run by hand. Main CI is the publish path. GitHub's concurrency replaces only a waiting main run with a newer one. Pull request Mac legs use GitHub-hosted runners.
+- Never cancel a main CI run by hand. Main CI gates releases. A release runs only when the owner starts the Release workflow by hand. GitHub's concurrency replaces only a waiting main run with a newer one. Pull request Mac legs use GitHub-hosted runners.
 
 ## Copy
 
