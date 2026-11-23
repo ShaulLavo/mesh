@@ -64,7 +64,7 @@ func writeUnfinishedPipe(t *testing.T, j *Journal, b Binding) {
 	a := Attempt{files: j.files, binding: b}
 	for _, stream := range b.Streams() {
 		c := Capture{store: newStreamStore(j.files, b, stream)}
-		if err := c.initialize(); err != nil {
+		if err := initializeStreams([]*streamStore{c.store}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := c.commit(captureBatch{data: []byte{0, 255}, observed: 2}); err != nil {

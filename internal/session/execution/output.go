@@ -214,51 +214,94 @@ func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	if err := o.confirmFinals(ctx, b, r.Streams); err != nil {
 		return Result{}, err
 	}
-	if err := o.files.Confirm(attempt(b, "result.json")); err != nil {
-		return Result{}, err
-	}
 	return r, nil
 }
 
-// confirmFinals confirms every stream's final capture side by side. Each
-// stream has its own fences and files, so their sync rounds are independent.
-func (o *Output) confirmFinals(ctx context.Context, b Binding, streams []StreamResult) error {
-	errs := make([]error, len(streams))
-	var group sync.WaitGroup
-	for i, stream := range streams {
-		group.Go(func() { errs[i] = o.confirmFinal(ctx, b, stream) })
-	}
-	group.Wait()
-	return errors.Join(errs...)
+// finalStream is one stream held under its exclusive fence while the result
+// is confirmed.
+type finalStream struct {
+	store *streamStore
+	gate  *Fence
+	plan  settlePlan
 }
-func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamResult) error {
+
+func (s finalStream) release() {
+	_ = s.gate.Close()
+	s.store.leave()
+}
+
+// confirmFinals proves every stream's final capture and then the result
+// durable, each stream held under its exclusive fence. Prerequisites are
+// confirmed before what depends on them, because seeing a record does not
+// prove its writer finished the barriers of what came before it: all
+// streams' unconfirmed segments share one round, their manifests the next,
+// and the result the last. Streams are held in result order, the same order
+// every caller uses.
+func (o *Output) confirmFinals(ctx context.Context, b Binding, streams []StreamResult) error {
+	held := make([]finalStream, 0, len(streams))
+	defer func() {
+		for _, s := range held {
+			s.release()
+		}
+	}()
+	var segments, manifests []string
+	for _, expected := range streams {
+		s, err := o.holdFinal(ctx, b, expected)
+		if err != nil {
+			return err
+		}
+		held = append(held, s)
+		segments = append(segments, s.plan.segments...)
+		manifests = append(manifests, s.plan.manifests...)
+	}
+	if err := confirmInOrder(o.files, segments, manifests, []string{attempt(b, "result.json")}); err != nil {
+		return err
+	}
+	for _, s := range held {
+		s.store.confirmed = s.plan.keep
+	}
+	return nil
+}
+
+// holdFinal takes a stream's exclusive fence and checks its final manifest
+// against the result. The caller releases what it returns.
+func (o *Output) holdFinal(ctx context.Context, b Binding, expected StreamResult) (finalStream, error) {
 	s, err := o.stream(b, expected.Stream)
 	if err != nil {
-		return err
+		return finalStream{}, err
 	}
 	if err := s.enter(ctx); err != nil {
-		return err
+		return finalStream{}, err
 	}
-	defer s.leave()
 	gate, err := s.readerFence(ctx, unix.LOCK_EX)
 	if err != nil {
-		return err
+		s.leave()
+		return finalStream{}, err
 	}
-	defer func() { _ = gate.Close() }()
+	held := finalStream{store: s, gate: gate}
+	held.plan, err = s.planFinal(ctx, expected)
+	if err != nil {
+		held.release()
+		return finalStream{}, err
+	}
+	return held, nil
+}
+
+func (s *streamStore) planFinal(ctx context.Context, expected StreamResult) (settlePlan, error) {
 	m, err := s.load()
 	if err != nil {
-		return err
+		return settlePlan{}, err
 	}
 	if m.Expired {
 		if m.Generation != expected.Generation || offsetText(m.End) != expected.End || offsetText(m.Observed) != expected.ObservedEnd {
-			return ErrResultExpired
+			return settlePlan{}, ErrResultExpired
 		}
-		return s.settle(ctx, m)
+		return s.planSettle(ctx, m)
 	}
 	if !m.Closed || m.summary() != expected {
-		return fmt.Errorf("execution: result capture mismatch")
+		return settlePlan{}, fmt.Errorf("execution: result capture mismatch")
 	}
-	return s.settle(ctx, m)
+	return s.planSettle(ctx, m)
 }
 func (o *Output) binding(id, instance, host string) (Binding, error) {
 	if !validToken(instance) {

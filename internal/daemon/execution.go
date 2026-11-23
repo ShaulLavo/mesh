@@ -110,11 +110,15 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	owned, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stop := l.cancelExecutionOnShutdown(cancel)
 	defer func() { stop(); cancel() }()
-	if err := journal.Dispatch(owned, r.Binding, intent); err != nil {
-		return executionResponse(request, r, err)
+	// Both reservation paths dispatch a new job in the lock hold that
+	// accepted it; a reservation that was not is dispatched here.
+	if r.Phase == "reserved" {
+		if err := journal.Dispatch(owned, r.Binding, intent); err != nil {
+			return executionResponse(request, r, err)
+		}
+		r.Phase = "dispatched"
+		r.LaunchOutcome = executionUnknownOutcome
 	}
-	r.Phase = "dispatched"
-	r.LaunchOutcome = executionUnknownOutcome
 	if err := owned.Err(); err != nil {
 		return executionResponse(request, r, err)
 	}
@@ -164,7 +168,7 @@ var executionBeforeReserve = func(context.Context) {}
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
 	var allocated string
-	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
+	r, owner, err := journal.ReserveAndDispatch(ctx, key, intent, func() (execution.Binding, error) {
 		preferred := l.standbys.preferredID()
 		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), preferred)
 		l.standbys.reserved(preferred, ref.ID)

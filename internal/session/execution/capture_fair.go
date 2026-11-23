@@ -37,23 +37,6 @@ var readerYieldLimit = time.Second
 
 const readerYieldPoll = time.Millisecond
 
-func (s *streamStore) createTurnLocks() error {
-	for _, name := range []string{readerLockName, writerLockName} {
-		path := s.path(name)
-		file, err := s.files.open(path, os.O_CREATE|os.O_RDWR)
-		if err != nil {
-			return executionBoundaryError("create capture "+name, err)
-		}
-		if err := s.files.closeFile(file); err != nil {
-			return executionBoundaryError("create capture "+name, err)
-		}
-		if err := s.files.Confirm(path); err != nil {
-			return executionBoundaryError("confirm capture "+name, err)
-		}
-	}
-	return nil
-}
-
 // readerFence takes stream.lock in mode while announced on reader.lock. All
 // its waits share one budget: the caller's own deadline under WithCallerWait,
 // otherwise lockWaitLimit. The announcement ends once stream.lock is held.

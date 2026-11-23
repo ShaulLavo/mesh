@@ -18,7 +18,7 @@ func TestCaptureSixteenMiBSuffixAndConcurrentReaders(t *testing.T) {
 	}
 	defer func() { _ = files.Close() }()
 	capture := &Capture{store: newStreamStore(files, b, KindPTY)}
-	if err := capture.initialize(); err != nil {
+	if err := initializeStreams([]*streamStore{capture.store}); err != nil {
 		t.Fatal(err)
 	}
 	readers := make([]*Output, 2)

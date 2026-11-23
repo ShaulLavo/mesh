@@ -30,6 +30,24 @@ func launchSnapshotName(b Binding) string { return attempt(b, "launch.json") }
 // returned before the context is read, so replays survive later edits and
 // closure. callerDigest covers the caller-supplied request.
 func (j *Journal) ReserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, bool, error) {
+	return j.reserveContextJob(ctx, k, callerDigest, resolve, reserve, nil)
+}
+
+// ReserveInContextAndDispatch is ReserveInContext for a caller that launches
+// the job at once, as ReserveAndDispatch is for Reserve. For a new job it
+// also returns the launch snapshot it read back under the journal lock before
+// dispatching, which is what the caller launches: reading it again after
+// dispatch would leave a window where a dying coordinator reports an unknown
+// outcome for a job no worker could have started.
+func (j *Journal) ReserveInContextAndDispatch(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, LaunchSnapshot, bool, error) {
+	var launch LaunchSnapshot
+	r, owner, err := j.reserveContextJob(ctx, k, callerDigest, resolve, reserve, &launch)
+	return r, launch, owner, err
+}
+
+// reserveContextJob dispatches a new job when launch is set, and stores the
+// snapshot it dispatched in launch.
+func (j *Journal) reserveContextJob(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error), launch *LaunchSnapshot) (Receipt, bool, error) {
 	if err := k.Validate(); err != nil || k.Operation != OperationExec || !validDigest(callerDigest) {
 		return Receipt{}, false, errors.Join(fmt.Errorf("execution: invalid context job key"), err)
 	}
@@ -43,7 +61,7 @@ func (j *Journal) ReserveInContext(ctx context.Context, k Key, callerDigest stri
 	if err := j.prepareOutputAdmission(ctx, k); err != nil {
 		return Receipt{}, false, err
 	}
-	r, owner, err := j.reserveInContext(ctx, k, callerDigest, resolve, reserve)
+	r, owner, err := j.reserveInContext(ctx, k, callerDigest, resolve, reserve, launch)
 	if err != nil || owner {
 		return r, owner, err
 	}
@@ -112,7 +130,7 @@ func (j *Journal) resolveOpenContext(k Key, resolve ResolveContextJob) (Context,
 	return c, LaunchSnapshot{Context: ContextUse{ID: c.ID, Revision: c.Revision}, Intent: normalized, Env: env}, nil
 }
 
-func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error)) (Receipt, bool, error) {
+func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest string, resolve ResolveContextJob, reserve func(LaunchSnapshot) (Binding, error), launch *LaunchSnapshot) (Receipt, bool, error) {
 	gate, err := j.lockAdmitted(ctx)
 	if err != nil {
 		return Receipt{}, false, err
@@ -131,7 +149,7 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 			use := snapshot.Context
 			r.IntentDigest, r.LaunchIntentDigest, r.Context = callerDigest, digest(snapshot.Intent), &use
 		},
-		prepare: func(b Binding) error { return j.prepareContextJob(b, k, snapshot) },
+		prepare: func(b Binding, r *round) error { return prepareContextJob(r, b, k, snapshot) },
 	}
 	r, owner, err := j.acceptNew(ctx, k, snapshot.Intent, func() (Binding, error) { return reserve(snapshot) }, hooks)
 	if err != nil || !owner {
@@ -140,20 +158,42 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 	// Membership is already durable through the marker, so a failed use
 	// update cannot leave the running job's context unprotected.
 	_, _ = j.touch(c, true)
-	return r, true, nil
+	if launch == nil {
+		return r, true, nil
+	}
+	return j.dispatchContextJob(r, launch)
 }
 
-// prepareContextJob stores the launch snapshot and the membership marker
-// before the receipt is durable.
-func (j *Journal) prepareContextJob(b Binding, k Key, snapshot LaunchSnapshot) error {
-	if _, err := j.files.PublishBounded(launchSnapshotName(b), snapshot, true, contextRecordLimit); err != nil {
+// dispatchContextJob dispatches a context job in the lock hold that accepted
+// it, after the context update and once the launch snapshot reads back as the
+// receipt recorded it. Until then the receipt stays reserved, so a
+// coordinator that dies first still settles as not_started. A snapshot that
+// does not read back settles the job as not_started here, and the caller does
+// not launch it. The snapshot read here is stored in launch for the caller.
+func (j *Journal) dispatchContextJob(r Receipt, launch *LaunchSnapshot) (Receipt, bool, error) {
+	snapshot, err := j.ReadLaunchSnapshot(r)
+	if err != nil {
+		settled, saveErr := j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "launch_snapshot_unreadable"}, Capture: CaptureNotRecorded})
+		return settled, false, errors.Join(executionBoundaryError("read context launch", err), saveErr)
+	}
+	r, err = j.dispatchReserved(r, snapshot.Intent)
+	if err == nil {
+		*launch = snapshot
+	}
+	return r, true, err
+}
+
+// prepareContextJob adds the launch snapshot and the membership marker to the
+// attempt's sync round, so both are durable before the receipt. Neither
+// depends on the other or on the attempt reference.
+func prepareContextJob(r *round, b Binding, k Key, snapshot LaunchSnapshot) error {
+	if err := r.record(launchSnapshotName(b), snapshot, true, contextRecordLimit); err != nil {
 		return err
 	}
-	if err := j.files.Ensure(contextMembers(k.Context)); err != nil {
+	if err := r.ensure(contextMembers(k.Context)); err != nil {
 		return err
 	}
-	_, err := j.files.Publish(contextMember(k.Context, b.RequestHash), k, true)
-	return err
+	return r.record(contextMember(k.Context, b.RequestHash), k, true, MaxRecord)
 }
 
 // ReadLaunchSnapshot returns the snapshot a context job was reserved with.

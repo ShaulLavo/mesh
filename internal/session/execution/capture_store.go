@@ -173,39 +173,89 @@ func (s *streamStore) identity(name string) (os.FileInfo, error) {
 
 // settle is the only certification and pruning authority. Callers hold the exclusive stream lock.
 func (s *streamStore) settle(ctx context.Context, m manifest) error {
-	keep := make(map[string]fileIdentity, len(m.Segments)+1)
-	for _, segment := range m.Segments {
-		if err := ctx.Err(); err != nil {
-			return executionBoundaryError("capture", err)
-		}
-		name := s.path(segment.Name)
-		identity, err := s.confirmSegment(name, segment)
-		if err != nil {
-			return executionBoundaryError("capture", err)
-		}
-		keep[name] = identity
-	}
-	name := s.path("manifest.json")
-	identity, err := s.confirmManifest(name)
+	plan, err := s.planSettle(ctx, m)
 	if err != nil {
-		return executionBoundaryError("confirm capture manifest", err)
+		return err
 	}
-	keep[name] = identity
-	s.confirmed = keep
+	if err := confirmInOrder(s.files, plan.segments, plan.manifests); err != nil {
+		return executionBoundaryError("confirm capture", err)
+	}
+	s.confirmed = plan.keep
 	return nil
 }
+
+// settlePlan is what settling a manifest needs: the identities to keep, and
+// the files among them this store has not yet proved durable. The segments
+// are already verified against their hashes.
+type settlePlan struct {
+	keep map[string]fileIdentity
+	// segments are prerequisites of manifests, so they are confirmed in an
+	// earlier round: a visible manifest does not prove that its writer
+	// finished the segments' barriers.
+	segments, manifests []string
+}
+
+// confirmInOrder confirms each group in its own round, a group only after
+// the previous one is durable. Empty groups take no round.
+func confirmInOrder(f *Files, groups ...[]string) error {
+	for _, names := range groups {
+		if len(names) == 0 {
+			continue
+		}
+		if err := f.ConfirmAll(names...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planSettle verifies a manifest's files for settle. Segments of several
+// streams are independent of one another, and so are their manifests, so
+// callers may confirm each kind for many streams in one round.
+func (s *streamStore) planSettle(ctx context.Context, m manifest) (settlePlan, error) {
+	plan := settlePlan{keep: make(map[string]fileIdentity, len(m.Segments)+1)}
+	for _, segment := range m.Segments {
+		if err := ctx.Err(); err != nil {
+			return plan, executionBoundaryError("capture", err)
+		}
+		name := s.path(segment.Name)
+		identity, known, err := s.verifySegment(name, segment)
+		if err != nil {
+			return plan, executionBoundaryError("capture", err)
+		}
+		plan.keep[name] = identity
+		if !known {
+			plan.segments = append(plan.segments, name)
+		}
+	}
+	name := s.path("manifest.json")
+	identity, known, err := s.manifestIdentity(name)
+	if err != nil {
+		return plan, executionBoundaryError("confirm capture manifest", err)
+	}
+	plan.keep[name] = identity
+	if !known {
+		plan.manifests = append(plan.manifests, name)
+	}
+	return plan, nil
+}
+
 func (s *streamStore) confirmManifest(name string) (fileIdentity, error) {
+	identity, known, err := s.manifestIdentity(name)
+	if err != nil || known {
+		return identity, err
+	}
+	return identity, s.files.Confirm(name)
+}
+
+// manifestIdentity reports whether a pipe manifest is unchanged since this
+// store proved it durable.
+func (s *streamStore) manifestIdentity(name string) (fileIdentity, bool, error) {
 	info, err := s.identity(name)
 	if err != nil {
-		return fileIdentity{}, err
+		return fileIdentity{}, false, err
 	}
-	if s.binding.Mode() != KindPTY && s.confirmed[name].matches(info) {
-		return fileIdentity{info}, nil
-	}
-	if err := s.files.Confirm(name); err != nil {
-		return fileIdentity{}, err
-	}
-	return fileIdentity{info}, nil
+	return fileIdentity{info}, s.binding.Mode() != KindPTY && s.confirmed[name].matches(info), nil
 }
 
 // Successful publication already synchronized both the file and its directory.
@@ -218,21 +268,20 @@ func (s *streamStore) rememberPublished(name string) {
 	}
 }
 
-func (s *streamStore) confirmSegment(name string, seg segment) (fileIdentity, error) {
+// verifySegment checks a segment this store has not yet proved durable
+// against its hash, and reports whether the store already had.
+func (s *streamStore) verifySegment(name string, seg segment) (fileIdentity, bool, error) {
 	info, err := s.identity(name)
 	if err != nil {
-		return fileIdentity{}, err
+		return fileIdentity{}, false, err
 	}
 	if s.confirmed[name].matches(info) {
-		return fileIdentity{info}, nil
+		return fileIdentity{info}, true, nil
 	}
 	if err := s.readSegment(seg, nil); err != nil {
-		return fileIdentity{}, err
+		return fileIdentity{}, false, err
 	}
-	if err := s.files.Confirm(name); err != nil {
-		return fileIdentity{}, err
-	}
-	return fileIdentity{info}, nil
+	return fileIdentity{info}, false, nil
 }
 func (s *streamStore) segmentBytes(seg segment) ([]byte, error) {
 	data := make([]byte, 0, int(seg.Size))

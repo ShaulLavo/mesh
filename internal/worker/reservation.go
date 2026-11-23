@@ -74,11 +74,12 @@ func strictReservation(root string, ref session.Reservation) error {
 		return workerExecutionError("reservation.go strictReservation", err)
 	}
 	defer func() { _ = f.Close() }()
+	// The origin marker lives in the session directory Reserve just created,
+	// so it is reachable only through it and shares its sync round. Discovery
+	// reads .reservation to recognize an unpublished allocation from an
+	// earlier boot, so .launching is published only once the origin is durable.
 	dir := filepath.Join(filepath.Base(root), ref.ID)
-	if err := f.Ensure(dir); err != nil {
-		return workerExecutionError("reservation.go strictReservation", err)
-	}
-	if _, err := f.Publish(filepath.Join(dir, ".reservation"), ref, true); err != nil {
+	if _, err := f.Prepare(dir, nil, execution.Record{Name: filepath.Join(dir, ".reservation"), Value: ref, Exclusive: true}); err != nil {
 		return workerExecutionError("reservation.go strictReservation", err)
 	}
 	_, err = f.Publish(filepath.Join(dir, ".launching"), ref, true)
@@ -93,18 +94,18 @@ func validateReservation(root string, ref session.Reservation) error {
 		return workerExecutionError("reservation.go validateReservation", err)
 	}
 	defer func() { _ = f.Close() }()
-	for _, name := range []string{".reservation", ".launching"} {
+	names := []string{filepath.Join(ref.ID, ".reservation"), filepath.Join(ref.ID, ".launching")}
+	for _, name := range names {
 		var saved session.Reservation
-		if err := f.Read(filepath.Join(ref.ID, name), &saved); err != nil {
+		if err := f.Read(name, &saved); err != nil {
 			return workerExecutionError("reservation.go validateReservation", err)
 		}
 		if saved != ref {
 			return fmt.Errorf("launch worker: reservation identity mismatch")
 		}
-		if ref.Purpose != session.Managed && !ref.Purpose.IsExecution() && ref.Purpose != session.Recovery {
-			continue
-		}
-		if err := f.Confirm(filepath.Join(ref.ID, name)); err != nil {
+	}
+	if ref.Purpose == session.Managed || ref.Purpose.IsExecution() || ref.Purpose == session.Recovery {
+		if err := f.ConfirmAll(names...); err != nil {
 			return workerExecutionError("confirm exact reservation", err)
 		}
 	}
