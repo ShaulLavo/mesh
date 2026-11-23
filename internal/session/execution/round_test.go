@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/shaul/mesh/internal/durable"
 )
 
 func roundFiles(t *testing.T) *Files {
@@ -193,7 +195,8 @@ func rememberedCount(f *Files) int {
 // a barrier of its own.
 func TestRoundFlushesEachDeviceOnce(t *testing.T) {
 	f := roundFiles(t)
-	devices := map[string]uint64{"a.json": 1, "b.json": 2, "c.json": 1}
+	// The state root shares a.json's device, so it adds no barrier of its own.
+	devices := map[string]uint64{"a.json": 1, "b.json": 2, "c.json": 1, ".": 1}
 	saved := fileDevice
 	fileDevice = func(file *os.File) (uint64, bool) {
 		dev, ok := devices[filepath.Base(file.Name())]
@@ -209,6 +212,59 @@ func TestRoundFlushesEachDeviceOnce(t *testing.T) {
 	// u.json and v.json have no known device, so neither shares a barrier.
 	if got := deviceBarriers(t, f, "a.json", "u.json", "v.json"); got != 3 {
 		t.Fatalf("one known and two unknown devices took %d barriers", got)
+	}
+}
+
+// Where sync leaves changes in the drive cache, a device the round reaches
+// only through a directory, such as a separately mounted parent, gets its own
+// barrier. Elsewhere fsync already flushed it and nothing is added.
+func TestRoundFlushesADeviceReachedOnlyThroughADirectory(t *testing.T) {
+	f := roundFiles(t)
+	if err := f.Ensure("p"); err != nil {
+		t.Fatal(err)
+	}
+	publishRecord(t, f, "p/a.json")
+	devices := map[string]uint64{"a.json": 1, ".": 1, "p": 2}
+	saved := fileDevice
+	fileDevice = func(file *os.File) (uint64, bool) {
+		dev, ok := devices[filepath.Base(file.Name())]
+		return dev, ok
+	}
+	t.Cleanup(func() { fileDevice = saved })
+	want := 1
+	if durable.HasBarrier {
+		want = 2
+	}
+	if got := deviceBarriers(t, f, "p/a.json"); got != want {
+		t.Fatalf("a file on one device under a directory on another took %d barriers, want %d", got, want)
+	}
+}
+
+// A directory whose device changed between its sync and its barrier, as an
+// unmounted parent would, fails the round instead of flushing the wrong device.
+func TestRoundFailsWhenADirectoryChangesDeviceBeforeItsBarrier(t *testing.T) {
+	if !durable.HasBarrier {
+		t.Skip("fsync already flushed the device; directories take no separate barrier")
+	}
+	f := roundFiles(t)
+	if err := f.Ensure("p"); err != nil {
+		t.Fatal(err)
+	}
+	publishRecord(t, f, "p/a.json")
+	var opened uint64
+	saved := fileDevice
+	fileDevice = func(file *os.File) (uint64, bool) {
+		switch filepath.Base(file.Name()) {
+		case "p":
+			opened++
+			return 1 + opened, true
+		default:
+			return 1, true
+		}
+	}
+	t.Cleanup(func() { fileDevice = saved })
+	if err := f.ConfirmAll("p/a.json"); err == nil || !strings.Contains(err.Error(), "changed device") {
+		t.Fatalf("err = %v, want a changed-device failure", err)
 	}
 }
 

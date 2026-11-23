@@ -243,7 +243,7 @@ func (j *Journal) confirmAbsentPayload(name string) error {
 	}
 	// A new allocation may now use this name. Settle the previous deletion
 	// without removing anything at the reused path.
-	return errors.Join(j.files.syncDirs(name), j.files.Confirm("execution/.barrier"))
+	return j.files.confirmAfter(name, "execution/.barrier")
 }
 func (j *Journal) terminalView(r Receipt) (Receipt, error) {
 	now := j.clock()

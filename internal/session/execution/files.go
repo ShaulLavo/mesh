@@ -13,6 +13,8 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/shaul/mesh/internal/durable"
 )
 
 const MaxRecord = 64 << 10
@@ -170,25 +172,63 @@ func (f *Files) ReadBounded(name string, out any, limit int) error {
 	}
 	return nil
 }
-func (f *Files) syncDirs(name string) error {
+
+// syncedDir is a directory a sync reached and its device. A device the
+// caller reaches only through directories still needs its own barrier.
+type syncedDir struct {
+	name  string
+	dev   uint64
+	known bool
+}
+
+func (f *Files) syncDirs(name string) ([]syncedDir, error) {
+	var synced []syncedDir
 	for dir := filepath.Dir(name); ; dir = filepath.Dir(dir) {
-		if err := f.syncDir(dir); err != nil {
-			return err
+		d, err := f.syncDir(dir)
+		if err != nil {
+			return synced, err
 		}
+		synced = appendSynced(synced, d)
 		if dir == "." {
-			return nil
+			return synced, nil
 		}
 	}
 }
-func (f *Files) syncDir(dir string) error {
+
+// appendSynced keeps directories only where they need their own barrier, so
+// Linux builds no list it would discard.
+func appendSynced(synced []syncedDir, d syncedDir) []syncedDir {
+	if !durable.HasBarrier {
+		return synced
+	}
+	return append(synced, d)
+}
+func (f *Files) syncDir(dir string) (syncedDir, error) {
+	synced := syncedDir{name: dir}
 	if err := f.step("directory_sync"); err != nil {
-		return err
+		return synced, err
 	}
 	file, err := f.root.Open(dir)
 	if err != nil {
-		return executionBoundaryError("files.go syncDirs", err)
+		return synced, executionBoundaryError("files.go syncDirs", err)
 	}
-	return errors.Join(file.Sync(), file.Close())
+	if durable.HasBarrier {
+		synced.dev, synced.known = fileDevice(file)
+	}
+	return synced, errors.Join(durable.Sync(file), file.Close())
+}
+
+// syncNamespace syncs every directory above name, then flushes each device
+// among those directories and anchor.
+func (f *Files) syncNamespace(name string, anchor *os.File) error {
+	dirs, err := f.syncDirs(name)
+	if err != nil {
+		return err
+	}
+	if !durable.HasBarrier {
+		return f.flushDevice(anchor)
+	}
+	return f.flushDevices([]*os.File{anchor}, dirs)
 }
 
 // Confirm makes an existing record and its namespace durable. Only the file's
@@ -328,10 +368,7 @@ func (f *Files) Remove(name, anchor string) error {
 		err = nil
 	}
 	if err == nil {
-		err = f.syncDirs(name)
-	}
-	if err == nil {
-		err = f.flushDevice(file)
+		err = f.syncNamespace(name, file)
 	}
 	return errors.Join(err, f.closeFile(file))
 }
@@ -355,13 +392,17 @@ func (f *Files) dataSync(file *os.File) error {
 	if err := f.step("data_sync"); err != nil {
 		return err
 	}
-	return executionBoundaryError("files.go dataSync", file.Sync())
+	return executionBoundaryError("files.go dataSync", durable.Sync(file))
 }
+
+// flushDevice ends a round on one device: the data and directory syncs before
+// it only handed their changes to that device, and this barrier makes them
+// all durable at once (one drive cache flush on Darwin, nothing more on Linux).
 func (f *Files) flushDevice(file *os.File) error {
 	if err := f.step("device_sync"); err != nil {
 		return err
 	}
-	return deviceSync(file)
+	return executionBoundaryError("flush execution namespace device", durable.Barrier(file))
 }
 func (f *Files) closeFile(file *os.File) error { return errors.Join(file.Close(), f.step("close")) }
 
@@ -377,10 +418,7 @@ func (f *Files) RemoveTree(name, anchor string) error {
 		err = f.root.RemoveAll(name)
 	}
 	if err == nil {
-		err = f.syncDirs(name)
-	}
-	if err == nil {
-		err = f.flushDevice(file)
+		err = f.syncNamespace(name, file)
 	}
 	return errors.Join(err, f.closeFile(file))
 }
