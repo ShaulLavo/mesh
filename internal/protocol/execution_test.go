@@ -82,3 +82,24 @@ func TestExecutionReadWaitBelongsToLogsAndWait(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionCreateInlineWaitBounds(t *testing.T) {
+	create := `{"type":"execution.create","requestId":"r","requestKey":"job","kind":"pipe","command":["/bin/true"],"cwd":"/work"`
+	for _, good := range []string{`,"waitMillis":1`, `,"waitMillis":60000`, `,"waitMillis":1000,"outputBytes":1`, `,"waitMillis":1000,"outputBytes":1048576`} {
+		if _, err := DecodeControl([]byte(create + good + "}")); err != nil {
+			t.Errorf("create rejected %s: %v", good, err)
+		}
+	}
+	for _, bad := range []string{`,"waitMillis":0`, `,"waitMillis":60001`, `,"waitMillis":null`, `,"waitMillis":"5"`, `,"outputBytes":10`, `,"waitMillis":10,"outputBytes":0`, `,"waitMillis":10,"outputBytes":1048577`} {
+		if _, err := DecodeControl([]byte(create + bad + "}")); err == nil {
+			t.Errorf("create accepted %s", bad)
+		}
+	}
+	// Only a create waits inline; bound controls keep their own fields.
+	for _, kind := range []string{TypeExecutionWait, TypeExecutionLogs, TypeExecutionRequest} {
+		raw := `{"type":"` + kind + `","requestId":"r","sessionId":"7K3D","instance":"i","requestKey":"job","waitMillis":10}`
+		if _, err := DecodeControl([]byte(raw)); err == nil {
+			t.Errorf("%s accepted waitMillis", kind)
+		}
+	}
+}

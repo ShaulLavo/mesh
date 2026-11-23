@@ -65,10 +65,13 @@ func (l *lifecycle) executionControl(ctx context.Context, request protocol.Contr
 		}
 		return executionResponse(request, r, err)
 	}
+	var response protocol.Control
 	if key.Class == execution.ApplicationClass {
-		return l.contextExecutionCreate(ctx, request, journal, key)
+		response, err = l.contextExecutionCreate(ctx, request, journal, key)
+	} else {
+		response, err = l.executionCreateControl(ctx, request, journal, key)
 	}
-	return l.executionCreateControl(ctx, request, journal, key)
+	return l.withInlineResult(ctx, request, response, err)
 }
 func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key) (protocol.Control, error) {
 	if err := updategate.Check(filepath.Dir(l.sessionsDir)); err != nil {
@@ -350,10 +353,15 @@ func wireExecutionStreams(streams []execution.StreamResult) []protocol.Execution
 // client loop's context lives as long as the daemon, so a reader that left
 // would otherwise keep waiting and announced until its timer ran out.
 func executionRequestContext(ctx context.Context, lookahead *frameLookahead, request protocol.Control) (context.Context, context.CancelFunc) {
-	if request.Type != protocol.TypeExecutionLogs || lookahead == nil {
+	if lookahead == nil {
 		return ctx, func() {}
 	}
-	return lookahead.watch(ctx)
+	// A create that waits inline stops waiting when its client leaves. Work it
+	// accepted is not affected: launch runs without the caller's cancellation.
+	if request.Type == protocol.TypeExecutionLogs || (request.Type == protocol.TypeExecutionCreate && request.WaitMillis > 0) {
+		return lookahead.watch(ctx)
+	}
+	return ctx, func() {}
 }
 
 func (s *clientServer) replyExecution(ctx context.Context, relay *clientRelay, lookahead *frameLookahead, request protocol.Control) error {
