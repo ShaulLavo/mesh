@@ -298,6 +298,15 @@ func TestClosedContextsExpireThirtyDaysAfterTheirClose(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = rebooted.Close() })
 	closedAt := time.Now()
+	// A read after the close records a later use, which must not move the
+	// closed context's deadline.
+	rebooted.now = func() time.Time { return closedAt.Add(2 * time.Hour) }
+	if _, err := rebooted.GetContext(t.Context(), ownerA, idle.ID); err != nil {
+		t.Fatal(err)
+	}
+	if record, err := rebooted.readContext(idle.ID); err != nil || !record.LastUsedAt.Equal(closedAt.Add(2*time.Hour).UTC()) {
+		t.Fatalf("read after the close = %+v, %v", record.LastUsedAt, err)
+	}
 	rebooted.now = func() time.Time { return closedAt.Add(contextIdleExpiry - time.Hour) }
 	if err := rebooted.MaintainContexts(t.Context()); err != nil {
 		t.Fatal(err)
@@ -333,6 +342,13 @@ func TestContextExpiryWaitsWhenMembershipIsMissing(t *testing.T) {
 	members := filepath.Join(dir, contextMembers(c.ID))
 	if err := os.Rename(members, members+".aside"); err != nil {
 		t.Fatal(err)
+	}
+	// A new job would recreate the directory with only its own marker.
+	if _, _, err := reserveJob(t, j, jobKey(ownerA, c.ID, "next"), "y", nil); !errors.Is(err, ErrContextDamaged) {
+		t.Fatalf("job in a context with missing membership = %v", err)
+	}
+	if _, err := os.Stat(members); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused job recreated the membership directory: %v", err)
 	}
 	passIdlePeriod(j)
 	if err := j.MaintainContexts(t.Context()); err != nil {

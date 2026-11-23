@@ -116,6 +116,9 @@ func (j *Journal) resolveOpenContext(k Key, resolve ResolveContextJob) (Context,
 	if c.ClosedAt != nil {
 		return Context{}, LaunchSnapshot{}, ErrContextClosed
 	}
+	if err := j.requireMembers(c.ID); err != nil {
+		return Context{}, LaunchSnapshot{}, err
+	}
 	intent, env, err := resolve(c)
 	if err != nil {
 		return Context{}, LaunchSnapshot{}, err
@@ -190,10 +193,21 @@ func prepareContextJob(r *round, b Binding, k Key, snapshot LaunchSnapshot) erro
 	if err := r.record(launchSnapshotName(b), snapshot, true, contextRecordLimit); err != nil {
 		return err
 	}
-	if err := r.ensure(contextMembers(k.Context)); err != nil {
-		return err
-	}
+	// The open created the membership directory and resolveOpenContext saw
+	// it; recreating it here would hide that it went missing.
 	return r.record(contextMember(k.Context, b.RequestHash), k, true, MaxRecord)
+}
+
+// requireMembers refuses a job for a context whose membership directory is
+// missing. Every open creates it, so its absence is damage that may hide a
+// running job; a new marker in a recreated directory would make membership
+// look complete and let expiry remove the context.
+func (j *Journal) requireMembers(id string) error {
+	err := j.files.check(contextMembers(id), false)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("context %s: %w", id, ErrContextDamaged)
+	}
+	return err
 }
 
 // ReadLaunchSnapshot returns the snapshot a context job was reserved with.

@@ -20,6 +20,9 @@ var (
 	ErrContextClosed   = errors.New("execution context is closed")
 	ErrContextConflict = errors.New("execution context revision changed")
 	ErrContextLimit    = errors.New("execution context limit reached")
+	// ErrContextDamaged is a context whose membership directory is missing.
+	// It may hide a running job, so it takes no new jobs and does not expire.
+	ErrContextDamaged = errors.New("execution context membership is missing")
 )
 
 // Context limits. They mirror protocol's limits; this package does not import

@@ -106,9 +106,15 @@ wall-clock date from which it may expire:
   alone, across reboots. A clock correction can make that happen sooner; the
   only effect is that replaying its open key then opens a new context.
 
+A context whose job list on the host is missing or unreadable is treated as
+damaged: it may still have a running job, so it never expires and refuses
+new jobs with `state.unavailable`. Repair or remove its state on the host.
+
 Each identity can hold 64 open contexts per host, and a host holds at most
-1,024; an open whose reply was lost still holds its slot. `mesh context ls`
-follows the host's pages for you.
+1,024; an open whose reply was lost still holds its slot. A host also keeps
+at most 4,096 context records, closed ones included until they expire, so an
+open can be refused while both open limits still have room. `mesh context
+ls` follows the host's pages for you.
 
 ## Account administration
 
