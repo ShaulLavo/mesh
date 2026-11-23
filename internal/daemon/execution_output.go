@@ -214,13 +214,18 @@ func (l *lifecycle) executionWaitResult(ctx context.Context, req protocol.Contro
 		response.ExecutionWait = executionWaitCompleted
 		return response, nil
 	}
-	if _, err := l.executionOutput.Result(ctx, r.Binding); err != nil {
+	// FinalResult confirms the result and its final captures with fresh
+	// stream stores: the long-lived output reader may have seen a final
+	// manifest during a logs read before the result existed. The receipt is
+	// then settled with that result rather than through a second confirmation.
+	result, err := j.FinalResult(ctx, r.Binding)
+	if err != nil {
 		if execution.IsResultPending(err) {
 			return response, nil
 		}
 		return response, executionBoundaryError("execution control", err)
 	}
-	r, err := j.Exact(ctx, r.Binding)
+	r, err = j.Complete(ctx, r.Binding, result)
 	response, _ = executionResponse(req, r, nil)
 	if err == nil {
 		response.ExecutionWait = executionWaitCompleted

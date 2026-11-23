@@ -51,6 +51,7 @@ type Files struct {
 	// observe sees every sync step without changing behavior, so tests can
 	// count them with the confirmation memory still active.
 	observe func(string)
+	hookMu  sync.Mutex
 	// confirmed remembers JSON records this process already proved durable, so
 	// an unchanged one skips its file fsync. Directory and device barriers are
 	// never skipped: a rename can be undone or repeated without touching the
@@ -405,6 +406,12 @@ func (f *Files) Remove(name, anchor string) error {
 }
 
 func (f *Files) step(operation string) error {
+	if f.observe == nil && f.fault == nil {
+		return nil
+	}
+	// Streams are confirmed side by side, so test hooks see one step at a time.
+	f.hookMu.Lock()
+	defer f.hookMu.Unlock()
 	if f.observe != nil {
 		f.observe(operation)
 	}

@@ -211,15 +211,25 @@ func (o *Output) Result(ctx context.Context, b Binding) (Result, error) {
 	if err := r.validate(b); err != nil {
 		return Result{}, err
 	}
-	for _, stream := range r.Streams {
-		if err := o.confirmFinal(ctx, b, stream); err != nil {
-			return Result{}, err
-		}
+	if err := o.confirmFinals(ctx, b, r.Streams); err != nil {
+		return Result{}, err
 	}
 	if err := o.files.Confirm(attempt(b, "result.json")); err != nil {
 		return Result{}, err
 	}
 	return r, nil
+}
+
+// confirmFinals confirms every stream's final capture side by side. Each
+// stream has its own fences and files, so their sync rounds are independent.
+func (o *Output) confirmFinals(ctx context.Context, b Binding, streams []StreamResult) error {
+	errs := make([]error, len(streams))
+	var group sync.WaitGroup
+	for i, stream := range streams {
+		group.Go(func() { errs[i] = o.confirmFinal(ctx, b, stream) })
+	}
+	group.Wait()
+	return errors.Join(errs...)
 }
 func (o *Output) confirmFinal(ctx context.Context, b Binding, expected StreamResult) error {
 	s, err := o.stream(b, expected.Stream)

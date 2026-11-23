@@ -135,16 +135,25 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	r.Phase = executionLivePhase
 	r.LaunchOutcome = "started"
 	executionDaemonBoundary(l.sessionsDir, "before_catalog_publication", r)
-	publishCtx, cancel := context.WithTimeout(owned, l.publishTimeout)
-	defer cancel()
-	if err := l.catalog.Reconcile(publishCtx); err != nil {
+	if err := l.publishExecutionCatalog(owned, r.Binding); err != nil {
 		return executionResponse(request, r, err)
 	}
 	r, err = journal.Published(owned, r.Binding)
-	if err == nil {
-		r, err = journal.Lookup(owned, key)
-	}
 	return executionResponse(request, r, err)
+}
+
+// publishExecutionCatalog makes a launched terminal job visible in the session
+// catalog, which is how it is attached, so its creation waits for a full
+// reconcile. The catalog scan leaves pipe reservations out, and pipe jobs are
+// only ever reached through their exact binding, which the worker's own
+// publication already proves, so they skip the scan.
+func (l *lifecycle) publishExecutionCatalog(ctx context.Context, b execution.Binding) error {
+	if b.Mode() != execution.KindPTY {
+		return nil
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, l.publishTimeout)
+	defer cancel()
+	return executionBoundaryError("reconcile execution catalog", l.catalog.Reconcile(publishCtx))
 }
 
 var executionDaemonBoundary = func(string, string, execution.Receipt) {}
@@ -306,7 +315,7 @@ func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Jour
 			}
 			return uncertainExecution(r)
 		}
-		return l.confirmExecutionPublication(ctx, journal, key, r)
+		return l.confirmExecutionPublication(ctx, journal, r)
 	}
 	source, observeErr := (worker.RecoveryRuntime{SessionsDir: l.sessionsDir, HostID: string(l.host.ID)}).Inspect(ctx, r.Binding.Reservation.ID)
 	if observeErr != nil || !source.Published || source.Reservation == nil || *source.Reservation != r.Binding.Reservation {
@@ -315,13 +324,13 @@ func (l *lifecycle) lookupExecution(ctx context.Context, journal *execution.Jour
 	if source.State != worker.StateRunning && source.State != worker.StateDetached {
 		return uncertainExecution(r)
 	}
-	return l.confirmExecutionPublication(ctx, journal, key, r)
+	return l.confirmExecutionPublication(ctx, journal, r)
 }
 func uncertainExecution(r execution.Receipt) (execution.Receipt, error) {
 	r.Phase = "uncertain"
 	return r, execution.ErrUnknown
 }
-func (l *lifecycle) confirmExecutionPublication(ctx context.Context, journal *execution.Journal, key execution.Key, r execution.Receipt) (execution.Receipt, error) {
+func (l *lifecycle) confirmExecutionPublication(ctx context.Context, journal *execution.Journal, r execution.Receipt) (execution.Receipt, error) {
 	if r.Publication == "published" && r.Phase == executionLivePhase {
 		return r, nil
 	}
@@ -333,14 +342,14 @@ func (l *lifecycle) confirmExecutionPublication(ctx context.Context, journal *ex
 	if err != nil {
 		return r, err
 	}
-	if err := l.catalog.Reconcile(ctx); err != nil {
+	if err := l.publishExecutionCatalog(ctx, r.Binding); err != nil {
 		return r, executionBoundaryError("publish execution catalog observation", err)
 	}
-	if _, err := journal.Published(ctx, r.Binding); err != nil {
-		return r, executionBoundaryError("publish execution receipt observation", err)
+	published, err := journal.Published(ctx, r.Binding)
+	if published.Binding != r.Binding {
+		published = r
 	}
-	result, err := journal.Lookup(ctx, key)
-	return result, executionBoundaryError("read published execution receipt", err)
+	return published, executionBoundaryError("publish execution receipt observation", err)
 }
 
 func executionBoundaryError(operation string, err error) error {

@@ -56,11 +56,24 @@ func (j *Journal) read(hash string) (Receipt, error) {
 	if err != nil {
 		return r, err
 	}
-	err = j.files.Confirm(requestName(hash))
+	return j.confirmRead(r)
+}
+
+func (j *Journal) confirmRead(r Receipt) (Receipt, error) {
+	err := j.files.Confirm(requestName(r.Binding.RequestHash))
 	if err != nil {
 		r.Acceptance = string(Unconfirmed)
 	}
 	return r, err
+}
+
+// readToReplace reads a receipt, under the journal lock, that the caller
+// replaces before it replies or acts. Saving the replacement makes the path's
+// new contents durable, which is all the outcome relies on, so the receipt
+// read here is not confirmed first. A caller that keeps it unchanged must
+// confirm it with confirmRead.
+func (j *Journal) readToReplace(hash string) (Receipt, error) {
+	return j.readRecord(hash)
 }
 
 // readRecord decodes a receipt without proving it durable, for callers that
@@ -277,25 +290,104 @@ func (j *Journal) Dispatch(ctx context.Context, b Binding, i Intent) error {
 	_, err = j.save(r)
 	return err
 }
+
+// Published records that the exact worker published the job and returns the
+// receipt a lookup would. A job that already finished is saved once as
+// terminal, rather than as live and then again by the next lookup. A result
+// that cannot be read is reported after the publication is saved, as a later
+// lookup would report it.
 func (j *Journal) Published(ctx context.Context, b Binding) (Receipt, error) {
+	// The result is confirmed under its stream fences before the journal lock,
+	// in the same order refresh takes them.
+	result, resultErr := j.result(ctx, b)
 	gate, err := j.lock(ctx)
 	if err != nil {
 		return Receipt{}, err
 	}
 	defer func() { _ = gate.Close() }()
-	r, err := j.read(b.RequestHash)
+	r, err := j.readToReplace(b.RequestHash)
 	if err != nil {
 		return r, err
 	}
 	if r.Binding != b {
 		return Receipt{}, ErrUnknown
 	}
-	r.Publication = publicationPublished
-	if r.Phase != phaseTerminal {
-		r.Phase = phaseLive
-		r.LaunchOutcome = outcomeStarted
+	if r.Phase == phaseTerminal {
+		return j.publishedTerminal(r)
 	}
-	return j.save(r)
+	r.Publication = publicationPublished
+	if resultErr == nil {
+		return j.terminal(r, result)
+	}
+	r.Phase = phaseLive
+	r.LaunchOutcome = outcomeStarted
+	saved, err := j.save(r)
+	if err == nil && !IsResultPending(resultErr) {
+		err = resultErr
+	}
+	return saved, err
+}
+
+func (j *Journal) publishedTerminal(r Receipt) (Receipt, error) {
+	if r.Publication == publicationPublished {
+		return j.confirmedTerminalView(r)
+	}
+	r.Publication = publicationPublished
+	saved, err := j.save(r)
+	if err != nil {
+		return saved, err
+	}
+	return j.terminalView(saved)
+}
+
+// Complete settles the exact receipt with a result the caller already read
+// through FinalResult, which confirmed it and its final captures durable, so
+// they are not confirmed a second time.
+func (j *Journal) Complete(ctx context.Context, b Binding, result Result) (Receipt, error) {
+	if err := result.validate(b); err != nil {
+		return Receipt{}, err
+	}
+	gate, err := j.lock(ctx)
+	if err != nil {
+		return Receipt{}, err
+	}
+	defer func() { _ = gate.Close() }()
+	r, err := j.readToReplace(b.RequestHash)
+	if err != nil {
+		return r, err
+	}
+	if r.Binding != b {
+		return Receipt{}, ErrInstance
+	}
+	if r.Phase == phaseTerminal {
+		return j.confirmedTerminalView(r)
+	}
+	return j.terminal(r, result)
+}
+
+// confirmedTerminalView returns a terminal receipt read with readToReplace,
+// which is kept unchanged and so is confirmed first.
+func (j *Journal) confirmedTerminalView(r Receipt) (Receipt, error) {
+	r, err := j.confirmRead(r)
+	if err != nil {
+		return r, err
+	}
+	return j.terminalView(r)
+}
+
+// FinalResult reads the exact attempt's result and confirms it and its final
+// captures durable, for Complete. Its stream stores are fresh, so a capture
+// that an output reader saw before the job finished is confirmed again with
+// all its barriers rather than trusted from that earlier read. A job still
+// running reports IsResultPending.
+func (j *Journal) FinalResult(ctx context.Context, b Binding) (Result, error) {
+	return j.result(ctx, b)
+}
+
+// result reads and confirms the exact attempt's result and final captures.
+func (j *Journal) result(ctx context.Context, b Binding) (Result, error) {
+	output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
+	return output.Result(ctx, b)
 }
 func (j *Journal) NotStarted(ctx context.Context, b Binding, reason string) (Receipt, error) {
 	gate, err := j.lock(ctx)
@@ -332,8 +424,7 @@ func (j *Journal) refresh(ctx context.Context, snapshot Receipt) (Receipt, error
 	var result Result
 	resultErr := errResultPending
 	if snapshot.Phase != phaseTerminal {
-		output := &Output{files: j.files, streams: make(map[streamKey]*streamStore)}
-		result, resultErr = output.Result(ctx, snapshot.Binding)
+		result, resultErr = j.result(ctx, snapshot.Binding)
 		if resultErr != nil && !IsResultPending(resultErr) {
 			return snapshot, resultErr
 		}
