@@ -317,6 +317,26 @@ func TestContextJobsReplayAcrossEditsClosureAndCallers(t *testing.T) {
 	}
 }
 
+func TestContextJobsRecordUseAtItsGranularity(t *testing.T) {
+	j := contextJournal(t)
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	opened := c.LastUsedAt
+	if _, owner, err := reserveJob(t, j, jobKey(ownerA, c.ID, "soon"), "x", nil); err != nil || !owner {
+		t.Fatal(err)
+	}
+	if record, err := j.readContext(c.ID); err != nil || !record.LastUsedAt.Equal(opened) {
+		t.Fatalf("job right after open rewrote last use: %+v, %v", record, err)
+	}
+	later := opened.Add(contextUseGranularity + time.Minute)
+	j.now = func() time.Time { return later }
+	if _, owner, err := reserveJob(t, j, jobKey(ownerA, c.ID, "later"), "x", nil); err != nil || !owner {
+		t.Fatal(err)
+	}
+	if record, err := j.readContext(c.ID); err != nil || !record.LastUsedAt.Equal(later.UTC()) {
+		t.Fatalf("job after the granularity kept last use: %+v, %v", record, err)
+	}
+}
+
 func TestContextJobPersistsItsLaunchSnapshot(t *testing.T) {
 	j := contextJournal(t)
 	c := openSpec(t, j, ownerA, "ctx", ContextSpec{Cwd: "/work", Shell: "sh", ShellPath: "/bin/sh", Env: map[string]string{"TOKEN": "one"}})
