@@ -139,3 +139,29 @@ bun "$heavy" --class build mesh-pi-tests -- bash -c '
 ' _ "$scratch/arm64"
 bun "$heavy" --class bench mesh-pi-profile -- scripts/bench/profile-pi.sh "$scratch/arm64" "$scratch/pi-profiles"
 ```
+
+## Fleet one-shot vs warm OpenSSH
+
+`oneshot.py` compares one-off `true` execution across the fleet (`local`, `vps`,
+`pi`, `mac`) through a persistent `mesh mcp --identity bench` stdio client
+(`mesh_exec` with `wait_ms=10000`) against warm multiplexed OpenSSH
+(`ControlMaster=auto`, `ControlPersist=60`). For each target host it starts an
+isolated scratch Mesh daemon listening on that host's tailnet IPv4 address (or
+`127.0.0.1` locally) with `--ssh-port 0`, records `tailscale ping` RTT, runs
+paired interleaved Mesh MCP and warm SSH samples (3 warm-up pairs dropped, 30
+measured pairs by default), and measures server-side `execution.create` +
+`execution.wait` over the isolated daemon's Unix socket. On the Mac, the remote
+daemon and server-side phase run under `mac-queue.ts run`. Speed is reported,
+never asserted.
+
+```sh
+python3 scripts/bench/oneshot.py --build \
+  --hosts local,vps,pi,mac \
+  --pairs 30 \
+  --output /work/tmp/oneshot.json
+```
+
+Pass prebuilt `go build -trimpath ./cmd/mesh` binaries with
+`--binary-linux-amd64`, `--binary-linux-arm64`, and `--binary-darwin-arm64` to
+skip building. Unit tests for pure logic live in `scripts/bench/test_oneshot.py`.
+
