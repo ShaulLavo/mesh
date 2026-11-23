@@ -112,20 +112,37 @@ func TestStandbyPoolHandsOutOnlyByID(t *testing.T) {
 	if started != 1 || id == "" {
 		t.Fatalf("activated pool: started %d, preferred %q", started, id)
 	}
+	// The request that gets the ID claims the standby: an overlapping request
+	// that sees its session directory does not disturb the claim.
+	pool.reserved(id, id)
+	if err := os.MkdirAll(filepath.Join(root, "s", id), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if pool.preferredID() == id {
+		t.Fatal("a claimed standby was offered again")
+	}
 	if pool.take("other") != nil || pool.take(id) == nil || pool.take(id) != nil {
 		t.Fatal("standby was handed to the wrong reservation or twice")
 	}
-	// A standby whose ID a reservation took without launching, or that a
-	// reservation wanted and missed, is dropped and replaced.
-	pool.refill()
-	taken := pool.preferredID()
-	if err := os.MkdirAll(filepath.Join(root, "s", taken), 0o700); err != nil {
+	// A claim whose request ended before launching is released.
+	pipeEventually(t, func() bool { return pool.preferredID() != "" })
+	abandoned := pool.preferredID()
+	pool.reserved(abandoned, abandoned)
+	pool.drop(abandoned)
+	if pool.take(abandoned) != nil {
+		t.Fatal("a dropped claim was still handed out")
+	}
+	// A waiting standby whose ID an old session holds, or that a reservation
+	// wanted and missed, is dropped and replaced.
+	pipeEventually(t, func() bool { return pool.preferredID() != "" })
+	occupied := pool.preferredID()
+	if err := os.MkdirAll(filepath.Join(root, "s", occupied), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if pool.preferredID() != "" {
 		t.Fatal("a standby whose session directory exists was still offered")
 	}
-	pipeEventually(t, func() bool { return pool.preferredID() != "" && pool.preferredID() != taken })
+	pipeEventually(t, func() bool { return pool.preferredID() != "" && pool.preferredID() != occupied })
 	missed := pool.preferredID()
 	pool.reserved(missed, "OTHR")
 	if pool.preferredID() == missed {
@@ -134,7 +151,7 @@ func TestStandbyPoolHandsOutOnlyByID(t *testing.T) {
 	pipeEventually(t, func() bool { return pool.preferredID() != "" })
 	pool.close()
 	pool.refill()
-	if started != 4 || pool.preferredID() != "" {
+	if started != 5 || pool.preferredID() != "" {
 		t.Fatalf("after close: started %d, preferred %q", started, pool.preferredID())
 	}
 }
