@@ -166,7 +166,9 @@ class GhListingTests(unittest.TestCase):
     def test_the_timeout_is_shared_by_every_read_of_one_listing(self):
         api = PagedApi(numbered(10))
         # The first pass takes pages 1 to 3 inside the budget; the second pass starts after it ran out.
-        with mock.patch.object(paged_listing.time, "monotonic", side_effect=[0, 1, 2, 3, 301]), \
+        def clock():
+            return 301 if len(api.pages) >= 3 else 0
+        with mock.patch.object(paged_listing.time, "monotonic", side_effect=clock), \
                 mock.patch.object(paged_listing.subprocess, "check_output", side_effect=api.check_output):
             with self.assertRaises(paged_listing.subprocess.TimeoutExpired):
                 paged_listing.gh_listing("endpoint")
