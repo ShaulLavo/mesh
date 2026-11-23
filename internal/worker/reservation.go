@@ -74,12 +74,15 @@ func strictReservation(root string, ref session.Reservation) error {
 		return workerExecutionError("reservation.go strictReservation", err)
 	}
 	defer func() { _ = f.Close() }()
-	// Both markers live in the session directory Reserve just created, so
-	// they are reachable only through it and share its sync round.
+	// The origin marker lives in the session directory Reserve just created,
+	// so it is reachable only through it and shares its sync round. Discovery
+	// reads .reservation to recognize an unpublished allocation from an
+	// earlier boot, so .launching is published only once the origin is durable.
 	dir := filepath.Join(filepath.Base(root), ref.ID)
-	_, err = f.Prepare(dir, nil,
-		execution.Record{Name: filepath.Join(dir, ".reservation"), Value: ref, Exclusive: true},
-		execution.Record{Name: filepath.Join(dir, ".launching"), Value: ref, Exclusive: true})
+	if _, err := f.Prepare(dir, nil, execution.Record{Name: filepath.Join(dir, ".reservation"), Value: ref, Exclusive: true}); err != nil {
+		return workerExecutionError("reservation.go strictReservation", err)
+	}
+	_, err = f.Publish(filepath.Join(dir, ".launching"), ref, true)
 	return workerExecutionError("reservation.go strictReservation", err)
 }
 func validateReservation(root string, ref session.Reservation) error {

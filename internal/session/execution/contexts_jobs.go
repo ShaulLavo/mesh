@@ -141,8 +141,7 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 			use := snapshot.Context
 			r.IntentDigest, r.LaunchIntentDigest, r.Context = callerDigest, digest(snapshot.Intent), &use
 		},
-		prepare:  func(b Binding, r *round) error { return prepareContextJob(r, b, k, snapshot) },
-		dispatch: dispatch,
+		prepare: func(b Binding, r *round) error { return prepareContextJob(r, b, k, snapshot) },
 	}
 	r, owner, err := j.acceptNew(ctx, k, snapshot.Intent, func() (Binding, error) { return reserve(snapshot) }, hooks)
 	if err != nil || !owner {
@@ -151,7 +150,26 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 	// Membership is already durable through the marker, so a failed use
 	// update cannot leave the running job's context unprotected.
 	_, _ = j.touch(c, true)
-	return r, true, nil
+	if !dispatch {
+		return r, true, nil
+	}
+	return j.dispatchContextJob(r)
+}
+
+// dispatchContextJob dispatches a context job in the lock hold that accepted
+// it, after the context update and once the launch snapshot reads back as the
+// receipt recorded it. Until then the receipt stays reserved, so a
+// coordinator that dies first still settles as not_started. A snapshot that
+// does not read back settles the job as not_started here, and the caller does
+// not launch it.
+func (j *Journal) dispatchContextJob(r Receipt) (Receipt, bool, error) {
+	snapshot, err := j.ReadLaunchSnapshot(r)
+	if err != nil {
+		settled, saveErr := j.terminal(r, Result{Binding: r.Binding, Termination: Termination{Kind: notStarted, Reason: "launch_snapshot_unreadable"}, Capture: CaptureNotRecorded})
+		return settled, false, errors.Join(executionBoundaryError("read context launch", err), saveErr)
+	}
+	r, err = j.dispatchReserved(r, snapshot.Intent)
+	return r, true, err
 }
 
 // prepareContextJob adds the launch snapshot and the membership marker to the

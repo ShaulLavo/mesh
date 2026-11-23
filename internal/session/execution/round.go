@@ -220,14 +220,7 @@ func (f *Files) syncDirsOf(names []string) error {
 	}
 	var dirs []string
 	for _, name := range names {
-		for dir := filepath.Dir(name); ; dir = filepath.Dir(dir) {
-			if !slices.Contains(dirs, dir) {
-				dirs = append(dirs, dir)
-			}
-			if dir == "." {
-				break
-			}
-		}
+		dirs = appendChain(dirs, name)
 	}
 	slices.SortStableFunc(dirs, func(a, b string) int { return pathDepth(b) - pathDepth(a) })
 	for _, dir := range dirs {
@@ -236,6 +229,19 @@ func (f *Files) syncDirsOf(names []string) error {
 		}
 	}
 	return nil
+}
+
+// appendChain adds every directory from name's parent up to the state root
+// that dirs does not hold yet.
+func appendChain(dirs []string, name string) []string {
+	for dir := filepath.Dir(name); ; dir = filepath.Dir(dir) {
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+		if dir == "." {
+			return dirs
+		}
+	}
 }
 
 func pathDepth(dir string) int {
@@ -250,7 +256,7 @@ func pathDepth(dir string) int {
 func (f *Files) flushDevices(files []*os.File) error {
 	seen := make(map[uint64]bool, 1)
 	for _, file := range files {
-		dev, ok := deviceOf(file)
+		dev, ok := fileDevice(file)
 		if ok && seen[dev] {
 			continue
 		}
@@ -263,6 +269,10 @@ func (f *Files) flushDevices(files []*os.File) error {
 	}
 	return nil
 }
+
+// fileDevice is deviceOf, a variable so tests can give files distinct or
+// unknown devices.
+var fileDevice = deviceOf
 
 func deviceOf(file *os.File) (uint64, bool) {
 	info, err := file.Stat()

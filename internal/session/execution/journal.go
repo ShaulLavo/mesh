@@ -298,17 +298,25 @@ func (j *Journal) Dispatch(ctx context.Context, b Binding, i Intent) error {
 
 // dispatchReserved records the launch intent for a reserved receipt that is
 // durable, then saves the receipt as dispatched. The caller holds the lock.
+// If either write fails, it returns the reserved receipt as last proven, with
+// its acceptance, and the failure separately: a replacement that failed
+// before or after its rename proves nothing about the job's acceptance.
 func (j *Journal) dispatchReserved(r Receipt, i Intent) (Receipt, error) {
 	if r.launchIntentDigest() != digest(i) {
 		return r, ErrUnknown
 	}
 	d := dispatch{Binding: r.Binding, Key: r.Key, Intent: i}
 	if _, err := j.files.Publish(attempt(r.Binding, "dispatch.json"), d, true); err != nil {
-		return r, err
+		return r, executionBoundaryError("record dispatch", err)
 	}
-	r.Phase = phaseDispatched
-	r.LaunchOutcome = outcomeUnknown
-	return j.save(r)
+	next := r
+	next.Phase = phaseDispatched
+	next.LaunchOutcome = outcomeUnknown
+	saved, err := j.save(next)
+	if err != nil {
+		return r, executionBoundaryError("save dispatched receipt", err)
+	}
+	return saved, nil
 }
 
 // ReserveAndDispatch is Reserve for a caller that launches the job at once:

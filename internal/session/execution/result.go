@@ -70,13 +70,16 @@ func (a *Attempt) claim(i Intent, env []string) error {
 	if d.Binding != b || d.Key != r.Key || digest(d.Intent) != digest(i) || NewBinding(d.Key, i, b.Reservation, env) != b {
 		return fmt.Errorf("execution: dispatch intent mismatch")
 	}
-	// Everything the claim relies on is already published, so the four
-	// records are proved durable together, and the claim only after them.
+	// Seeing a record does not prove its writer finished the barriers of
+	// what came before it, so the dispatched receipt is confirmed only after
+	// the allocation and dispatch evidence it rests on, and the claim is
+	// published only after all of them.
 	session := "s/" + b.Reservation.ID + "/"
-	if err := a.files.ConfirmAll(session+".reservation", session+".launching", requestName(b.RequestHash), attempt(b, "dispatch.json")); err != nil {
+	err := confirmInOrder(a.files, []string{session + ".reservation", session + ".launching", attempt(b, "dispatch.json")}, []string{requestName(b.RequestHash)})
+	if err != nil {
 		return err
 	}
-	_, err := a.files.Publish(attempt(b, "claim.json"), b, true)
+	_, err = a.files.Publish(attempt(b, "claim.json"), b, true)
 	return err
 }
 func (a *Attempt) Finish(result Result) error {

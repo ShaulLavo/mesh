@@ -3,6 +3,7 @@ package execution
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -152,9 +153,13 @@ func TestPublishAllReportsTheNamesThatBecameVisible(t *testing.T) {
 // unconfirmed, and nothing is remembered as durable.
 func TestRoundBarrierFailureRemembersNothing(t *testing.T) {
 	f := roundFiles(t)
+	// The memory stays active, so a record would be remembered if the
+	// failed barrier were treated as proof.
+	f.faultKeepsMemory = true
+	failing := true
 	boom := errors.New("injected directory failure")
 	recordSteps(f, func(step string, _ int) error {
-		if step == "directory_sync" {
+		if failing && step == "directory_sync" {
 			return boom
 		}
 		return nil
@@ -164,11 +169,76 @@ func TestRoundBarrierFailureRemembersNothing(t *testing.T) {
 	if !errors.As(err, &persistence) || persistence.Stage != Unconfirmed || len(visible) != 2 {
 		t.Fatalf("visible %v, err %v", visible, err)
 	}
-	f.confirmMu.Lock()
-	remembered := len(f.confirmed)
-	f.confirmMu.Unlock()
-	if remembered != 0 {
+	if remembered := rememberedCount(f); remembered != 0 {
 		t.Fatalf("%d unconfirmed records were remembered", remembered)
+	}
+	// The same memory does remember records once their barriers succeed, so
+	// the assertion above is not vacuous.
+	failing = false
+	if _, err := f.PublishAll(Record{Name: "c.json", Value: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if remembered := rememberedCount(f); remembered != 1 {
+		t.Fatalf("%d records remembered after a successful round, want 1", remembered)
+	}
+}
+
+func rememberedCount(f *Files) int {
+	f.confirmMu.Lock()
+	defer f.confirmMu.Unlock()
+	return len(f.confirmed)
+}
+
+// Each device gets one barrier, and a file whose device cannot be read gets
+// a barrier of its own.
+func TestRoundFlushesEachDeviceOnce(t *testing.T) {
+	f := roundFiles(t)
+	devices := map[string]uint64{"a.json": 1, "b.json": 2, "c.json": 1}
+	saved := fileDevice
+	fileDevice = func(file *os.File) (uint64, bool) {
+		dev, ok := devices[filepath.Base(file.Name())]
+		return dev, ok
+	}
+	t.Cleanup(func() { fileDevice = saved })
+	confirm := func(names ...string) map[string]int {
+		return syncCounts(f, func() {
+			if err := f.ConfirmAll(names...); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, name := range []string{"a.json", "b.json", "c.json", "u.json", "v.json"} {
+		publishRecord(t, f, name)
+	}
+	if got := confirm("a.json", "b.json", "c.json")["device_sync"]; got != 2 {
+		t.Fatalf("two devices took %d barriers", got)
+	}
+	// u.json and v.json have no known device, so neither shares a barrier.
+	if got := confirm("a.json", "u.json", "v.json")["device_sync"]; got != 3 {
+		t.Fatalf("one known and two unknown devices took %d barriers", got)
+	}
+}
+
+// A dependent group is not confirmed when its prerequisite's barrier fails.
+func TestConfirmInOrderStopsAtAFailedPrerequisite(t *testing.T) {
+	f := roundFiles(t)
+	for _, name := range []string{"first.json", "second.json", "third.json"} {
+		publishRecord(t, f, name)
+	}
+	boom := errors.New("injected device failure")
+	steps := recordSteps(f, func(step string, _ int) error {
+		if step == "device_sync" {
+			return boom
+		}
+		return nil
+	})
+	err := confirmInOrder(f, []string{"first.json", "second.json"}, []string{"third.json"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	// Only the prerequisites' own files were synced.
+	if got := count(*steps, "data_sync"); got != 2 {
+		t.Fatalf("data syncs = %d, want the two prerequisites only: %v", got, *steps)
 	}
 }
 

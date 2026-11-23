@@ -49,6 +49,9 @@ func OpenCaptures(state string, b Binding, streams []string) ([]*Capture, error)
 	if err := b.Validate(); err != nil {
 		return nil, executionBoundaryError("capture", err)
 	}
+	if len(streams) == 0 {
+		return nil, fmt.Errorf("execution: no capture streams")
+	}
 	for i, stream := range streams {
 		if !slices.Contains(b.Streams(), stream) || slices.Contains(streams[:i], stream) {
 			return nil, fmt.Errorf("execution: invalid capture stream")
@@ -119,13 +122,21 @@ func initializeStreams(stores []*streamStore) error {
 
 func addStreamDirectories(r *round, stores []*streamStore) error {
 	for _, s := range stores {
-		if err := r.ensure(s.path(".")); err != nil {
+		if err := addStreamDirectory(r, s); err != nil {
 			return err
 		}
-		for _, name := range []string{"stream.lock", readerLockName, writerLockName} {
-			if err := r.open(roundCreated, s.path(name), os.O_CREATE|os.O_RDWR); err != nil {
-				return err
-			}
+	}
+	return nil
+}
+
+// addStreamDirectory adds one stream's directory and its three locks.
+func addStreamDirectory(r *round, s *streamStore) error {
+	if err := r.ensure(s.path(".")); err != nil {
+		return err
+	}
+	for _, name := range []string{"stream.lock", readerLockName, writerLockName} {
+		if err := r.open(roundCreated, s.path(name), os.O_CREATE|os.O_RDWR); err != nil {
+			return err
 		}
 	}
 	return nil

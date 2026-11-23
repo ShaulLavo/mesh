@@ -177,7 +177,7 @@ func (s *streamStore) settle(ctx context.Context, m manifest) error {
 	if err != nil {
 		return err
 	}
-	if err := s.files.ConfirmAll(plan.unconfirmed...); err != nil {
+	if err := confirmInOrder(s.files, plan.segments, plan.manifests); err != nil {
 		return executionBoundaryError("confirm capture", err)
 	}
 	s.confirmed = plan.keep
@@ -188,13 +188,30 @@ func (s *streamStore) settle(ctx context.Context, m manifest) error {
 // the files among them this store has not yet proved durable. The segments
 // are already verified against their hashes.
 type settlePlan struct {
-	keep        map[string]fileIdentity
-	unconfirmed []string
+	keep map[string]fileIdentity
+	// segments are prerequisites of manifests, so they are confirmed in an
+	// earlier round: a visible manifest does not prove that its writer
+	// finished the segments' barriers.
+	segments, manifests []string
 }
 
-// planSettle verifies a manifest's files for settle. The unconfirmed ones are
-// all published already, so they can be confirmed in one round, also together
-// with other streams' files.
+// confirmInOrder confirms each group in its own round, a group only after
+// the previous one is durable. Empty groups take no round.
+func confirmInOrder(f *Files, groups ...[]string) error {
+	for _, names := range groups {
+		if len(names) == 0 {
+			continue
+		}
+		if err := f.ConfirmAll(names...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planSettle verifies a manifest's files for settle. Segments of several
+// streams are independent of one another, and so are their manifests, so
+// callers may confirm each kind for many streams in one round.
 func (s *streamStore) planSettle(ctx context.Context, m manifest) (settlePlan, error) {
 	plan := settlePlan{keep: make(map[string]fileIdentity, len(m.Segments)+1)}
 	for _, segment := range m.Segments {
@@ -206,22 +223,21 @@ func (s *streamStore) planSettle(ctx context.Context, m manifest) (settlePlan, e
 		if err != nil {
 			return plan, executionBoundaryError("capture", err)
 		}
-		plan.add(name, identity, known)
+		plan.keep[name] = identity
+		if !known {
+			plan.segments = append(plan.segments, name)
+		}
 	}
 	name := s.path("manifest.json")
 	identity, known, err := s.manifestIdentity(name)
 	if err != nil {
 		return plan, executionBoundaryError("confirm capture manifest", err)
 	}
-	plan.add(name, identity, known)
-	return plan, nil
-}
-
-func (p *settlePlan) add(name string, identity fileIdentity, known bool) {
-	p.keep[name] = identity
+	plan.keep[name] = identity
 	if !known {
-		p.unconfirmed = append(p.unconfirmed, name)
+		plan.manifests = append(plan.manifests, name)
 	}
+	return plan, nil
 }
 
 func (s *streamStore) confirmManifest(name string) (fileIdentity, error) {

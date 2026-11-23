@@ -230,10 +230,12 @@ func (s finalStream) release() {
 	s.store.leave()
 }
 
-// confirmFinals proves the result and every stream's final capture durable in
-// one round, each stream held under its exclusive fence. All of them were
-// published before anyone reads the result, so their confirmations have no
-// order among themselves. Streams are held in result order, the same order
+// confirmFinals proves every stream's final capture and then the result
+// durable, each stream held under its exclusive fence. Prerequisites are
+// confirmed before what depends on them, because seeing a record does not
+// prove its writer finished the barriers of what came before it: all
+// streams' unconfirmed segments share one round, their manifests the next,
+// and the result the last. Streams are held in result order, the same order
 // every caller uses.
 func (o *Output) confirmFinals(ctx context.Context, b Binding, streams []StreamResult) error {
 	held := make([]finalStream, 0, len(streams))
@@ -242,16 +244,17 @@ func (o *Output) confirmFinals(ctx context.Context, b Binding, streams []StreamR
 			s.release()
 		}
 	}()
-	names := []string{attempt(b, "result.json")}
+	var segments, manifests []string
 	for _, expected := range streams {
 		s, err := o.holdFinal(ctx, b, expected)
 		if err != nil {
 			return err
 		}
 		held = append(held, s)
-		names = append(names, s.plan.unconfirmed...)
+		segments = append(segments, s.plan.segments...)
+		manifests = append(manifests, s.plan.manifests...)
 	}
-	if err := o.files.ConfirmAll(names...); err != nil {
+	if err := confirmInOrder(o.files, segments, manifests, []string{attempt(b, "result.json")}); err != nil {
 		return err
 	}
 	for _, s := range held {

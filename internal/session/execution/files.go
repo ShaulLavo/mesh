@@ -50,6 +50,9 @@ type Files struct {
 	// count them with the confirmation memory still active.
 	observe func(string)
 	hookMu  sync.Mutex
+	// faultKeepsMemory lets a test inject faults with the confirmation memory
+	// still active, to check what a failed barrier leaves remembered.
+	faultKeepsMemory bool
 	// confirmed remembers JSON records this process already proved durable, so
 	// an unchanged one skips its file fsync. Directory and device barriers are
 	// never skipped: a rename can be undone or repeated without touching the
@@ -199,7 +202,7 @@ func (f *Files) Confirm(name string) error { return f.ConfirmAll(name) }
 // capture segments are not records and never get a stamp. Fault injection
 // bypasses the memory so tests that script sync steps still see every one.
 func (f *Files) stampOf(name string, file *os.File) (fileStamp, bool) {
-	if f.fault != nil || !strings.HasSuffix(name, recordExtension) {
+	if (f.fault != nil && !f.faultKeepsMemory) || !strings.HasSuffix(name, recordExtension) {
 		return fileStamp{}, false
 	}
 	info, err := file.Stat()
