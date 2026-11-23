@@ -214,13 +214,16 @@ func (l *lifecycle) executionWaitResult(ctx context.Context, req protocol.Contro
 		response.ExecutionWait = executionWaitCompleted
 		return response, nil
 	}
-	if _, err := l.executionOutput.Result(ctx, r.Binding); err != nil {
+	result, err := l.executionOutput.Result(ctx, r.Binding)
+	if err != nil {
 		if execution.IsResultPending(err) {
 			return response, nil
 		}
 		return response, executionBoundaryError("execution control", err)
 	}
-	r, err := j.Exact(ctx, r.Binding)
+	// Result already confirmed the result and its final captures, so the
+	// receipt is settled with it rather than through a second confirmation.
+	r, err = j.Complete(ctx, r.Binding, result)
 	response, _ = executionResponse(req, r, nil)
 	if err == nil {
 		response.ExecutionWait = executionWaitCompleted

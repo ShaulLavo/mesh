@@ -358,16 +358,25 @@ func finishPipeCaptures(readers []*pipeReader, reasons []string, result *executi
 	finishPipeCapture(readers, reasons, result, pipeCaptureFlushBudget)
 }
 
+// finishPipeCapture closes every stream's capture side by side under one
+// budget: each commits its own final manifest, so their sync rounds overlap
+// instead of adding up. The result lists the streams in reader order.
 func finishPipeCapture(readers []*pipeReader, reasons []string, result *execution.Result, budget time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
+	streams := make([]execution.StreamResult, len(readers))
+	errs := make([]error, len(readers))
+	var group sync.WaitGroup
 	for index, reader := range readers {
-		stream, err := reader.capture.Finish(ctx, reasons[index])
-		if err != nil {
-			abortPipeCaptures(readers)
-			result.Capture, result.Streams = execution.CaptureNotRecorded, nil
-			return
-		}
+		group.Go(func() { streams[index], errs[index] = reader.capture.Finish(ctx, reasons[index]) })
+	}
+	group.Wait()
+	if errors.Join(errs...) != nil {
+		abortPipeCaptures(readers)
+		result.Capture, result.Streams = execution.CaptureNotRecorded, nil
+		return
+	}
+	for _, stream := range streams {
 		result.Streams = append(result.Streams, stream)
 		if captureStatus(stream) != captureComplete {
 			result.Capture = captureIncomplete
