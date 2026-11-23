@@ -1809,7 +1809,7 @@ func (a *application) daemonCommand() *cobra.Command {
 				CertificateRenewerID: certificateRenewer, PrivateNamesConfig: privateNamesConfig,
 				AppRegistryConfig: appRegistryConfig, AppRegistryTarget: appRegistryTarget, AppDataRoot: appDataRoot,
 
-				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle,
+				TailscaleServe: tailscaleServe, TailscaleServePort: uint16(tailscaleServePort), TailscaleServeProxyProtocol: tailscaleServeProxy, HibernateIdle: hibernateIdle, StandbyWorkers: true,
 				ReportError: func(err error) {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "mesh daemon: %s\n", a.privacy.Value("error", err.Error()))
 				},

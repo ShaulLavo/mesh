@@ -68,6 +68,10 @@ type Config struct {
 	// detached and quiet this long. Zero leaves every session running.
 	HibernateIdle time.Duration
 	ReportError   func(error)
+	// StandbyWorkers keeps one pre-started worker for keyed launches. Only
+	// the daemon command sets it: a daemon run inside a test process would
+	// start the test binary as its standby.
+	StandbyWorkers bool
 }
 
 type runOptions struct {
@@ -452,7 +456,9 @@ func run(ctx context.Context, cfg Config, opts runOptions) (runErr error) {
 	}
 	defer lifecycle.closeExecution()
 	defer lifecycle.standbys.close()
-	go lifecycle.standbys.activate()
+	if cfg.StandbyWorkers {
+		go lifecycle.standbys.activate()
+	}
 	state.hostChanged(lifecycle.declaredHostInfo())
 	var appLocal *apps.Origin
 	if appClient != nil {

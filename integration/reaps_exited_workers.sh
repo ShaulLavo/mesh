@@ -33,9 +33,10 @@ done
 "$MESH" local --daemon -- /bin/true >"$T/client.out" 2>"$T/client.err" ||
   fail "short session failed: $(cat "$T/client.err")"
 
+# Only an exited child matters: the daemon may keep a waiting standby worker.
 children=""
 for _ in $(seq 100); do
-  children=$(ps -o pid=,stat=,comm= --ppid "$DAEMON")
+  children=$(ps -o pid=,stat=,comm= --ppid "$DAEMON" | awk '$2 ~ /^Z/')
   [ -z "$children" ] && break
   sleep 0.02
 done

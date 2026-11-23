@@ -44,7 +44,8 @@ func runNativePipeDaemon(role string, args []string) error {
 	if pause, err := time.ParseDuration(os.Getenv(inlineAfterWaitFixture)); err == nil {
 		inlineAfterWait = func() { time.Sleep(pause) }
 	}
-	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
+	// The fixture's own workers handle the standby handoff, so it keeps one.
+	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config"), StandbyWorkers: true})
 }
 
 // runNativeStandbyWorker is the fixture's standby: the same handoff as the
