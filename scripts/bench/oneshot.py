@@ -708,31 +708,33 @@ def posix_start_id(pid):
     return " ".join(parts[1].split())
 
 
-def ancestor_pids():
-    seen = set()
-    pid = os.getpid()
+def ancestor_pids(deadline=None, reserve=0.0):
+    seen = {os.getpid()}
+    pid = os.getppid()
     while pid > 1 and pid not in seen:
         seen.add(pid)
-        pid = parent_pid(pid)
+        pid = parent_pid(pid, deadline=deadline, reserve=reserve)
     return seen
 
 
-def parent_pid(pid):
+def parent_pid(pid, deadline=None, reserve=0.0):
     if sys.platform == "linux":
         try:
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
             return int(fields[1])
         except OSError:
             return 0
-    result = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+    result = run_command_with_deadline(
+        ["ps", "-o", "ppid=", "-p", str(pid)], deadline=deadline, reserve=reserve
+    )
     text = result.stdout.strip()
     return int(text) if text.isdigit() else 0
 
 
-def list_process_rows(deadline=None, reserve=0.0):
+def list_process_rows(deadline=None, reserve=0.0, cap_at=None):
     if sys.platform == "linux":
         return list_linux_process_rows()
-    return list_posix_process_rows(deadline=deadline, reserve=reserve)
+    return list_posix_process_rows(deadline=deadline, reserve=reserve, cap_at=cap_at)
 
 
 def list_linux_process_rows():
@@ -784,25 +786,69 @@ def read_linux_owner_token(entry):
     return None
 
 
-def run_ps_snapshot(argv, deadline=None, reserve=0.0):
-    timeout = None
+def scan_limit_at(deadline, reserve=0.0, cap_at=None):
+    limits = []
     if deadline is not None:
-        timeout = deadline.at - reserve - time.monotonic()
-        if timeout <= 0.0:
-            raise RuntimeError("ps process listing timed out: cleanup deadline expired")
+        limits.append(deadline.at - reserve)
+    if cap_at is not None:
+        limits.append(cap_at)
+    return min(limits) if limits else None
+
+
+def close_popen_pipes(proc):
+    for stream in (proc.stdout, proc.stderr):
+        if stream is not None:
+            stream.close()
+
+
+def communicate_until_deadline(proc, deadline, reserve, cap_at):
+    while True:
+        limit = scan_limit_at(deadline, reserve, cap_at)
+        slice_timeout = None
+        if limit is not None:
+            remaining = limit - time.monotonic()
+            if remaining <= 0.0:
+                proc.kill()
+                proc.wait(timeout=1.0)
+                raise RuntimeError("ps process listing timed out: cleanup deadline expired")
+            slice_timeout = min(0.05, remaining)
+        try:
+            stdout, stderr = proc.communicate(timeout=slice_timeout)
+            return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_command_with_deadline(argv, deadline=None, reserve=0.0, cap_at=None):
+    limit = scan_limit_at(deadline, reserve, cap_at)
+    if limit is not None and time.monotonic() >= limit:
+        raise RuntimeError("ps process listing timed out: cleanup deadline expired")
+    proc = subprocess.Popen(
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"ps process listing timed out after {timeout:.2f}s") from error
+        return communicate_until_deadline(proc, deadline, reserve, cap_at)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=1.0)
+        close_popen_pipes(proc)
+
+
+def run_ps_snapshot(argv, deadline=None, reserve=0.0, cap_at=None):
+    result = run_command_with_deadline(argv, deadline=deadline, reserve=reserve, cap_at=cap_at)
     if result.returncode != 0 or not result.stdout.strip():
         raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
     return result.stdout.splitlines()
 
 
-def list_posix_process_rows(deadline=None, reserve=0.0):
+def list_posix_process_rows(deadline=None, reserve=0.0, cap_at=None):
     if sys.platform == "darwin":
-        return list_darwin_process_rows(deadline=deadline, reserve=reserve)
-    lines = run_ps_snapshot(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,lstart=,command="], deadline=deadline, reserve=reserve)
+        return list_darwin_process_rows(deadline=deadline, reserve=reserve, cap_at=cap_at)
+    lines = run_ps_snapshot(
+        ["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,lstart=,command="],
+        deadline=deadline, reserve=reserve, cap_at=cap_at,
+    )
     rows = []
     for line in lines:
         row = parse_posix_ps_row(line)
@@ -811,11 +857,14 @@ def list_posix_process_rows(deadline=None, reserve=0.0):
     return rows
 
 
-def list_darwin_process_rows(deadline=None, reserve=0.0):
+def list_darwin_process_rows(deadline=None, reserve=0.0, cap_at=None):
     # Bracket the ps snapshot with libproc birth times before and after so a PID
     # reused during ps cannot pair old arguments with a new process identity.
     starts_before = {pid: start for pid in darwin_all_pids() if (start := darwin_start_id(pid)) is not None}
-    lines = run_ps_snapshot(["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,command="], deadline=deadline, reserve=reserve)
+    lines = run_ps_snapshot(
+        ["ps", "-ax", "-o", "pid=,ppid=,pgid=,state=,command="],
+        deadline=deadline, reserve=reserve, cap_at=cap_at,
+    )
     return bracket_darwin_ps_rows(lines, starts_before, darwin_start_id)
 
 
@@ -1086,6 +1135,13 @@ def snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_tok
     return found
 
 
+def try_ancestor_pids(deadline):
+    try:
+        return ancestor_pids(deadline=deadline, reserve=0.55), None
+    except Exception as error:
+        return {os.getpid(), os.getppid()}, error
+
+
 def cleanup_owned_tree(
     scratch_path,
     *,
@@ -1105,15 +1161,15 @@ def cleanup_owned_tree(
         exact_binary = scratch / "mesh"
     if deadline is None:
         deadline = CleanupDeadline(8.0)
-    exclude = ancestor_pids()
+    exclude, ancestor_error = try_ancestor_pids(deadline)
     sessions_dir = Path(state_dir) / "s"
     snapshot_error = try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
     shutdown_workers_gracefully(state_dir, deadline)
     stop_popen(daemon_proc, deadline=deadline, grace=2.5, kill_wait=0.5)
     reap_children()
     remaining = terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
-    if snapshot_error is not None:
-        raise snapshot_error
+    if ancestor_error or snapshot_error:
+        raise (ancestor_error or snapshot_error)
     return remaining
 
 
@@ -1129,29 +1185,62 @@ def try_snapshot_owned(registry, exact_binary, sessions_dir, owner_token, exclud
 
 def terminate_owned_within(registry, exact_binary, sessions_dir, owner_token, exclude, deadline):
     term_cap = time.monotonic() + 2.0
+    scan_error = None
+    known_targets = {tuple(item) for item in registry.load_all() if item[0] not in exclude}
     for sig, reserve in ((signal.SIGTERM, 0.35), (signal.SIGKILL, 0.0)):
-        targets = find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)
-        if not targets:
+        phase_cap = term_cap if sig == signal.SIGTERM else None
+        targets, err = try_find_live_owned(
+            registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap
+        )
+        if err is not None:
+            scan_error = scan_error or err
+            targets = sorted(known_targets)
+        else:
+            known_targets.update(targets)
+        if not targets and scan_error is None:
             return []
         for pid, start in targets:
             signal_verified_process(pid, start, sig)
-        phase_cap = term_cap if sig == signal.SIGTERM else float("inf")
-        wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap)
-    return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline)]
+        wait_err = wait_owned_gone(
+            registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap
+        )
+        if wait_err is not None:
+            scan_error = scan_error or wait_err
+    remaining, final_err = try_find_live_owned(
+        registry, exact_binary, sessions_dir, owner_token, exclude, deadline, 0.0, None
+    )
+    if scan_error or final_err:
+        raise (scan_error or final_err)
+    return [pid for pid, _ in remaining]
 
 
-def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline=None, reserve=0.0):
+def try_find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, cap_at):
+    try:
+        return find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, cap_at), None
+    except Exception as error:
+        return [], error
+
+
+def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline=None, reserve=0.0, cap_at=None):
     reap_children()
-    rows = list_process_rows(deadline=deadline, reserve=reserve)
+    rows = list_process_rows(deadline=deadline, reserve=reserve, cap_at=cap_at)
     roots = registry.load_all()
     return discover_owned_processes(rows, roots, exact_binary, sessions_dir, owner_token, exclude)
 
 
 def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap):
-    while time.monotonic() < min(phase_cap, deadline.at - reserve):
-        if not find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude, deadline):
-            return
+    limit = scan_limit_at(deadline, reserve, phase_cap)
+    while limit is not None and time.monotonic() < limit:
+        targets, err = try_find_live_owned(
+            registry, exact_binary, sessions_dir, owner_token, exclude, deadline, reserve, phase_cap
+        )
+        if err is not None:
+            return err
+        if not targets:
+            return None
         time.sleep(0.05)
+        limit = scan_limit_at(deadline, reserve, phase_cap)
+    return None
 
 
 def poll_proc_until(proc, stop_at):
@@ -2517,10 +2606,17 @@ def cancel_mac_queue_ticket(target_ip, ssh_alias, remote_python, task_label):
     return {"cancelled": False, "error": f"mac-queue cancel failed: {detail}"}
 
 
+def attach_ticket_cancel_error(report, ticket_cancel):
+    if ticket_cancel is not None and not ticket_cancel.get("cancelled"):
+        report["clean"] = False
+        report["ticket_cancel_error"] = ticket_cancel.get("error") or "mac-queue ticket still active"
+
+
 def teardown_remote(
     host_name, spec, target_ip, remote_python, remote_scratch,
     remote_proc, marker_stream, stopped_payload, owner_token, stage_ready, args, cleanup_report,
 ):
+    ticket_cancel = None
     try:
         if remote_proc is not None and remote_proc.poll() is None:
             stopped_payload = request_remote_stop(
@@ -2529,7 +2625,6 @@ def teardown_remote(
         if isinstance(stopped_payload, dict) and stopped_payload.get("clean") is True:
             cleanup_report[host_name] = stopped_payload
             return
-        ticket_cancel = None
         if spec.get("use_mac_queue"):
             ticket_cancel = cancel_mac_queue_ticket(
                 target_ip, spec["ssh_alias"], remote_python, mac_queue_task_label(owner_token)
@@ -2537,12 +2632,12 @@ def teardown_remote(
         recovery = remote_recovery_cleanup(
             target_ip, spec, remote_python, remote_scratch, owner_token, args
         )
-        if ticket_cancel is not None and not ticket_cancel.get("cancelled"):
-            recovery["clean"] = False
-            recovery["ticket_cancel_error"] = ticket_cancel.get("error") or "mac-queue ticket still active"
+        attach_ticket_cancel_error(recovery, ticket_cancel)
         cleanup_report[host_name] = recovery
     except Exception as error:
-        cleanup_report[host_name] = {"clean": False, "error": str(error), "remote_scratch": remote_scratch}
+        report = {"clean": False, "error": str(error), "remote_scratch": remote_scratch}
+        attach_ticket_cancel_error(report, ticket_cancel)
+        cleanup_report[host_name] = report
 
 
 def request_remote_stop(target_ip, ssh_alias, remote_scratch, owner_token, stage_ready, remote_proc, marker_stream):
