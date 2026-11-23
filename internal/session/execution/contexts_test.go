@@ -570,6 +570,33 @@ func TestDeniedContextJobReclaimsNoOutput(t *testing.T) {
 	}
 }
 
+// A context whose membership directory exists but cannot be listed refuses a
+// job in preflight, before output admission, so a full output quota reclaims
+// nothing for a job that is never accepted.
+func TestUnlistableMembershipRefusesAJobBeforeOutputReclaim(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lists a directory without permissions")
+	}
+	j, _, _, _, retained := terminalOutputFixture(t)
+	j.maxActive = 1
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	members := filepath.Join(j.files.root.Name(), contextMembers(c.ID))
+	if err := os.Chmod(members, 0o300); err != nil { //nolint:gosec // write and search without read: a directory that exists but cannot be listed
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(members, 0o700) }) //nolint:gosec // a directory needs its search bit for the temporary directory's cleanup
+	if _, _, err := reserveJob(t, j, jobKey(ownerA, c.ID, "job"), "x", nil); !errors.Is(err, ErrContextDamaged) {
+		t.Fatalf("job in a context with unlistable membership = %v", err)
+	}
+	after, err := j.Exact(t.Context(), retained.Binding)
+	if err != nil || after.OutputExpired {
+		t.Fatalf("a refused reservation reclaimed retained output: %+v %v", after.OutputExpired, err)
+	}
+	if _, err := j.read(jobKey(ownerA, c.ID, "job").Hash()); err == nil {
+		t.Fatal("refused reservation left a receipt")
+	}
+}
+
 func TestContextJobsReplayAcrossEditsClosureAndCallers(t *testing.T) {
 	j := contextJournal(t)
 	c := openTestContext(t, j, ownerA, "ctx-1", "/work")

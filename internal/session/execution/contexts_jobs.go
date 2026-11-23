@@ -198,16 +198,17 @@ func prepareContextJob(r *round, b Binding, k Key, snapshot LaunchSnapshot) erro
 	return r.record(contextMember(k.Context, b.RequestHash), k, true, MaxRecord)
 }
 
-// requireMembers refuses a job for a context whose membership directory is
-// missing. Every open creates it, so its absence is damage that may hide a
-// running job; a new marker in a recreated directory would make membership
-// look complete and let expiry remove the context.
+// requireMembers refuses a job for a context whose membership directory
+// cannot be listed, the same listing expiry relies on. Every open creates it,
+// so a missing or unreadable one is damage that may hide a running job; a new
+// marker in a recreated directory would make membership look complete and
+// let expiry remove the context. Preflight runs it before output admission,
+// so a refused job reclaims no retained output.
 func (j *Journal) requireMembers(id string) error {
-	err := j.files.check(contextMembers(id), false)
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("context %s: %w", id, ErrContextDamaged)
+	if _, err := j.files.Names(contextMembers(id)); err != nil {
+		return fmt.Errorf("context %s: %w", id, errors.Join(ErrContextDamaged, err))
 	}
-	return err
+	return nil
 }
 
 // ReadLaunchSnapshot returns the snapshot a context job was reserved with.
