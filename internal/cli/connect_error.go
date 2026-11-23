@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
+	"unicode"
 
 	"github.com/shaul/mesh/internal/transport"
 )
@@ -69,10 +71,24 @@ func presentJoinPart(host HostRecord, err error) error {
 }
 
 // sanitizedError shows its cause as terminal-safe text and keeps the cause for
-// errors.Is and errors.As.
+// errors.Is and errors.As. It only replaces characters a terminal would act
+// on, so a local path in the same message keeps its exact spelling.
 type sanitizedError struct{ cause error }
 
-func (e sanitizedError) Error() string { return safeRemoteText(e.cause.Error()) }
+func (e sanitizedError) Error() string { return terminalSafeText(e.cause.Error()) }
+
+// terminalSafeText replaces invalid UTF-8 and nonprintable characters, such
+// as carriage returns and escape sequences, and leaves printable text as it
+// is. Unlike safeRemoteText it neither collapses spaces nor truncates.
+func terminalSafeText(value string) string {
+	value = strings.ToValidUTF8(value, "?")
+	return strings.Map(func(character rune) rune {
+		if !unicode.IsPrint(character) {
+			return ' '
+		}
+		return character
+	}, value)
+}
 
 func (e sanitizedError) Unwrap() error { return e.cause }
 

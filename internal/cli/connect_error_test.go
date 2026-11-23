@@ -146,11 +146,26 @@ func TestWakeJoinSanitizesRemoteWakeMessage(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Cannot connect to pc: nothing accepted the TCP connection to 100.64.0.2:7337 (connection refused).",
-		"wake through vps: spoofed [31mline: wake sender refused",
+		"wake through vps: spoofed  [31mline: wake sender refused",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q is missing %q", err, want)
 		}
+	}
+}
+
+// A local wake failure keeps its exact text, such as a state directory whose
+// name has repeated spaces; only characters a terminal acts on are replaced.
+func TestWakeJoinKeepsLocalPathsExact(t *testing.T) {
+	local := errors.New("open wake cache /tmp/mesh  state/wake.json: permission denied")
+	app := &application{dependencies: Dependencies{
+		DialHost: failingDialer(wrappedDialError("100.64.0.2:7337", syscall.ECONNREFUSED)),
+		Wake:     func(context.Context, HostRecord) error { return local },
+	}}
+	host := connectErrorTestHost("ws://100.64.0.2:7337/mesh")
+	_, _, err := openVerifiedHostInfo(context.Background(), host, app.intentDialer(io.Discard))
+	if !errors.Is(err, local) || !strings.Contains(err.Error(), local.Error()) {
+		t.Fatalf("joined error %q changed the local wake failure %q", err, local)
 	}
 }
 
