@@ -128,12 +128,7 @@ func TestCompleteSettlesWithTheConfirmedResult(t *testing.T) {
 	j, k, i, env := pipeJournalFixture(t)
 	b, a := claimedAttempt(t, j, k, i, env)
 	want := finishedPipe(t, j, b, a, 3)
-	output, err := OpenOutput(j.files.root.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = output.Close() }()
-	result, err := output.Result(t.Context(), b)
+	result, err := j.FinalResult(t.Context(), b)
 	if err != nil || len(result.Streams) != 2 || result.Streams[0] != want.Streams[0] || result.Streams[1] != want.Streams[1] {
 		t.Fatalf("confirmed result: %+v %v", result, err)
 	}
@@ -150,9 +145,19 @@ func TestCompleteSettlesWithTheConfirmedResult(t *testing.T) {
 	if counts["publish"] != 1 || counts["device_sync"] != 1 {
 		t.Fatalf("completion steps: %v", counts)
 	}
-	repeat, err := j.Complete(t.Context(), b, result)
-	if err != nil || repeat.Phase != phaseTerminal || *repeat.Result.Termination.Code != 3 {
-		t.Fatalf("repeated completion: %+v %v", repeat, err)
+	var repeat Receipt
+	counts = syncCounts(j.files, func() {
+		if repeat, err = j.Complete(t.Context(), b, result); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if repeat.Phase != phaseTerminal || *repeat.Result.Termination.Code != 3 {
+		t.Fatalf("repeated completion: %+v", repeat)
+	}
+	// The unchanged receipt is returned only after its own barriers: the
+	// requests directory, execution and the root, then the device.
+	if counts["publish"] != 0 || counts["directory_sync"] != 3 || counts["device_sync"] != 1 {
+		t.Fatalf("an unchanged terminal receipt was not confirmed: %v", counts)
 	}
 	other := result
 	other.Binding.Reservation.Instance = "00000000000000000000000000000000"

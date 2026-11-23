@@ -50,25 +50,58 @@ func executionCatalogLifecycle(t *testing.T, catalog lifecycleCatalog) *lifecycl
 	return l
 }
 
-// A pipe job is reached only through its exact binding, so its creation does
-// not wait for a catalog scan; a background reconcile still lists it.
-func TestPipeExecutionCreateDoesNotWaitForTheCatalog(t *testing.T) {
+// controlWithin runs one control and fails the test if it is still waiting
+// at the hang cap, as it would be if it waited for the blocked catalog.
+func controlWithin(ctx context.Context, t *testing.T, l *lifecycle, request protocol.Control) (protocol.Control, error) {
+	t.Helper()
+	type reply struct {
+		control protocol.Control
+		err     error
+	}
+	done := make(chan reply, 1)
+	go func() {
+		control, _, err := l.HandleControl(ctx, request)
+		done <- reply{control, err}
+	}()
+	select {
+	case got := <-done:
+		return got.control, got.err
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s waited for the catalog", request.Type)
+		return protocol.Control{}, nil
+	}
+}
+
+// The catalog scan leaves pipe reservations out, and pipe jobs are reached
+// only through their exact binding, so creating one, replaying its key and
+// its exact controls never wait for the catalog.
+func TestPipeExecutionNeverWaitsForTheCatalog(t *testing.T) {
 	catalog := newBlockingCatalog()
 	t.Cleanup(catalog.unblock)
 	l := executionCatalogLifecycle(t, catalog)
 	ctx := context.WithValue(t.Context(), localClientKey{}, true)
-	request := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "r", RequestKey: "pipe-job", ExecutionKind: "pipe", Stdin: "closed", Command: []string{"/bin/true"}, Cwd: "/work"}
-	response, handled, err := l.HandleControl(ctx, request)
-	if !handled || err != nil || response.ExecutionReceipt == nil {
+	create := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "r", RequestKey: "pipe-job", ExecutionKind: "pipe", Stdin: "closed", Command: []string{"/bin/true"}, Cwd: "/work"}
+	response, err := controlWithin(ctx, t, l, create)
+	if err != nil || response.ExecutionReceipt == nil {
 		t.Fatalf("create: %+v %v", response, err)
 	}
-	if r := response.ExecutionReceipt; r.Publication != "published" || r.Phase != "live" || r.LaunchOutcome != "started" {
-		t.Fatalf("receipt: %+v", r)
+	job := response.ExecutionReceipt
+	if job.Publication != "published" || job.Phase != "live" || job.LaunchOutcome != "started" {
+		t.Fatalf("receipt: %+v", job)
 	}
-	select {
-	case <-catalog.started:
-	case <-time.After(10 * time.Second):
-		t.Fatal("no background catalog reconcile was requested")
+	// The fixture launched no real worker, so the replay finds nothing to
+	// probe and reports an unknown outcome; it still must not wait.
+	replay, _ := controlWithin(ctx, t, l, create)
+	if replay.ExecutionReceipt == nil || replay.ExecutionReceipt.Instance != job.Instance {
+		t.Fatalf("replay: %+v", replay)
+	}
+	wait := protocol.Control{Type: protocol.TypeExecutionWait, RequestID: "w", SessionID: job.SessionID, Instance: job.Instance, TimeoutMillis: 50}
+	waited, err := controlWithin(ctx, t, l, wait)
+	if err != nil || waited.ExecutionWait != executionWaitTimedOut {
+		t.Fatalf("wait: %+v %v", waited, err)
+	}
+	if calls := catalog.reconciliationCount(); calls != 0 {
+		t.Fatalf("pipe controls ran %d catalog reconciles", calls)
 	}
 }
 
@@ -94,30 +127,5 @@ func TestTerminalExecutionCreateWaitsForTheCatalog(t *testing.T) {
 	catalog.unblock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
-	}
-}
-
-// A burst of requests while a reconcile runs schedules one more, not one each.
-func TestReconcileSoonCoalescesABurst(t *testing.T) {
-	catalog := newBlockingCatalog()
-	t.Cleanup(catalog.unblock)
-	l := executionCatalogLifecycle(t, catalog)
-	l.reconcileSoon()
-	<-catalog.started
-	for range 20 {
-		l.reconcileSoon()
-	}
-	catalog.unblock()
-	<-catalog.started
-	deadline := time.Now().Add(10 * time.Second)
-	for l.reconcilePending.Load() && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
-	l.reconcileSoonMu.Lock()
-	calls := catalog.reconciliationCount()
-	l.reconcileSoonMu.Unlock()
-	if calls != 2 {
-		t.Fatalf("reconciles = %d, want the running one and one more", calls)
 	}
 }

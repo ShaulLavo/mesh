@@ -142,39 +142,18 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	return executionResponse(request, r, err)
 }
 
-// publishExecutionCatalog makes a launched job visible in the session catalog.
-// A terminal job is attached through the catalog, so its creation waits for a
-// full reconcile. Pipe jobs are only ever reached through their exact binding,
-// which the worker's own publication already proves, so they do not hold the
-// reply for a scan of every session: a background reconcile lists them within
-// moments, and the periodic one would within a second.
+// publishExecutionCatalog makes a launched terminal job visible in the session
+// catalog, which is how it is attached, so its creation waits for a full
+// reconcile. The catalog scan leaves pipe reservations out, and pipe jobs are
+// only ever reached through their exact binding, which the worker's own
+// publication already proves, so they skip the scan.
 func (l *lifecycle) publishExecutionCatalog(ctx context.Context, b execution.Binding) error {
 	if b.Mode() != execution.KindPTY {
-		l.reconcileSoon() //nolint:contextcheck // the scan outlives this request and ends with the daemon
 		return nil
 	}
 	publishCtx, cancel := context.WithTimeout(ctx, l.publishTimeout)
 	defer cancel()
 	return executionBoundaryError("reconcile execution catalog", l.catalog.Reconcile(publishCtx))
-}
-
-// reconcileSoon runs one catalog reconcile in the background. Requests that
-// arrive while one is waiting share it, so a burst of jobs costs at most one
-// running and one waiting scan.
-func (l *lifecycle) reconcileSoon() {
-	if !l.reconcilePending.CompareAndSwap(false, true) {
-		return
-	}
-	go func() {
-		l.reconcileSoonMu.Lock()
-		defer l.reconcileSoonMu.Unlock()
-		// Cleared as the scan starts, so a job published during the scan
-		// schedules the next one rather than relying on this one to see it.
-		l.reconcilePending.Store(false)
-		ctx, cancel := context.WithTimeout(l.context, l.publishTimeout)
-		defer cancel()
-		_ = l.catalog.Reconcile(ctx)
-	}()
 }
 
 var executionDaemonBoundary = func(string, string, execution.Receipt) {}

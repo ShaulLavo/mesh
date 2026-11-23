@@ -341,8 +341,8 @@ func (j *Journal) publishedTerminal(r Receipt) (Receipt, error) {
 }
 
 // Complete settles the exact receipt with a result the caller already read
-// through Output.Result, which confirmed it and its final captures durable,
-// so they are not confirmed a second time.
+// through FinalResult, which confirmed it and its final captures durable, so
+// they are not confirmed a second time.
 func (j *Journal) Complete(ctx context.Context, b Binding, result Result) (Receipt, error) {
 	if err := result.validate(b); err != nil {
 		return Receipt{}, err
@@ -373,6 +373,15 @@ func (j *Journal) confirmedTerminalView(r Receipt) (Receipt, error) {
 		return r, err
 	}
 	return j.terminalView(r)
+}
+
+// FinalResult reads the exact attempt's result and confirms it and its final
+// captures durable, for Complete. Its stream stores are fresh, so a capture
+// that an output reader saw before the job finished is confirmed again with
+// all its barriers rather than trusted from that earlier read. A job still
+// running reports IsResultPending.
+func (j *Journal) FinalResult(ctx context.Context, b Binding) (Result, error) {
+	return j.result(ctx, b)
 }
 
 // result reads and confirms the exact attempt's result and final captures.

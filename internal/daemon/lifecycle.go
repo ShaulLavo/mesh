@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -65,15 +64,11 @@ type lifecycleConfig struct {
 }
 
 type lifecycle struct {
-	updateSummary   func() *protocol.HostUpdateSummary
-	executionOnce   sync.Once
-	execution       *execution.Journal
-	executionErr    error
-	executionOutput *execution.Output
-	// reconcilePending and reconcileSoonMu coalesce the background catalog
-	// reconciles that pipe job creation requests.
-	reconcilePending atomic.Bool
-	reconcileSoonMu  sync.Mutex
+	updateSummary    func() *protocol.HostUpdateSummary
+	executionOnce    sync.Once
+	execution        *execution.Journal
+	executionErr     error
+	executionOutput  *execution.Output
 	names            *machinename.Store
 	nameChanged      func(protocol.HostInfo)
 	renameMu         sync.Mutex

@@ -11,38 +11,57 @@ import (
 // blocked does not hold the other stream's final save behind it, whichever
 // stream is blocked.
 func TestFinishPipeCaptureClosesStreamsSideBySide(t *testing.T) {
-	for _, blocked := range []string{execution.StreamStdout, execution.StreamStderr} {
-		other := execution.StreamStderr
-		if blocked == execution.StreamStderr {
-			other = execution.StreamStdout
-		}
-		t.Run(blocked, func(t *testing.T) {
-			f := newPipeDrainFixture(t, execution.StreamStdout, execution.StreamStderr)
-			stall := f.stallStream(t, blocked)
-			t.Cleanup(func() { _ = stall.Close() })
-			for _, s := range f.streams {
-				_ = s.writes.Close()
-			}
-			reasons := f.drain(pipeDrainLimits{silence: time.Second, total: hangCap})
-			result := execution.Result{Capture: captureComplete}
-			finishPipeCapture(f.readers(), reasons, &result, 300*time.Millisecond)
-			if result.Capture != execution.CaptureNotRecorded || len(result.Streams) != 0 {
-				t.Fatalf("result = capture %q with %d streams, want %q with none", result.Capture, len(result.Streams), execution.CaptureNotRecorded)
-			}
-			output, err := execution.OpenOutput(f.root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = output.Close() }()
-			page, err := output.Page(t.Context(), f.binding, other, "", execution.MaxPage)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !page.StreamClosed || !page.EOF {
-				t.Fatalf("%s waited for the blocked %s: closed=%v eof=%v", other, blocked, page.StreamClosed, page.EOF)
-			}
-		})
+	t.Run(execution.StreamStdout, func(t *testing.T) { testStreamsSideBySide(t, execution.StreamStdout, execution.StreamStderr) })
+	t.Run(execution.StreamStderr, func(t *testing.T) { testStreamsSideBySide(t, execution.StreamStderr, execution.StreamStdout) })
+}
+
+// testStreamsSideBySide holds blocked's capture lock and waits, under the hang
+// cap only, for other's final save to close its stream. Then it releases the
+// lock and expects both final saves in the result.
+func testStreamsSideBySide(t *testing.T, blocked, other string) {
+	f := newPipeDrainFixture(t, execution.StreamStdout, execution.StreamStderr)
+	stall := f.stallStream(t, blocked)
+	t.Cleanup(func() { _ = stall.Close() })
+	for _, s := range f.streams {
+		_ = s.writes.Close()
 	}
+	reasons := f.drain(pipeDrainLimits{silence: time.Second, total: hangCap})
+	result := execution.Result{Capture: captureComplete}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		finishPipeCapture(f.readers(), reasons, &result, hangCap)
+	}()
+	output, err := execution.OpenOutput(f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = output.Close() }()
+	if !streamClosesWithin(t, output, f.binding, other, hangCap) {
+		t.Fatalf("%s waited for the blocked %s", other, blocked)
+	}
+	_ = stall.Close()
+	<-finished
+	if result.Capture != captureComplete || len(result.Streams) != 2 {
+		t.Fatalf("result = capture %q with %d streams, want complete with both", result.Capture, len(result.Streams))
+	}
+}
+
+// streamClosesWithin polls one stream until its capture is closed.
+func streamClosesWithin(t *testing.T, output *execution.Output, b execution.Binding, stream string, limit time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		page, err := output.Page(t.Context(), b, stream, "", execution.MaxPage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.StreamClosed && page.EOF {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 // Both streams are listed in reader order when every final save succeeds.
