@@ -206,9 +206,12 @@ func assertInlineCompletion(t *testing.T, reply protocol.Control, code int) {
 	if len(reply.ExecutionOutput) != len(want) {
 		t.Fatalf("inline pages = %+v", reply.ExecutionOutput)
 	}
+	// Exactly one page per stream: each expected stream is consumed once.
 	for _, page := range reply.ExecutionOutput {
-		if page.SessionID != r.SessionID || page.Instance != r.Instance || !page.EOF || !bytes.Equal(page.Bytes, []byte(want[page.Stream])) {
+		expected, ok := want[page.Stream]
+		if !ok || page.SessionID != r.SessionID || page.Instance != r.Instance || !page.EOF || !bytes.Equal(page.Bytes, []byte(expected)) {
 			t.Fatalf("inline page %s = %+v", page.Stream, page)
 		}
+		delete(want, page.Stream)
 	}
 }
