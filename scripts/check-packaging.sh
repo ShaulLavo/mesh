@@ -196,6 +196,7 @@ check_source_contract() {
   python3 scripts/test-prepare-draft-intake.py
   check_bundled_release
   python3 scripts/test-acquire-release-history.py
+  python3 scripts/test-paged-listing.py
   python3 scripts/test-update-reader-publication.py
   python3 scripts/test-release-workers.py
   python3 scripts/test-release-worker-groups.py

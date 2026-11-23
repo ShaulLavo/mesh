@@ -241,8 +241,7 @@ if [[ $GATE_STATUS != green ]]; then
 fi
 
 if [[ -z $explicit_version ]]; then
-  gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-    --jq '.[] | select(.draft == true) | [.tag_name, .target_commitish] | @tsv' >"$temporary/drafts.tsv"
+  python3 "$(dirname -- "${BASH_SOURCE[0]}")/list-release-drafts.py" >"$temporary/drafts.tsv"
   git for-each-ref --format='%(refname:short)%09%(*objectname)%09%(objectname)' refs/tags >"$temporary/tags.tsv"
   version=$(python3 - "$source_sha" "$latest_tag" "$temporary" <<'PY'
 import pathlib

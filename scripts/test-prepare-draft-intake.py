@@ -83,13 +83,14 @@ source = pathlib.Path(os.environ["FIXTURE_SOURCE"])
 args = sys.argv[1:]
 with (root / "calls").open("a") as calls:
     calls.write(json.dumps(args) + "\\n")
-if args == ["api", "--paginate", "--slurp", "repos/ShaulLavo/mesh/releases?per_page=100"]:
+if args == ["api", "repos/ShaulLavo/mesh/releases?per_page=100&page=1"]:
     value = json.loads((source / "draft.json").read_text())
-    print(json.dumps([[dict(value, assets=[])]] if os.environ["AUTHORITY"] == "write" else [[]]))
-elif args == ["api", "--paginate", "--slurp", "repos/ShaulLavo/mesh/releases/445605054/assets?per_page=100"] and os.environ["AUTHORITY"] == "write":
+    print(json.dumps([dict(value, assets=[])] if os.environ["AUTHORITY"] == "write" else []))
+elif args[:1] == ["api"] and args[1].startswith("repos/ShaulLavo/mesh/releases/445605054/assets?per_page=") and os.environ["AUTHORITY"] == "write":
     value = json.loads((source / "draft.json").read_text())
-    middle = len(value["assets"]) // 2
-    print(json.dumps([value["assets"][:middle], value["assets"][middle:]]))
+    query = dict(part.split("=") for part in args[1].split("?")[1].split("&"))
+    size, page = int(query["per_page"]), int(query["page"])
+    print(json.dumps(value["assets"][(page - 1) * size:page * size]))
 elif args == ["api", "repos/ShaulLavo/mesh/releases/445605054"] and os.environ["AUTHORITY"] == "write":
     print((source / "draft.json").read_text())
 elif args[0] == "api" and "/releases/assets/" in args[1] and os.environ["AUTHORITY"] == "write":

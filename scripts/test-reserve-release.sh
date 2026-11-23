@@ -47,9 +47,11 @@ case " $* " in
     else
       printf ''
     fi ;;
-  *'/releases?per_page=100 '*)
-    [[ -f $GH_LOG ]] || exit 0
-    awk '$1 == "release" && $2 == "create" {for(i=4;i<=NF;i++) if($i == "--target") print $3 "\t" $(i+1)}' "$GH_LOG" ;;
+  *'/releases?per_page=100&page=1 '*)
+    [[ -f $GH_LOG ]] || { printf '[]\n'; exit 0; }
+    awk 'BEGIN {printf "["} $1 == "release" && $2 == "create" {for(i=4;i<=NF;i++) if($i == "--target") {
+      printf "%s{\"id\":%d,\"draft\":true,\"tag_name\":\"%s\",\"target_commitish\":\"%s\"}", sep, NR, $3, $(i+1); sep=","}}
+      END {print "]"}' "$GH_LOG" ;;
   *' release download '*' --pattern mesh.rb '*)
     if [[ -n ${GH_CASK_DOWNLOAD_FAIL:-} ]]; then
       echo 'simulated HTTP 503 downloading mesh.rb' >&2
