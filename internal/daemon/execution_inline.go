@@ -17,8 +17,9 @@ const inlinePageBudget = 2 * time.Second
 const inlineObservationGrace = time.Second
 
 // withInlineResult finishes a create that asked to wait. It waits for the job
-// exactly as execution.wait would and attaches the first page of each output
-// stream as execution.logs without a cursor would, so a short command costs
+// exactly as execution.wait would and, once the job has finished, attaches the
+// first page of each output stream as execution.logs without a cursor would,
+// so a short command costs
 // the caller one round trip instead of three or four. Every check of those
 // controls applies (the exact binding, the caller, the device grant), and the
 // grant is checked again once the wait ends. The page reads reuse the wait's
@@ -72,6 +73,10 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 // inlineAfterWait lets a test act between the inline wait and the grant check.
 var inlineAfterWait = func() {}
 
+// inlineBetweenPages lets a test act after one inline page is read and
+// before the next.
+var inlineBetweenPages = func() {}
+
 // inlineDisconnectKey carries a channel that closes when the client of a
 // waiting create disconnects. Only the observation listens to it: the create
 // itself, before and after its acceptance barrier, keeps its own rules.
@@ -121,16 +126,27 @@ func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, dead
 }
 
 // inlinePages reads the first page of each stream as execution.logs without
-// a cursor would, from the receipt the wait left. A stream whose page cannot
-// be read is left out; each page names its stream, so the caller reads only
-// the missing one itself.
+// a cursor would. A stream whose page cannot be read is left out; each page
+// names its stream, so the caller reads only the missing one itself.
 func (l *lifecycle) inlinePages(ctx context.Context, bound protocol.Control, job boundJob, streams []string, size int) []protocol.ExecutionPage {
-	r, err := job.journal.Peek(ctx, job.receipt.Binding)
-	if err != nil {
-		return nil
-	}
 	var pages []protocol.ExecutionPage
-	for _, stream := range streams {
+	for i, stream := range streams {
+		if i > 0 {
+			inlineBetweenPages()
+		}
+		// Each page rereads the exact receipt, as a separate execution.logs
+		// would: retirement and eviction mark it before they delete stream
+		// bytes, so a page read after that reports the output as expired.
+		r, err := job.journal.Peek(ctx, job.receipt.Binding)
+		if err != nil {
+			return pages
+		}
+		// A live receipt may lag a result published after the wait ended,
+		// which changes how a page reports its stream; only a separate read
+		// refreshes it, so the caller reads a live job's pages itself.
+		if r.Phase != executionTerminalPhase {
+			return nil
+		}
 		req := bound
 		req.Type, req.Stream, req.MaxBytes = protocol.TypeExecutionLogs, stream, size
 		response, _ := executionResponse(req, r, nil)
