@@ -2,10 +2,16 @@ package daemon
 
 import (
 	"bytes"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/shaul/mesh/internal/identity"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
+	"github.com/shaul/mesh/internal/storage"
 )
 
 func TestInlineCreateReturnsResultAndOutputOnce(t *testing.T) {
@@ -44,6 +50,62 @@ func TestInlineCreateTimesOutWithTheLiveReceipt(t *testing.T) {
 	plain.RequestKey, plain.WaitMillis, plain.OutputBytes = "plain", 0, 0
 	if reply := f.request(t, plain); reply.ExecutionWait != "" || reply.ExecutionOutput != nil {
 		t.Fatalf("plain create carried an observation: %+v", reply)
+	}
+}
+
+// A client that disconnects after sending an inline create never causes a
+// second launch: a retry of its key finds the one job and its result.
+func TestInlineCreateDisconnectThenRetryRunsOnce(t *testing.T) {
+	f := newNativePipeDaemon(t)
+	marker := filepath.Join(f.root, "launches")
+	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "gone", RequestKey: "gone", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "echo x >> " + marker + "; sleep 0.2; printf done"}, WaitMillis: 10000, OutputBytes: 64}
+	conn, err := net.DialTimeout("unix", SocketPath(f.state), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.NewWriter(conn).WriteControlMsg(req); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	retry := f.request(t, req)
+	assertInlineCompletion(t, retry, 0, "done", "")
+	launches, err := os.ReadFile(marker) //nolint:gosec // the fixture's marker under its own temporary root
+	if err != nil || string(launches) != "x\n" {
+		t.Fatalf("launches = %q, %v; want exactly one", launches, err)
+	}
+}
+
+// A device whose grant is revoked receives no observation of its job.
+func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
+	state := compactSocketTempDir(t)
+	host, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, grantCtx := bindExecutionFixtureGrant(t, state, host.ID)
+	l := mustLifecycle(t, lifecycleConfig{Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: storage.HostID(host.ID), MeshIdentity: host.ID}, SessionsDir: filepath.Join(state, "s")})
+	t.Cleanup(l.closeExecution)
+	key := prepareQueuedExecution(t, l, host.ID, device, state, false)
+	request := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "observe", RequestKey: key.Opaque, WaitMillis: 1000, OutputBytes: 64}
+	j, err := l.executionJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := j.Lookup(grantCtx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _ := executionResponse(request, r, nil)
+	if observed, err := l.withInlineResult(grantCtx, request, created, nil); err != nil || observed.ExecutionWait != "completed" {
+		t.Fatalf("current grant observation = %+v, %v", observed, err)
+	}
+	if err := identity.RevokeDevice(t.Context(), state, device); err != nil {
+		t.Fatal(err)
+	}
+	observed, _ := l.withInlineResult(grantCtx, request, created, nil)
+	if observed.ExecutionWait != "" || observed.ExecutionOutput != nil {
+		t.Fatalf("revoked grant received an observation: %+v", observed)
 	}
 }
 

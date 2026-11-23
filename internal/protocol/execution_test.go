@@ -95,11 +95,20 @@ func TestExecutionCreateInlineWaitBounds(t *testing.T) {
 			t.Errorf("create accepted %s", bad)
 		}
 	}
-	// Only a create waits inline; bound controls keep their own fields.
-	for _, kind := range []string{TypeExecutionWait, TypeExecutionLogs, TypeExecutionRequest} {
-		raw := `{"type":"` + kind + `","requestId":"r","sessionId":"7K3D","instance":"i","requestKey":"job","waitMillis":10}`
-		if _, err := DecodeControl([]byte(raw)); err == nil {
-			t.Errorf("%s accepted waitMillis", kind)
+	// Only a create waits inline. Each baseline is valid on its own, so a
+	// rejection comes from the inline field.
+	for _, base := range []string{
+		`{"type":"execution.wait","requestId":"r","sessionId":"7K3D","instance":"i"`,
+		`{"type":"execution.logs","requestId":"r","sessionId":"7K3D","instance":"i","stream":"stdout"`,
+		`{"type":"execution.request","requestId":"r","requestKey":"job"`,
+	} {
+		if _, err := DecodeControl([]byte(base + "}")); err != nil {
+			t.Fatalf("baseline rejected: %s: %v", base, err)
+		}
+		for _, field := range []string{`,"waitMillis":10`, `,"outputBytes":10`} {
+			if _, err := DecodeControl([]byte(base + field + "}")); err == nil {
+				t.Errorf("accepted %s on %s", field, base)
+			}
 		}
 	}
 }

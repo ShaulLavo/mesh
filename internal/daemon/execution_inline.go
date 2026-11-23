@@ -2,36 +2,49 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
 )
 
+// inlinePageBudget bounds both page reads of one inline observation, so a
+// busy output stream cannot hold a create reply long after its wait ended.
+const inlinePageBudget = 2 * time.Second
+
 // withInlineResult finishes a create that asked to wait. It waits for the job
 // exactly as execution.wait would and attaches the first page of each output
 // stream as execution.logs without a cursor would, so a short command costs
 // the caller one round trip instead of three or four. Every check of those
-// controls applies: the exact binding, the caller, and the device grant after
-// the wait. The create is already decided here, so a failed observation
-// leaves the create reply unchanged and the caller continues with separate
-// wait and logs requests. A replay of the same key reaches this point through
-// the receipt lookup and observes the same job again.
+// controls applies (the exact binding, the caller, the device grant), and the
+// grant is checked again once the wait ends. The create is already decided
+// here, so a failed observation leaves the create reply unchanged and the
+// caller continues with separate wait and logs requests. A replay of the same
+// key reaches this point through the receipt lookup and observes the same job.
 func (l *lifecycle) withInlineResult(ctx context.Context, request, response protocol.Control, err error) (protocol.Control, error) {
 	if err != nil || request.Type != protocol.TypeExecutionCreate || request.WaitMillis == 0 || response.ExecutionReceipt == nil {
 		return response, err
 	}
+	// The budget starts at the create's own reply point, not after the reads
+	// that resolve the binding.
+	deadline := time.Now().Add(time.Duration(request.WaitMillis) * time.Millisecond)
 	bound := inlineBound(request, response.ExecutionReceipt)
-	waited, ok := l.inlineWait(ctx, bound, request.WaitMillis)
+	waited, ok := l.inlineWait(ctx, bound, deadline)
 	if !ok {
 		return response, nil
+	}
+	if err := workerExecutionAdmission(ctx); err != nil {
+		return response, err
 	}
 	if request.OutputBytes == 0 {
 		return waited, nil
 	}
+	pageCtx, cancel := context.WithTimeout(ctx, inlinePageBudget)
+	defer cancel()
 	// A stream whose page cannot be read is left out; each page names its
 	// stream, so the caller reads only the missing one itself.
 	for _, stream := range inlineStreams(response.ExecutionReceipt.Kind) {
-		if page, ok := l.inlinePage(ctx, bound, stream, request.OutputBytes); ok {
+		if page, ok := l.inlinePage(pageCtx, bound, stream, request.OutputBytes); ok {
 			waited.ExecutionOutput = append(waited.ExecutionOutput, page)
 		}
 	}
@@ -47,10 +60,17 @@ func inlineBound(request protocol.Control, receipt *protocol.ExecutionReceipt) p
 	return bound
 }
 
-func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, millis int) (protocol.Control, bool) {
-	bound.Type, bound.TimeoutMillis = protocol.TypeExecutionWait, millis
-	waited, err := l.boundExecutionControl(ctx, bound)
-	return waited, err == nil && waited.ExecutionReceipt != nil
+func (l *lifecycle) inlineWait(ctx context.Context, bound protocol.Control, deadline time.Time) (protocol.Control, bool) {
+	remaining := time.Until(deadline)
+	if remaining < time.Millisecond {
+		return protocol.Control{}, false
+	}
+	bound.Type, bound.TimeoutMillis = protocol.TypeExecutionWait, int(remaining/time.Millisecond)
+	waitCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	waited, err := l.boundExecutionControl(waitCtx, bound)
+	receipt := waited.ExecutionReceipt
+	return waited, err == nil && receipt != nil && receipt.SessionID == bound.SessionID && receipt.Instance == bound.Instance
 }
 
 func (l *lifecycle) inlinePage(ctx context.Context, bound protocol.Control, stream string, size int) (protocol.ExecutionPage, bool) {
