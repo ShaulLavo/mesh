@@ -126,10 +126,19 @@ class HistoryTests(unittest.TestCase):
         releases = [{"id": number} for number in range(6, 0, -1)]
         # A release appears before page 2 (so page 2 repeats id 5) and is gone
         # before page 3, which would hide release 3 from a read that only deduplicated.
-        run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 100}), 2: lambda items: items.pop(0)})
+        # It happens in both of the first two reads, so they would otherwise agree.
+        run, _ = self.listing(releases, {1: lambda items: items.insert(0, {"id": 100}), 2: lambda items: items.pop(0),
+                                         3: lambda items: items.insert(0, {"id": 101}), 4: lambda items: items.pop(0)})
         with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
             found = HISTORY.api("endpoint", 2)
         self.assertEqual([item["id"] for item in found], [6, 5, 4, 3, 2, 1])
+
+    def test_api_rereads_when_a_draft_is_published_between_reads(self):
+        releases = [{"id": 2, "draft": True}, {"id": 1, "draft": False}]
+        run, _ = self.listing(releases, {5: lambda items: items[0].update(draft=False)})
+        with mock.patch.object(HISTORY.subprocess, "run", side_effect=run):
+            found = HISTORY.api("endpoint", 1)
+        self.assertEqual([(item["id"], item["draft"]) for item in found], [(2, False), (1, False)])
 
     def test_api_refuses_a_page_that_repeats_an_id(self):
         repeated = self.page([{"id": 1}, {"id": 1}])
