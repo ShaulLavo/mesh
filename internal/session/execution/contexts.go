@@ -128,7 +128,14 @@ func contextMember(id, hash string) string {
 }
 
 func (j *Journal) ensureContextDirs() error {
-	return errors.Join(j.files.Ensure(contextDir), j.files.Ensure(contextRequestDir), j.files.Ensure(contextMemberDir))
+	if j.contextDirsReady.Load() {
+		return nil
+	}
+	err := errors.Join(j.files.Ensure(contextDir), j.files.Ensure(contextRequestDir), j.files.Ensure(contextMemberDir))
+	if err == nil {
+		j.contextDirsReady.Store(true)
+	}
+	return err
 }
 
 func cutJSON(name string) (string, bool) {
