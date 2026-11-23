@@ -12,6 +12,10 @@ import (
 // busy output stream cannot hold a create reply long after its wait ended.
 const inlinePageBudget = 2 * time.Second
 
+// inlineObservationGrace is how long past its wait budget an observation may
+// still spend resolving the binding and confirming the result.
+const inlineObservationGrace = time.Second
+
 // withInlineResult finishes a create that asked to wait. It waits for the job
 // exactly as execution.wait would and attaches the first page of each output
 // stream as execution.logs without a cursor would, so a short command costs
@@ -26,12 +30,22 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 		return response, err
 	}
 	// The budget starts at the create's own reply point, not after the reads
-	// that resolve the binding.
+	// that resolve the binding. The whole observation, those reads included,
+	// ends a bounded grace after it, so it cannot use up the caller's deadline
+	// for the create reply, while even a 1 ms wait still gets its first look.
 	deadline := time.Now().Add(time.Duration(request.WaitMillis) * time.Millisecond)
 	ctx, stop := observeUntilDisconnect(ctx)
 	defer stop()
+	ctx, cancel := context.WithDeadline(ctx, deadline.Add(inlineObservationGrace))
+	defer cancel()
 	bound := inlineBound(request, response.ExecutionReceipt)
 	waited, ok := l.inlineWait(ctx, bound, deadline)
+	if !ok && time.Now().After(deadline) {
+		// The wait's budget is spent even though no answer came back, so the
+		// caller charges it as a timeout instead of waiting the whole time again.
+		response.ExecutionWait = executionWaitTimedOut
+		return response, nil
+	}
 	if !ok {
 		return response, nil
 	}

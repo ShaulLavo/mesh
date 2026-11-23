@@ -195,7 +195,7 @@ func (l *lifecycle) executionWait(ctx context.Context, req protocol.Control, j *
 		timer.Reset(interval)
 		select {
 		case <-ctx.Done():
-			response.ExecutionWait = "timed_out"
+			response.ExecutionWait = executionWaitTimedOut
 			return response, nil
 		case <-timer.C:
 		}
@@ -315,6 +315,9 @@ func (l *lifecycle) observeBoundExecution(ctx context.Context, j *execution.Jour
 
 const executionTerminalPhase = "terminal"
 const executionWaitCompleted = "completed"
+
+// executionWaitTimedOut is a wait that ended at its deadline.
+const executionWaitTimedOut = "timed_out"
 
 const (
 	executionWaitFirstPoll = 2 * time.Millisecond

@@ -95,6 +95,7 @@ func (l *lifecycle) executionCreateControl(ctx context.Context, request protocol
 type executionReservation func() (execution.Receipt, bool, []string, execution.Intent, error)
 
 func (l *lifecycle) createExecution(ctx context.Context, request protocol.Control, journal *execution.Journal, key execution.Key, reserve executionReservation) (protocol.Control, error) {
+	executionBeforeReserve(ctx)
 	r, owner, env, intent, err := reserve()
 	if !owner && (err == nil || errors.Is(err, execution.ErrProgress) || errors.Is(err, execution.ErrUnknown)) {
 		r, err = l.lookupExecution(ctx, journal, key)
@@ -143,6 +144,9 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 }
 
 var executionDaemonBoundary = func(string, string, execution.Receipt) {}
+
+// executionBeforeReserve lets a test act on a create before its acceptance.
+var executionBeforeReserve = func(context.Context) {}
 
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string

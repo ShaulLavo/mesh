@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/session/execution"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/worker"
 )
 
 func TestInlineCreateReturnsResultAndOutputOnce(t *testing.T) {
@@ -93,6 +95,38 @@ func TestInlineCreateDisconnectAfterAcceptanceKeepsTheJob(t *testing.T) {
 	launches, err := os.ReadFile(marker) //nolint:gosec // the fixture's marker under its own temporary root
 	if err != nil || string(launches) != "x\n" {
 		t.Fatalf("launches = %q, %v; want exactly one", launches, err)
+	}
+}
+
+// A client that leaves before its waiting create is accepted cancels only
+// the observation: the create itself still goes through.
+func TestInlineCreateDisconnectBeforeAcceptanceStillCreates(t *testing.T) {
+	state := compactSocketTempDir(t)
+	host, _, err := identity.LoadOrCreate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launches := 0
+	l := mustLifecycle(t, lifecycleConfig{Catalog: &lifecycleTestCatalog{}, Connector: failingLifecycleConnector(),
+		Host: storage.Host{ID: storage.HostID(host.ID), MeshIdentity: host.ID}, SessionsDir: filepath.Join(state, "s"),
+		Launch: func(cfg worker.LaunchConfig) (worker.Launched, error) {
+			launches++
+			return worker.Launched{Meta: worker.Meta{Reservation: cfg.Reservation}}, nil
+		}})
+	t.Cleanup(l.closeExecution)
+	conn := newRelayTestConn()
+	request := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "early", RequestKey: "early", ExecutionKind: execution.KindPipe, Cwd: state, Command: []string{"/bin/true"}, WaitMillis: 50}
+	ctx, cancel := executionRequestContext(context.WithValue(t.Context(), localClientKey{}, true), &frameLookahead{conn: conn}, request)
+	defer cancel()
+	executionBeforeReserve = func(ctx context.Context) {
+		gone, _ := ctx.Value(inlineDisconnectKey{}).(<-chan struct{})
+		_ = conn.Close()
+		<-gone
+	}
+	t.Cleanup(func() { executionBeforeReserve = func(context.Context) {} })
+	reply, err := l.executionControl(ctx, request)
+	if err != nil || reply.ExecutionReceipt == nil || launches != 1 {
+		t.Fatalf("create after its client left = %+v, %v, %d launches", reply, err, launches)
 	}
 }
 
