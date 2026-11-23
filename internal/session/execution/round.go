@@ -228,13 +228,13 @@ func (f *Files) syncDirsOf(names []string) ([]syncedDir, error) {
 		dirs = appendChain(dirs, name)
 	}
 	slices.SortStableFunc(dirs, func(a, b string) int { return pathDepth(b) - pathDepth(a) })
-	synced := make([]syncedDir, 0, len(dirs))
+	var synced []syncedDir
 	for _, dir := range dirs {
 		d, err := f.syncDir(dir)
 		if err != nil {
 			return synced, err
 		}
-		synced = append(synced, d)
+		synced = appendSynced(synced, d)
 	}
 	return synced, nil
 }
@@ -289,7 +289,7 @@ func (f *Files) flushDevices(files []*os.File, dirs []syncedDir) error {
 }
 
 // firstOnDevice reports whether dev still needs a barrier and marks it
-// covered. An unknown device always needs one.
+// covered. An unknown device always needs one (and flushDir refuses one).
 func firstOnDevice(seen map[uint64]bool, dev uint64, known bool) bool {
 	if !known {
 		return true
@@ -302,14 +302,18 @@ func firstOnDevice(seen map[uint64]bool, dev uint64, known bool) bool {
 }
 
 // flushDir reopens a synced directory for its barrier. A directory whose
-// device changed since its sync, such as an unmounted parent, fails instead of
-// flushing the device that now sits under the same path.
+// device changed since its sync, such as an unmounted parent, or whose device
+// was never known fails instead of flushing whatever device now sits under
+// the same path.
 func (f *Files) flushDir(dir syncedDir) error {
+	if !dir.known {
+		return fmt.Errorf("execution: directory %s has no known device to flush", dir.name)
+	}
 	file, err := f.root.Open(dir.name)
 	if err != nil {
 		return executionBoundaryError("open directory for device flush", err)
 	}
-	if dev, known := fileDevice(file); dir.known && (!known || dev != dir.dev) {
+	if dev, known := fileDevice(file); !known || dev != dir.dev {
 		return errors.Join(fmt.Errorf("execution: directory %s changed device before its flush", dir.name), file.Close())
 	}
 	return errors.Join(f.flushDevice(file), file.Close())

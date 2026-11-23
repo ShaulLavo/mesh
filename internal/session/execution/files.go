@@ -188,11 +188,20 @@ func (f *Files) syncDirs(name string) ([]syncedDir, error) {
 		if err != nil {
 			return synced, err
 		}
-		synced = append(synced, d)
+		synced = appendSynced(synced, d)
 		if dir == "." {
 			return synced, nil
 		}
 	}
+}
+
+// appendSynced keeps directories only where they need their own barrier, so
+// Linux builds no list it would discard.
+func appendSynced(synced []syncedDir, d syncedDir) []syncedDir {
+	if !durable.HasBarrier {
+		return synced
+	}
+	return append(synced, d)
 }
 func (f *Files) syncDir(dir string) (syncedDir, error) {
 	synced := syncedDir{name: dir}
