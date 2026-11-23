@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Unit tests for scripts/bench/oneshot.py pure logic, markers, and cleanup."""
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -83,6 +87,31 @@ class OneshotPureLogicTests(unittest.TestCase):
         )
         self.assertIsNone(oneshot.parse_ssh_connection(""))
 
+    def test_parse_proc_net_tcp_inodes_selects_only_matching_established_connection(self):
+        # 100.77.94.94 -> 5E5E4D64 (little-endian), port 41270 -> A136
+        # 100.84.25.68 -> 44195464 (little-endian), port 22 -> 0016
+        proc_net = "\n".join([
+            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+            "   0: 5E5E4D64:A136 44195464:0016 01 00000000:00000000 00:00000000 00000000  1000        0 468755272 1",
+            "   1: 5E5E4D64:A136 44195464:0016 06 00000000:00000000 00:00000000 00000000  1000        0 999999999 1",
+            "   2: 0100007F:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 111111111 1",
+        ])
+        conn = {"client_ip": "100.77.94.94", "client_port": "41270", "server_ip": "100.84.25.68", "server_port": "22"}
+        self.assertEqual(oneshot.parse_proc_net_tcp_inodes(proc_net, conn), ["468755272"])
+
+    def test_ssh_hardening_options_prevent_known_hosts_write_and_forwarding(self):
+        argv = oneshot.remote_ssh_base_argv("100.84.25.68")
+        for expected in (
+            "BatchMode=yes",
+            "UpdateHostKeys=no",
+            "StrictHostKeyChecking=yes",
+            "ClearAllForwardings=yes",
+            "ForwardAgent=no",
+            "ForwardX11=no",
+            "HostName=100.84.25.68",
+        ):
+            self.assertIn(expected, argv)
+
     def test_build_ssh_exec_command_pins_cwd_and_absolute_true(self):
         cmd = oneshot.build_ssh_exec_command("/Users/shaul/mesh-oneshot-bench-1/work", "/usr/bin/true")
         self.assertEqual(cmd, "cd /Users/shaul/mesh-oneshot-bench-1/work && exec /usr/bin/true")
@@ -156,78 +185,189 @@ class OneshotPureLogicTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 oneshot.validate_server_wait_reply(bad)
 
-    def test_discover_owned_processes_ignores_unrelated_and_sibling_and_catches_detached_child(self):
+    def test_discover_owned_processes_rejects_stale_recycled_pid_and_unrelated_processes(self):
         scratch = "/home/pi/mesh-oneshot-bench-abcd"
         rows = [
-            # Owned daemon (by recorded pid + start)
+            # Owned daemon (exact recorded pid + start)
             {"pid": 100, "ppid": 50, "pgid": 50, "start": "1000", "exe": f"{scratch}/mesh",
              "argv": [f"{scratch}/mesh", "daemon"], "owner_token": "tok-1"},
             # Owned worker (exact binary + session dir under state/s)
             {"pid": 101, "ppid": 1, "pgid": 101, "start": "1010", "exe": f"{scratch}/mesh",
              "argv": [f"{scratch}/mesh", "session-worker", "--dir", f"{scratch}/state/s/ABCD"], "owner_token": "tok-1"},
-            # Detached child started in its own session with NO scratch path in argv (caught via ppid + meta.json)
+            # Live detached child of live worker (caught via ppid in owned)
             {"pid": 102, "ppid": 101, "pgid": 102, "start": "1020", "exe": "/bin/sleep",
              "argv": ["/bin/sleep", "60"], "owner_token": None},
-            # Orphaned detached child whose worker already exited (caught via meta.json + pgid == pid)
+            # Previously recorded detached child whose worker exited (exact pid + start matches owned_roots)
             {"pid": 103, "ppid": 1, "pgid": 103, "start": "1030", "exe": "/bin/sleep",
              "argv": ["/bin/sleep", "60"], "owner_token": None},
+            # Recycled PID: old recorded (104, "1040") exited, new unrelated group leader has (104, "9999") -> MUST NOT match!
+            {"pid": 104, "ppid": 1, "pgid": 104, "start": "9999", "exe": "/usr/bin/vim",
+             "argv": ["vim"], "owner_token": None},
             # Unrelated process reading the benchmark log (MUST NOT be matched)
             {"pid": 200, "ppid": 1, "pgid": 200, "start": "2000", "exe": "/usr/bin/tail",
              "argv": ["tail", "-f", f"{scratch}/daemon.log"], "owner_token": None},
             # Sibling scratch directory with shared prefix (MUST NOT be matched)
             {"pid": 201, "ppid": 1, "pgid": 201, "start": "2010", "exe": f"{scratch}2/mesh",
              "argv": [f"{scratch}2/mesh", "session-worker", "--dir", f"{scratch}2/state/s/EFGH"], "owner_token": "tok-2"},
-            # Real canonical daemon worker (MUST NOT be matched)
-            {"pid": 202, "ppid": 1, "pgid": 202, "start": "2020", "exe": "/home/pi/.local/bin/mesh",
-             "argv": ["/home/pi/.local/bin/mesh", "session-worker", "--dir", "/home/pi/.local/state/mesh/s/REAL"], "owner_token": None},
             # Excluded ancestor process
             {"pid": 50, "ppid": 1, "pgid": 50, "start": "500", "exe": "/usr/bin/python3",
              "argv": ["python3", f"{scratch}/oneshot.py"], "owner_token": "tok-1"},
         ]
         found = oneshot.discover_owned_processes(
             rows=rows,
-            owned_roots=[(100, "1000")],
+            owned_roots=[(100, "1000"), (103, "1030"), (104, "1040")],
             exact_binary=f"{scratch}/mesh",
             state_sessions_dir=f"{scratch}/state/s",
-            meta_pids=[102, 103],
             owner_token="tok-1",
             exclude_pids={50},
         )
         self.assertEqual(found, [(100, "1000"), (101, "1010"), (102, "1020"), (103, "1030")])
 
     @unittest.skipUnless(sys.platform == "linux", "real process cleanup test uses Linux /proc + pidfd")
-    def test_cleanup_owned_tree_preserves_unrelated_and_joins_detached_child(self):
+    def test_cleanup_owned_tree_preserves_unrelated_and_joins_recorded_detached_child(self):
         with tempfile.TemporaryDirectory(prefix="mesh-oneshot-bench-test-", dir="/work/tmp") as directory:
             scratch = Path(directory)
             log_file = scratch / "daemon.log"
             log_file.write_text("log\n")
-            state_s = scratch / "state" / "s" / "TEST"
-            state_s.mkdir(parents=True)
+            registry = oneshot.OwnedRegistry(scratch / "owned-pids.jsonl")
             # Unrelated process referencing the scratch path in argv (like tailing a log).
             unrelated = subprocess.Popen(
                 [sys.executable, "-c", "import time; time.sleep(60)", str(log_file)],
                 start_new_session=True,
             )
-            # Detached child in its own session with NO scratch path in argv, recorded in meta.json.
-            detached = subprocess.Popen(
-                ["/bin/sleep", "60"],
-                start_new_session=True,
-            )
-            (state_s / "meta.json").write_text(json.dumps({"pid": detached.pid}))
+            # Detached child in its own session with NO scratch path in argv, recorded with exact (pid, start).
+            detached = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+            registry.record(detached.pid)
             try:
                 remaining = oneshot.cleanup_owned_tree(
                     scratch,
+                    registry=registry,
                     state_dir=scratch / "state",
-                    owner_token="unused-token-for-meta-test",
+                    owner_token="unused-token-for-registry-test",
                 )
                 self.assertEqual(remaining, [])
                 detached.wait(timeout=5)
                 self.assertIsNotNone(detached.poll())
-                # Unrelated process must still be alive!
                 self.assertIsNone(unrelated.poll())
             finally:
                 oneshot.stop_popen(unrelated, grace=1.0)
                 oneshot.stop_popen(detached, grace=1.0)
+
+    def test_list_posix_process_rows_raises_on_ps_failure(self):
+        failed = subprocess.CompletedProcess(["ps"], 1, stdout="", stderr="ps: permission denied")
+        with patch.object(oneshot.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, "ps process listing failed"):
+                oneshot.list_posix_process_rows()
+
+    def test_worker_socket_eof_does_not_abort_daemon_stop(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-oneshot-bench-eof-", dir="/work/tmp") as directory:
+            scratch = Path(directory)
+            sock = scratch / "state" / "s" / "ABCD" / "sock"
+            sock.parent.mkdir(parents=True)
+            sock.write_text("")
+            stopped = []
+            with patch.object(oneshot, "daemon_rpc", side_effect=EOFError("worker closed")), \
+                 patch.object(oneshot, "stop_popen", side_effect=lambda p, grace=5.0: stopped.append(p)), \
+                 patch.object(oneshot, "list_process_rows", return_value=[]):
+                remaining = oneshot.cleanup_owned_tree(scratch, daemon_proc="fake-daemon")
+            self.assertEqual(remaining, [])
+            self.assertEqual(stopped, ["fake-daemon"])
+
+    def test_cleanup_scratch_refuses_missing_or_mismatched_owner_token(self):
+        with tempfile.TemporaryDirectory(prefix="mesh-oneshot-bench-tok-", dir="/work/tmp") as directory:
+            scratch = Path(directory)
+            args = SimpleNamespace(scratch=scratch, owner_token="expected-token")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = oneshot.run_cleanup_scratch(args)
+            self.assertEqual(rc, 1)
+            self.assertTrue(scratch.exists())
+            self.assertFalse(json.loads(out.getvalue())["clean"])
+
+            oneshot.write_owner_token(scratch, "different-token")
+            out2 = io.StringIO()
+            with contextlib.redirect_stdout(out2):
+                rc2 = oneshot.run_cleanup_scratch(args)
+            self.assertEqual(rc2, 1)
+            self.assertTrue(scratch.exists())
+            self.assertIn("mismatch", json.loads(out2.getvalue())["error"])
+
+    def test_daemon_rpc_aborts_promptly_on_stop_event(self):
+        with tempfile.TemporaryDirectory(prefix="oneshot-rpc-cancel-", dir="/work/tmp") as directory:
+            sock_path = Path(directory) / "daemon.sock"
+            elapsed = self._measure_cancelled_rpc(sock_path)
+            self.assertLess(elapsed, 1.5)
+
+    def _measure_cancelled_rpc(self, sock_path):
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(sock_path))
+            server.listen(1)
+            stop_event = threading.Event()
+            threading.Timer(0.1, stop_event.set).start()
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                oneshot.daemon_rpc(sock_path, {"type": "host.info"}, timeout=30.0, stop_event=stop_event)
+            return time.monotonic() - started
+
+    def test_recovery_uses_fresh_verified_ssh_when_orch_master_is_dead(self):
+        dead_master = SimpleNamespace(master_pid=123, check=lambda: None)
+        fake_res = subprocess.CompletedProcess([], 0, stdout='{"clean":true,"remaining_pids":[],"scratch_removed":true}\n', stderr="")
+        spec = oneshot.HOST_SPECS["vps"]
+        args = SimpleNamespace(mac_lane="lane", mac_thread="thread")
+        with patch.object(oneshot, "run_fresh_verified_ssh", return_value=fake_res) as fresh:
+            result = oneshot.remote_recovery_cleanup(
+                dead_master, "100.84.25.68", spec, "/usr/bin/python3", "/root/mesh-oneshot-bench-1-vps", "tok-1", args
+            )
+        self.assertTrue(result["clean"])
+        fresh.assert_called_once()
+
+    def test_missing_stopped_marker_preserves_completed_measurements(self):
+        read_fd, write_fd = os.pipe()
+        os.write(
+            write_fd,
+            b'ONESHOT_SERVER_BENCH {"warmups":[],"samples":[{"create_seconds":0.1,"wait_seconds":0.02,"total_seconds":0.12,"exit":0}]}\n',
+        )
+        os.close(write_fd)
+        report_hosts = {}
+        with tempfile.TemporaryDirectory(prefix="oneshot-preserve-", dir="/work/tmp") as directory, \
+             os.fdopen(read_fd, "r", encoding="utf-8") as reader:
+            self._run_missing_stopped_case(Path(directory), reader, report_hosts)
+        self.assertEqual(report_hosts["vps"]["status"], "ok")
+        self.assertEqual(len(report_hosts["vps"]["pairs"]), 1)
+        self.assertEqual(len(report_hosts["vps"]["server_samples"]), 1)
+        # record_host_failure must preserve the completed "ok" measurements rather than replacing them.
+        oneshot.record_host_failure(report_hosts, "vps", RuntimeError("missing STOPPED"))
+        self.assertEqual(report_hosts["vps"]["status"], "ok")
+        self.assertIn("missing STOPPED", report_hosts["vps"]["teardown_error"])
+
+    def _run_missing_stopped_case(self, workdir, reader, report_hosts):
+        fake_proc = SimpleNamespace(poll=lambda: 1, wait=lambda timeout=30: 1)
+        fake_orch = SimpleNamespace(run=lambda _cmd, timeout=20: subprocess.CompletedProcess([], 0, "", ""))
+        fake_helpers = SimpleNamespace(
+            mcp_native=SimpleNamespace(MCPClient=lambda *_a, **_kw: SimpleNamespace(proc=SimpleNamespace(pid=os.getpid(), poll=lambda: 0))),
+            ssh_command=ssh_command,
+        )
+        args = SimpleNamespace(warmups=0, pairs=1, seed=435)
+        probe = {"platform": "Linux", "load_average": [0.1, 0.1, 0.1]}
+        ready = {"host_id": "h1", "mesh_identity": "m1", "ip": "100.84.25.68", "port": 9999, "cwd": "/tmp/w", "true_path": "/bin/true"}
+        stream = oneshot.MarkerStream(reader)
+        registry = oneshot.OwnedRegistry(workdir / "owned.jsonl")
+        fake_master = SimpleNamespace(
+            master_pid=os.getpid(), control_path=workdir / "c",
+            start=lambda: os.getpid(), close=lambda: None,
+        )
+        with patch.object(oneshot, "SSHMaster", return_value=fake_master), \
+             patch.object(oneshot, "collect_mux_proof", return_value=({"check_before": True}, ["1"])), \
+             patch.object(oneshot, "finalize_mux_proof"), \
+             patch.object(oneshot, "open_mcp_context", return_value="mc1.ctx"), \
+             patch.object(oneshot, "run_paired_samples", return_value=([], make_pairs([0.2], [0.1]))):
+            with self.assertRaisesRegex(RuntimeError, "ONESHOT_STOPPED"):
+                oneshot.execute_remote_measurements(
+                    "vps", oneshot.HOST_SPECS["vps"], "100.84.25.68", fake_orch, probe,
+                    {"available": True, "summary_ms": {"p50": 80.0}}, "/root/mesh-oneshot-bench-1-vps",
+                    fake_proc, stream, lambda: "eof", ready, Path("/bin/true"),
+                    {}, workdir, workdir, registry, args, fake_helpers, "run1", report_hosts,
+                )
 
     def test_summarize_host_verdicts_slowdown_no_clear_slowdown_and_inconclusive(self):
         slow = oneshot.summarize_host(
@@ -251,7 +391,6 @@ class OneshotPureLogicTests(unittest.TestCase):
         self.assertEqual(fast["promise_verdict"], "no clear slowdown")
         self.assertTrue(fast["at_or_under_ssh_p50"])
 
-        # Only 5 pairs: 1 / 2^5 = 0.03125 >= 0.01 -> cannot reach p < 0.01 -> inconclusive!
         small = oneshot.summarize_host(
             make_pairs([0.35] * 5, [0.05] * 5),
             [],
@@ -292,8 +431,6 @@ class OneshotPureLogicTests(unittest.TestCase):
                 report["cleanup"]["vps"] = {"clean": False, "remaining_pids": [99999], "scratch_removed": False}
                 report["status"] = "ok"
 
-            import contextlib
-            import io
             with patch.object(oneshot, "execute_fleet_run", side_effect=fake_fleet), \
                  contextlib.redirect_stdout(io.StringIO()), \
                  contextlib.redirect_stderr(io.StringIO()):
@@ -308,7 +445,7 @@ class OneshotPureLogicTests(unittest.TestCase):
         stop_event = threading.Event()
         calls = 0
 
-        def fake_sample(_sock, _cwd, _true_path, _key):
+        def fake_sample(_sock, _cwd, _true_path, _key, stop_event=None):
             nonlocal calls
             calls += 1
             stop_event.set()

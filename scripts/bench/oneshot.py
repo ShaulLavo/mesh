@@ -79,8 +79,21 @@ SIGN_P_THRESHOLD = 0.01
 MAC_QUEUE_WAIT_SECONDS = 600
 MAC_QUEUE_TIMEOUT_SECONDS = 600
 MAC_QUEUE_EXPECTED_SECONDS = 300
+REMOTE_STAGE_EXPIRY_SECONDS = 120
+REMOTE_AGENT_IDLE_SECONDS = 540
 OWNER_TOKEN_ENV = "ONESHOT_BENCH_OWNER_TOKEN"
+OWNER_TOKEN_FILE = ".owner-token"
 PR_SET_CHILD_SUBREAPER = 36
+
+SSH_HARDENING_OPTS = (
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=15",
+    "-o", "UpdateHostKeys=no",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "ClearAllForwardings=yes",
+    "-o", "ForwardAgent=no",
+    "-o", "ForwardX11=no",
+)
 
 STAGE_READY_PREFIX = "ONESHOT_STAGE_READY "
 READY_PREFIX = "ONESHOT_READY "
@@ -92,10 +105,15 @@ MASTER_PID_RE = re.compile(r"Master running \(pid=(\d+)\)")
 
 REMOTE_STAGE_WRAPPER = r"""
 set -eu
-scratch=$1; py=$2; host=$3; ip=$4; cid=$5; st=$6; tp=$7; sw=$8; sc=$9; tok=${10}
-mkdir -p "$scratch"
+scratch=$1; py=$2; host=$3; ip=$4; cid=$5; st=$6; tp=$7; sw=$8; sc=$9; tok=${10}; idle=${11}
+mkdir "$scratch"
 chmod 700 "$scratch"
+printf '%s\n' "$tok" > "$scratch/.owner-token"
+chmod 600 "$scratch/.owner-token"
 cleanup_stage() {
+  if [ ! -f "$scratch/.owner-token" ] || [ "$(cat "$scratch/.owner-token")" != "$tok" ]; then
+    return 0
+  fi
   if [ -f "$scratch/oneshot.py" ]; then
     "$py" "$scratch/oneshot.py" --cleanup-scratch --scratch "$scratch" --owner-token "$tok" || true
   elif [ -d "$scratch" ]; then
@@ -104,8 +122,10 @@ cleanup_stage() {
 }
 trap cleanup_stage EXIT INT TERM HUP
 printf 'ONESHOT_STAGE_READY {"scratch":"%s"}\n' "$scratch"
+deadline=$(( $(date +%s) + 120 ))
 while [ ! -f "$scratch/stage.done" ]; do
   [ -f "$scratch/stop" ] && exit 0
+  [ "$(date +%s)" -ge "$deadline" ] && exit 124
   sleep 0.05
 done
 trap - EXIT INT TERM HUP
@@ -113,7 +133,7 @@ exec "$py" "$scratch/oneshot.py" --remote-agent --self-clean \
   --scratch "$scratch" --binary "$scratch/mesh" --host-name "$host" \
   --bind-ip "$ip" --client-id "$cid" --startup-timeout "$st" \
   --true-path "$tp" --server-warmups "$sw" --server-count "$sc" \
-  --owner-token "$tok"
+  --owner-token "$tok" --max-idle-seconds "$idle"
 """
 
 
@@ -209,6 +229,27 @@ def parse_ssh_connection(text):
     }
 
 
+def ipv4_port_to_proc_hex(ip_str, port_str):
+    octets = socket.inet_aton(ip_str)
+    ip_hex = "".join(f"{byte:02X}" for byte in reversed(octets))
+    return f"{ip_hex}:{int(port_str):04X}"
+
+
+def parse_proc_net_tcp_inodes(proc_net_text, ssh_connection):
+    if not ssh_connection:
+        return []
+    want_local = ipv4_port_to_proc_hex(ssh_connection["client_ip"], ssh_connection["client_port"])
+    want_remote = ipv4_port_to_proc_hex(ssh_connection["server_ip"], ssh_connection["server_port"])
+    inodes = []
+    for line in proc_net_text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 10 or fields[3] != "01":
+            continue
+        if fields[1].upper() == want_local and fields[2].upper() == want_remote:
+            inodes.append(fields[9])
+    return sorted(set(inodes))
+
+
 def duration_to_ms(value, unit):
     if unit == "ms":
         return value
@@ -289,7 +330,7 @@ def is_owned_worker_row(row, exact_binary, state_sessions_dir):
     return any(is_path_within(arg, state_sessions_dir) for arg in argv)
 
 
-def seed_owned_pids(rows, owned_roots, exact_binary, state_sessions_dir, meta_pids, owner_token, exclude_pids):
+def seed_owned_pids(rows, owned_roots, exact_binary, state_sessions_dir, owner_token, exclude_pids):
     owned = {}
     root_set = {(int(pid), str(start)) for pid, start in owned_roots}
     for row in rows:
@@ -305,30 +346,11 @@ def seed_owned_pids(rows, owned_roots, exact_binary, state_sessions_dir, meta_pi
             continue
         if is_owned_worker_row(row, exact_binary, state_sessions_dir):
             owned[pid] = start
-    add_meta_children(rows, owned, meta_pids, exclude_pids)
     return owned
 
 
-def add_meta_children(rows, owned, meta_pids, exclude_pids):
-    if not meta_pids:
-        return
-    meta_set = {int(pid) for pid in meta_pids}
-    for row in rows:
-        pid = row["pid"]
-        if pid in exclude_pids or pid in owned or pid not in meta_set:
-            continue
-        # Accept a meta.json child PID only when its parent is an owned worker
-        # or it leads its own session/group (detached worker command).
-        if row.get("ppid") in owned or row.get("pgid") == pid:
-            owned[pid] = str(row["start"])
-
-
-def discover_owned_processes(
-    rows, owned_roots, exact_binary, state_sessions_dir, meta_pids, owner_token, exclude_pids
-):
-    owned = seed_owned_pids(
-        rows, owned_roots, exact_binary, state_sessions_dir, meta_pids, owner_token, exclude_pids
-    )
+def discover_owned_processes(rows, owned_roots, exact_binary, state_sessions_dir, owner_token, exclude_pids):
+    owned = seed_owned_pids(rows, owned_roots, exact_binary, state_sessions_dir, owner_token, exclude_pids)
     changed = True
     while changed:
         changed = expand_owned_descendants(rows, owned, exclude_pids)
@@ -337,12 +359,11 @@ def discover_owned_processes(
 
 def expand_owned_descendants(rows, owned, exclude_pids):
     added = False
-    owned_pgids = {row.get("pgid") for row in rows if row["pid"] in owned and row.get("pgid")}
     for row in rows:
         pid = row["pid"]
         if pid in exclude_pids or pid in owned:
             continue
-        if row.get("ppid") in owned or (row.get("pgid") in owned_pgids and row.get("pgid") == row.get("pid")):
+        if row.get("ppid") in owned:
             owned[pid] = str(row["start"])
             added = True
     return added
@@ -374,8 +395,7 @@ def classify_promise_verdict(pair_count, clear_slowdown):
         return "n/a"
     if clear_slowdown:
         return "slowdown"
-    min_possible_p = 1.0 / (2 ** pair_count)
-    if min_possible_p >= SIGN_P_THRESHOLD:
+    if 1.0 / (2 ** pair_count) >= SIGN_P_THRESHOLD:
         return "inconclusive"
     return "no clear slowdown"
 
@@ -524,7 +544,7 @@ class MarkerStream:
 
 
 # ---------------------------------------------------------------------------
-# Stdlib-only process identity, verified signalling, and daemon RPC
+# Stdlib-only process identity, verified signalling, and interruptible RPC
 # ---------------------------------------------------------------------------
 
 
@@ -570,6 +590,10 @@ def posix_start_id(pid):
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+            return None
+        raise RuntimeError(f"ps -p {pid} failed ({result.returncode}): {result.stderr.strip()}")
     line = result.stdout.strip()
     if not line:
         return None
@@ -657,6 +681,8 @@ def list_posix_process_rows():
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(f"ps process listing failed ({result.returncode}): {result.stderr.strip()}")
     rows = []
     for line in result.stdout.splitlines():
         row = parse_posix_ps_row(line)
@@ -673,8 +699,7 @@ def parse_posix_ps_row(line):
     if parts[3].startswith("Z"):
         return None
     start = " ".join(parts[4:9])
-    command = parts[9]
-    argv = split_command_safe(command)
+    argv = split_command_safe(parts[9])
     return {
         "pid": int(parts[0]),
         "ppid": int(parts[1]),
@@ -693,50 +718,31 @@ def split_command_safe(command):
         return command.split()
 
 
-def read_session_meta_pids(state_dir):
-    if not state_dir:
-        return []
-    sessions_dir = Path(state_dir) / "s"
-    if not sessions_dir.exists():
-        return []
-    pids = []
-    for meta in sessions_dir.glob("*/meta.json"):
-        pid = read_meta_pid(meta)
-        if pid is not None:
-            pids.append(pid)
-    return pids
-
-
-def read_meta_pid(meta_path):
-    try:
-        data = json.loads(meta_path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    pid = data.get("pid")
-    return int(pid) if isinstance(pid, int) and pid > 1 else None
-
-
 class OwnedRegistry:
-    """Tracks exact (pid, start_id) identities persisted inside the scratch directory."""
+    """Thread-safe exact (pid, start_id) registry persisted inside the scratch directory."""
 
     def __init__(self, path):
         self.path = Path(path)
-        self._records = []
+        self._lock = threading.Lock()
+        self._records = set()
 
-    def record(self, pid):
-        start = process_start_id(pid)
-        if start is None:
+    def record(self, pid, start=None):
+        resolved = str(start) if start is not None else process_start_id(pid)
+        if resolved is None:
             return None
-        entry = (int(pid), str(start))
-        if entry not in self._records:
-            self._records.append(entry)
+        entry = (int(pid), resolved)
+        with self._lock:
+            if entry in self._records:
+                return entry
+            self._records.add(entry)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"pid": entry[0], "start": entry[1]}) + "\n")
         return entry
 
     def load_all(self):
-        seen = set(self._records)
+        with self._lock:
+            seen = set(self._records)
         if not self.path.exists():
             return sorted(seen)
         for line in self.path.read_text(errors="replace").splitlines():
@@ -752,6 +758,27 @@ def parse_registry_line(line):
         return int(data["pid"]), str(data["start"])
     except (ValueError, KeyError, TypeError):
         return None
+
+
+def write_owner_token(scratch, owner_token):
+    token_path = Path(scratch) / OWNER_TOKEN_FILE
+    token_path.write_text(f"{owner_token}\n", encoding="utf-8")
+    token_path.chmod(0o600)
+
+
+def verify_owner_token(scratch, expected_token):
+    root = Path(scratch)
+    if not root.exists():
+        return "absent"
+    if not expected_token:
+        raise RuntimeError(f"missing expected owner token for scratch {root}")
+    token_path = root / OWNER_TOKEN_FILE
+    if not token_path.is_file():
+        raise RuntimeError(f"refusing to clean {root}: {OWNER_TOKEN_FILE} is absent")
+    actual = token_path.read_text(encoding="utf-8", errors="replace").strip()
+    if actual != expected_token:
+        raise RuntimeError(f"refusing to clean {root}: owner token mismatch")
+    return "matched"
 
 
 def signal_verified_process(pid, expected_start, sig):
@@ -783,29 +810,39 @@ def signal_linux_pidfd(pid, expected_start, sig):
         os.close(fd)
 
 
-def receive_exact(conn, size):
+def receive_exact(conn, size, deadline, stop_event=None):
     buf = bytearray()
     while len(buf) < size:
-        chunk = conn.recv(size - len(buf))
+        if stop_event is not None and stop_event.is_set():
+            raise RuntimeError("daemon RPC cancelled")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("daemon RPC timed out")
+        conn.settimeout(min(0.2, remaining))
+        try:
+            chunk = conn.recv(size - len(buf))
+        except socket.timeout:
+            continue
         if not chunk:
             raise EOFError("daemon closed before completing control frame")
         buf.extend(chunk)
     return bytes(buf)
 
 
-def daemon_rpc(socket_path, request, timeout=30.0):
+def daemon_rpc(socket_path, request, timeout=30.0, stop_event=None):
+    deadline = time.monotonic() + timeout
     payload = json.dumps(request, separators=(",", ":")).encode()
     with socket.socket(socket.AF_UNIX) as conn:
-        conn.settimeout(timeout)
+        conn.settimeout(min(0.5, timeout))
         conn.connect(str(socket_path))
         conn.sendall(b"\x01" + struct.pack(">I", len(payload)) + payload)
-        header = receive_exact(conn, 5)
+        header = receive_exact(conn, 5, deadline, stop_event=stop_event)
         if header[0] != 1:
             raise RuntimeError(f"unexpected control frame kind {header[0]}")
         length = struct.unpack(">I", header[1:])[0]
         if length > 4 << 20:
             raise RuntimeError(f"oversized control response: {length}")
-        return json.loads(receive_exact(conn, length))
+        return json.loads(receive_exact(conn, length, deadline, stop_event=stop_event))
 
 
 def worker_kill_request(socket_path):
@@ -827,14 +864,14 @@ def worker_kill_request(socket_path):
     }
 
 
-def kill_worker_socket(socket_path):
+def kill_worker_socket(socket_path, rpc_timeout=1.5):
     try:
-        daemon_rpc(socket_path, worker_kill_request(socket_path), timeout=2.0)
-    except OSError:
+        daemon_rpc(socket_path, worker_kill_request(socket_path), timeout=rpc_timeout)
+    except (OSError, EOFError, RuntimeError, ValueError):
         pass
 
 
-def shutdown_workers_gracefully(state_dir, wait_seconds=3.0):
+def shutdown_workers_gracefully(state_dir, wait_seconds=2.0, rpc_timeout=1.5):
     if not state_dir:
         return
     sessions_dir = Path(state_dir) / "s"
@@ -842,10 +879,25 @@ def shutdown_workers_gracefully(state_dir, wait_seconds=3.0):
         return
     sockets = list(sessions_dir.glob("*/sock"))
     for sock in sockets:
-        kill_worker_socket(sock)
+        kill_worker_socket(sock, rpc_timeout=rpc_timeout)
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline and any(sock.exists() for sock in sockets):
         time.sleep(0.05)
+
+
+def cleanup_budgets(fast):
+    if fast:
+        # Fit strictly inside mac-queue.ts's 2.0s SIGTERM -> SIGKILL grace window.
+        return SimpleNamespace(worker_rpc=0.2, worker_wait=0.25, daemon_grace=0.35, term_wait=0.3, kill_wait=0.25)
+    return SimpleNamespace(worker_rpc=1.5, worker_wait=2.0, daemon_grace=3.0, term_wait=2.0, kill_wait=1.0)
+
+
+def snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_token, exclude):
+    rows = list_process_rows()
+    found = discover_owned_processes(rows, registry.load_all(), exact_binary, sessions_dir, owner_token, exclude)
+    for pid, start in found:
+        registry.record(pid, start)
+    return found
 
 
 def cleanup_owned_tree(
@@ -856,6 +908,7 @@ def cleanup_owned_tree(
     state_dir=None,
     owner_token=None,
     daemon_proc=None,
+    fast=False,
 ):
     scratch = Path(scratch_path).resolve()
     if registry is None:
@@ -864,33 +917,36 @@ def cleanup_owned_tree(
         state_dir = scratch / "state"
     if exact_binary is None and (scratch / "mesh").exists():
         exact_binary = scratch / "mesh"
-    shutdown_workers_gracefully(state_dir)
-    stop_popen(daemon_proc, grace=5.0)
-    reap_children()
+    budgets = cleanup_budgets(fast)
     exclude = ancestor_pids()
     sessions_dir = Path(state_dir) / "s"
-    for sig, wait_s in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
-        targets = find_live_owned(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude)
+    # Snapshot live workers & their children into OwnedRegistry BEFORE stopping
+    # workers/daemon so detached descendants retain verified (pid, start) evidence.
+    snapshot_owned_into_registry(registry, exact_binary, sessions_dir, owner_token, exclude)
+    shutdown_workers_gracefully(state_dir, wait_seconds=budgets.worker_wait, rpc_timeout=budgets.worker_rpc)
+    stop_popen(daemon_proc, grace=budgets.daemon_grace)
+    reap_children()
+    for sig, wait_s in ((signal.SIGTERM, budgets.term_wait), (signal.SIGKILL, budgets.kill_wait)):
+        targets = find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)
         if not targets:
             return []
         for pid, start in targets:
             signal_verified_process(pid, start, sig)
-        wait_owned_gone(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude, wait_s)
-    return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude)]
+        wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, wait_s)
+    return [pid for pid, _ in find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude)]
 
 
-def find_live_owned(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude):
+def find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
     reap_children()
     rows = list_process_rows()
     roots = registry.load_all()
-    meta_pids = read_session_meta_pids(state_dir)
-    return discover_owned_processes(rows, roots, exact_binary, sessions_dir, meta_pids, owner_token, exclude)
+    return discover_owned_processes(rows, roots, exact_binary, sessions_dir, owner_token, exclude)
 
 
-def wait_owned_gone(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude, timeout):
+def wait_owned_gone(registry, exact_binary, sessions_dir, owner_token, exclude, timeout):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not find_live_owned(registry, exact_binary, sessions_dir, state_dir, owner_token, exclude):
+        if not find_live_owned(registry, exact_binary, sessions_dir, owner_token, exclude):
             return
         time.sleep(0.05)
 
@@ -903,7 +959,7 @@ def stop_popen(proc, grace=5.0):
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5.0)
+        proc.wait(timeout=2.0)
 
 
 def pick_free_port(bind_ip):
@@ -975,7 +1031,7 @@ def wait_daemon_ready(proc, state_dir, bind_ip, port, log_path, timeout, stop_ev
             detail = log_path.read_text(errors="replace")[-4000:] if log_path.exists() else ""
             raise RuntimeError(f"isolated daemon exited ({proc.returncode}): {detail}")
         if host_info is None and sock_path.exists():
-            host_info = probe_host_info(sock_path)
+            host_info = probe_host_info(sock_path, stop_event=stop_event)
         if host_info is not None and tcp_reachable(bind_ip, port):
             return host_info
         time.sleep(0.05)
@@ -983,10 +1039,10 @@ def wait_daemon_ready(proc, state_dir, bind_ip, port, log_path, timeout, stop_ev
     raise TimeoutError(f"isolated daemon did not become ready on {bind_ip}:{port} within {timeout}s: {detail}")
 
 
-def probe_host_info(sock_path):
+def probe_host_info(sock_path, stop_event=None):
     try:
-        reply = daemon_rpc(sock_path, {"type": "host.info", "requestId": "oneshot-ready"}, timeout=5.0)
-    except OSError:
+        reply = daemon_rpc(sock_path, {"type": "host.info", "requestId": "oneshot-ready"}, timeout=5.0, stop_event=stop_event)
+    except (OSError, EOFError, RuntimeError):
         return None
     if reply.get("type") != "host.info.result":
         return None
@@ -1008,7 +1064,7 @@ def run_server_bench(sock_path, cwd, true_path, warmups, count, stop_event=None,
         if is_cancelled(stop_event, stop_file):
             raise RuntimeError("server benchmark cancelled")
         key = f"srv-{uuid.uuid4().hex[:12]}-{index}"
-        all_samples.append(run_one_server_sample(sock_path, cwd, true_path, key))
+        all_samples.append(run_one_server_sample(sock_path, cwd, true_path, key, stop_event=stop_event))
     warm, measured = drop_warmups(all_samples, warmups)
     return {"warmups": warm, "samples": measured}
 
@@ -1019,7 +1075,7 @@ def is_cancelled(stop_event, stop_file):
     return stop_file is not None and Path(stop_file).exists()
 
 
-def run_one_server_sample(sock_path, cwd, true_path, key):
+def run_one_server_sample(sock_path, cwd, true_path, key, stop_event=None):
     create_req = {
         "type": "execution.create",
         "requestId": key,
@@ -1030,7 +1086,7 @@ def run_one_server_sample(sock_path, cwd, true_path, key):
         "stdin": "closed",
     }
     t0 = time.perf_counter_ns()
-    create_reply = daemon_rpc(sock_path, create_req, timeout=30.0)
+    create_reply = daemon_rpc(sock_path, create_req, timeout=30.0, stop_event=stop_event)
     t1 = time.perf_counter_ns()
     if create_reply.get("type") != "execution.receipt":
         raise RuntimeError(f"execution.create failed: {create_reply}")
@@ -1042,7 +1098,7 @@ def run_one_server_sample(sock_path, cwd, true_path, key):
         "instance": rec["instance"],
         "timeoutMillis": 30000,
     }
-    wait_reply = daemon_rpc(sock_path, wait_req, timeout=40.0)
+    wait_reply = daemon_rpc(sock_path, wait_req, timeout=40.0, stop_event=stop_event)
     t2 = time.perf_counter_ns()
     validate_server_wait_reply(wait_reply)
     return {
@@ -1075,10 +1131,13 @@ class IsolatedDaemon:
         self.env = None
         self.port = None
         self.host_info = None
+        self._watch_stop = threading.Event()
+        self._watcher = None
 
     def start(self, stop_event=None):
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.scratch.chmod(0o700)
+        write_owner_token(self.scratch, self.owner_token)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         bindir, status_path = write_fake_tailscale(self.scratch, self.host_name, self.bind_ip)
         self.port = pick_free_port(self.bind_ip)
@@ -1097,6 +1156,7 @@ class IsolatedDaemon:
             stderr=subprocess.STDOUT,
         )
         self.registry.record(self.proc.pid)
+        self._start_watcher()
         self.host_info = wait_daemon_ready(
             self.proc, self.state_dir, self.bind_ip, self.port, self.log_path, self.startup_timeout, stop_event
         )
@@ -1121,6 +1181,20 @@ class IsolatedDaemon:
             "true_path": self.true_path,
         }
 
+    def _start_watcher(self):
+        exclude = ancestor_pids()
+        sessions_dir = self.state_dir / "s"
+
+        def poll():
+            while not self._watch_stop.wait(0.2):
+                try:
+                    snapshot_owned_into_registry(self.registry, self.binary, sessions_dir, self.owner_token, exclude)
+                except Exception:
+                    pass
+
+        self._watcher = threading.Thread(target=poll, daemon=True)
+        self._watcher.start()
+
     def server_bench(self, warmups, count, stop_event=None, stop_file=None):
         return run_server_bench(
             self.state_dir / "daemon.sock",
@@ -1132,7 +1206,11 @@ class IsolatedDaemon:
             stop_file=stop_file,
         )
 
-    def stop(self):
+    def stop(self, fast=False):
+        self._watch_stop.set()
+        if self._watcher is not None:
+            self._watcher.join(timeout=0.5)
+            self._watcher = None
         remaining = cleanup_owned_tree(
             self.scratch,
             registry=self.registry,
@@ -1140,6 +1218,7 @@ class IsolatedDaemon:
             state_dir=self.state_dir,
             owner_token=self.owner_token,
             daemon_proc=self.proc,
+            fast=fast,
         )
         self.proc = None
         if self.log_stream is not None:
@@ -1165,14 +1244,21 @@ def run_cleanup_scratch(args):
     scratch = Path(args.scratch).resolve()
     if not scratch.name.startswith("mesh-oneshot-bench-"):
         raise SystemExit(f"refusing to clean unexpected scratch path: {scratch}")
-    remaining = cleanup_owned_tree(scratch, owner_token=args.owner_token or None)
-    removed = remove_scratch_if_clean(scratch, remaining)
-    result = {
-        "clean": not remaining and removed,
-        "remaining_pids": remaining,
-        "scratch_removed": removed,
-        "remote_scratch": str(scratch),
-    }
+    try:
+        state = verify_owner_token(scratch, args.owner_token)
+        if state == "absent":
+            result = {"clean": True, "remaining_pids": [], "scratch_removed": True, "remote_scratch": str(scratch)}
+        else:
+            remaining = cleanup_owned_tree(scratch, owner_token=args.owner_token)
+            removed = remove_scratch_if_clean(scratch, remaining)
+            result = {
+                "clean": not remaining and removed,
+                "remaining_pids": remaining,
+                "scratch_removed": removed,
+                "remote_scratch": str(scratch),
+            }
+    except Exception as error:
+        result = {"clean": False, "error": str(error), "remote_scratch": str(scratch)}
     print(json.dumps(result, separators=(",", ":")))
     return 0 if result["clean"] else 1
 
@@ -1180,8 +1266,10 @@ def run_cleanup_scratch(args):
 def run_remote_agent(args):
     enable_linux_subreaper()
     stop_requested = threading.Event()
+    signal_triggered = threading.Event()
 
     def handle_signal(_signum, _frame):
+        signal_triggered.set()
         stop_requested.set()
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
@@ -1209,30 +1297,39 @@ def run_remote_agent(args):
         exit_code = 1
         raise
     finally:
-        cleanup_result = finish_remote_agent(daemon, scratch, args.self_clean)
+        cleanup_result = finish_remote_agent(daemon, scratch, args.self_clean, fast=signal_triggered.is_set())
         emit_line(STOPPED_PREFIX, cleanup_result)
         if not cleanup_result["clean"]:
             exit_code = 1
     return exit_code
 
 
-def finish_remote_agent(daemon, scratch, self_clean):
-    # Ignore termination signals while tearing down owned daemon and workers.
+def finish_remote_agent(daemon, scratch, self_clean, fast=False):
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, signal.SIG_IGN)
-    remaining = daemon.stop()
-    removed = remove_scratch_if_clean(scratch, remaining) if self_clean else (not scratch.exists())
-    clean = (not remaining) and (removed if self_clean else True)
-    return {
-        "clean": clean,
-        "remaining_pids": remaining,
-        "scratch_removed": removed,
-        "remote_scratch": str(scratch),
-    }
+    try:
+        remaining = daemon.stop(fast=fast)
+        removed = remove_scratch_if_clean(scratch, remaining) if self_clean else (not scratch.exists())
+        clean = (not remaining) and (removed if self_clean else True)
+        return {
+            "clean": clean,
+            "remaining_pids": remaining,
+            "scratch_removed": removed,
+            "remote_scratch": str(scratch),
+        }
+    except Exception as error:
+        return {
+            "clean": False,
+            "error": str(error),
+            "remote_scratch": str(scratch),
+        }
 
 
 def wait_remote_triggers(daemon, trigger_bench, trigger_stop, stop_requested, args):
+    deadline = time.monotonic() + args.max_idle_seconds
     while not stop_requested.is_set():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"remote agent idle expiry ({args.max_idle_seconds}s) without coordinator trigger")
         if daemon.proc.poll() is not None:
             raise RuntimeError(f"isolated daemon exited early ({daemon.proc.returncode})")
         if trigger_stop.exists():
@@ -1256,18 +1353,18 @@ def emit_line(prefix, payload):
 # ---------------------------------------------------------------------------
 
 
-def linux_socket_inodes(pid):
+def linux_fd_socket_inodes(pid):
     if sys.platform != "linux":
-        return []
+        return set()
     fd_dir = Path(f"/proc/{pid}/fd")
     if not fd_dir.exists():
-        return []
-    inodes = []
+        return set()
+    inodes = set()
     for item in fd_dir.iterdir():
         inode = read_socket_inode(item)
         if inode is not None:
-            inodes.append(inode)
-    return sorted(inodes)
+            inodes.add(inode)
+    return inodes
 
 
 def read_socket_inode(fd_path):
@@ -1278,6 +1375,15 @@ def read_socket_inode(fd_path):
     if target.startswith("socket:[") and target.endswith("]"):
         return target[8:-1]
     return None
+
+
+def linux_tcp_connection_inodes(pid, ssh_connection):
+    if sys.platform != "linux":
+        return []
+    fd_inodes = linux_fd_socket_inodes(pid)
+    tcp_text = Path(f"/proc/{pid}/net/tcp").read_text()
+    matched = parse_proc_net_tcp_inodes(tcp_text, ssh_connection)
+    return sorted(inode for inode in matched if inode in fd_inodes)
 
 
 class SSHMaster:
@@ -1381,7 +1487,7 @@ class SSHMaster:
     def scp_upload(self, local_path, remote_path, host_ip=None, timeout=120):
         opts = [
             "-q",
-            "-o", "BatchMode=yes",
+            *SSH_HARDENING_OPTS,
             "-o", "ControlMaster=no",
             "-o", f"ControlPath={self.control_path}",
             "-o", "ControlPersist=no",
@@ -1525,17 +1631,31 @@ def measure_tailscale_rtt(ip):
 
 
 def remote_ssh_base_argv(target_ip):
-    return [
-        shutil.which("ssh"),
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=15",
-        "-o", f"HostName={target_ip}",
+    return [shutil.which("ssh"), *SSH_HARDENING_OPTS, "-o", f"HostName={target_ip}"]
+
+
+def run_fresh_verified_ssh(target_ip, ssh_alias, remote_cmd, timeout=60):
+    argv = remote_ssh_base_argv(target_ip) + [
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        "-o", "ControlPersist=no",
+        "-T",
+        ssh_alias,
+        remote_cmd,
     ]
+    return subprocess.run(
+        argv,
+        env=os.environ,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def verify_ssh_effective_hostname(ssh_alias, target_ip):
     res = subprocess.run(
-        [shutil.which("ssh"), "-G", "-o", f"HostName={target_ip}", ssh_alias],
+        [shutil.which("ssh"), "-G", *SSH_HARDENING_OPTS, "-o", f"HostName={target_ip}", ssh_alias],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -1665,7 +1785,7 @@ def time_mcp_exec(mcp_client, ctx_handle, true_path, request_key):
     return {"seconds": elapsed, "exit": 0, "state": data["state"], "wait": data["wait"]}
 
 
-def time_warm_ssh(ssh_master, remote_cmd, expected_inodes):
+def time_warm_ssh(ssh_master, remote_cmd, expected_tcp_inodes):
     if ssh_master.proc.poll() is not None:
         raise RuntimeError(f"SSH master exited before sample ({ssh_master.proc.returncode})")
     started = time.perf_counter_ns()
@@ -1682,9 +1802,10 @@ def time_warm_ssh(ssh_master, remote_cmd, expected_inodes):
         raise RuntimeError(f"warm ssh command failed ({result.returncode}): {result.stderr.decode(errors='replace')}")
     if ssh_master.proc.poll() is not None:
         raise RuntimeError("SSH master exited during sample")
-    current_inodes = linux_socket_inodes(ssh_master.master_pid)
-    if expected_inodes and not set(expected_inodes).issubset(set(current_inodes)):
-        raise RuntimeError(f"SSH master socket inodes changed: before={expected_inodes}, after={current_inodes}")
+    if sys.platform == "linux":
+        open_inodes = linux_fd_socket_inodes(ssh_master.master_pid)
+        if not set(expected_tcp_inodes).issubset(open_inodes):
+            raise RuntimeError(f"SSH master TCP inode missing: want={expected_tcp_inodes}, open={sorted(open_inodes)}")
     return {"seconds": elapsed, "exit": 0, "master_pid": ssh_master.master_pid}
 
 
@@ -1723,7 +1844,11 @@ def start_local_openssh(ssh_root, helpers, stack, pc_registry):
     try:
         base_ssh, port = helpers.ssh_command.start_openssh(fixture, sshd, stack)
         record_sshd_pid(ssh_root / "sshd.pid", pc_registry)
-        cleaned_base = strip_control_options(base_ssh[:-1])
+        cleaned_base = strip_control_options(base_ssh[:-1]) + [
+            "-o", "ClearAllForwardings=yes",
+            "-o", "ForwardAgent=no",
+            "-o", "ForwardX11=no",
+        ]
         target = base_ssh[-1]
         master = SSHMaster(cleaned_base, target, ssh_root / "cm" / "c", env, registry=pc_registry)
         stack.callback(master.close)
@@ -1757,32 +1882,32 @@ def strip_control_options(argv):
 
 
 def run_paired_samples(
-    mcp_client, ctx_handle, true_path, cwd, ssh_master, expected_inodes, args, helpers, run_id, host_name
+    mcp_client, ctx_handle, true_path, cwd, ssh_master, expected_tcp_inodes, args, helpers, run_id, host_name
 ):
     ssh_cmd = build_ssh_exec_command(cwd, true_path)
     warmups = collect_phase(
-        mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_inodes,
+        mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_tcp_inodes,
         args.warmups, args.seed, helpers, f"{run_id}-{host_name}-w",
     )
     measured = collect_phase(
-        mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_inodes,
+        mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_tcp_inodes,
         args.pairs, args.seed + 1, helpers, f"{run_id}-{host_name}-m",
     )
     return warmups, measured
 
 
-def collect_one_pair(order, mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_inodes, key):
+def collect_one_pair(order, mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_tcp_inodes, key):
     pair = {"order": order}
     for mode in order:
         if mode == "mesh":
             pair["mesh"] = time_mcp_exec(mcp_client, ctx_handle, true_path, key)
         else:
-            pair["ssh"] = time_warm_ssh(ssh_master, ssh_cmd, expected_inodes)
+            pair["ssh"] = time_warm_ssh(ssh_master, ssh_cmd, expected_tcp_inodes)
     return pair
 
 
 def collect_phase(
-    mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_inodes, count, seed, helpers, prefix
+    mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_tcp_inodes, count, seed, helpers, prefix
 ):
     if ssh_master is None:
         return [
@@ -1790,7 +1915,7 @@ def collect_phase(
             for index in range(count)
         ]
     return [
-        collect_one_pair(order, mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_inodes, f"{prefix}-{index}")
+        collect_one_pair(order, mcp_client, ctx_handle, true_path, ssh_master, ssh_cmd, expected_tcp_inodes, f"{prefix}-{index}")
         for index, order in enumerate(helpers.ssh_command.orders(count, seed))
     ]
 
@@ -1800,26 +1925,34 @@ def collect_mux_proof(ssh_master, expected_ip):
     if check_before != ssh_master.master_pid:
         raise RuntimeError(f"SSH master -O check before failed: got {check_before}, want {ssh_master.master_pid}")
     conn = verify_ssh_master_route(ssh_master, expected_ip)
-    inodes_before = linux_socket_inodes(ssh_master.master_pid)
+    tcp_inodes_before = linux_tcp_connection_inodes(ssh_master.master_pid, conn)
+    if sys.platform == "linux" and not tcp_inodes_before:
+        raise RuntimeError(f"could not locate established TCP socket inode for SSH master pid={ssh_master.master_pid} conn={conn}")
     return {
         "master_pid": ssh_master.master_pid,
         "control_path": str(ssh_master.control_path),
         "proxy_command_guard": "false",
         "ssh_connection": conn,
         "check_before": True,
-        "tcp_socket_inodes_before": inodes_before,
-    }, inodes_before
+        "tcp_connection_inodes_before": tcp_inodes_before,
+    }, tcp_inodes_before
 
 
 def finalize_mux_proof(ssh_master, mux_proof):
     check_after = ssh_master.check()
     if check_after != ssh_master.master_pid:
         raise RuntimeError(f"SSH master -O check after failed: got {check_after}, want {ssh_master.master_pid}")
+    tcp_inodes_after = linux_tcp_connection_inodes(ssh_master.master_pid, mux_proof["ssh_connection"])
+    if sys.platform == "linux" and tcp_inodes_after != mux_proof["tcp_connection_inodes_before"]:
+        raise RuntimeError(
+            f"SSH master TCP connection inode changed: before={mux_proof['tcp_connection_inodes_before']}, after={tcp_inodes_after}"
+        )
     mux_proof["check_after"] = True
-    mux_proof["tcp_socket_inodes_after"] = linux_socket_inodes(ssh_master.master_pid)
+    mux_proof["tcp_connection_inodes_after"] = tcp_inodes_after
+    mux_proof["tcp_inode_unchanged"] = tcp_inodes_after == mux_proof["tcp_connection_inodes_before"]
 
 
-def benchmark_local(pc_binary, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token, args, helpers, run_id):
+def benchmark_local(pc_binary, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token, args, helpers, run_id, report_hosts):
     daemon_root = pc_scratch / "local-daemon"
     daemon_root.mkdir(parents=True, exist_ok=True)
     daemon = IsolatedDaemon(
@@ -1837,14 +1970,14 @@ def benchmark_local(pc_binary, client_env, client_config, client_id, pc_scratch,
         ready = daemon.start()
         write_hosts_json(client_config, ready, "local")
         ssh_master, ssh_note = start_local_openssh(pc_scratch / "local-ssh", helpers, stack, pc_registry)
-        mux_proof, expected_inodes = (collect_mux_proof(ssh_master, "127.0.0.2") if ssh_master else (None, []))
+        mux_proof, expected_tcp_inodes = (collect_mux_proof(ssh_master, "127.0.0.2") if ssh_master else (None, []))
         mcp_client = helpers.mcp_native.MCPClient(str(pc_binary), client_env, args=("--identity", "bench"))
         pc_registry.record(mcp_client.proc.pid)
         stack.callback(close_mcp_client, mcp_client)
         ctx_handle = open_mcp_context(mcp_client, ready["host_id"], ready["cwd"], run_id, "local")
         warmups, measured = run_paired_samples(
             mcp_client, ctx_handle, ready["true_path"], ready["cwd"],
-            ssh_master, expected_inodes, args, helpers, run_id, "local",
+            ssh_master, expected_tcp_inodes, args, helpers, run_id, "local",
         )
         if ssh_master is not None:
             finalize_mux_proof(ssh_master, mux_proof)
@@ -1852,7 +1985,7 @@ def benchmark_local(pc_binary, client_env, client_config, client_id, pc_scratch,
         server_result = daemon.server_bench(args.warmups, args.pairs)
         ssh_available = ssh_master is not None
         summary = summarize_host(measured, server_result["samples"], ssh_available, helpers.ssh_command.summarize)
-        return {
+        report_hosts["local"] = {
             "status": "ok",
             "host": "local",
             "platform": "linux/amd64",
@@ -1904,6 +2037,7 @@ def start_stderr_drain(stream):
 
 
 def build_remote_launcher_command(host_name, spec, probe, remote_scratch, client_id, owner_token, args):
+    idle_seconds = (MAC_QUEUE_TIMEOUT_SECONDS - 30) if spec.get("use_mac_queue") else REMOTE_AGENT_IDLE_SECONDS
     wrapper_argv = [
         "/bin/sh", "-c", REMOTE_STAGE_WRAPPER, "oneshot-stage",
         remote_scratch,
@@ -1916,6 +2050,7 @@ def build_remote_launcher_command(host_name, spec, probe, remote_scratch, client
         str(args.warmups),
         str(args.pairs),
         owner_token,
+        str(idle_seconds),
     ]
     if spec.get("use_mac_queue"):
         queue_cmd = build_mac_queue_command(
@@ -1944,19 +2079,30 @@ def stage_files_into_remote(orch_master, target_ip, binary_path, remote_scratch)
         raise RuntimeError(f"failed to finalize staging on {orch_master.target}: {finish_stage.stderr}")
 
 
-def remote_recovery_cleanup(orch_master, spec, remote_python, remote_scratch, owner_token, args):
+def run_recovery_command(orch_master, target_ip, ssh_alias, cmd, timeout):
+    if orch_master is not None and orch_master.check() == orch_master.master_pid:
+        return orch_master.run(cmd, timeout=timeout)
+    return run_fresh_verified_ssh(target_ip, ssh_alias, cmd, timeout=timeout)
+
+
+def remote_recovery_cleanup(orch_master, target_ip, spec, remote_python, remote_scratch, owner_token, args):
     script = (
-        f"if [ -f {shlex.quote(remote_scratch + '/oneshot.py')} ]; then "
-        f"{shlex.quote(remote_python)} {shlex.quote(remote_scratch + '/oneshot.py')} "
-        f"--cleanup-scratch --scratch {shlex.quote(remote_scratch)} --owner-token {shlex.quote(owner_token)}; "
-        f"elif [ -d {shlex.quote(remote_scratch)} ]; then "
-        f"rm -rf -- {shlex.quote(remote_scratch)} && "
-        f"printf '%s\\n' '{{\"clean\":true,\"remaining_pids\":[],\"scratch_removed\":true,\"remote_scratch\":\"'\"$1\"'\"}}'; "
-        f"else "
-        f"printf '%s\\n' '{{\"clean\":true,\"remaining_pids\":[],\"scratch_removed\":true,\"remote_scratch\":\"'\"$1\"'\"}}'; "
-        f"fi"
+        "scratch=$1; py=$2; tok=$3\n"
+        "if [ ! -e \"$scratch\" ]; then\n"
+        "  printf '{\"clean\":true,\"remaining_pids\":[],\"scratch_removed\":true,\"remote_scratch\":\"%s\"}\\n' \"$scratch\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ ! -f \"$scratch/.owner-token\" ] || [ \"$(cat \"$scratch/.owner-token\")\" != \"$tok\" ]; then\n"
+        "  printf '{\"clean\":false,\"error\":\"owner token missing or mismatch\",\"remote_scratch\":\"%s\"}\\n' \"$scratch\"\n"
+        "  exit 1\n"
+        "fi\n"
+        "if [ -f \"$scratch/oneshot.py\" ]; then\n"
+        "  exec \"$py\" \"$scratch/oneshot.py\" --cleanup-scratch --scratch \"$scratch\" --owner-token \"$tok\"\n"
+        "fi\n"
+        "rm -rf -- \"$scratch\"\n"
+        "printf '{\"clean\":true,\"remaining_pids\":[],\"scratch_removed\":true,\"remote_scratch\":\"%s\"}\\n' \"$scratch\"\n"
     )
-    shell_argv = ["/bin/sh", "-c", script, "oneshot-recover", remote_scratch]
+    shell_argv = ["/bin/sh", "-c", script, "oneshot-recover", remote_scratch, remote_python, owner_token]
     if spec.get("use_mac_queue"):
         queue_cmd = build_mac_queue_command(
             shell_argv,
@@ -1971,18 +2117,23 @@ def remote_recovery_cleanup(orch_master, spec, remote_python, remote_scratch, ow
     else:
         cmd = " ".join(shlex.quote(part) for part in shell_argv)
         timeout = 60
-    result = orch_master.run(cmd, timeout=timeout)
-    if result.returncode != 0:
-        return {
-            "clean": False,
-            "error": (result.stderr or result.stdout).strip()[:1000],
-            "remote_scratch": remote_scratch,
-        }
-    return json.loads(result.stdout.strip().splitlines()[-1])
+    result = run_recovery_command(orch_master, target_ip, spec["ssh_alias"], cmd, timeout)
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    if lines:
+        try:
+            return json.loads(lines[-1])
+        except json.JSONDecodeError:
+            pass
+    return {
+        "clean": False,
+        "error": (result.stderr or result.stdout or f"exit {result.returncode}").strip()[:1000],
+        "remote_scratch": remote_scratch,
+    }
 
 
 def benchmark_remote(
-    host_name, binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token, args, helpers, run_id, cleanup_report
+    host_name, binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token,
+    args, helpers, run_id, report_hosts, cleanup_report,
 ):
     spec = HOST_SPECS[host_name]
     target_ip = resolve_tailscale_ip_local(spec["tailscale_dns_prefix"])
@@ -2001,17 +2152,17 @@ def benchmark_remote(
         orch_master.start()
         probe = probe_remote_host(orch_master, spec, target_ip)
         remote_scratch = f"{probe['home']}/mesh-oneshot-bench-{run_id}-{host_name}"
-        return run_remote_session(
+        run_remote_session(
             host_name, spec, target_ip, orch_master, probe, rtt, remote_scratch,
             binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token,
-            args, helpers, run_id, cleanup_report,
+            args, helpers, run_id, report_hosts, cleanup_report,
         )
 
 
 def run_remote_session(
     host_name, spec, target_ip, orch_master, probe, rtt, remote_scratch,
     binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token,
-    args, helpers, run_id, cleanup_report,
+    args, helpers, run_id, report_hosts, cleanup_report,
 ):
     remote_proc = None
     marker_stream = None
@@ -2031,16 +2182,15 @@ def run_remote_session(
         marker_stream.read_marker(STAGE_READY_PREFIX, stage_timeout, detail_fn)
         stage_files_into_remote(orch_master, target_ip, binaries[spec["platform"]], remote_scratch)
         ready = marker_stream.read_marker(READY_PREFIX, spec["startup_timeout"] + 30, detail_fn)
-        result, stopped_payload = execute_remote_measurements(
+        stopped_payload = execute_remote_measurements(
             host_name, spec, target_ip, orch_master, probe, rtt, remote_scratch,
             remote_proc, marker_stream, detail_fn, ready, binaries["linux/amd64"],
-            client_env, client_config, pc_scratch, pc_registry, args, helpers, run_id,
+            client_env, client_config, pc_scratch, pc_registry, args, helpers, run_id, report_hosts,
         )
-        return result
     finally:
         with helpers.isolation.protected_cleanup():
             teardown_remote(
-                host_name, spec, orch_master, probe["python3"], remote_scratch,
+                host_name, spec, target_ip, orch_master, probe["python3"], remote_scratch,
                 remote_proc, marker_stream, stopped_payload, owner_token, args, cleanup_report,
             )
 
@@ -2048,7 +2198,7 @@ def run_remote_session(
 def execute_remote_measurements(
     host_name, spec, target_ip, orch_master, probe, rtt, remote_scratch,
     remote_proc, marker_stream, detail_fn, ready, pc_binary,
-    client_env, client_config, pc_scratch, pc_registry, args, helpers, run_id,
+    client_env, client_config, pc_scratch, pc_registry, args, helpers, run_id, report_hosts,
 ):
     with ExitStack() as stack:
         write_hosts_json(client_config, ready, host_name)
@@ -2061,14 +2211,14 @@ def execute_remote_measurements(
         )
         stack.callback(ssh_master.close)
         ssh_master.start()
-        mux_proof, expected_inodes = collect_mux_proof(ssh_master, target_ip)
+        mux_proof, expected_tcp_inodes = collect_mux_proof(ssh_master, target_ip)
         mcp_client = helpers.mcp_native.MCPClient(str(pc_binary), client_env, args=("--identity", "bench"))
         pc_registry.record(mcp_client.proc.pid)
         stack.callback(close_mcp_client, mcp_client)
         ctx_handle = open_mcp_context(mcp_client, ready["host_id"], ready["cwd"], run_id, host_name)
         warmups, measured = run_paired_samples(
             mcp_client, ctx_handle, ready["true_path"], ready["cwd"],
-            ssh_master, expected_inodes, args, helpers, run_id, host_name,
+            ssh_master, expected_tcp_inodes, args, helpers, run_id, host_name,
         )
         finalize_mux_proof(ssh_master, mux_proof)
         close_mcp_client(mcp_client)
@@ -2076,10 +2226,10 @@ def execute_remote_measurements(
     if trigger.returncode != 0:
         raise RuntimeError(f"failed to trigger server benchmark on {host_name}: {trigger.stderr}")
     server_result = marker_stream.read_marker(SERVER_BENCH_PREFIX, 180, detail_fn)
-    stopped_payload = marker_stream.read_marker(STOPPED_PREFIX, 45, detail_fn)
-    remote_proc.wait(timeout=30)
     summary = summarize_host(measured, server_result["samples"], True, helpers.ssh_command.summarize)
-    result = {
+    # Persist completed measurements BEFORE waiting for STOPPED so a teardown
+    # marker timeout never discards collected samples.
+    report_hosts[host_name] = {
         "status": "ok",
         "host": host_name,
         "platform": spec["platform"],
@@ -2106,29 +2256,33 @@ def execute_remote_measurements(
         "server_samples": server_result["samples"],
         "summary": summary,
     }
-    return result, stopped_payload
+    stopped_payload = marker_stream.read_marker(STOPPED_PREFIX, 45, detail_fn)
+    remote_proc.wait(timeout=30)
+    return stopped_payload
 
 
 def teardown_remote(
-    host_name, spec, orch_master, remote_python, remote_scratch,
+    host_name, spec, target_ip, orch_master, remote_python, remote_scratch,
     remote_proc, marker_stream, stopped_payload, owner_token, args, cleanup_report,
 ):
     try:
         if remote_proc is not None and remote_proc.poll() is None:
-            stopped_payload = request_remote_stop(orch_master, remote_scratch, remote_proc, marker_stream)
+            stopped_payload = request_remote_stop(
+                orch_master, target_ip, spec["ssh_alias"], remote_scratch, remote_proc, marker_stream
+            )
         if isinstance(stopped_payload, dict) and stopped_payload.get("clean") is True:
             cleanup_report[host_name] = stopped_payload
             return
         cleanup_report[host_name] = remote_recovery_cleanup(
-            orch_master, spec, remote_python, remote_scratch, owner_token, args
+            orch_master, target_ip, spec, remote_python, remote_scratch, owner_token, args
         )
     except Exception as error:
         cleanup_report[host_name] = {"clean": False, "error": str(error), "remote_scratch": remote_scratch}
 
 
-def request_remote_stop(orch_master, remote_scratch, remote_proc, marker_stream):
+def request_remote_stop(orch_master, target_ip, ssh_alias, remote_scratch, remote_proc, marker_stream):
     try:
-        orch_master.run(f"touch {shlex.quote(remote_scratch + '/stop')}", timeout=10)
+        run_recovery_command(orch_master, target_ip, ssh_alias, f"touch {shlex.quote(remote_scratch + '/stop')}", timeout=10)
     except Exception:
         pass
     try:
@@ -2182,6 +2336,7 @@ def run_coordinator(args):
         with signal_guard(helpers):
             pc_scratch = Path(tempfile.mkdtemp(prefix="mesh-oneshot-bench-", dir=str(args.scratch_parent))).resolve()
             pc_scratch.chmod(0o700)
+            write_owner_token(pc_scratch, owner_token)
             pc_registry = OwnedRegistry(pc_scratch / "owned-pids.jsonl")
             report["scratch_root"] = str(pc_scratch)
             execute_fleet_run(args, helpers, run_id, owner_token, pc_scratch, pc_registry, report)
@@ -2208,16 +2363,18 @@ def apply_cleanup_gate(args, report):
 
 
 def run_one_host(
-    host_name, binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token, args, helpers, run_id, cleanup_report
+    host_name, binaries, client_env, client_config, client_id, pc_scratch, pc_registry, owner_token,
+    args, helpers, run_id, report_hosts, cleanup_report,
 ):
     if host_name == "local":
-        return benchmark_local(
+        benchmark_local(
             binaries["linux/amd64"], client_env, client_config, client_id,
-            pc_scratch, pc_registry, owner_token, args, helpers, run_id,
+            pc_scratch, pc_registry, owner_token, args, helpers, run_id, report_hosts,
         )
-    return benchmark_remote(
+        return
+    benchmark_remote(
         host_name, binaries, client_env, client_config, client_id,
-        pc_scratch, pc_registry, owner_token, args, helpers, run_id, cleanup_report,
+        pc_scratch, pc_registry, owner_token, args, helpers, run_id, report_hosts, cleanup_report,
     )
 
 
@@ -2232,16 +2389,24 @@ def execute_fleet_run(args, helpers, run_id, owner_token, pc_scratch, pc_registr
     failures = 0
     for host_name in args.hosts:
         try:
-            report["hosts"][host_name] = run_one_host(
+            run_one_host(
                 host_name, binaries, client_env, client_config, client_id,
-                pc_scratch, pc_registry, owner_token, args, helpers, run_id, report["cleanup"],
+                pc_scratch, pc_registry, owner_token, args, helpers, run_id, report["hosts"], report["cleanup"],
             )
         except Exception as error:
             failures += 1
-            report["hosts"][host_name] = {"status": "error", "host": host_name, "error": str(error)}
+            record_host_failure(report["hosts"], host_name, error)
     report["status"] = "ok" if failures == 0 else "error"
     if failures:
         report["error"] = f"{failures} host(s) failed"
+
+
+def record_host_failure(report_hosts, host_name, error):
+    existing = report_hosts.get(host_name)
+    if isinstance(existing, dict) and existing.get("status") == "ok":
+        existing["teardown_error"] = str(error)
+        return
+    report_hosts[host_name] = {"status": "error", "host": host_name, "error": str(error)}
 
 
 def cleanup_pc(pc_scratch, pc_registry, owner_token, report):
@@ -2318,6 +2483,7 @@ def parse_args(argv=None):
     parser.add_argument("--true-path", default="/bin/true", help=argparse.SUPPRESS)
     parser.add_argument("--server-warmups", type=int, default=DEFAULT_WARMUPS, help=argparse.SUPPRESS)
     parser.add_argument("--server-count", type=int, default=DEFAULT_PAIRS, help=argparse.SUPPRESS)
+    parser.add_argument("--max-idle-seconds", type=int, default=REMOTE_AGENT_IDLE_SECONDS, help=argparse.SUPPRESS)
 
     args = parser.parse_args(argv)
     if args.remote_agent or args.cleanup_scratch:
