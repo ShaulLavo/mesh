@@ -17,7 +17,7 @@ func TestExecutionRunResultValidate(t *testing.T) {
 	code, signal, zero, big := 0, 15, 0, 256
 	valid := map[string]ExecutionRunResult{
 		"exit": runResultWith(func(r *ExecutionRunResult) {
-			r.Stdout = ExecutionRunStream{Bytes: []byte("abc"), Total: 10, Truncated: true, CloseReason: "eof"}
+			r.Stdout = ExecutionRunStream{Bytes: []byte("abcd"), Total: 10, Truncated: true, CloseReason: "eof"}
 		}),
 		"signal after a deadline": runResultWith(func(r *ExecutionRunResult) {
 			r.Termination, r.TimedOut = ExecutionTermination{Kind: "signal", Signal: &signal}, true
@@ -53,6 +53,10 @@ func TestExecutionRunResultValidate(t *testing.T) {
 		"unknown close reason":         runResultWith(func(r *ExecutionRunResult) { r.Stderr.CloseReason = "gone" }),
 		"more bytes than asked":        runResultWith(func(r *ExecutionRunResult) { r.Stdout.Bytes, r.Stdout.Total = []byte("abcde"), 5 }),
 		"total below the bytes":        runResultWith(func(r *ExecutionRunResult) { r.Stdout.Bytes, r.Stdout.Total = []byte("ab"), 1 }),
+		"short prefix": runResultWith(func(r *ExecutionRunResult) {
+			r.Stdout = ExecutionRunStream{Bytes: []byte("abc"), Total: 10, Truncated: true, CloseReason: "eof"}
+		}),
+		"short complete stream": runResultWith(func(r *ExecutionRunResult) { r.Stdout.Bytes, r.Stdout.Total = []byte("a"), 2 }),
 		"truncation disagrees": runResultWith(func(r *ExecutionRunResult) {
 			r.Stdout.Bytes, r.Stdout.Total, r.Stdout.Truncated = []byte("ab"), 2, true
 		}),

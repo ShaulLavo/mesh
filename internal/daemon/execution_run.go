@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -260,7 +261,7 @@ func (s *clientServer) replyRun(ctx context.Context, relay *clientRelay, lookahe
 	runs := s.lifecycle.runs
 	launch, err := runs.beginLaunch()
 	if err != nil {
-		return commitRunReply(ctx, relay, commit, runErrorReply(request, err))
+		return commitRunReply(ctx, watched, relay, commit, runErrorReply(request, err))
 	}
 	go func() {
 		started, err := s.lifecycle.startRun(watched, request)
@@ -268,20 +269,32 @@ func (s *clientServer) replyRun(ctx context.Context, relay *clientRelay, lookahe
 	}()
 	if !awaitRunEvent(watched, launch.ready) {
 		runs.abandonLaunch(launch)
-		return errRunEnded
+		return runEndCause(watched)
 	}
 	if launch.err != nil {
-		return commitRunReply(ctx, relay, commit, runErrorReply(request, launch.err))
+		return commitRunReply(ctx, watched, relay, commit, runErrorReply(request, launch.err))
 	}
 	if run := launch.started.run; run != nil && !awaitRunEvent(watched, run.Done()) {
 		runs.abandonLaunch(launch)
-		return errRunEnded
+		return runEndCause(watched)
 	}
 	if run := launch.started.run; run != nil {
 		runs.forget(run)
 	}
 	defer launch.started.release()
-	return commitRunReply(ctx, relay, commit, runReply(request, launch.started))
+	return commitRunReply(ctx, watched, relay, commit, runReply(request, launch.started))
+}
+
+// runEndCause is why a run ended without a reply: a frame its caller sent
+// or a cancellation, which end the connection quietly, or the read error
+// that broke the connection, which the client loop classifies like any
+// other (EOF is a caller that left; an invalid frame is a fault).
+func runEndCause(watched context.Context) error {
+	cause := context.Cause(watched)
+	if cause == nil || errors.Is(cause, context.Canceled) {
+		return errRunEnded
+	}
+	return fmt.Errorf("daemon: execution.run connection: %w", cause)
 }
 
 // awaitRunEvent reports whether done closed before the run's caller left or
@@ -295,16 +308,22 @@ func awaitRunEvent(watched context.Context, done <-chan struct{}) bool {
 	}
 }
 
-// runBeforeCommit runs just before a run's reply is committed; tests use it
-// to queue a frame at that moment.
-var runBeforeCommit = func() {}
+// runBeforeCommitHook runs just before a run's reply is committed; tests
+// install it to queue a frame at that moment.
+var runBeforeCommitHook atomic.Pointer[func()]
+
+func runBeforeCommit() {
+	if hook := runBeforeCommitHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
 
 // commitRunReply sends the reply only if no other frame arrived first; the
 // two are mutually exclusive, and a frame that won ends the connection.
-func commitRunReply(ctx context.Context, relay *clientRelay, commit func() bool, reply protocol.Control) error {
+func commitRunReply(ctx, watched context.Context, relay *clientRelay, commit func() bool, reply protocol.Control) error {
 	runBeforeCommit()
 	if !commit() {
-		return errRunEnded
+		return runEndCause(watched)
 	}
 	return writeRunReply(ctx, relay, reply)
 }

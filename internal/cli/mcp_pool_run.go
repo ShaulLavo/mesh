@@ -56,7 +56,7 @@ func (p *mcpHostPool) ExchangeRun(ctx context.Context, host HostRecord, req prot
 		err = validRunReply(resp, req.OutputBytes)
 	}
 	if err != nil {
-		p.discard(entry.conn)
+		p.abandon(entry.conn)
 		return protocol.Control{}, entry.info, err
 	}
 	// A valid reply is the run's result even when the call's cancellation
@@ -67,10 +67,20 @@ func (p *mcpHostPool) ExchangeRun(ctx context.Context, host HostRecord, req prot
 
 func (p *mcpHostPool) settleRunConnection(bucket *mcpHostBucket, entry *mcpPooledConn, reusable bool) {
 	if !reusable {
-		p.discard(entry.conn)
+		p.abandon(entry.conn)
 		return
 	}
 	p.checkin(bucket, entry)
+}
+
+// abandon drops a run's connection without a close handshake. A graceful
+// Close could claim the connection's end before the cancellation's Abort
+// arrives and then wait on a peer that never answers.
+func (p *mcpHostPool) abandon(conn transport.Conn) {
+	p.mu.Lock()
+	delete(p.live, conn)
+	p.mu.Unlock()
+	_ = transport.Abort(conn)
 }
 
 func validRunReply(resp protocol.Control, outputBytes int) error {
@@ -98,7 +108,7 @@ func (p *mcpHostPool) runConnection(ctx context.Context, bucket *mcpHostBucket, 
 	if p.usableForRun(ctx, host, entry) {
 		return entry, nil
 	}
-	p.discard(entry.conn)
+	p.abandon(entry.conn)
 	fresh, _, err := p.checkoutFresh(ctx, host)
 	return fresh, err
 }

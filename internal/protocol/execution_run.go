@@ -150,8 +150,10 @@ func (s ExecutionRunStream) empty() bool {
 }
 
 func (s ExecutionRunStream) validate(outputBytes int) error {
+	// The daemon keeps the head of the stream: exactly the first
+	// min(total, limit) bytes, never a shorter prefix.
 	kept := int64(len(s.Bytes))
-	if kept > int64(outputBytes) || s.Total < kept || s.Truncated != (s.Total > kept) {
+	if s.Total < 0 || kept != min(s.Total, int64(outputBytes)) || s.Truncated != (s.Total > kept) {
 		return fmt.Errorf("execution: invalid run stream bounds")
 	}
 	switch s.CloseReason {

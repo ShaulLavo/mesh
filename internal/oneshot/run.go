@@ -98,7 +98,7 @@ func (r *Run) supervise(streams []*stream, timeout time.Duration) {
 	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	c := &cleanup{group: group, streams: streams, exited: exited, deadline: deadline.C, cancel: r.cancel, stopDrain: make(chan struct{})}
+	c := &cleanup{group: group, streams: streams, exited: exited, deadline: deadline.C, cancel: r.cancel, stopDrain: make(chan struct{}), gate: newCutGate()}
 	c.run()
 	r.result.TimedOut = c.timedOut
 	// The unreaped leader still fences its group ID, so this reaches only the

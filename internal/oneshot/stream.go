@@ -109,24 +109,65 @@ func (s *stream) silentFor(start int64) time.Duration {
 
 // drain waits for every stream at once, each on its own silence window, and
 // stops early when the run is cancelled.
-func drain(streams []*stream, stop <-chan struct{}) {
+func drain(streams []*stream, stop <-chan struct{}, gate *cutGate) {
 	hard := make(chan struct{})
 	timer := time.AfterFunc(drainTotal, func() { close(hard) })
 	defer timer.Stop()
 	start := monotonic()
 	var group sync.WaitGroup
 	for _, s := range streams {
-		group.Go(func() { s.drain(hard, stop, start) })
+		group.Go(func() { s.drain(hard, stop, start, gate) })
 	}
 	group.Wait()
 }
 
-// drain cuts the stream off unless it ends by itself first.
-func (s *stream) drain(hard, stop <-chan struct{}, start int64) {
+// drain cuts the stream off unless it ends by itself first; the gate holds
+// the cut while an escalation is in progress.
+func (s *stream) drain(hard, stop <-chan struct{}, start int64, gate *cutGate) {
 	if !s.awaitQuiet(hard, stop, start) {
-		s.cut()
+		gate.cut(s)
 	}
 }
+
+// cutGate gives the cleanup loop the pipes during an escalation: from the
+// first signal until SIGKILL, a drain that would cut a pipe waits, so a
+// member running its signal handler keeps its output.
+type cutGate struct {
+	mu        sync.Mutex
+	escalated bool
+	killed    chan struct{}
+	killOnce  sync.Once
+}
+
+func newCutGate() *cutGate { return &cutGate{killed: make(chan struct{})} }
+
+// cut closes the stream now, or, during an escalation, once SIGKILL went
+// out or the stream ended by itself. The check and the cut share the lock,
+// so an escalation never starts between them.
+func (g *cutGate) cut(s *stream) {
+	g.mu.Lock()
+	escalated := g.escalated
+	if !escalated {
+		s.cut()
+	}
+	g.mu.Unlock()
+	if !escalated {
+		return
+	}
+	select {
+	case <-g.killed:
+	case <-s.done:
+	}
+	s.cut()
+}
+
+func (g *cutGate) escalate() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.escalated = true
+}
+
+func (g *cutGate) kill() { g.killOnce.Do(func() { close(g.killed) }) }
 
 // awaitQuiet reports whether the stream ended by itself before it was
 // silent for drainSilence, the total drain ended, or the run was cancelled.

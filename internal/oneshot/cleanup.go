@@ -1,6 +1,7 @@
 package oneshot
 
 import (
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -9,9 +10,16 @@ import (
 // variable so tests can shorten it.
 var grace = Grace
 
-// drainStarting runs when the leader has exited and the drain begins; tests
-// use it as a sync point.
-var drainStarting = func() {}
+// drainStartingHook runs when the leader has exited and the drain begins;
+// tests install it as a sync point. Atomic, since another run's cleanup may
+// be reading it while a test installs it.
+var drainStartingHook atomic.Pointer[func()]
+
+func drainStarting() {
+	if hook := drainStartingHook.Load(); hook != nil {
+		(*hook)()
+	}
+}
 
 // cleanup is the run's single event loop. The deadline and cancellation stay
 // live until the group is cleaned up, not only until the leader exits: a
@@ -31,6 +39,9 @@ type cleanup struct {
 	// gone out: closing the pipes earlier would kill members with SIGPIPE
 	// before their hang-up.
 	stopDrain chan struct{}
+	// gate holds the drain's pipe cutoffs from the first signal until
+	// SIGKILL.
+	gate *cutGate
 
 	leaderGone, drainDone, escalated, killed, timedOut, cancelled, drainStopped bool
 	graceTimer                                                                  *time.Timer
@@ -88,11 +99,18 @@ func (c *cleanup) onCancel() {
 }
 
 func (c *cleanup) onGraceEnd() {
-	c.graceC, c.killed = nil, true
-	signalGroup(c.group, syscall.SIGKILL)
+	c.graceC = nil
+	c.kill()
 	if c.cancelled {
 		c.releaseDrain()
 	}
+}
+
+// kill sends SIGKILL to the group and hands the pipes back to the drain.
+func (c *cleanup) kill() {
+	c.killed = true
+	signalGroup(c.group, syscall.SIGKILL)
+	c.gate.kill()
 }
 
 func (c *cleanup) releaseDrain() {
@@ -107,25 +125,27 @@ func (c *cleanup) releaseDrain() {
 func (c *cleanup) leaderExited(err error) {
 	c.exited, c.leaderGone = nil, true
 	if err != nil {
-		signalGroup(c.group, syscall.SIGKILL)
-		c.drainDone, c.killed = true, true
+		c.kill()
+		c.drainDone = true
 		return
 	}
 	drainStarting()
 	drained := make(chan struct{})
 	c.drained = drained
 	go func() {
-		drain(c.streams, c.stopDrain)
+		drain(c.streams, c.stopDrain, c.gate)
 		close(drained)
 	}()
 }
 
-// escalate sends first to the group once and starts the grace.
+// escalate sends first to the group once and starts the grace. The gate
+// takes the pipes before the signal goes out.
 func (c *cleanup) escalate(first syscall.Signal) {
 	if c.escalated {
 		return
 	}
 	c.escalated = true
+	c.gate.escalate()
 	signalGroup(c.group, first)
 	c.graceTimer = time.NewTimer(grace)
 	c.graceC = c.graceTimer.C

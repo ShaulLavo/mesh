@@ -140,14 +140,7 @@ func TestCancelDuringTheDrainHangsUpTheGroup(t *testing.T) {
 	dir := t.TempDir()
 	marker, leaderDone := filepath.Join(dir, "hup"), filepath.Join(dir, "leader-done")
 	member := `(trap 'echo hup > ` + marker + `; exit' HUP; while :; do echo x; sleep 0.05; done) &`
-	draining := make(chan struct{}, 1)
-	drainStarting = func() {
-		select {
-		case draining <- struct{}{}:
-		default:
-		}
-	}
-	t.Cleanup(func() { drainStarting = func() {} })
+	draining := watchDrainStart(t)
 	run, err := Start(shellSpec(t, member+" touch "+leaderDone, 1024, hangCap))
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +158,32 @@ func TestCancelDuringTheDrainHangsUpTheGroup(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	eventually(t, func() bool { return fileExists(marker) })
+}
+
+// A silent member whose hang-up handler takes longer than the drain's
+// silence window still has stdout when it writes, because during the
+// grace the cleanup loop, not the silence timer, decides when pipes close.
+func TestSilentMemberKeepsStdoutThroughItsHangUp(t *testing.T) {
+	dir := t.TempDir()
+	trapped, wrote := filepath.Join(dir, "trapped"), filepath.Join(dir, "wrote")
+	member := `(trap 'sleep 0.35; echo late; touch ` + wrote + `; exit' HUP; touch ` + trapped + `; while :; do sleep 0.05; done) &`
+	// The leader exits only once the member's trap is installed.
+	leader := ` while [ ! -e ` + trapped + ` ]; do sleep 0.01; done`
+	draining := watchDrainStart(t)
+	run, err := Start(shellSpec(t, member+leader, 1024, hangCap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-draining:
+	case <-time.After(hangCap):
+		t.Fatal("the drain never started")
+	}
+	run.Cancel()
+	waitRun(t, run)
+	if !fileExists(wrote) {
+		t.Fatal("the member lost stdout during its hang-up grace")
+	}
 }
 
 func TestNormalExitCleansUpTheGroup(t *testing.T) {
@@ -248,13 +267,29 @@ func TestADeadlineDueAtTheEndOfTheDrainIsReported(t *testing.T) {
 		deadline <- time.Now()
 		drained := make(chan struct{})
 		close(drained)
-		c := &cleanup{group: member.Process.Pid, deadline: deadline, drained: drained, leaderGone: true, stopDrain: make(chan struct{})}
+		c := &cleanup{group: member.Process.Pid, deadline: deadline, drained: drained, leaderGone: true, stopDrain: make(chan struct{}), gate: newCutGate()}
 		c.run()
 		_ = member.Wait()
 		if !c.timedOut || !c.killed {
 			t.Fatalf("a due deadline was dropped: timedOut=%t killed=%t", c.timedOut, c.killed)
 		}
 	}
+}
+
+// watchDrainStart installs the drain-start hook for this test and returns
+// the channel it signals.
+func watchDrainStart(t *testing.T) <-chan struct{} {
+	t.Helper()
+	draining := make(chan struct{}, 1)
+	hook := func() {
+		select {
+		case draining <- struct{}{}:
+		default:
+		}
+	}
+	drainStartingHook.Store(&hook)
+	t.Cleanup(func() { drainStartingHook.Store(nil) })
+	return draining
 }
 
 func fileExists(path string) bool {

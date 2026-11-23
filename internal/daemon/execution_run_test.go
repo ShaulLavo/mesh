@@ -16,6 +16,7 @@ import (
 	"github.com/shaul/mesh/internal/oneshot"
 	"github.com/shaul/mesh/internal/protocol"
 	"github.com/shaul/mesh/internal/storage"
+	"github.com/shaul/mesh/internal/transport"
 	"github.com/shaul/mesh/internal/updategate"
 	"github.com/shaul/mesh/internal/worker"
 )
@@ -401,23 +402,40 @@ func TestRunDaemonStopCleansUpTheGroup(t *testing.T) {
 // reply is not sent and the connection ends, never both.
 func TestRunFrameBeforeCommitEndsTheConnection(t *testing.T) {
 	f := newRunFixture(t)
-	claimed := make(chan struct{}, 1)
+	claimed := make(chan int, 1)
 	publish := make(chan struct{})
 	committing := make(chan struct{})
 	// The watcher pauses after claiming the second frame and before
-	// publishing it, the window in which the reply must not commit.
-	lookaheadFrameClaimed = func() {
+	// publishing it, the window in which the reply must not commit. Nothing
+	// may be pending yet: a watcher that published first is the old race.
+	// Watchers of other, closing connections see read errors; only the
+	// frame this test queues is held.
+	frameClaimed := func(pending chan lookaheadRead, err error) {
+		if err != nil {
+			return
+		}
 		select {
-		case claimed <- struct{}{}:
+		case claimed <- len(pending):
 		default:
 		}
 		<-publish
 	}
-	runBeforeCommit = func() {
+	pendingAtClaim := make(chan int, 1)
+	beforeCommit := func() {
 		close(committing)
-		waitSignal(t, claimed, "the claimed frame")
+		select {
+		case queued := <-claimed:
+			pendingAtClaim <- queued
+		case <-time.After(runHangCap):
+			pendingAtClaim <- -1
+		}
 	}
-	t.Cleanup(func() { lookaheadFrameClaimed, runBeforeCommit = func() {}, func() {} })
+	lookaheadFrameClaimedHook.Store(&frameClaimed)
+	runBeforeCommitHook.Store(&beforeCommit)
+	t.Cleanup(func() {
+		lookaheadFrameClaimedHook.Store(nil)
+		runBeforeCommitHook.Store(nil)
+	})
 	defer close(publish)
 	client, done := f.serve()
 	client.pushRead(serverControlFrame(t, f.request("true")))
@@ -426,7 +444,30 @@ func TestRunFrameBeforeCommitEndsTheConnection(t *testing.T) {
 	if err := waitServerResult(t, done, "run server"); err != nil {
 		t.Fatal(err)
 	}
+	if queued := <-pendingAtClaim; queued != 0 {
+		t.Fatalf("the frame was published before its interruption was claimed (%d pending)", queued)
+	}
 	assertNoRunReply(t, client)
+	assertRunsReleased(t, f.l.runs)
+}
+
+// A broken stream during a run is a fault the client loop reports, not a
+// caller that left; the run is still cleaned up.
+func TestRunInvalidFrameEndsTheConnectionWithAnError(t *testing.T) {
+	f := newRunFixture(t)
+	client, done := f.serve()
+	client.pushRead(serverControlFrame(t, f.request("echo $$ > pid; exec sleep 30")))
+	pid := readRunPID(t, filepath.Join(f.root, "pid"))
+	client.pushReadError(transport.ErrInvalidFrame)
+	select {
+	case err := <-done:
+		if !errors.Is(err, transport.ErrInvalidFrame) {
+			t.Fatalf("client loop after an invalid frame = %v", err)
+		}
+	case <-time.After(runHangCap):
+		t.Fatal("the client loop never ended")
+	}
+	assertRunGone(t, pid)
 	assertRunsReleased(t, f.l.runs)
 }
 

@@ -62,17 +62,27 @@ const (
 	watchInterrupted
 )
 
-// lookaheadFrameClaimed runs after watchAny claims a read and before it
-// publishes it; tests use it to order a frame against a reply.
-var lookaheadFrameClaimed = func() {}
+// lookaheadFrameClaimedHook runs after watchAny claims a read and before it
+// publishes it to pending; tests install it to order a frame against a
+// reply. Atomic, since a watcher from another connection may be finishing
+// while a test installs it.
+var lookaheadFrameClaimedHook atomic.Pointer[func(pending chan lookaheadRead, err error)]
+
+func lookaheadFrameClaimed(pending chan lookaheadRead, err error) {
+	if hook := lookaheadFrameClaimedHook.Load(); hook != nil {
+		(*hook)(pending, err)
+	}
+}
 
 // watchAny is watch for a request that must be its connection's only one in
 // flight: a frame that arrives before the reply is committed interrupts the
-// request and ends ctx, as a failure does. commit reports whether the reply
-// may still be sent; once it returns true, the next frame is simply the
-// loop's next request.
+// request and ends ctx, as a failure does. The context's cause says which:
+// errRunEnded for a frame, or the read's own error, so the client loop can
+// tell a broken stream from a caller that left. commit reports whether the
+// reply may still be sent; once it returns true, the next frame is simply
+// the loop's next request.
 func (l *frameLookahead) watchAny(ctx context.Context) (watched context.Context, cancel context.CancelFunc, commit func() bool) {
-	watched, cancel = context.WithCancel(ctx)
+	watched, cancelCause := context.WithCancelCause(ctx)
 	l.pending = make(chan lookaheadRead, 1)
 	l.armed = true
 	pending := l.pending
@@ -81,13 +91,17 @@ func (l *frameLookahead) watchAny(ctx context.Context) (watched context.Context,
 		frame, err := l.conn.ReadFrame()
 		// Claim the interruption before the read becomes visible, so a reply
 		// can never be committed with this frame already pending.
-		if state.CompareAndSwap(watchRunning, watchInterrupted) || err != nil {
-			cancel()
+		interrupted := state.CompareAndSwap(watchRunning, watchInterrupted)
+		if err != nil {
+			cancelCause(err)
+		} else if interrupted {
+			cancelCause(errRunEnded)
 		}
-		lookaheadFrameClaimed()
+		lookaheadFrameClaimed(pending, err)
 		pending <- lookaheadRead{frame: frame, err: err}
 	}()
-	return watched, cancel, func() bool { return state.CompareAndSwap(watchRunning, watchCommitted) }
+	commit = func() bool { return state.CompareAndSwap(watchRunning, watchCommitted) }
+	return watched, func() { cancelCause(nil) }, commit
 }
 
 // replyFiles runs one file request and queues its reply with the grant check

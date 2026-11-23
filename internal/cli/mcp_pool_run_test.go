@@ -100,17 +100,25 @@ func validRunResult() *protocol.ExecutionRunResult {
 // a hook before it reads.
 type scriptedConn struct {
 	*poolFixtureConn
-	silent     atomic.Bool
-	beforeRead func()
-	aborted    chan struct{}
-	abortOnce  sync.Once
-	closes     atomic.Int32
+	silent          atomic.Bool
+	beforeRead      func()
+	aborted         chan struct{}
+	abortOnce       sync.Once
+	pauseFirstAbort chan struct{}
+	aborts          atomic.Int32
+	closes          atomic.Int32
 }
 
 // Abort only marks the connection; a queued reply stays readable, as one
-// already received would be.
+// already received would be. With pauseFirstAbort set, the first Abort
+// waits there, like a cancellation callback that has not yet reached the
+// transport.
 func (c *scriptedConn) Abort() error {
+	first := c.aborts.Add(1) == 1
 	c.abortOnce.Do(func() { close(c.aborted) })
+	if first && c.pauseFirstAbort != nil {
+		<-c.pauseFirstAbort
+	}
 	return nil
 }
 
@@ -272,6 +280,10 @@ func TestExchangeRunKeepsAValidReplyWhenTheConnectionIsNotReusable(t *testing.T)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	conn := f.conns[0]
+	// The cancellation's Abort is entered and held before it reaches the
+	// transport, while the reply arrives.
+	conn.pauseFirstAbort = make(chan struct{})
+	defer close(conn.pauseFirstAbort)
 	conn.beforeRead = func() {
 		cancel()
 		<-conn.aborted
@@ -279,6 +291,11 @@ func TestExchangeRunKeepsAValidReplyWhenTheConnectionIsNotReusable(t *testing.T)
 	resp, _, err := pool.ExchangeRun(ctx, host, runPoolRequest())
 	if err != nil || resp.ExecutionRun == nil {
 		t.Fatalf("reply racing a cancellation = %+v, %v", resp, err)
+	}
+	// The pool dropped the connection abortively itself, without a graceful
+	// Close that could claim the connection first and wait on its peer.
+	if closes, aborts := conn.closes.Load(), conn.aborts.Load(); closes != 0 || aborts != 2 {
+		t.Fatalf("closes=%d aborts=%d, want only aborts", closes, aborts)
 	}
 	conn.beforeRead = nil
 	if _, _, err := pool.ExchangeRun(t.Context(), host, runPoolRequest()); err != nil {
