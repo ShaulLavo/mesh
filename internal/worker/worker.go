@@ -645,6 +645,7 @@ func Run(cfg Config) (int, error) {
 	} else if err := os.Remove(paths.Launching(cfg.Dir)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return 0, fmt.Errorf("worker: publish session %s: %w", cfg.ID, err)
 	}
+	notifyPublished()
 
 	go w.pump()
 	w.startRecovery()

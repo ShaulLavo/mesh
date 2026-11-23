@@ -223,6 +223,7 @@ func (w *Worker) publishPipe(attempt *execution.Attempt, sockPath string, meta M
 		_ = ln.Close()
 		return nil, fmt.Errorf("publish pipe worker: %w", err)
 	}
+	notifyPublished()
 	return ln, nil
 }
 

@@ -103,6 +103,9 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	if err != nil || !owner {
 		return executionResponse(request, r, err)
 	}
+	// A reservation that ends before its launch leaves a standby with its ID
+	// unusable; after a launch took the standby this does nothing.
+	defer l.standbys.drop(r.Binding.Reservation.ID)
 	// Caller loss cannot cancel work after the acceptance barrier.
 	owned, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stop := l.cancelExecutionOnShutdown(cancel)
@@ -121,7 +124,8 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	}
 	executionDaemonBoundary(l.sessionsDir, "before_worker_launch", r)
 	ref := r.Binding.Reservation
-	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance})
+	launched, err := l.launch(worker.LaunchConfig{SessionsDir: l.sessionsDir, HostID: string(l.host.ID), Executable: l.executable, Reservation: &ref, Execution: &r.Binding, Command: intent.Command, Cwd: intent.Cwd, Env: env, Cols: intent.Cols, Rows: intent.Rows, Term: intent.Term, Label: "agent request " + ref.Instance, Standby: l.standbys.take(ref.ID)})
+	l.standbys.refillSoon()
 	if err != nil {
 		return l.executionLaunchFailure(request, journal, r, err)
 	}
@@ -150,8 +154,12 @@ var executionBeforeReserve = func(context.Context) {}
 
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
+	var allocated string
 	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
-		ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(intent.Kind))
+		preferred := l.standbys.preferredID()
+		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), preferred)
+		l.standbys.reserved(preferred, ref.ID)
+		allocated = ref.ID
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
 		}
@@ -162,6 +170,10 @@ func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Jou
 		env = worker.ExecutionEnvironment(snapshot, string(l.host.ID), ref, intent.Term)
 		return execution.NewBinding(key, intent, ref, env), nil
 	})
+	if err != nil || !owner {
+		// Allocated but not accepted: nothing will launch it.
+		l.standbys.drop(allocated)
+	}
 	return r, owner, env, executionBoundaryError("reserve detached execution", err)
 }
 func (l *lifecycle) executionKey(ctx context.Context, opaque string) (execution.Key, error) {

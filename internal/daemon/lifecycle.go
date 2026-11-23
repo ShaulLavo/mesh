@@ -81,6 +81,7 @@ type lifecycle struct {
 	executable       string
 	env              []string
 	launch           launchWorker
+	standbys         *standbyPool
 	publishTimeout   time.Duration
 	operationTimeout time.Duration
 	// observeTerminalSize is a read-only compatibility boundary for workers
@@ -221,7 +222,7 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		return nil, err
 	}
 	cfg.Host.TailscaleName = cloneLifecycleString(cfg.Host.TailscaleName)
-	return &lifecycle{
+	l := &lifecycle{
 		names:               cfg.Names,
 		nameChanged:         cfg.NameChanged,
 		updateSummary:       cfg.UpdateSummary,
@@ -242,7 +243,9 @@ func newLifecycle(cfg lifecycleConfig) (*lifecycle, error) {
 		creationRetention:   cfg.CreationRetention,
 		maxPendingCreations: cfg.MaxPendingCreations,
 		maxCreationBytes:    cfg.MaxCreationBytes,
-	}, nil
+	}
+	l.standbys = newStandbyPool(cfg.SessionsDir, standbyExecutable(cfg.Executable), l.environment)
+	return l, nil
 }
 
 func creationDefaults(cfg lifecycleConfig) (lifecycleConfig, error) {

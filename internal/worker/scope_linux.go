@@ -42,12 +42,13 @@ func IsolateSession(id string) {
 	// The move lands when systemd starts the scope, which can trail the call.
 	// The command must fork after it, or it stays in the old cgroup.
 	deadline := time.Now().Add(scopeSettle)
-	for time.Now().Before(deadline) {
+	// systemd usually moves us within a few milliseconds, so look again soon.
+	for pause := time.Millisecond; time.Now().Before(deadline); pause = min(pause*2, 10*time.Millisecond) {
 		current, err := os.ReadFile("/proc/self/cgroup")
 		if err == nil && strings.HasSuffix(unifiedCgroupPath(string(current)), "/"+unit) {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(pause)
 	}
 	log.Printf("worker: own scope %s: not joined within %s", unit, scopeSettle)
 }

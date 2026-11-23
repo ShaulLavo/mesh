@@ -66,19 +66,30 @@ func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol
 		return resolveContextJob(c, job)
 	}
 	reserve := func() (execution.Receipt, bool, []string, execution.Intent, error) {
-		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key))
+		var allocated string
+		r, owner, err := journal.ReserveInContext(ctx, key, execution.Digest(job), resolve, l.allocateContextJob(key, &allocated))
 		if err != nil || !owner {
+			// Allocated but not accepted: nothing will launch it.
+			l.standbys.drop(allocated)
 			return r, owner, nil, execution.Intent{}, executionBoundaryError("reserve context job", err)
 		}
-		return l.persistedContextLaunch(ctx, journal, r)
+		r, owner, env, intent, err := l.persistedContextLaunch(ctx, journal, r)
+		if err != nil || !owner {
+			l.standbys.drop(allocated)
+		}
+		return r, owner, env, intent, err
 	}
 	return l.createExecution(ctx, request, journal, key, reserve)
 }
 
-// allocateContextJob reserves the worker slot for a new context job.
-func (l *lifecycle) allocateContextJob(key execution.Key) func(execution.LaunchSnapshot) (execution.Binding, error) {
+// allocateContextJob reserves the worker slot for a new context job and
+// records its session ID in allocated.
+func (l *lifecycle) allocateContextJob(key execution.Key, allocated *string) func(execution.LaunchSnapshot) (execution.Binding, error) {
 	return func(s execution.LaunchSnapshot) (execution.Binding, error) {
-		ref, err := worker.Reserve(l.sessionsDir, execution.PurposeForKind(s.Intent.Kind))
+		preferred := l.standbys.preferredID()
+		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(s.Intent.Kind), preferred)
+		l.standbys.reserved(preferred, ref.ID)
+		*allocated = ref.ID
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("reserve context job", err)
 		}

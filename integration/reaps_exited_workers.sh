@@ -33,9 +33,12 @@ done
 "$MESH" local --daemon -- /bin/true >"$T/client.out" 2>"$T/client.err" ||
   fail "short session failed: $(cat "$T/client.err")"
 
+# The session's worker can still be finishing its own cleanup when the client
+# returns, so wait for it to be gone: reaped, not left as a zombie. A waiting
+# standby worker is a live child by design and is not this session's worker.
 children=""
-for _ in $(seq 100); do
-  children=$(ps -o pid=,stat=,comm= --ppid "$DAEMON")
+for _ in $(seq 500); do
+  children=$(ps -o pid=,stat=,args= --ppid "$DAEMON" | awk '!/--standby/')
   [ -z "$children" ] && break
   sleep 0.02
 done

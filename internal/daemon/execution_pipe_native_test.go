@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -28,6 +29,9 @@ const pipeNativeFixture = "MESH_PIPE_NATIVE_FIXTURE"
 const inlineAfterWaitFixture = "MESH_PIPE_NATIVE_INLINE_PAUSE"
 
 func runNativePipeDaemon(role string, args []string) error {
+	if len(args) == 6 && args[0] == "session-worker" && args[1] == worker.StandbyFlag {
+		return runNativeStandbyWorker(args[3], args[5])
+	}
 	if len(args) != 0 && args[0] == "session-worker" {
 		return runNativePipeWorker(args[1:])
 	}
@@ -40,7 +44,31 @@ func runNativePipeDaemon(role string, args []string) error {
 	if pause, err := time.ParseDuration(os.Getenv(inlineAfterWaitFixture)); err == nil {
 		inlineAfterWait = func() { time.Sleep(pause) }
 	}
-	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config")})
+	// The fixture's own workers handle the standby handoff, so it keeps one.
+	return Run(context.Background(), Config{StateDir: filepath.Join(role, "state"), ConfigDir: filepath.Join(role, "config"), StandbyWorkers: true})
+}
+
+// runNativeStandbyWorker is the fixture's standby: the same handoff as the
+// real one, then the fixture's own worker.
+func runNativeStandbyWorker(id, dir string) error {
+	launch, err := worker.AwaitStandbyLaunch(worker.StandbyHandoff(), id, dir)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	if err := launch.Apply(dir); err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	marker := filepath.Join(os.Getenv(pipeNativeFixture), "standby-"+id)
+	if err := os.WriteFile(marker, nil, 0o600); err != nil { //nolint:gosec // the fixture's own root, from its own environment
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	if err := launch.Accept(); err != nil {
+		return fmt.Errorf("fixture standby: %w", err)
+	}
+	return runNativePipeWorker(launch.Args[1:])
 }
 
 func runNativePipeWorker(args []string) error {
@@ -94,12 +122,27 @@ func newNativePipeDaemon(t *testing.T, extraEnv ...string) *nativePipeDaemon {
 		t.Fatal(err)
 	}
 	f := &nativePipeDaemon{root: root, state: state, sessions: filepath.Join(state, "s"), executable: bin, extraEnv: extraEnv}
+	t.Cleanup(func() { f.dumpLogsOnFailure(t) })
 	t.Cleanup(func() {
 		f.stop(t)
 		f.stopWorkers(t)
 	})
 	f.start(t)
 	return f
+}
+
+// dumpLogsOnFailure shows the daemon's and every worker's log when the test
+// failed, before the fixture root is removed.
+func (f *nativePipeDaemon) dumpLogsOnFailure(t *testing.T) {
+	if !t.Failed() {
+		return
+	}
+	logs, _ := filepath.Glob(filepath.Join(f.sessions, "*", "worker.log"))
+	for _, path := range append([]string{filepath.Join(f.root, "daemon.log")}, logs...) {
+		if data, err := os.ReadFile(path); err == nil { //nolint:gosec // the fixture's own logs
+			t.Logf("%s:\n%s", path, data)
+		}
+	}
 }
 
 func (f *nativePipeDaemon) env() []string {
