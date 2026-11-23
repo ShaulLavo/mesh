@@ -1,71 +1,70 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
-	"syscall"
 
 	"github.com/shaul/mesh/internal/transport"
 )
 
-// hostConnectError is a TCP connection that failed before any Mesh
-// authentication began. Reporting it as an authentication failure sent people
-// to check keys and grants when a sandbox, firewall or stopped daemon had
-// refused the socket itself.
+// hostConnectError is a connection that failed before any Mesh authentication
+// began. Reporting it as an authentication failure sent people to check keys
+// and grants when a sandbox, firewall or stopped daemon had refused the socket.
 type hostConnectError struct {
 	host    string
-	problem string
+	connect *transport.ConnectError
 	cause   error
 }
 
 func (e *hostConnectError) Error() string {
-	return "Cannot connect to " + e.host + ": " + e.problem
+	return "Cannot connect to " + e.host + ": " + e.connect.Problem() + "." + connectAction(e.host, e.connect.Failure)
 }
 
 func (e *hostConnectError) Unwrap() error { return e.cause }
 
-// classifyConnectError returns the plain connection failure behind err when the
-// TCP dial itself failed, and nil when the failure came later (HTTP upgrade,
-// TLS, Mesh identity) or the caller canceled. fallbackAddress names the target
-// when the dial error carries no resolved address, as with a DNS failure.
-func classifyConnectError(host HostRecord, fallbackAddress string, err error) error {
-	var classified *hostConnectError
-	if errors.As(err, &classified) {
-		return classified
+func connectAction(host string, failure transport.ConnectFailure) string {
+	switch failure {
+	case transport.ConnectBlocked:
+		return " If this shell runs in a sandbox, such as Codex workspace-write, turn on its network access."
+	case transport.ConnectRefused:
+		return fmt.Sprintf(" Check that Mesh is running on %s.", host)
+	case transport.ConnectTimedOut, transport.ConnectNoRoute:
+		return fmt.Sprintf(" Check that %s is online in Tailscale.", host)
+	case transport.ConnectFailed:
+		return ""
 	}
-	var dial *net.OpError
-	if !errors.As(err, &dial) || dial.Op != "dial" || dial.Err == nil || errors.Is(err, context.Canceled) {
-		return nil
-	}
-	address := fallbackAddress
-	if dial.Addr != nil {
-		address = dial.Addr.String()
-	}
-	label := HostLabel(host)
-	return &hostConnectError{host: label, problem: connectProblem(label, address, dial), cause: err}
+	return ""
 }
 
-func connectProblem(label, address string, dial *net.OpError) string {
-	reason := dial.Err.Error()
-	var errno syscall.Errno
-	if errors.As(dial.Err, &errno) {
-		reason = errno.Error()
+// classifyConnectError presents err as a connection failure to host when a
+// dial failed before authentication, and returns nil when the failure came
+// later (HTTP upgrade, TLS, Mesh identity) or the caller canceled. An error
+// that already carries a presented failure comes back whole, so every part of
+// an errors.Join keeps its own cause. fallbackAddress names the target when
+// the dial error carries no resolved address.
+func classifyConnectError(host HostRecord, fallbackAddress string, err error) error {
+	var presented *hostConnectError
+	if errors.As(err, &presented) {
+		return err
 	}
-	switch {
-	case errors.Is(dial.Err, syscall.EPERM), errors.Is(dial.Err, syscall.EACCES):
-		return fmt.Sprintf("TCP connection to %s was blocked by local permissions (%s). If this shell runs in a sandbox, such as Codex workspace-write, turn on its network access.", address, reason)
-	case errors.Is(dial.Err, syscall.ECONNREFUSED):
-		return fmt.Sprintf("nothing accepted the TCP connection to %s (%s). Check that Mesh is running on %s.", address, reason, label)
-	case dial.Timeout():
-		return fmt.Sprintf("TCP connection to %s got no answer (%s). Check that %s is online in Tailscale.", address, reason, label)
-	case errors.Is(dial.Err, syscall.ENETUNREACH), errors.Is(dial.Err, syscall.EHOSTUNREACH):
-		return fmt.Sprintf("no network route to %s (%s). Check that %s is online in Tailscale.", address, reason, label)
-	default:
-		return fmt.Sprintf("TCP connection to %s failed (%s).", address, reason)
+	var connect *transport.ConnectError
+	if !errors.As(err, &connect) {
+		connect = transport.ClassifyDial(fallbackAddress, err)
 	}
+	if connect == nil {
+		return nil
+	}
+	return &hostConnectError{host: HostLabel(host), connect: connect, cause: err}
+}
+
+// presentConnectError is classifyConnectError for callers that keep any other
+// failure as it was.
+func presentConnectError(host HostRecord, err error) error {
+	if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
+		return connectErr
+	}
+	return err
 }
 
 // endpointAddress names the host:port a control endpoint dials.

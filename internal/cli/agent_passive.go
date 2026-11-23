@@ -37,6 +37,9 @@ func dialAgentHost(ctx context.Context, host HostRecord) (transport.Conn, error)
 	}
 	conn, err := transport.DialOnce(ctx, host.Endpoint, transport.DialOptions{Auth: &transport.Authentication{Key: key, ExpectedIdentity: host.MeshIdentity}})
 	if err != nil {
+		if connectErr := classifyConnectError(host, endpointAddress(host), err); connectErr != nil {
+			return nil, connectErr
+		}
 		return nil, fmt.Errorf("passive control connection: %w", err)
 	}
 	return conn, nil

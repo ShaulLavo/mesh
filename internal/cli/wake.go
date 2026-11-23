@@ -95,8 +95,10 @@ func (a *application) intentDialer(output io.Writer) HostDialer {
 		if err == nil || ctx.Err() != nil {
 			return conn, err
 		}
+		// Present each dial before the join: a later classifier sees only the
+		// first presented failure and would hide the other cause.
 		if wakeErr := a.wakeHost(ctx, host, output); wakeErr != nil {
-			return nil, errors.Join(err, wakeErr)
+			return nil, errors.Join(presentConnectError(host, err), presentConnectError(host, wakeErr))
 		}
 		connectCtx, connectCancel := context.WithTimeout(ctx, remoteConnectTimeout)
 		defer connectCancel()

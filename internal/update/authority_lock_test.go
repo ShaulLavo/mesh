@@ -142,3 +142,30 @@ func TestAuthorityLockDoesNotRecreateRemovedParent(t *testing.T) {
 		t.Fatalf("removed lock directory error: %v", err)
 	}
 }
+
+func TestAuthorityLockPermissionErrorNamesThePath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permission")
+	}
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A read-only lock directory stands in for a sandbox that denies writes to
+	// the Mesh state directory.
+	if err := os.Chmod(store.directory, 0o500); err != nil { //nolint:gosec // a directory needs its search bit; the fixture removes write access
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(store.directory, 0o700) }) //nolint:gosec // restores the directory OpenStore created so TempDir cleanup can remove it
+	file, err := store.openAuthorityLock()
+	if file != nil {
+		_ = file.Close()
+	}
+	want := "update: open authority lock: local permissions blocked opening lock " + filepath.Join(store.directory, ".lock") + ": permission denied"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("error %q lost its permission cause", err)
+	}
+}

@@ -131,7 +131,7 @@ func lockTrust(ctx context.Context, directory string) (func(), error) {
 	}
 	dir := os.NewFile(uintptr(directoryFD), directory)
 	defer func() { _ = dir.Close() }()
-	fd, err := openLockAt(int(dir.Fd()), ".lock")
+	fd, err := openLockAt(dir, ".lock")
 	if err != nil {
 		return nil, fmt.Errorf("update: open administrator lock: %w", err)
 	}
