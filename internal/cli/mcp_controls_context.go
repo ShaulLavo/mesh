@@ -336,8 +336,9 @@ const execWaitTimedOut = "timed_out"
 const execWaitCompleted = "completed"
 
 // execInlineCreateBudget is the create's own deadline on top of its inline
-// wait; it also covers the host's bounded page reads.
-const execInlineCreateBudget = 17 * time.Second
+// wait: a plain create's 15 seconds plus what the host may add after the
+// wait, one second of grace and two seconds of page reads.
+const execInlineCreateBudget = 18 * time.Second
 
 // sendExecCreate sends the create with a short inline wait when the inline
 // budget has room and the extra fields still fit the request limit, and a

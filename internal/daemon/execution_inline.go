@@ -30,9 +30,10 @@ func (l *lifecycle) withInlineResult(ctx context.Context, request, response prot
 		return response, err
 	}
 	// The budget starts at the create's own reply point, not after the reads
-	// that resolve the binding. The whole observation, those reads included,
-	// ends a bounded grace after it, so it cannot use up the caller's deadline
-	// for the create reply, while even a 1 ms wait still gets its first look.
+	// that resolve the binding. The wait, those reads included, ends a bounded
+	// grace after it, so it cannot use up the caller's deadline for the create
+	// reply, while even a 1 ms wait still gets its first look. The grant check
+	// and page reads after it have their own bounds.
 	deadline := time.Now().Add(time.Duration(request.WaitMillis) * time.Millisecond)
 	ctx, stop := observeUntilDisconnect(ctx)
 	defer stop()

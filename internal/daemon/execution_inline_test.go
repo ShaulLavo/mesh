@@ -20,17 +20,17 @@ func TestInlineCreateReturnsResultAndOutputOnce(t *testing.T) {
 	f := newNativePipeDaemon(t)
 	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "inline", RequestKey: "inline", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "printf out; printf err >&2; exit 3"}, WaitMillis: 10000, OutputBytes: 4096}
 	first := f.request(t, req)
-	assertInlineCompletion(t, first, 3, "out", "err")
+	assertInlineCompletion(t, first, 3)
 	// A replay of the same key observes the same job; it never launches again.
 	replay := f.request(t, req)
-	assertInlineCompletion(t, replay, 3, "out", "err")
+	assertInlineCompletion(t, replay, 3)
 	if replay.ExecutionReceipt.Instance != first.ExecutionReceipt.Instance {
 		t.Fatalf("replay changed instance: %s then %s", first.ExecutionReceipt.Instance, replay.ExecutionReceipt.Instance)
 	}
 	// The smallest budget still observes a job that has finished.
 	brief := req
 	brief.WaitMillis = 1
-	assertInlineCompletion(t, f.request(t, brief), 3, "out", "err")
+	assertInlineCompletion(t, f.request(t, brief), 3)
 	conflict := req
 	conflict.Command = []string{"/bin/true"}
 	reply, err := f.exchange(conflict)
@@ -98,6 +98,21 @@ func TestInlineCreateDisconnectAfterAcceptanceKeepsTheJob(t *testing.T) {
 	}
 }
 
+// The pages have their own budget: a wait budget that ran out after the wait
+// succeeded still returns both of them.
+func TestInlinePagesOutliveTheWaitBudget(t *testing.T) {
+	f := newNativePipeDaemon(t, inlineAfterWaitFixture+"="+(inlineObservationGrace+200*time.Millisecond).String())
+	req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: "late", RequestKey: "late", ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "printf out; printf err >&2"}}
+	job := f.request(t, req).ExecutionReceipt
+	wait := boundPipeRequest(protocol.TypeExecutionWait, job)
+	wait.TimeoutMillis = 10000
+	if done := f.request(t, wait); done.ExecutionWait != "completed" {
+		t.Fatalf("job did not finish: %+v", done)
+	}
+	req.WaitMillis, req.OutputBytes = 10, 64
+	assertInlineCompletion(t, f.request(t, req), 0)
+}
+
 // A client that leaves before its waiting create is accepted cancels only
 // the observation: the create itself still goes through.
 func TestInlineCreateDisconnectBeforeAcceptanceStillCreates(t *testing.T) {
@@ -152,10 +167,12 @@ func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, _ := executionResponse(request, r, nil)
+	t.Cleanup(func() { inlineAfterWait = func() {} })
 	if observed, err := l.withInlineResult(grantCtx, request, created, nil); err != nil || observed.ExecutionWait != "completed" {
 		t.Fatalf("current grant observation = %+v, %v", observed, err)
 	}
 	// A wait budget that runs out after the wait succeeded keeps the result.
+	// TestInlinePagesOutliveTheWaitBudget covers the pages.
 	late := request
 	late.WaitMillis = 10
 	inlineAfterWait = func() { time.Sleep(10*time.Millisecond + inlineObservationGrace + 100*time.Millisecond) }
@@ -167,7 +184,6 @@ func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
 	inlineAfterWait = func() {
 		revoked = identity.RevokeDevice(t.Context(), state, device) == nil
 	}
-	t.Cleanup(func() { inlineAfterWait = func() {} })
 	observed, err := l.withInlineResult(grantCtx, request, created, nil)
 	if !revoked || err == nil || observed.ExecutionWait != "" || observed.ExecutionOutput != nil {
 		t.Fatalf("grant revoked during the wait: observation %+v, %v", observed, err)
@@ -179,13 +195,14 @@ func TestInlineObservationNeedsACurrentGrant(t *testing.T) {
 	}
 }
 
-func assertInlineCompletion(t *testing.T, reply protocol.Control, code int, stdout, stderr string) {
+// assertInlineCompletion expects the fixture command that prints out and err.
+func assertInlineCompletion(t *testing.T, reply protocol.Control, code int) {
 	t.Helper()
 	r := reply.ExecutionReceipt
 	if reply.ExecutionWait != "completed" || r == nil || r.Phase != "terminal" || r.Result == nil || r.Result.Termination.Code == nil || *r.Result.Termination.Code != code {
 		t.Fatalf("inline completion = %+v", reply)
 	}
-	want := map[string]string{execution.StreamStdout: stdout, execution.StreamStderr: stderr}
+	want := map[string]string{execution.StreamStdout: "out", execution.StreamStderr: "err"}
 	if len(reply.ExecutionOutput) != len(want) {
 		t.Fatalf("inline pages = %+v", reply.ExecutionOutput)
 	}
