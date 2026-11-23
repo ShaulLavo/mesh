@@ -99,6 +99,9 @@ func (l *lifecycle) createExecution(ctx context.Context, request protocol.Contro
 	if err != nil || !owner {
 		return executionResponse(request, r, err)
 	}
+	// A reservation that ends before its launch leaves a standby with its ID
+	// unusable; after a launch took the standby this does nothing.
+	defer l.standbys.drop(r.Binding.Reservation.ID)
 	// Caller loss cannot cancel work after the acceptance barrier.
 	owned, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stop := l.cancelExecutionOnShutdown(cancel)
@@ -145,7 +148,9 @@ var executionDaemonBoundary = func(string, string, execution.Receipt) {}
 func (l *lifecycle) reserveExecution(ctx context.Context, journal *execution.Journal, key execution.Key, intent execution.Intent) (execution.Receipt, bool, []string, error) {
 	var env []string
 	r, owner, err := journal.Reserve(ctx, key, intent, func() (execution.Binding, error) {
-		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), l.standbys.preferredID())
+		preferred := l.standbys.preferredID()
+		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(intent.Kind), preferred)
+		l.standbys.reserved(preferred, ref.ID)
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("execution.go executionControl", err)
 		}

@@ -3,13 +3,9 @@ package cli
 import (
 	"errors"
 	"io"
-	"os"
 
 	"github.com/shaul/mesh/internal/worker"
 )
-
-// standbyHandoffFD is where the daemon passes a standby's launch socket.
-const standbyHandoffFD = 3
 
 // workerEntry handles what a worker does before its own launch: a missing
 // identity is an error, and a standby waits for its launch instead.
@@ -29,13 +25,10 @@ func (a *application) workerEntry(id, dir string, standby bool) (bool, error) {
 // worker would have received. A socket that closes first means the daemon no
 // longer needs it, and the standby exits having owned nothing.
 func (a *application) runStandbyWorker(id, dir string) error {
+	// First, before anything here can start a process that would inherit it.
+	handoff := worker.StandbyHandoff()
 	worker.WarmStandby()
-	// Join this session's own scope now, while nothing waits on it. The
-	// worker command repeats both calls after the handoff, where they find
-	// the work done. A standby that is never used takes its scope with it.
-	worker.TuneProcess()
-	worker.IsolateSession(id)
-	launch, err := worker.AwaitStandbyLaunch(os.NewFile(standbyHandoffFD, "standby-handoff"), id, dir)
+	launch, err := worker.AwaitStandbyLaunch(handoff, id, dir)
 	if errors.Is(err, io.EOF) {
 		return nil
 	}

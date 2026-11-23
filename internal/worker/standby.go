@@ -16,6 +16,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
 
@@ -65,7 +66,7 @@ type Standby struct {
 	process    *os.Process
 	handoff    *net.UnixConn
 	executable string
-	image      os.FileInfo
+	image      imageStamp
 	runtimeEnv map[string]string
 	exited     chan struct{}
 }
@@ -86,9 +87,9 @@ func StartStandby(sessionsDir, executable string, env []string) (*Standby, error
 	if err != nil {
 		return nil, err //nolint:wrapcheck // session names the failure
 	}
-	image, err := os.Stat(executable)
+	image, err := stampImage(executable)
 	if err != nil {
-		return nil, fmt.Errorf("standby worker: inspect executable: %w", err)
+		return nil, err
 	}
 	ours, theirs, err := handoffPair()
 	if err != nil {
@@ -162,11 +163,14 @@ func (s *Standby) usableFor(executable string, launch StandbyLaunch) bool {
 	if executable != s.executable {
 		return false
 	}
-	current, err := os.Stat(executable)
-	if err != nil || !os.SameFile(current, s.image) || current.ModTime() != s.image.ModTime() || current.Size() != s.image.Size() {
+	if current, err := stampImage(executable); err != nil || current != s.image {
 		return false
 	}
 	if info, err := os.Stat(launch.Cwd); err != nil || !info.IsDir() {
+		return false
+	}
+	// The handoff is JSON, which would replace bytes that are not UTF-8.
+	if !utf8.ValidString(launch.Cwd) || !allUTF8(launch.Args) || !allUTF8(launch.Env) {
 		return false
 	}
 	for _, entry := range launch.Env {
@@ -175,6 +179,32 @@ func (s *Standby) usableFor(executable string, launch StandbyLaunch) bool {
 		}
 	}
 	return sameVariables(runtimeVariables(launch.Env), s.runtimeEnv)
+}
+
+func allUTF8(values []string) bool {
+	for _, value := range values {
+		if !utf8.ValidString(value) {
+			return false
+		}
+	}
+	return true
+}
+
+// imageStamp identifies an executable's file and contents cheaply. The change
+// time moves on any rewrite and cannot be set by a process, so a same-size
+// rewrite that restores the modification time still changes the stamp.
+type imageStamp struct {
+	dev, ino     uint64
+	size         int64
+	mtime, ctime unix.Timespec
+}
+
+func stampImage(path string) (imageStamp, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return imageStamp{}, fmt.Errorf("standby worker: inspect executable: %w", err)
+	}
+	return imageStamp{dev: uint64(st.Dev), ino: st.Ino, size: st.Size, mtime: st.Mtim, ctime: st.Ctim}, nil //nolint:unconvert,gosec // Dev's type differs by platform
 }
 
 // give hands launch to the standby. accepted reports that the standby
@@ -194,25 +224,35 @@ func (s *Standby) give(launch StandbyLaunch) (accepted bool, err error) {
 	frame := binary.BigEndian.AppendUint32(make([]byte, 0, 4+len(payload)), uint32(len(payload))) //nolint:gosec // bounded above
 	frame = append(frame, payload...)
 	_ = s.handoff.SetDeadline(time.Now().Add(standbyAcceptTimeout))
-	if _, err := s.handoff.Write(frame); err != nil {
-		var timeout net.Error
-		if errors.As(err, &timeout) && timeout.Timeout() {
-			return true, fmt.Errorf("standby worker: hand off launch: %w", err)
-		}
+	if n, err := s.handoff.Write(frame); n < len(frame) {
 		// Without the whole launch it cannot acknowledge, so it starts nothing.
 		return false, nil
+	} else if err != nil {
+		return true, fmt.Errorf("standby worker: hand off launch: %w", err)
 	}
 	var ack [1]byte
-	_, err = io.ReadFull(s.handoff, ack[:])
-	if err == nil && ack[0] == standbyAccepted {
+	n, err := s.handoff.Read(ack[:])
+	switch {
+	case n == 1 && ack[0] == standbyAccepted:
 		return true, nil
+	case n == 0 && errors.Is(err, io.EOF):
+		// An orderly close before acknowledging: it started nothing.
+		return false, nil
+	default:
+		// A timeout, a reset or a wrong byte proves nothing either way.
+		return true, fmt.Errorf("standby worker: acknowledgement: %w", errors.Join(err, fmt.Errorf("reply %q", ack[:n])))
 	}
-	var timeout net.Error
-	if errors.As(err, &timeout) && timeout.Timeout() {
-		return true, fmt.Errorf("standby worker: acknowledgement: %w", err)
-	}
-	// It closed or failed without acknowledging, so it started nothing.
-	return false, nil
+}
+
+// standbyHandoffFD is where StartStandby passes the standby's socket.
+const standbyHandoffFD = 3
+
+// StandbyHandoff takes the handoff socket this standby was started with and
+// marks it close-on-exec, so no process the standby starts, the job
+// included, inherits it. Call it before anything that can start a process.
+func StandbyHandoff() *os.File {
+	unix.CloseOnExec(standbyHandoffFD)
+	return os.NewFile(standbyHandoffFD, "standby-handoff")
 }
 
 // WarmStandby does start-up work a fresh worker would do on its critical

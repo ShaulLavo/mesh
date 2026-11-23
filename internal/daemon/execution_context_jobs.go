@@ -78,7 +78,9 @@ func (l *lifecycle) contextExecutionCreate(ctx context.Context, request protocol
 // allocateContextJob reserves the worker slot for a new context job.
 func (l *lifecycle) allocateContextJob(key execution.Key) func(execution.LaunchSnapshot) (execution.Binding, error) {
 	return func(s execution.LaunchSnapshot) (execution.Binding, error) {
-		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(s.Intent.Kind), l.standbys.preferredID())
+		preferred := l.standbys.preferredID()
+		ref, err := worker.ReservePreferring(l.sessionsDir, execution.PurposeForKind(s.Intent.Kind), preferred)
+		l.standbys.reserved(preferred, ref.ID)
 		if err != nil {
 			return execution.Binding{}, executionBoundaryError("reserve context job", err)
 		}

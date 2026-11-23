@@ -16,13 +16,14 @@ import (
 )
 
 // A keyed job is run by the waiting standby once one is ready, with the same
-// result and output a fresh worker gives, and another standby replaces it.
+// result and output a fresh worker gives (and no inherited handoff socket),
+// and another standby replaces it.
 func TestKeyedJobRunsInTheStandbyWorker(t *testing.T) {
 	f := newNativePipeDaemon(t)
 	served := map[string]bool{}
 	for attempt := 0; len(served) < 2 && attempt < 40; attempt++ {
 		key := "standby-" + string(rune('a'+attempt%26)) + string(rune('a'+attempt/26))
-		req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: key, RequestKey: key, ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "printf \"$PWD\"; exit 4"}}
+		req := protocol.Control{Type: protocol.TypeExecutionCreate, RequestID: key, RequestKey: key, ExecutionKind: execution.KindPipe, Cwd: f.root, Command: []string{"/bin/sh", "-c", "printf \"$PWD\"; [ -e /proc/self/fd/3 ] && printf ' inherited fd 3'; exit 4"}}
 		job := f.request(t, req).ExecutionReceipt
 		wait := boundPipeRequest(protocol.TypeExecutionWait, job)
 		wait.TimeoutMillis = 10000
@@ -114,10 +115,26 @@ func TestStandbyPoolHandsOutOnlyByID(t *testing.T) {
 	if pool.take("other") != nil || pool.take(id) == nil || pool.take(id) != nil {
 		t.Fatal("standby was handed to the wrong reservation or twice")
 	}
+	// A standby whose ID a reservation took without launching, or that a
+	// reservation wanted and missed, is dropped and replaced.
 	pool.refill()
+	taken := pool.preferredID()
+	if err := os.MkdirAll(filepath.Join(root, "s", taken), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if pool.preferredID() != "" {
+		t.Fatal("a standby whose session directory exists was still offered")
+	}
+	pipeEventually(t, func() bool { return pool.preferredID() != "" && pool.preferredID() != taken })
+	missed := pool.preferredID()
+	pool.reserved(missed, "OTHR")
+	if pool.preferredID() == missed {
+		t.Fatal("a standby whose ID another reservation missed was kept")
+	}
+	pipeEventually(t, func() bool { return pool.preferredID() != "" })
 	pool.close()
 	pool.refill()
-	if started != 2 || pool.preferredID() != "" {
+	if started != 4 || pool.preferredID() != "" {
 		t.Fatalf("after close: started %d, preferred %q", started, pool.preferredID())
 	}
 }

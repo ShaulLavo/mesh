@@ -1,6 +1,8 @@
 package worker
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -76,6 +78,46 @@ func TestStandbySilentAfterReadingIsAnUnknownOutcome(t *testing.T) {
 	}
 }
 
+// Anything but an orderly close or the acknowledgement leaves the outcome
+// unknown, so the launch is never started a second time.
+func TestStandbyWrongReplyIsAnUnknownOutcome(t *testing.T) {
+	s, theirs := testStandby(t)
+	go func() {
+		_, _ = readStandbyLaunch(theirs, "7K3D", "/state/s/7K3D")
+		_, _ = theirs.Write([]byte{'?'})
+	}()
+	if accepted, err := s.give(testLaunch(t.TempDir())); !accepted || err == nil {
+		t.Fatalf("wrong reply = %v, %v; want accepted with an error", accepted, err)
+	}
+}
+
+// A daemon that goes away before reading the acknowledgement makes it fail,
+// so the standby runs nothing.
+func TestStandbyRunsNothingWhenItsDaemonLeavesBeforeTheAcknowledgement(t *testing.T) {
+	s, theirs := testStandby(t)
+	launch := testLaunch(t.TempDir())
+	if _, err := s.handoff.Write(standbyFrame(t, launch)); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.handoff.Close()
+	got, err := AwaitStandbyLaunch(theirs, "7K3D", "/state/s/7K3D")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Accept() == nil {
+		t.Fatal("acknowledged a launch to a daemon that had gone")
+	}
+}
+
+func standbyFrame(t *testing.T, launch StandbyLaunch) []byte {
+	t.Helper()
+	payload, err := json.Marshal(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(binary.BigEndian.AppendUint32(nil, uint32(len(payload))), payload...) //nolint:gosec // a small fixture
+}
+
 func TestStandbyRefusesALaunchForAnotherSession(t *testing.T) {
 	for name, args := range map[string][]string{
 		"other id":  {"session-worker", "--id", "9ZZZ", "--dir", "/state/s/9ZZZ", "--", "/bin/true"},
@@ -97,7 +139,7 @@ func TestStandbyRunsOnlyWhatAFreshWorkerWould(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("binary"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	image, err := os.Stat(exe)
+	image, err := stampImage(exe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +154,8 @@ func TestStandbyRunsOnlyWhatAFreshWorkerWould(t *testing.T) {
 		"loader variable":  func(l *StandbyLaunch) { l.Env = append(l.Env, "LD_PRELOAD=/x.so") },
 		"missing cwd":      func(l *StandbyLaunch) { l.Cwd = filepath.Join(l.Cwd, "gone") },
 		"bare entry":       func(l *StandbyLaunch) { l.Env = append(l.Env, "NOEQUALS") },
+		"non-UTF-8 env":    func(l *StandbyLaunch) { l.Env = append(l.Env, "RAW=\xff") },
+		"non-UTF-8 arg":    func(l *StandbyLaunch) { l.Args = append(l.Args, "\xff") },
 	} {
 		changed := launch
 		change(&changed)
@@ -119,11 +163,20 @@ func TestStandbyRunsOnlyWhatAFreshWorkerWould(t *testing.T) {
 			t.Errorf("%s: standby accepted a launch a fresh worker would start differently", name)
 		}
 	}
-	if err := os.WriteFile(exe, []byte("replaced binary"), 0o600); err != nil {
+	// A same-size rewrite that restores the modification time still differs.
+	before, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := os.WriteFile(exe, []byte("BINARY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(exe, before.ModTime(), before.ModTime()); err != nil {
 		t.Fatal(err)
 	}
 	if s.usableFor(exe, launch) {
-		t.Error("standby of a replaced executable was used")
+		t.Error("standby of an executable rewritten with its old mtime was used")
 	}
 	close(s.exited)
 	if s.usableFor(exe, launch) {

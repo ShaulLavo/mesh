@@ -44,7 +44,7 @@ func runNativePipeDaemon(role string, args []string) error {
 // runNativeStandbyWorker is the fixture's standby: the same handoff as the
 // real one, then the fixture's own worker.
 func runNativeStandbyWorker(id, dir string) error {
-	launch, err := worker.AwaitStandbyLaunch(os.NewFile(3, "standby-handoff"), id, dir)
+	launch, err := worker.AwaitStandbyLaunch(worker.StandbyHandoff(), id, dir)
 	if errors.Is(err, io.EOF) {
 		return nil
 	}

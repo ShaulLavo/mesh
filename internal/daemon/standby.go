@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"sync"
 	"time"
@@ -41,13 +42,20 @@ func newStandbyPool(sessionsDir, executable string, env func() []string) *standb
 }
 
 // preferredID is the session ID the next reservation should try first.
+// A standby whose session directory already exists lost its ID to a
+// reservation that never launched it, so it is dropped instead.
 func (p *standbyPool) preferredID() string {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.current == nil {
+	s := p.current
+	p.mu.Unlock()
+	if s == nil {
 		return ""
 	}
-	return p.current.ID
+	if _, err := os.Lstat(s.Dir); !errors.Is(err, os.ErrNotExist) {
+		p.drop(s.ID)
+		return ""
+	}
+	return s.ID
 }
 
 // take returns the standby started under id, which a reservation now owns.
@@ -100,10 +108,34 @@ func (p *standbyPool) refill() {
 
 func (p *standbyPool) forgetWhenExited(s *worker.Standby) {
 	<-s.Exited()
+	s.Discard()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.current == s {
 		p.current = nil
+	}
+}
+
+// drop discards the waiting standby if it carries id: a reservation took
+// that ID and never launched, or a reservation that wanted it got another,
+// so the standby can no longer serve anyone. The next one starts soon.
+func (p *standbyPool) drop(id string) {
+	p.mu.Lock()
+	s := p.current
+	if s == nil || s.ID != id {
+		p.mu.Unlock()
+		return
+	}
+	p.current = nil
+	p.mu.Unlock()
+	s.Discard()
+	p.refillSoon()
+}
+
+// reserved reports a reservation that asked for preferred and got id.
+func (p *standbyPool) reserved(preferred, id string) {
+	if preferred != "" && preferred != id {
+		p.drop(preferred)
 	}
 }
 
