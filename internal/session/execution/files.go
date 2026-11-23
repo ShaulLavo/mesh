@@ -216,6 +216,9 @@ func (f *Files) syncNamespace(name string, anchor *os.File) error {
 	if err != nil {
 		return err
 	}
+	if !durable.HasBarrier {
+		return f.flushDevice(anchor)
+	}
 	return f.flushDevices([]*os.File{anchor}, dirs)
 }
 

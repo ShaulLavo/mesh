@@ -281,7 +281,7 @@ func (f *Files) flushDevices(files []*os.File, dirs []syncedDir) error {
 		if !firstOnDevice(seen, dir.dev, dir.known) {
 			continue
 		}
-		if err := f.flushDir(dir.name); err != nil {
+		if err := f.flushDir(dir); err != nil {
 			return err
 		}
 	}
@@ -301,10 +301,16 @@ func firstOnDevice(seen map[uint64]bool, dev uint64, known bool) bool {
 	return true
 }
 
-func (f *Files) flushDir(dir string) error {
-	file, err := f.root.Open(dir)
+// flushDir reopens a synced directory for its barrier. A directory whose
+// device changed since its sync, such as an unmounted parent, fails instead of
+// flushing the device that now sits under the same path.
+func (f *Files) flushDir(dir syncedDir) error {
+	file, err := f.root.Open(dir.name)
 	if err != nil {
 		return executionBoundaryError("open directory for device flush", err)
+	}
+	if dev, known := fileDevice(file); dir.known && (!known || dev != dir.dev) {
+		return errors.Join(fmt.Errorf("execution: directory %s changed device before its flush", dir.name), file.Close())
 	}
 	return errors.Join(f.flushDevice(file), file.Close())
 }

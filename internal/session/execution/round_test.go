@@ -240,6 +240,34 @@ func TestRoundFlushesADeviceReachedOnlyThroughADirectory(t *testing.T) {
 	}
 }
 
+// A directory whose device changed between its sync and its barrier, as an
+// unmounted parent would, fails the round instead of flushing the wrong device.
+func TestRoundFailsWhenADirectoryChangesDeviceBeforeItsBarrier(t *testing.T) {
+	if !durable.HasBarrier {
+		t.Skip("fsync already flushed the device; directories take no separate barrier")
+	}
+	f := roundFiles(t)
+	if err := f.Ensure("p"); err != nil {
+		t.Fatal(err)
+	}
+	publishRecord(t, f, "p/a.json")
+	var opened uint64
+	saved := fileDevice
+	fileDevice = func(file *os.File) (uint64, bool) {
+		switch filepath.Base(file.Name()) {
+		case "p":
+			opened++
+			return 1 + opened, true
+		default:
+			return 1, true
+		}
+	}
+	t.Cleanup(func() { fileDevice = saved })
+	if err := f.ConfirmAll("p/a.json"); err == nil || !strings.Contains(err.Error(), "changed device") {
+		t.Fatalf("err = %v, want a changed-device failure", err)
+	}
+}
+
 // deviceBarriers confirms names together and counts their device barriers.
 func deviceBarriers(t *testing.T, f *Files, names ...string) int {
 	t.Helper()

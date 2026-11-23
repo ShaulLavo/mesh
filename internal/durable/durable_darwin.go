@@ -23,15 +23,13 @@ func syncFile(file *os.File) error {
 	return nil
 }
 
-// barrier falls back to a plain fsync where F_FULLFSYNC is unsupported, such
-// as SMB mounts, exactly as File.Sync does.
+// barrier reports ENOTSUP instead of falling back to a plain fsync the way
+// File.Sync does: a plain fsync guarantees no cache flush, so a durability
+// point on such a filesystem fails rather than claiming success.
 func barrier(file *os.File) error {
 	fd := file.Fd()
 	err := retryInterrupted(func() error {
 		_, err := unix.FcntlInt(fd, unix.F_FULLFSYNC, 0)
-		if errors.Is(err, unix.ENOTSUP) {
-			return unix.Fsync(int(fd))
-		}
 		return err
 	})
 	if err != nil {
