@@ -20,6 +20,9 @@ var (
 	ErrContextClosed   = errors.New("execution context is closed")
 	ErrContextConflict = errors.New("execution context revision changed")
 	ErrContextLimit    = errors.New("execution context limit reached")
+	// ErrContextDamaged is a context whose membership directory is missing.
+	// It may hide a running job, so it takes no new jobs and does not expire.
+	ErrContextDamaged = errors.New("execution context membership is missing")
 )
 
 // Context limits. They mirror protocol's limits; this package does not import
@@ -60,14 +63,31 @@ type Context struct {
 	Revision     uint64            `json:"revision"`
 	CreatedAt    time.Time         `json:"createdAt"`
 	LastUsedAt   time.Time         `json:"lastUsedAt"`
-	ClosedAt     *time.Time        `json:"closedAt,omitempty"`
+	// UseClock is this boot's monotonic clock at the last recorded use. Reads
+	// record use at most once per granularity of it, so a wall-clock
+	// correction cannot make an old use look recent.
+	UseClock *ClockAnchor `json:"useClock,omitempty"`
+	// IdleAnchor is this boot's monotonic clock at the last use, or when an
+	// open context's deadline was found passed under another boot's anchor.
+	// An open context's expiry needs a full idle period of it as well as the
+	// wall-clock deadline, so a forward clock correction cannot purge it.
+	IdleAnchor *ClockAnchor `json:"idleAnchor,omitempty"`
+	ClosedAt   *time.Time   `json:"closedAt,omitempty"`
 	// Members are the keys of jobs whose receipts are not terminal yet. Any
 	// of them, running or uncertain, keeps the context from expiring.
 	Members []Key `json:"-"`
 }
 
-// ExpiresAt is when an unused context with no active job is purged.
-func (c Context) ExpiresAt() time.Time { return c.LastUsedAt.Add(contextIdleExpiry) }
+// ExpiresAt is the wall-clock date from which a context with no active job
+// may expire: 30 days after its last use while open, 30 days after its close
+// once closed. An open context also needs that idle period on the uptime
+// clock (Journal.idle), so it can go later, never earlier.
+func (c Context) ExpiresAt() time.Time {
+	if c.ClosedAt != nil {
+		return c.ClosedAt.Add(contextIdleExpiry)
+	}
+	return c.LastUsedAt.Add(contextIdleExpiry)
+}
 
 // contextRequest is the caller-keyed open receipt. It holds the accepted
 // result, so a retry returns exactly what the first open created, and a crash
@@ -193,16 +213,36 @@ func (j *Journal) settleRequest(request contextRequest) (Context, error) {
 	}
 	c, err := j.readContext(request.ContextID)
 	if errors.Is(err, os.ErrNotExist) {
-		return j.saveContext(newRecord(request, j.now()))
+		if err := j.files.Ensure(contextMembers(request.ContextID)); err != nil {
+			return Context{}, err
+		}
+		return j.saveContext(j.anchorUse(newRecord(request, j.now())))
 	}
 	if err != nil {
 		return Context{}, err
 	}
-	c = j.withMembers(c)
-	if j.idle(c) {
+	c, known := j.withMembers(c)
+	if !known {
+		// Without its membership a context may still have a running job.
+		return c, nil
+	}
+	c, idle := j.idle(c)
+	if idle {
 		return Context{}, errors.Join(ErrContextNotFound, j.expire(request))
 	}
 	return c, nil
+}
+
+// anchorUse records this boot's monotonic clock as the time of c's last use,
+// for the read throttle and for expiry. Without a monotonic clock an open
+// context keeps no anchor and does not expire until one is available.
+func (j *Journal) anchorUse(c Context) Context {
+	anchor := j.clock()
+	c.UseClock, c.IdleAnchor = nil, nil
+	if anchor.valid() {
+		c.UseClock, c.IdleAnchor = &anchor, &anchor
+	}
+	return c
 }
 
 // openResult is the result the first open returned.
@@ -233,7 +273,12 @@ func (j *Journal) acceptContext(k Key, callerDigest string, resolve func() (Cont
 	if _, err := j.files.PublishBounded(contextRequestName(k.Hash()), request, true, contextRecordLimit); err != nil {
 		return Context{}, false, err
 	}
-	if _, err := j.saveContext(newRecord(request, request.AcceptedAt)); err != nil {
+	// The membership directory exists before the record, so a record whose
+	// directory is missing is damage rather than a context without jobs.
+	if err := j.files.Ensure(contextMembers(request.ContextID)); err != nil {
+		return Context{}, false, err
+	}
+	if _, err := j.saveContext(j.anchorUse(newRecord(request, request.AcceptedAt))); err != nil {
 		return Context{}, false, err
 	}
 	return openResult(request), true, nil
@@ -340,12 +385,15 @@ func (j *Journal) ownedContext(owner, id string) (Context, error) {
 // withMembers lists the context's jobs whose receipts are not terminal.
 // Markers are written before a job receipt becomes durable, so a failed
 // context write never hides a running job. Markers for terminal or never
-// accepted jobs are pruned.
-func (j *Journal) withMembers(c Context) Context {
+// accepted jobs are pruned. known is false when the markers could not be
+// listed, so callers never take an unreadable directory for an empty one. A
+// missing directory counts as unreadable too: every open creates it before
+// the record, so its absence is damage that could hide a running job.
+func (j *Journal) withMembers(c Context) (Context, bool) {
 	c.Members = nil
 	entries, err := j.files.Names(contextMembers(c.ID))
 	if err != nil {
-		return c
+		return c, false
 	}
 	for _, entry := range entries {
 		hash, ok := cutJSON(entry.Name())
@@ -360,11 +408,38 @@ func (j *Journal) withMembers(c Context) Context {
 		// A damaged receipt counts as active, so damage never expires a context.
 		c.Members = append(c.Members, r.Key)
 	}
-	return c
+	return c, true
 }
 
-func (j *Journal) idle(c Context) bool {
-	return len(c.Members) == 0 && !j.now().Before(c.ExpiresAt())
+// idle reports whether c may expire now: no active job and its wall-clock
+// deadline has passed. A closed context takes no new jobs, so the wall clock
+// alone decides: a clock jump can at worst let a replay of its open key open
+// a new context. An open context also needs this boot's monotonic clock to
+// have run a whole idle period since its anchor, as receipt retention
+// requires (elapsedFloor). A passed deadline with an anchor from another
+// boot, or none, is anchored to this boot first, so that purge waits for an
+// idle period this boot observed itself.
+func (j *Journal) idle(c Context) (Context, bool) {
+	if len(c.Members) != 0 || j.now().Before(c.ExpiresAt()) {
+		return c, false
+	}
+	if c.ClosedAt != nil {
+		return c, true
+	}
+	now := j.clock()
+	if c.IdleAnchor != nil && c.IdleAnchor.valid() && c.IdleAnchor.Boot == now.Boot {
+		return c, elapsedFloor(*c.IdleAnchor, now)
+	}
+	if !now.valid() {
+		return c, false
+	}
+	anchored := c
+	anchored.IdleAnchor = &now
+	// A failed save leaves the old anchor, which is retried on a later read.
+	if saved, err := j.saveContext(anchored); err == nil {
+		c = saved
+	}
+	return c, false
 }
 
 // expire records the decision before removing anything, so an interrupted
@@ -391,12 +466,25 @@ func (j *Journal) finishExpiry(request contextRequest) error {
 // touch records use at most once per granularity, so reads do not write on
 // every call.
 func (j *Journal) touch(c Context, force bool) (Context, error) {
-	now := j.now().UTC()
-	if !force && now.Sub(c.LastUsedAt) < contextUseGranularity {
+	if !force && j.usedRecently(c) {
 		return c, nil
 	}
-	c.LastUsedAt = now
+	c = j.anchorUse(c)
+	c.LastUsedAt = j.now().UTC()
 	return j.saveContext(c)
+}
+
+// usedRecently reports a use recorded less than the granularity ago on this
+// boot's monotonic clock. A wall-clock correction cannot make an old use look
+// recent, and a reading from another boot, or none, cannot be compared, so
+// that use is recorded again. An expiry re-anchor is not a use and never
+// counts here.
+func (j *Journal) usedRecently(c Context) bool {
+	now, anchor := j.clock(), c.UseClock
+	if anchor == nil || !anchor.valid() || !now.valid() || anchor.Boot != now.Boot {
+		return false
+	}
+	return now.Elapsed >= anchor.Elapsed && now.Elapsed-anchor.Elapsed < int64(contextUseGranularity)
 }
 
 // GetContext returns the owner's context, closed or open.
@@ -595,7 +683,9 @@ func (j *Journal) dueMembers(ctx context.Context) ([]Key, error) {
 		if !ok || err != nil || j.now().Before(c.ExpiresAt()) {
 			continue
 		}
-		due = append(due, j.withMembers(c).Members...)
+		// Unlisted members have nothing to observe; settling defers that expiry.
+		members, _ := j.withMembers(c)
+		due = append(due, members.Members...)
 	}
 	return due, nil
 }

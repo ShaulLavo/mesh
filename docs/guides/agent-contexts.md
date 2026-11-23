@@ -91,12 +91,30 @@ mesh context close CONTEXT_HANDLE --identity codex --json
 A stale `--expected-revision` returns `context.conflict`. Closing stops new
 jobs (`context.closed`); running jobs keep going and keep their receipts.
 
-A context expires 30 days after its last use, together with its open
-receipt, once none of its jobs is running or uncertain (`runningJobs` and
-`uncertainJobs`). After a reboot the context remains and its jobs show as
-interrupted. Each identity can hold 64 open contexts per host, and a host
-holds at most 1,024; an open whose reply was lost still holds its slot.
-`mesh context ls` follows the host's pages for you.
+A context expires together with its open receipt once none of its jobs is
+running or uncertain (`runningJobs` and `uncertainJobs`). After a reboot a
+context remains and its jobs show as interrupted. `expiresAt` is the
+wall-clock date from which it may expire:
+
+- An open context may expire 30 days after its last use. The 30 days must
+  also pass on the host's uptime clock, so a clock correction never expires
+  it early. The time a host spends down cannot be measured, so when the host
+  first finds the date passed with no job active and no uptime reading from
+  the current boot, a new 30-day wait on the uptime clock starts then, which
+  can be well after the reboot.
+- A closed context expires 30 days after it was closed, by the wall clock
+  alone, across reboots. A clock correction can make that happen sooner; the
+  only effect is that replaying its open key then opens a new context.
+
+A context whose job list on the host is missing or unreadable is treated as
+damaged: it may still have a running job, so it never expires and refuses
+new jobs with `state.unavailable`. Repair or remove its state on the host.
+
+Each identity can hold 64 open contexts per host, and a host holds at most
+1,024; an open whose reply was lost still holds its slot. A host also keeps
+at most 4,096 context records, closed ones included until they expire, so an
+open can be refused while both open limits still have room. `mesh context
+ls` follows the host's pages for you.
 
 ## Account administration
 
