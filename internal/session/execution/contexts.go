@@ -353,13 +353,38 @@ func (j *Journal) withMembers(c Context) Context {
 			continue
 		}
 		r, err := j.read(hash)
-		if errors.Is(err, os.ErrNotExist) || (err == nil && (r.Phase == phaseTerminal || r.Key.Context != c.ID)) {
+		if errors.Is(err, os.ErrNotExist) || (err == nil && r.Key.Context != c.ID) {
 			_ = j.files.Remove(contextMember(c.ID, hash), journalAnchor)
+			continue
+		}
+		if err == nil && r.Phase == phaseTerminal {
+			c = j.pruneFinishedMember(c, hash, r)
 			continue
 		}
 		// A damaged receipt counts as active, so damage never expires a context.
 		c.Members = append(c.Members, r.Key)
 	}
+	return c
+}
+
+// pruneFinishedMember removes a finished job's marker once the context's
+// last use covers the job's start. A job start records use only at the
+// context's granularity, and that write can fail, so until the record holds
+// the receipt's durable acceptance time the marker is the only evidence of
+// that use: a record that cannot be saved keeps the marker and counts the
+// job as active, which defers expiry instead of ending it early.
+func (j *Journal) pruneFinishedMember(c Context, hash string, r Receipt) Context {
+	if c.LastUsedAt.Before(r.AcceptedAt) {
+		used := c
+		used.LastUsedAt = r.AcceptedAt.UTC()
+		saved, err := j.saveContext(used)
+		if err != nil {
+			c.Members = append(c.Members, r.Key)
+			return c
+		}
+		c = saved
+	}
+	_ = j.files.Remove(contextMember(c.ID, hash), journalAnchor)
 	return c
 }
 

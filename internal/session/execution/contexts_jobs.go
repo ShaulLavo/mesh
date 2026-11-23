@@ -156,10 +156,11 @@ func (j *Journal) reserveInContext(ctx context.Context, k Key, callerDigest stri
 		return r, owner, err
 	}
 	// Membership is already durable through the marker, so a failed use
-	// update cannot leave the running job's context unprotected. Use is
-	// recorded at the same granularity as reads: rewriting the record durably
-	// on every job cost each create 4 to 15 ms to move a 30-day idle expiry by
-	// less than an hour.
+	// update cannot leave the running job's context unprotected, and the
+	// marker is pruned only after the record holds the job's acceptance time
+	// (pruneFinishedMember). Use is therefore recorded here at the same
+	// granularity as reads: rewriting the record durably on every job cost
+	// each create 4 to 15 ms.
 	_, _ = j.touch(c, false)
 	if launch == nil {
 		return r, true, nil

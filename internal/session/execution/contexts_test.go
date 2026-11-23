@@ -409,6 +409,103 @@ func updateUntilApplied(t *testing.T, j *Journal, id string) {
 	}
 }
 
+// finishedContextJob starts a job in c at started and settles it, so only its
+// membership marker and receipt record that use.
+func finishedContextJob(t *testing.T, j *Journal, c Context, opaque string, started time.Time) {
+	t.Helper()
+	j.now = func() time.Time { return started }
+	r, owner, err := reserveJob(t, j, jobKey(ownerA, c.ID, opaque), "x", nil)
+	if err != nil || !owner {
+		t.Fatalf("reserve %s: %v", opaque, err)
+	}
+	if _, err := j.NotStarted(t.Context(), r.Binding, "fixture"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func contextKept(j *Journal, id string) bool {
+	_, err := j.readContext(id)
+	return err == nil
+}
+
+// Maintenance on a new boot, before anything reads the context, counts the
+// 30 days from the last job's start even though that start was not written
+// to the record.
+func TestContextExpiryCountsFromTheLastJobStart(t *testing.T) {
+	dir := t.TempDir()
+	j, err := Open(dir, "boot", "coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened := time.Now().UTC()
+	j.now = func() time.Time { return opened }
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	started := opened.Add(50 * time.Minute)
+	finishedContextJob(t, j, c, "job", started)
+	if record, err := j.readContext(c.ID); err != nil || !record.LastUsedAt.Equal(opened) {
+		t.Fatalf("job start rewrote the record: %+v, %v", record, err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rebooted, err := Open(dir, "boot-2", "coordinator-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rebooted.Close() })
+	rebooted.now = func() time.Time { return opened.Add(contextIdleExpiry + time.Minute) }
+	if err := rebooted.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !contextKept(rebooted, c.ID) {
+		t.Fatal("context expired 30 days after its open, before 30 days after its last job")
+	}
+	rebooted.now = func() time.Time { return started.Add(contextIdleExpiry + time.Minute) }
+	if err := rebooted.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if contextKept(rebooted, c.ID) {
+		t.Fatal("context kept past 30 days after its last job")
+	}
+}
+
+// A job whose own last-use write was lost, started a minute before the old
+// deadline and finished since, still keeps its context for 30 days from its
+// start. A record that cannot be saved keeps the job's marker and the context.
+func TestContextExpiryKeepsALostJobStartThroughCompletion(t *testing.T) {
+	j := contextJournal(t)
+	opened := time.Now().UTC()
+	j.now = func() time.Time { return opened }
+	c := openTestContext(t, j, ownerA, "ctx", "/work")
+	started := opened.Add(contextIdleExpiry - time.Minute)
+	finishedContextJob(t, j, c, "job", started)
+	record, err := j.readContext(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.LastUsedAt = opened
+	if _, err := j.saveContext(record); err != nil {
+		t.Fatal(err)
+	}
+	j.now = func() time.Time { return opened.Add(contextIdleExpiry + time.Minute) }
+	failed := errors.New("injected write failure")
+	j.files.fault = func(string) error { return failed }
+	_ = j.MaintainContexts(t.Context())
+	j.files.fault = nil
+	if !contextKept(j, c.ID) {
+		t.Fatal("context expired while its last job start could not be recorded")
+	}
+	if err := j.MaintainContexts(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !contextKept(j, c.ID) {
+		t.Fatal("context expired two minutes after its last job started")
+	}
+	if record, err := j.readContext(c.ID); err != nil || !record.LastUsedAt.Equal(started) {
+		t.Fatalf("pruned job left last use at %+v, %v", record, err)
+	}
+}
+
 func TestContextExpiryWaitsForActiveJobsEvenAfterFailedWrites(t *testing.T) {
 	j := contextJournal(t)
 	idle := openTestContext(t, j, ownerA, "idle", "/work")
